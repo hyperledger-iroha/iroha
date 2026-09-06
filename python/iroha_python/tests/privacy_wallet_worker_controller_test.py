@@ -20,7 +20,7 @@ sys.modules[SPEC.name] = worker
 SPEC.loader.exec_module(worker)
 
 AUTH_KEY = bytes(range(1, 33))
-PROTOCOL = "iroha-jindo-polynomial-commitment-v0"
+PROTOCOL = "iroha-jindo-polynomial-commitment-v1"
 OPERATION = "jindo_polynomial_evaluation_v1"
 SETTLEMENT_PROTOCOL = "atomic-private-settlement-v1"
 SETTLEMENT_GENESIS = b"\x10" * 32
@@ -164,6 +164,7 @@ def settlement_proof_payload(
     capsule: bytes,
     *,
     genesis: bytes = SETTLEMENT_GENESIS,
+    delta: bytes = b"canonical-private-settlement-delta",
 ) -> bytes:
     return b"".join(
         (
@@ -176,6 +177,7 @@ def settlement_proof_payload(
             b"\x64" * 32,
             put_bytes_u32(statement),
             put_bytes_u32(b"public-stark-proof"),
+            put_bytes_u32(delta),
             put_bytes_u32(capsule),
         )
     )
@@ -228,12 +230,12 @@ def written_frames(process: FakeProcess) -> list[tuple[object, int, bytes]]:
 
 def test_generic11_worker_registry_is_closed_and_ordered() -> None:
     assert list(worker.PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.items()) == [
-        ("zk-ace-pq-authorization-v0", "zk_ace_authorization_action_v1"),
+        ("zk-ace-pq-authorization-v1", "zk_ace_authorization_action_v1"),
         ("anonymous-pgc-k-out-of-n-v1", "anonymous_pgc_payment_action_v1"),
         ("verange-transparent-range-v1", "verange_range_proof_v1"),
         ("iroha-zk-ams-v1", "zk_ams_admission_and_provisioning_v1"),
-        ("vega-existing-credential-zk-v0", "vega_credential_presentation_v1"),
-        ("iroha-jindo-polynomial-commitment-v0", "jindo_polynomial_evaluation_v1"),
+        ("vega-existing-credential-zk-v1", "vega_credential_presentation_v1"),
+        ("iroha-jindo-polynomial-commitment-v1", "jindo_polynomial_evaluation_v1"),
         (
             "iroha-bootle-lantern-anoncred-v1",
             "bootle_lantern_credential_presentation_v1",
@@ -241,7 +243,7 @@ def test_generic11_worker_registry_is_closed_and_ordered() -> None:
         ("orchard-halo2-actions-v1", "orchard_note_action_v1"),
         ("monero-fcmp-plus-plus-v1", "fcmp_membership_payment_v1"),
         ("iroha-ivm-private-note-stark-v1", "ivm_private_note_action_v1"),
-        ("pq-masp-stark-v0", "pq_masp_note_action_v1"),
+        ("pq-masp-stark-v1", "pq_masp_note_action_v1"),
     ]
 
 
@@ -270,7 +272,7 @@ def test_public_intent_digest_matches_the_rust_domain_contract() -> None:
     [
         ({"protocol_id": "sis-with-hints"}, ValueError),
         ({"protocol_id": "jindo-lattice-pcs-zk-v0"}, ValueError),
-        ({"protocol_id": "iroha-zk-x509-stark-p256-v0"}, ValueError),
+        ({"protocol_id": "iroha-zk-x509-stark-p256-v1"}, ValueError),
         ({"chain_id": "taira-testnet"}, TypeError),
         ({"genesis_digest": b"\x11" * 32}, TypeError),
         ({"network_id": b"\0" * 32}, ValueError),
@@ -491,11 +493,16 @@ def test_private_settlement_prove_accepts_only_public_norito_and_checks_exact_re
     assert result.statement_norito == statement
     assert result.audit_capsule_norito == capsule
     assert result.proof == b"public-stark-proof"
+    assert result.delta_norito == b"canonical-private-settlement-delta"
+    assert repr(result) == "PrivateSettlementPreparedProofV1(<restricted>)"
+    assert "public-stark-proof" not in repr(result)
+    assert "capsule" not in repr(result).lower()
     [(command, sequence, payload)] = written_frames(process)
     assert command == worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT
     assert sequence == 1
     for public_object in (manifest, statement, capsule, policy):
         assert public_object in payload
+    assert payload.endswith(struct.pack(">Q", 41))
 
 
 def test_private_settlement_proof_substitution_terminates_the_session(
@@ -517,6 +524,35 @@ def test_private_settlement_proof_substitution_terminates_the_session(
             manifest_norito=b"manifest\0norito",
             statement_norito=b"statement\0norito",
             audit_capsule_norito=b"capsule\0norito",
+            audit_policy_norito=b"policy\0norito",
+            canonical_genesis_hash=SETTLEMENT_GENESIS,
+            current_height=41,
+        )
+    assert client.closed
+    assert process.killed
+
+
+def test_private_settlement_empty_delta_terminates_the_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    statement = b"statement\0norito"
+    capsule = b"capsule\0norito"
+    client, process = controller(
+        monkeypatch,
+        tmp_path,
+        response_frame(
+            worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT,
+            1,
+            settlement_proof_payload(statement, capsule, delta=b""),
+        ),
+    )
+    with pytest.raises(worker.PrivacyWalletWorkerErrorV1, match="substituted"):
+        client.prove_private_settlement(
+            worker.PrivacyWalletWitnessHandleV1(b"\xd1" * 32),
+            settlement_binding(),
+            manifest_norito=b"manifest\0norito",
+            statement_norito=statement,
+            audit_capsule_norito=capsule,
             audit_policy_norito=b"policy\0norito",
             canonical_genesis_hash=SETTLEMENT_GENESIS,
             current_height=41,

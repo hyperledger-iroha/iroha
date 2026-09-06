@@ -224,6 +224,13 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.ExecuteTrigger(triggerId, args));
     }
 
+    /// <summary>Adds the sole first-release KAGEMUSHA top-up instruction.</summary>
+    public TransactionBuilder TopUpKagemushaV1(
+        Hyperledger.Iroha.Kagemusha.KagemushaTopUpRequestV1 request)
+    {
+        return AddInstruction(TransactionInstruction.TopUpKagemushaV1(request));
+    }
+
     public TransactionBuilder IssueReplicationOrder(
         string orderId,
         ReadOnlySpan<byte> orderPayload,
@@ -490,11 +497,36 @@ public sealed class TransactionBuilder
             Metadata);
     }
 
+    internal TransactionBuilder CreateSigningSnapshot()
+    {
+        if (executableEntries.Count == 0)
+        {
+            throw new InvalidOperationException("Transactions must contain at least one executable item.");
+        }
+        ValidateExecutableFeeIntent();
+
+        var snapshot = new TransactionBuilder(NetworkId, AuthorityAccountId, feePayment)
+        {
+            CreationTimeMilliseconds = CreationTimeMilliseconds
+                ?? checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+            TimeToLiveMilliseconds = TimeToLiveMilliseconds,
+            Nonce = Nonce,
+            forceExecutableBatch = forceExecutableBatch,
+        };
+        snapshot.executableEntries.AddRange(executableEntries);
+        foreach (var (key, value) in metadata)
+        {
+            snapshot.metadata[key] = value?.DeepClone();
+        }
+
+        return snapshot;
+    }
+
     /// <summary>
     /// Replaces only the signed fee maxima with a quote that preserves the selected payer,
     /// exact sponsor revision, and gas bound.
     /// </summary>
-    public TransactionBuilder ApplyFeeQuote(FeePaymentIntent quotedFeePayment)
+    internal TransactionBuilder ApplyFeeQuote(FeePaymentIntent quotedFeePayment)
     {
         ArgumentNullException.ThrowIfNull(quotedFeePayment);
         if (!feePayment.HasSamePayerAndGasBound(quotedFeePayment))

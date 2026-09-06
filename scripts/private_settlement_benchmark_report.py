@@ -8,15 +8,18 @@ import hashlib
 import json
 import math
 import random
+import re
 import statistics
 import sys
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
-
+from typing import Any
 
 REPORT_VERSION = 1
+PROTOCOL = "AtomicPrivateSettlementV1"
+_GIT_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 REQUIRED_PARTICIPANTS = (2, 3, 4, 8, 16)
 REQUIRED_PRIVATE_STAGES = (
     "proof_generation",
@@ -24,6 +27,7 @@ REQUIRED_PRIVATE_STAGES = (
     "auditor_response",
     "committee_verification",
     "prepare",
+    "prepare_registration",
     "commit",
     "global_finality",
     "end_to_end",
@@ -51,6 +55,10 @@ class EvidenceError(ValueError):
 class Sample:
     """One validated benchmark run."""
 
+    commit: str
+    hardware_sha256: str
+    hardware_profile_sha256: str
+    configuration_sha256: str
     profile: str
     participants: int
     seed: int
@@ -76,6 +84,11 @@ def parse_sample(record: Any, source: str) -> Sample:
         raise EvidenceError(f"{source}: sample version must be 1")
     expected = {
         "version",
+        "protocol",
+        "commit",
+        "hardware_sha256",
+        "hardware_profile_sha256",
+        "configuration_sha256",
         "profile",
         "participants",
         "seed",
@@ -90,6 +103,23 @@ def parse_sample(record: Any, source: str) -> Sample:
         raise EvidenceError(
             f"{source}: sample fields mismatch; missing={sorted(missing)} unknown={sorted(unknown)}"
         )
+    if record["protocol"] != PROTOCOL:
+        raise EvidenceError(f"{source}: sample protocol must be {PROTOCOL}")
+    commit = record["commit"]
+    if not isinstance(commit, str) or _GIT_COMMIT.fullmatch(commit) is None:
+        raise EvidenceError(f"{source}: sample commit must be a full Git object id")
+    hardware_sha256 = record["hardware_sha256"]
+    hardware_profile_sha256 = record["hardware_profile_sha256"]
+    configuration_sha256 = record["configuration_sha256"]
+    if (
+        not isinstance(hardware_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", hardware_sha256) is None
+        or not isinstance(hardware_profile_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", hardware_profile_sha256) is None
+        or not isinstance(configuration_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", configuration_sha256) is None
+    ):
+        raise EvidenceError(f"{source}: sample environment digests must be SHA-256")
     profile = record["profile"]
     if profile not in PROFILES:
         raise EvidenceError(f"{source}: profile must be one of {PROFILES}")
@@ -108,7 +138,11 @@ def parse_sample(record: Any, source: str) -> Sample:
     stages = record["stages_ms"]
     if not isinstance(stages, dict):
         raise EvidenceError(f"{source}: stages_ms must be an object")
-    required_stages = REQUIRED_PRIVATE_STAGES if profile == "private" else ("global_finality", "end_to_end")
+    required_stages = (
+        REQUIRED_PRIVATE_STAGES
+        if profile == "private"
+        else ("global_finality", "end_to_end")
+    )
     if set(stages) != set(required_stages):
         raise EvidenceError(
             f"{source}: {profile} stages must be exactly {required_stages}"
@@ -122,6 +156,10 @@ def parse_sample(record: Any, source: str) -> Sample:
         for field in RESOURCE_FIELDS
     }
     return Sample(
+        commit=commit,
+        hardware_sha256=hardware_sha256,
+        hardware_profile_sha256=hardware_profile_sha256,
+        configuration_sha256=configuration_sha256,
         profile=profile,
         participants=participants,
         seed=seed,
@@ -224,7 +262,11 @@ def validate_matrix(samples: Sequence[Sample]) -> None:
     buckets: dict[tuple[str, int], list[Sample]] = defaultdict(list)
     for sample in samples:
         buckets[(sample.profile, sample.participants)].append(sample)
-    required = {(profile, participants) for profile in PROFILES for participants in REQUIRED_PARTICIPANTS}
+    required = {
+        (profile, participants)
+        for profile in PROFILES
+        for participants in REQUIRED_PARTICIPANTS
+    }
     missing = required - set(buckets)
     if missing:
         raise EvidenceError(f"benchmark matrix is incomplete: {sorted(missing)}")
@@ -236,17 +278,56 @@ def validate_matrix(samples: Sequence[Sample]) -> None:
         if len(warmups) < MIN_WARMUPS:
             raise EvidenceError(f"{key}: requires at least {MIN_WARMUPS} warmups")
         if len(measured) < MIN_MEASURED:
-            raise EvidenceError(f"{key}: requires at least {MIN_MEASURED} measured runs")
+            raise EvidenceError(
+                f"{key}: requires at least {MIN_MEASURED} measured runs"
+            )
         if len(seeds) < MIN_SEEDS:
             raise EvidenceError(f"{key}: requires measured runs across multiple seeds")
 
 
-def build_report(samples: Sequence[Sample], bootstrap_iterations: int) -> dict[str, Any]:
+def build_report(
+    samples: Sequence[Sample], bootstrap_iterations: int
+) -> dict[str, Any]:
     """Build the signed-baseline-compatible statistical report."""
 
     validate_matrix(samples)
+    commits = {sample.commit for sample in samples}
+    if len(commits) != 1:
+        raise EvidenceError("benchmark evidence must use one exact source commit")
+    hardware_digests = {sample.hardware_sha256 for sample in samples}
+    if len(hardware_digests) != 1:
+        raise EvidenceError(
+            "benchmark evidence must use one pinned hardware description"
+        )
+    hardware_profile_digests = {
+        sample.hardware_profile_sha256 for sample in samples
+    }
+    if len(hardware_profile_digests) != 1:
+        raise EvidenceError("benchmark evidence must use one pinned hardware profile")
+    configuration_digests: dict[int, str] = {}
+    for participants in REQUIRED_PARTICIPANTS:
+        digests = {
+            sample.configuration_sha256
+            for sample in samples
+            if sample.participants == participants
+        }
+        if len(digests) != 1:
+            raise EvidenceError(
+                f"benchmark N={participants} must use one pinned configuration"
+            )
+        configuration_digests[participants] = next(iter(digests))
     report: dict[str, Any] = {
         "version": REPORT_VERSION,
+        "protocol": PROTOCOL,
+        "commit": next(iter(commits)),
+        "environment": {
+            "hardware_sha256": next(iter(hardware_digests)),
+            "hardware_profile_sha256": next(iter(hardware_profile_digests)),
+            "configuration_sha256_by_participants": {
+                str(participants): configuration_digests[participants]
+                for participants in REQUIRED_PARTICIPANTS
+            },
+        },
         "requirements": {
             "participants": list(REQUIRED_PARTICIPANTS),
             "minimum_warmups": MIN_WARMUPS,
@@ -267,7 +348,11 @@ def build_report(samples: Sequence[Sample], bootstrap_iterations: int) -> dict[s
                 and not sample.warmup
             ]
             binding_prefix = f"{profile}:{participants}:".encode("ascii")
-            stage_names = REQUIRED_PRIVATE_STAGES if profile == "private" else ("global_finality", "end_to_end")
+            stage_names = (
+                REQUIRED_PRIVATE_STAGES
+                if profile == "private"
+                else ("global_finality", "end_to_end")
+            )
             stages = {
                 stage: summarize_values(
                     [sample.stages_ms[stage] for sample in bucket],
@@ -294,8 +379,57 @@ def build_report(samples: Sequence[Sample], bootstrap_iterations: int) -> dict[s
     return report
 
 
-def compare_baseline(candidate: Mapping[str, Any], baseline: Mapping[str, Any]) -> list[dict[str, Any]]:
+def compare_baseline(
+    candidate: Mapping[str, Any], baseline: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     """Apply the post-initial-release p95/p99 regression policy."""
+
+    if (
+        candidate.get("version") != REPORT_VERSION
+        or baseline.get("version") != REPORT_VERSION
+        or candidate.get("protocol") != PROTOCOL
+        or baseline.get("protocol") != PROTOCOL
+    ):
+        raise EvidenceError("candidate and baseline must use the V1 settlement profile")
+    environments: list[dict[str, Any]] = []
+    for label, report in (("candidate", candidate), ("baseline", baseline)):
+        environment = report.get("environment")
+        expected = {
+            "hardware_sha256",
+            "hardware_profile_sha256",
+            "configuration_sha256_by_participants",
+        }
+        if not isinstance(environment, dict) or set(environment) != expected:
+            raise EvidenceError(f"{label} benchmark environment is malformed")
+        configurations = environment["configuration_sha256_by_participants"]
+        expected_participants = {str(value) for value in REQUIRED_PARTICIPANTS}
+        if any(
+            not isinstance(environment[field], str)
+            or re.fullmatch(r"[0-9a-f]{64}", environment[field]) is None
+            for field in ("hardware_sha256", "hardware_profile_sha256")
+        ) or not isinstance(configurations, dict):
+            raise EvidenceError(f"{label} benchmark environment is malformed")
+        if set(configurations) != expected_participants or any(
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in configurations.values()
+        ):
+            raise EvidenceError(f"{label} benchmark environment is malformed")
+        environments.append(environment)
+    candidate_environment, baseline_environment = environments
+    if (
+        candidate_environment["hardware_profile_sha256"]
+        != baseline_environment["hardware_profile_sha256"]
+        or candidate_environment["configuration_sha256_by_participants"]
+        != baseline_environment["configuration_sha256_by_participants"]
+    ):
+        raise EvidenceError(
+            "candidate and baseline must use identical hardware profiles and configurations"
+        )
+    if candidate.get("requirements") != baseline.get("requirements"):
+        raise EvidenceError(
+            "candidate and baseline must use identical benchmark requirements"
+        )
 
     regressions: list[dict[str, Any]] = []
     for profile in PROFILES:

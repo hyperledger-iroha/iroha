@@ -83,6 +83,20 @@ function exactNetworkId(payload, context) {
   return networkId;
 }
 
+function exactGoldilocksDigest384(payload, context) {
+  if (payload.length !== 48) {
+    throw new TypeError(`${context} must contain exactly six raw Goldilocks limbs`);
+  }
+  for (let index = 0; index < 6; index += 1) {
+    if (payload.readBigUInt64LE(index * 8) >= 0xffff_ffff_0000_0001n) {
+      throw new TypeError(`${context} carries a non-canonical Goldilocks limb`);
+    }
+  }
+  if (payload.every((byte) => byte === 0)) {
+    throw new TypeError(`${context} must be non-zero`);
+  }
+}
+
 function networkTransactionDomain(payload, context) {
   const buffer = Buffer.from(payload);
   if (buffer.length < 4) {
@@ -125,6 +139,10 @@ export function validatePrivacyExact12NetworkBindingsV1({
     STATEMENT_FIELD_COUNTS[statementTag],
     `${context}.statementNorito.variant`,
   );
+  if (statementTag === 0) {
+    exactGoldilocksDigest384(statementFields[1], `${context}.identityCommitment`);
+    exactGoldilocksDigest384(statementFields[10], `${context}.replayNullifier`);
+  }
   const statementContext = decodeFields(
     statementFields[0],
     STATEMENT_CONTEXT_FIELDS,

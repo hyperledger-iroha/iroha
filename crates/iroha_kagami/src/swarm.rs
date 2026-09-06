@@ -1063,7 +1063,6 @@ fn execution_policy_projection(config: &actual::Root) -> [u8; 32] {
         &config.settlement,
         [0x11; 32],
         [0x22; 32],
-        Some([0x44; 32]),
     )
 }
 fn validate_runtime_projection_policy(
@@ -1727,7 +1726,6 @@ fn project_prepared_runtime_config(
     const LANE_POLICY_TARGET: &str = "/config/runtime/lane-policies";
     const SORAFS_ADMISSION_TARGET: &str = "/config/runtime/sorafs-admission";
     const SORAFS_SALT_TARGET: &str = "/config/runtime/sorafs-salt-schedule";
-    const KAGEMUSHA_ARTIFACT_TARGET: &str = "/config/runtime/kagemusha-artifacts";
     const SITE_BINDINGS_TARGET: &str = "/config/runtime/sorafs_sites.json";
     let source_table = crate::secret_toml::Table::new((*table).clone());
     let (effective_source, source_requires_sora) =
@@ -2187,39 +2185,6 @@ fn project_prepared_runtime_config(
             captured_validation_paths.push(captured);
         }
     }
-    let offline = &source.settlement.offline;
-    if let Some(path) = offline.kagemusha_release_policy_path.as_deref() {
-        let (file, captured) = capture_prepared_runtime_file(
-            &mut table,
-            projection_root,
-            path,
-            "kagemusha-release-policy",
-            "release_policy.norito",
-            "/config/runtime/kagemusha-release-policy.norito",
-            "Kagemusha release policy",
-            64 * 1024 * 1024,
-            &["settlement", "offline"],
-            "kagemusha_release_policy_path",
-        )?;
-        runtime_files.push(file);
-        captured_validation_paths.push(captured);
-    }
-    if let Some(path) = offline.kagemusha_catalog_qualification_seal_path.as_deref() {
-        let (file, captured) = capture_prepared_runtime_file(
-            &mut table,
-            projection_root,
-            path,
-            "kagemusha-catalog-seal",
-            "catalog_seal.norito",
-            "/config/runtime/kagemusha-catalog-seal.norito",
-            "Kagemusha catalog qualification seal",
-            64 * 1024 * 1024,
-            &["settlement", "offline"],
-            "kagemusha_catalog_qualification_seal_path",
-        )?;
-        runtime_files.push(file);
-        captured_validation_paths.push(captured);
-    }
     let captured_manifest_directory =
         if let Some(manifest_directory) = source.nexus.registry.manifest_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
@@ -2322,27 +2287,6 @@ fn project_prepared_runtime_config(
         captured_validation_paths.push(CapturedValidationPath {
             table_path: &["sorafs", "gateway"],
             key: "salt_schedule_dir",
-            source: validation_directory,
-        });
-    }
-    if let Some(artifact_directory) = offline.kagemusha_artifact_dir.as_deref() {
-        let (files, validation_directory) = collect_runtime_directory(
-            artifact_directory,
-            projection_root,
-            "kagemusha-artifacts",
-            KAGEMUSHA_ARTIFACT_TARGET,
-            "Kagemusha release artifact",
-        )?;
-        runtime_files.extend(files);
-        set_toml_string(
-            &mut table,
-            &["settlement", "offline"],
-            "kagemusha_artifact_dir",
-            KAGEMUSHA_ARTIFACT_TARGET,
-        )?;
-        captured_validation_paths.push(CapturedValidationPath {
-            table_path: &["settlement", "offline"],
-            key: "kagemusha_artifact_dir",
             source: validation_directory,
         });
     }
@@ -3101,7 +3045,7 @@ mod tests {
         tx_history_mandatory_alias_source, validate_prepared_genesis,
         validate_runtime_projection_policy,
     };
-    use crate::{RunArgs, localnet::LocalnetOptions};
+    use crate::{RunArgs, genesis::CompleteTestGenesisBuilder as _, localnet::LocalnetOptions};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -3567,6 +3511,13 @@ mod tests {
         );
         assert_eq!(
             table_at("torii")
+                .get("zk_prover_enabled")
+                .and_then(toml::Value::as_bool),
+            Some(false),
+            "prepared Compose validators must opt out until prover keys are projected"
+        );
+        assert_eq!(
+            table_at("torii")
                 .get("da_ingest")
                 .and_then(toml::Value::as_table)
                 .and_then(|da| da.get("manifest_store_dir"))
@@ -3986,12 +3937,17 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("resultless-prepared-bundle"),
-            PathBuf::from("."),
+        let authority_topology = topology.iter().map(|entry| entry.peer.clone()).collect();
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("resultless-prepared-bundle"),
+                PathBuf::from("."),
+            ),
+            authority_topology,
         )
-        .set_topology(topology)
+        .set_topology_for_test(topology)
         .build_raw()
+        .expect("complete resultless prepared-bundle fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_key = KeyPair::random();
@@ -4224,7 +4180,9 @@ api_port = 9000
     fn write_minimal_genesis(path: &Path) {
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
+                .complete_for_test()
                 .build_raw()
+                .expect("complete minimal swarm fixture")
                 .with_consensus_mode(
                     iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
                 );
@@ -4232,11 +4190,16 @@ api_port = 9000
         fs::write(path, genesis_json).expect("write minimal genesis");
     }
     fn write_npos_genesis_without_parameters(path: &Path) {
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("npos-without-parameters"),
-            PathBuf::from("."),
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("npos-without-parameters"),
+                PathBuf::from("."),
+            ),
+            Vec::new(),
         )
+        .complete_for_test()
         .build_raw()
+        .expect("complete NPoS-without-parameters fixture")
         .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write NPoS genesis without parameters");
@@ -4247,7 +4210,9 @@ api_port = 9000
             .append_parameter(Parameter::Custom(
                 SumeragiNposParameters::default().into_custom_parameter(),
             ))
+            .complete_for_test()
             .build_raw()
+            .expect("complete NPoS swarm fixture")
             .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write npos genesis");

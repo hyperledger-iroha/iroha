@@ -1,8 +1,3 @@
-// Keep the canonical UTF-16 ordering primitive inside the audited browser graph.
-import { compareUtf16 } from "./ordering.js";
-
-void compareUtf16;
-
 export {
   AccountAddress,
   AccountAddressError,
@@ -23,6 +18,8 @@ export {
 export {
   buildMintAssetInstruction,
   buildSetAssetTransferAvailabilityInstruction,
+  buildSetAssetTransferBlacklistInstruction,
+  buildSetAssetTransferControlInstruction,
   buildTransferAssetInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
@@ -43,8 +40,8 @@ export {
 } from "./numericV1.js";
 
 export { NetworkId } from "./networkId.js";
+export { Kagemusha } from "./kagemusha.js";
 export { OperatorSigningContext } from "./operatorRequest.browser.js";
-
 export {
   computeIvmArtifactHashes,
   IVM_ARTIFACT_MAX_BYTES,
@@ -84,6 +81,7 @@ export {
 
 export {
   encodeAccountIdNoritoValue,
+  decodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,
   encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
@@ -105,38 +103,8 @@ export {
   ToriiBrowserClient,
   ToriiBrowserHttpError,
   ToriiBrowserStreamGapError,
-  ToriiBrowserClient as ToriiClient,
-  ToriiBrowserHttpError as ToriiHttpError,
 } from "./toriiBrowserClient.js";
 
-export {
-  BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,
-  BOOTLE_LANTERN_ISSUANCE_ISSUE_PATH_V1,
-  BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1,
-  BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1,
-  BOOTLE_LANTERN_ISSUE_REQUEST_BYTES_V1,
-  BOOTLE_LANTERN_ISSUE_RESPONSE_BYTES_V1,
-  BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1,
-  BOOTLE_LANTERN_ISSUANCE_ERROR_RESPONSE_MAX_BYTES_V1,
-  BootleLanternIssuanceCredentialV1,
-  BootleLanternIssuanceClientErrorV1,
-  BootleLanternIssuanceClientV1,
-} from "./bootleLanternIssuance.js";
-
-export {
-  KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
-  KAGEMUSHA_MANIFEST_VERSION,
-  KAGEMUSHA_MAX_HOPS,
-  KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
-  KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
-  KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaOperationId,
-  normalizeKagemushaOperationReference,
-  normalizeKagemushaOperationStatus,
-  normalizeKagemushaRedeemRequestV4,
-  normalizeOfflineStatus,
-  normalizeKagemushaTopUpRequestV4,
-} from "./kagemushaOffline.js";
 
 export {
   assetReferencesMatch,

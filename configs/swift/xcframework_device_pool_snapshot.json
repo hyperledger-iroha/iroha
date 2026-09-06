@@ -11,9 +11,11 @@
   "harness": {
     "uses_matrix_file": true,
     "uses_reader": true,
-    "has_dest_defaults": true
+    "has_required_dest_defaults": true,
+    "has_optional_hardware_dest": true
   },
   "pipeline": {
-    "devicekit": "ios14p-strongbox"
-  }
+    "devicekit": null
+  },
+  "hardware_lane_required": false
 }

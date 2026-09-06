@@ -940,7 +940,7 @@ pub mod network {
     /// Maximum encrypted frame size for peer messages in bytes.
     ///
     /// The recommended maximal Sumeragi v2 `CertifiedBodyResponse` occupies
-    /// 16,828,108 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// 16,844,237 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
     /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
     /// layers while keeping every retained frame allocation finite.
     /// The encrypted ceiling includes AEAD expansion in addition to the full
@@ -958,8 +958,8 @@ pub mod network {
     /// Maximum frame size for control-plane messages.
     ///
     /// Consensus-safety proposals and timeout certificates use this topic. A
-    /// 2 MiB cap carries the reviewed sub-1 MiB non-manifest proposal ceiling
-    /// plus the recommended manifest and bounded P2P envelope overhead.
+    /// 2 MiB cap carries the reviewed 1,106,267-byte maximal proposal ceiling
+    /// plus the bounded P2P envelope overhead.
     pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = nonzero!(2 * 1024 * 1024_usize);
     /// Maximum frame size for block sync / consensus payload traffic.
     pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_PLAINTEXT_FRAME_BYTES;
@@ -1018,8 +1018,8 @@ pub mod streaming {
     pub const FEATURE_BITS: u32 = 0b11 | CapabilityFlags::FEATURE_ENTROPY_BUNDLED;
     /// Defaults applied to the streaming audio/video sync enforcement gate.
     pub mod sync {
-        /// Enable sync enforcement gate (disabled by default until rollout).
-        pub const ENABLED: bool = false;
+        /// Enable sync enforcement in observe-only mode by default.
+        pub const ENABLED: bool = true;
         /// Observe-only mode keeps logging metrics without rejecting segments.
         pub const OBSERVE_ONLY: bool = true;
         /// Minimum rolling window (milliseconds) required before enforcement.
@@ -1097,7 +1097,8 @@ pub mod sorafs {
         /// authority bundle and its reviewed digest are configured.
         pub const MODERATION_SCREENING_ENABLED: bool = false;
         /// Proof-of-personhood credential services require explicit governed
-        /// policy plus runtime-injected signer/KMS/authentication dependencies.
+        /// policy plus runtime-injected signing, key-custody, and authentication
+        /// providers.
         pub mod pop_credentials {
             use std::path::PathBuf;
             /// PoP service routes and workers are disabled by default.
@@ -1933,7 +1934,7 @@ pub mod sorafs {
         /// Enforce admission registry membership by default.
         pub const ENFORCE_ADMISSION: bool = true;
         /// Enforce advertised capabilities (e.g., chunk-range fetch) before serving data.
-        pub const ENFORCE_CAPABILITIES: bool = false;
+        pub const ENFORCE_CAPABILITIES: bool = true;
         /// Enable per-CID untrusted host routing.
         pub const UNTRUSTED_HOSTING_ENABLED: bool = false;
         /// Redirect browser path-gateway requests to the canonical CID host.
@@ -2176,8 +2177,10 @@ pub mod torii {
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
+    /// This includes SCCP submissions and KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Absolute deadline for reading one admitted proof-bearing request body.
+    /// This includes SCCP submissions and KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
@@ -2250,6 +2253,42 @@ pub mod torii {
         /// First-release terminal-retention hard ceiling.
         pub const TERMINAL_RETENTION_BLOCKS_MAX: u64 = u32::MAX as u64;
     }
+    /// Independently rebuildable SCCP replay archive defaults.
+    pub mod sccp_replay_archive {
+        use iroha_config_base::util::Bytes;
+        use std::time::Duration;
+
+        /// Replay archive reads are unavailable until an operator supplies the
+        /// complete signed three-replica production policy.
+        pub const ENABLED: bool = false;
+        /// Complete bounded checkpoint-set response.
+        pub const MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
+        /// Maximum encoded bytes in one independently verified snapshot.
+        pub const MAX_SNAPSHOT_BYTES: Bytes = Bytes(32 * 1024 * 1024);
+        /// Maximum leaves retained by one snapshot.
+        pub const MAX_SNAPSHOT_LEAVES: usize = 256 * 1024;
+        /// Maximum route/boundary accumulators in one checkpoint set.
+        pub const MAX_ACCUMULATORS: usize = 4_096;
+        /// Complete deadline for one pinned replica fetch.
+        pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+        /// Delay between bounded refresh attempts after a replica is behind or unavailable.
+        pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+        /// First-release response-size ceiling.
+        pub const MAX_RESPONSE_BYTES_HARD: u64 = 256 * 1024 * 1024;
+        /// First-release per-snapshot size ceiling.
+        pub const MAX_SNAPSHOT_BYTES_HARD: u64 = 128 * 1024 * 1024;
+        const _: () = assert!(MAX_SNAPSHOT_BYTES_HARD <= super::super::norito::MAX_ARCHIVE_LEN);
+        /// First-release per-snapshot leaf ceiling.
+        pub const MAX_SNAPSHOT_LEAVES_HARD: u64 = 1024 * 1024;
+        /// First-release checkpoint-set cardinality ceiling.
+        pub const MAX_ACCUMULATORS_HARD: u64 = 65_536;
+        /// First-release request deadline ceiling.
+        pub const REQUEST_TIMEOUT_HARD: Duration = Duration::from_secs(60);
+        /// Smallest production refresh interval.
+        pub const REFRESH_INTERVAL_MIN: Duration = Duration::from_secs(1);
+        /// Largest production refresh interval.
+        pub const REFRESH_INTERVAL_HARD: Duration = Duration::from_secs(5 * 60);
+    }
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
         use url::Url;
@@ -2259,11 +2298,6 @@ pub mod torii {
         pub fn endpoint() -> Option<Url> {
             None
         }
-    }
-    /// RAM-LFE runtime defaults (disabled unless explicitly configured).
-    pub mod ram_lfe {
-        /// Master enable switch for in-process RAM-LFE runtime wiring.
-        pub const ENABLED: bool = false;
     }
     /// Transaction-history visibility policy defaults.
     pub mod tx_history {
@@ -2320,11 +2354,7 @@ pub mod torii {
         pub fn mtls_trusted_proxy_cidrs() -> Vec<String> {
             vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
         }
-        /// Token fallback mode (`disabled`, `bootstrap`, `always`).
-        pub const TOKEN_FALLBACK: &str = "bootstrap";
-        /// Token source selection (`operator`, `api`, `both`).
-        pub const TOKEN_SOURCE: &str = "operator";
-        /// Token allow-list for operator fallback (empty => none).
+        /// Operator-token allow-list for first-credential bootstrap (empty => none).
         pub fn tokens() -> Vec<String> {
             Vec::new()
         }
@@ -2332,6 +2362,20 @@ pub mod torii {
         pub const RATE_PER_MIN: Option<u32> = Some(30);
         /// Burst budget for auth attempts (tokens).
         pub const BURST: Option<u32> = Some(10);
+        /// Per-kind capacity for expiry-bound challenges, sessions, and lockout identities.
+        pub const EPHEMERAL_STATE_CAPACITY: usize = 4_096;
+        /// Maximum accepted per-kind ephemeral-state capacity.
+        pub const MAX_EPHEMERAL_STATE_CAPACITY: usize = 65_536;
+        /// Maximum number of persisted operator WebAuthn credentials.
+        pub const CREDENTIAL_CAPACITY: usize = 64;
+        /// Maximum accepted persisted credential capacity.
+        pub const MAX_CREDENTIAL_CAPACITY: usize = 1_024;
+        /// Maximum number of configured first-credential bootstrap tokens.
+        pub const MAX_BOOTSTRAP_TOKENS: usize = 16;
+        /// Minimum byte length of a first-credential bootstrap token.
+        pub const BOOTSTRAP_TOKEN_MIN_BYTES: usize = 32;
+        /// Maximum byte length of a first-credential bootstrap token.
+        pub const BOOTSTRAP_TOKEN_MAX_BYTES: usize = 256;
         /// Failures before applying a temporary lockout.
         pub const LOCKOUT_FAILURES: u32 = 5;
         /// Sliding window for lockout failure counts (seconds).
@@ -2432,16 +2476,20 @@ pub mod torii {
     }
     /// Enable the push bridge (FCM/APNS). Disabled by default.
     pub const PUSH_ENABLED: bool = false;
-    /// Optional steady-state rate (requests per minute) for push notifications. None disables.
-    pub const PUSH_RATE_PER_MINUTE: Option<u32> = Some(60);
-    /// Optional burst tokens for push notifications.
-    pub const PUSH_BURST: Option<u32> = Some(30);
+    /// Enable push-notification rate limiting.
+    pub const PUSH_RATE_LIMIT_ENABLED: bool = true;
+    /// Steady-state rate (requests per minute) for push notifications.
+    pub const PUSH_RATE_PER_MINUTE: NonZeroU32 = nonzero!(60_u32);
+    /// Burst tokens for push notifications.
+    pub const PUSH_BURST: NonZeroU32 = nonzero!(30_u32);
     /// HTTP connect timeout (milliseconds) for push delivery.
     pub const PUSH_CONNECT_TIMEOUT_MS: u64 = 5_000;
     /// HTTP request timeout (milliseconds) for push delivery.
     pub const PUSH_REQUEST_TIMEOUT_MS: u64 = 10_000;
     /// Maximum topics recorded per registered device.
-    pub const PUSH_MAX_TOPICS_PER_DEVICE: usize = 32;
+    pub const PUSH_MAX_TOPICS_PER_DEVICE: NonZeroUsize = nonzero!(32_usize);
+    /// First-release hard ceiling for topics recorded per registered device.
+    pub const PUSH_MAX_TOPICS_PER_DEVICE_V1: usize = 256;
     /// Default APNs environment for provider-token delivery.
     pub const PUSH_APNS_ENVIRONMENT: &str = "sandbox";
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
@@ -2451,6 +2499,12 @@ pub mod torii {
     // API tokens are disabled by default.
     /// Whether Torii requires API tokens for authentication.
     pub const REQUIRE_API_TOKEN: bool = false;
+    /// Maximum number of listener-wide API tokens admitted by first-release configuration.
+    pub const API_TOKEN_MAX_COUNT_V1: usize = 256;
+    /// Minimum byte length of a listener-wide API token.
+    pub const API_TOKEN_MIN_BYTES_V1: usize = 32;
+    /// Maximum byte length of a listener-wide API token.
+    pub const API_TOKEN_MAX_BYTES_V1: usize = 256;
     /// Faucet defaults.
     pub mod faucet {
         use super::*;
@@ -2478,19 +2532,17 @@ pub mod torii {
         /// Whether verified finalized global-beacon seeds are mixed into faucet challenges.
         pub const POW_BEACON_SEED_ENABLED: bool = false;
     }
-    /// Kagemusha command-submission defaults.
-    pub mod kagemusha_commands {
-        use iroha_primitives::numeric::Quantity;
-        /// Maximum authorized value for one offline transaction.
-        pub fn max_tx_value() -> Quantity {
-            Quantity::from(100_000_u64)
-        }
+    /// KAGEMUSHA V1 command-submission defaults.
+    pub mod kagemusha_v1_commands {
         /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
         pub const OPERATION_REGISTRY_MAX_ENTRIES: usize = 4_096;
-        /// Canonical bytes charged for each admitted binding or in-flight reservation.
-        pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize = 32 + 1 + 32 + 32 + 8 + 8;
+        /// Canonical bytes charged for operation id, request-authority digest, kind,
+        /// request digest, transaction hash, and issuance/expiry timestamps.
+        pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize =
+            32 + 32 + 32 + 1 + 8 + 8 + 32;
         /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
-        pub const OPERATION_REGISTRY_MAX_BYTES: usize = 512 * 1024;
+        pub const OPERATION_REGISTRY_MAX_BYTES: usize =
+            OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY * OPERATION_REGISTRY_MAX_ENTRIES;
     }
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);
@@ -2504,10 +2556,10 @@ pub mod torii {
     pub fn internal_api_trusted_cidrs() -> Vec<String> {
         vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
     }
-    /// Enable app-facing webhook routes and workers. Disabled by default.
-    pub const WEBHOOKS_ENABLED: bool = false;
-    /// Enable app-facing ZK attachment routes and workers. Disabled by default.
-    pub const ZK_ATTACHMENTS_ENABLED: bool = false;
+    /// Enable app-facing webhook routes and workers.
+    pub const WEBHOOKS_ENABLED: bool = true;
+    /// Enable app-facing ZK attachment routes and workers.
+    pub const ZK_ATTACHMENTS_ENABLED: bool = true;
     /// Default TTL for app API ZK attachments (seconds)
     pub const ATTACHMENTS_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
     /// Default maximum size per ZK attachment (bytes)
@@ -2542,8 +2594,8 @@ pub mod torii {
     pub const ATTACHMENTS_SANITIZE_TIMEOUT_MS: u64 = 1_000;
     /// Attachment sanitizer execution mode (`subprocess` or `in_process`).
     pub const ATTACHMENTS_SANITIZER_MODE: &str = "subprocess";
-    /// Background ZK prover worker enable flag (disabled by default)
-    pub const ZK_PROVER_ENABLED: bool = false;
+    /// Background ZK prover worker enable flag.
+    pub const ZK_PROVER_ENABLED: bool = true;
     /// Background ZK prover scan period (seconds)
     pub const ZK_PROVER_SCAN_PERIOD_SECS: u64 = 30;
     /// Background ZK prover reports retention TTL (seconds)
@@ -2744,7 +2796,7 @@ pub mod torii {
             pub const MAX_CONNECTIONS_PER_IP: NonZeroUsize = nonzero!(64usize);
             /// Absolute deadline for reading one HTTP/1 request head.
             pub const HEADER_READ_TIMEOUT_MS: u64 = 10_000;
-            /// Maximum duration without socket write progress.
+            /// Maximum duration without socket write progress and graceful connection-drain deadline.
             pub const WRITE_TIMEOUT_MS: u64 = 30_000;
             /// Maximum number of HTTP/1 headers accepted in one request.
             pub const MAX_HEADERS: NonZeroUsize = nonzero!(100usize);
@@ -2753,7 +2805,7 @@ pub mod torii {
         }
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
         pub mod norito_rpc {
-            /// Enable Norito-RPC decoding by default so lab/devnet builds can exercise the transport.
+            /// Enable the production Norito-RPC transport by default.
             pub const ENABLED: bool = true;
             /// Require the forwarded client certificate header from a trusted ingress proxy.
             pub const REQUIRE_MTLS: bool = false;
@@ -2762,7 +2814,7 @@ pub mod torii {
                 vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
             }
             /// Default rollout stage label for Norito-RPC.
-            pub const STAGE: &str = "disabled";
+            pub const STAGE: &str = "ga";
             /// Default allowlist of clients permitted to use Norito-RPC (empty = unrestricted).
             #[must_use]
             pub fn allowed_clients() -> Vec<String> {
@@ -2772,8 +2824,8 @@ pub mod torii {
     }
     /// MCP endpoint defaults surfaced via `torii.mcp`.
     pub mod mcp {
-        /// Enable native Torii MCP server.
-        pub const ENABLED: bool = false;
+        /// Enable the bounded read-only native Torii MCP server.
+        pub const ENABLED: bool = true;
         /// Maximum accepted MCP request payload size (bytes).
         pub const MAX_REQUEST_BYTES: usize = 1_048_576; // 1 MiB
         /// Maximum number of tools returned per `tools/list` response page.
@@ -3037,22 +3089,6 @@ pub mod torii {
             XorQuantity::from_str(value).expect("canonical appeal-finance XOR quantity default")
         }
     }
-    /// Alias cache positive TTL (seconds) applied by Torii gateways and SDK helpers.
-    pub const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
-    /// Alias cache refresh window (seconds) before positive TTL elapses.
-    pub const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
-    /// Hard expiry (seconds) after which stale alias proofs are rejected even if refresh failed.
-    pub const SORAFS_ALIAS_HARD_EXPIRY_SECS: u64 = 15 * 60;
-    /// Alias cache negative TTL (seconds) for missing aliases.
-    pub const SORAFS_ALIAS_NEGATIVE_TTL_SECS: u64 = 60;
-    /// Alias cache TTL (seconds) for revoked aliases (`410 Gone` responses).
-    pub const SORAFS_ALIAS_REVOCATION_TTL_SECS: u64 = 5 * 60;
-    /// Maximum tolerated age (seconds) for alias proof bundles before rotation is required.
-    pub const SORAFS_ALIAS_ROTATION_MAX_AGE_SECS: u64 = 6 * 60 * 60;
-    /// Grace period (seconds) applied after an approved successor before refusing predecessor proofs.
-    pub const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
-    /// Grace period (seconds) applied to governance rotation events.
-    pub const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
     /// Default set of capability names recognised by Torii's discovery cache.
     pub fn sorafs_known_capabilities() -> Vec<String> {
         vec![
@@ -3125,7 +3161,7 @@ pub mod nexus {
         pub const MAX_CAPSULE_BYTES: u64 = 1024 * 1024;
         /// Hard encrypted-capsule ceiling for the V1 path.
         pub const MAX_CAPSULE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
-        /// Maximum encoded global carrier size.
+        /// Maximum canonical sponsor-signed direct carrier transaction size.
         /// Protocol carrier limit. The worst-case 255-leg V1 fixture is below 1 MiB.
         pub const MAX_CARRIER_BYTES: u64 = 4 * 1024 * 1024;
         /// Hard global-carrier ceiling for the V1 path.
@@ -3133,7 +3169,16 @@ pub mod nexus {
         pub const MAX_CARRIER_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
         /// Minimum durable sidecar retention after admission, in blocks.
         pub const SIDECAR_RETENTION_BLOCKS: u64 = 1_000_000;
-        /// Default online auditor threshold for newly governed policies.
+        /// Maximum encrypted settlement records retained by one local sidecar store.
+        pub const SIDECAR_MAX_RECORDS: u32 = 256;
+        /// Hard record-count ceiling implemented by the V1 sidecar store.
+        pub const SIDECAR_MAX_RECORDS_LIMIT: u32 = 4_096;
+        /// Maximum canonical bytes retained by one local sidecar store.
+        pub const SIDECAR_MAX_TOTAL_BYTES: u64 = 12 * 1024 * 1024 * SIDECAR_MAX_RECORDS as u64;
+        /// Hard byte ceiling implemented by the V1 sidecar store.
+        pub const SIDECAR_MAX_TOTAL_BYTES_LIMIT: u64 =
+            12 * 1024 * 1024 * SIDECAR_MAX_RECORDS_LIMIT as u64;
+        /// Governed minimum online auditor threshold accepted for new policies.
         pub const DEFAULT_MIN_AUDITOR_APPROVALS: u16 = 1;
         /// Audit-policy schema versions accepted by default.
         pub const PERMITTED_POLICY_VERSIONS: [u16; 1] = [1];
@@ -3264,10 +3309,12 @@ pub mod nexus {
         }
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
+        /// Maximum number of stake-share rows retained for one validator.
+        pub const MAX_STAKE_SHARES_PER_VALIDATOR: NonZeroU32 = nonzero!(256_u32);
+        /// Maximum number of pending unbond requests retained in one stake share.
+        pub const MAX_PENDING_UNBONDS_PER_SHARE: NonZeroU32 = nonzero!(8_u32);
         /// Minimum delay between scheduling and finalising unbonds.
         pub const UNBONDING_DELAY: Duration = Duration::from_secs(0);
-        /// Grace window after `release_at_ms` for finalising withdrawals.
-        pub const WITHDRAW_GRACE: Duration = Duration::from_secs(0);
         /// Maximum slash ratio (basis points, 10_000 = 100%).
         pub const MAX_SLASH_BPS: u16 = 10_000;
         /// Minimum reward amount (base units) that will be paid out; smaller amounts are skipped.
@@ -3745,7 +3792,7 @@ pub mod zk {
     /// Halo2 verifier configuration for host-side proof checking.
     pub mod halo2 {
         /// Feature toggle for Halo2 verification in hosts.
-        pub const ENABLED: bool = false;
+        pub const ENABLED: bool = true;
         /// Default curve identifier used for Halo2 verification.
         pub const CURVE: &str = "pallas";
         /// Backend implementation identifier (e.g., IPA).
@@ -3781,9 +3828,8 @@ pub mod zk {
     pub mod stark {
         /// Runtime toggle for STARK verification in hosts.
         ///
-        /// Acceptance still requires binaries built with `zk-stark`; this default
-        /// remains `false` so operators must explicitly opt in at runtime.
-        pub const ENABLED: bool = false;
+        /// Acceptance still requires binaries built with `zk-stark`.
+        pub const ENABLED: bool = true;
         /// Maximum accepted outer STARK OpenVerifyEnvelope length (bytes).
         pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024; // 1 MiB
         /// Maximum accepted proof payload length (bytes).
@@ -3874,15 +3920,16 @@ pub mod sumeragi {
     );
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     ///
-    /// Seven default per-source quotas leave room for the two configured
-    /// authenticated non-validator lanes and up to five validator lanes.
-    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
+    /// One isolated quota is reserved for every protocol-permitted validator
+    /// and every configured authenticated non-validator lane. This keeps the
+    /// default safe when a signed NPoS election expands to its default ceiling.
+    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(1122_usize * 1024 * 1024);
     /// Per-ingress-source canonical outer-ingress wire-byte partition. The
     /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,
     /// payload-completion, and timeout-vote partitions. The ordinary and completion partitions also
     /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
     /// protocol floors when deployments choose a smaller global block body.
-    pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(33_usize * 1024 * 1024);
+    pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(34_usize * 1024 * 1024);
     /// Fixed wire-envelope headroom beyond body or chunk-hash bytes.
     pub const BODY_ENVELOPE_HEADROOM_BYTES: usize = 64 * 1024;
     /// Maximum chunk count in the recommended signed DA layout.
@@ -3901,7 +3948,7 @@ pub mod sumeragi {
     ///
     /// The maximum 31-validator certificate forms fit this bound. Height
     /// activation derives and checks their exact canonical wire requirement.
-    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 64 * 1024;
+    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 1024 * 1024;
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
     /// Reconstructed bodies waiting for reducer delivery.
@@ -4056,22 +4103,11 @@ pub mod sumeragi {
     pub const KEY_OVERLAP_GRACE_BLOCKS: u64 = 8;
     /// Grace window after declared consensus-key expiry.
     pub const KEY_EXPIRY_GRACE_BLOCKS: u64 = 0;
-    /// Whether consensus keys must be bound to an admitted HSM provider.
-    pub const KEY_REQUIRE_HSM: bool = false;
     /// Allowed consensus signing algorithms.
     pub const KEY_ALLOWED_ALGOS: &[Algorithm] = &[Algorithm::BlsNormal];
-    /// Admitted HSM provider identifiers.
-    pub const KEY_ALLOWED_HSM_PROVIDERS: &[&str] = &["pkcs11", "softkey", "yubihsm"];
     /// Default list of allowed consensus signing algorithms.
     pub fn key_allowed_algorithms() -> Vec<Algorithm> {
         KEY_ALLOWED_ALGOS.to_vec()
-    }
-    /// Default list of admitted consensus-key HSM providers.
-    pub fn key_allowed_hsm_providers() -> Vec<String> {
-        KEY_ALLOWED_HSM_PROVIDERS
-            .iter()
-            .map(|provider| (*provider).to_owned())
-            .collect()
     }
     /// NPoS epoch, randomness, election, and reconfiguration defaults.
     pub mod npos {
@@ -4094,7 +4130,7 @@ pub mod sumeragi {
         /// Delay between finalized election and roster activation.
         pub const RECONFIG_ACTIVATION_LAG_BLOCKS: u64 = 1;
         /// Delay before finalized slashing evidence is applied.
-        pub const SLASHING_DELAY_BLOCKS: u64 = 259_200;
+        pub const SLASHING_DELAY_BLOCKS: u64 = 3_600;
         /// Finality margin before a new epoch roster activates.
         pub const FINALITY_MARGIN_BLOCKS: u64 = 8;
     }
@@ -4102,6 +4138,8 @@ pub mod sumeragi {
 /// Governance defaults (voting & parliament).
 pub mod governance {
     use super::*;
+    /// Enable standalone plain-ballot governance alongside ZK voting.
+    pub const PLAIN_VOTING_ENABLED: bool = true;
     /// Default public key used for governance escrow account derivation.
     pub const BOND_ESCROW_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -4168,6 +4206,10 @@ pub mod governance {
     pub const ALIAS_FRONTIER_TELEMETRY: bool = true;
     /// Emit governance pipeline trace logs.
     pub const DEBUG_TRACE_PIPELINE: bool = false;
+    /// Maximum number of non-closed governance referenda retained at once.
+    pub const MAX_ACTIVE_REFERENDA: NonZeroU32 = nonzero!(64_u32);
+    /// Maximum distinct governance-lock owners retained for one referendum.
+    pub const MAX_LOCK_OWNERS_PER_REFERENDUM: NonZeroU32 = nonzero!(1_000_u32);
     /// Default JDG signature schemes accepted during attestation validation.
     pub const JDG_SIGNATURE_SCHEMES: &[&str] = &["simple_threshold"];
     /// Default runtime-upgrade provenance enforcement mode.
@@ -4194,22 +4236,8 @@ pub mod governance {
             .map(str::to_string)
             .collect()
     }
-    /// Default sortition council committee size.
-    pub const PARLIAMENT_COMMITTEE_SIZE: usize = 21;
-    /// Default term length for the council (blocks). ~12h at 1s blocks.
-    pub const PARLIAMENT_TERM_BLOCKS: u64 = 43_200;
-    /// Minimum stake required to qualify for council selection.
-    pub fn parliament_min_stake() -> Quantity {
-        Quantity::from(1_u64)
-    }
-    /// Default stake asset definition used for council eligibility.
-    pub fn parliament_eligibility_asset_id() -> String {
-        super::canonical_asset_definition_literal("stake.universal", "SORA")
-    }
-    /// Default alternates drawn per parliament term (None = committee size).
-    pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;
-    /// Default council quorum requirement expressed in basis points (ceil-divided).
-    pub const PARLIAMENT_QUORUM_BPS: u16 = 6_667;
+    /// Default alternates retained for each attempt-local Parliament body draw.
+    pub const PARLIAMENT_ALTERNATE_SIZE: usize = 21;
     /// Exact number of blocks between a Parliament sortition request and its beacon pulse.
     pub const PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS: u64 = 4;
     /// Consensus block-height span during which selected primaries and alternates may respond.
@@ -4226,9 +4254,9 @@ pub mod governance {
     pub const PARLIAMENT_REVIEW_PANEL_SIZE: usize = 150;
     /// Default Coordination Council size.
     pub const PARLIAMENT_COORDINATION_COUNCIL_SIZE: usize = 150;
-    /// Default Policy Jury size (hidden timed-OVN bodies require at least two seats).
+    /// Default Policy Jury size (hidden timed-OVN bodies require the V1 anonymity floor).
     pub const PARLIAMENT_POLICY_JURY_SIZE: usize = 500;
-    /// Configured Confirmation Jury target/cap (hidden timed-OVN bodies require at least two).
+    /// Configured Confirmation Jury target/cap (hidden timed-OVN bodies require the V1 anonymity floor).
     pub const PARLIAMENT_CONFIRMATION_JURY_SIZE: usize = 1_000;
     /// Default Oversight Committee size.
     pub const PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE: usize = 50;
@@ -4261,18 +4289,17 @@ pub mod governance {
         /// Hard first-release corpus ceiling, matching the bounded timed-OVN decoder.
         pub const MAX_CORPUS_ENTRIES_LIMIT: u32 = 1_000;
     }
-    /// Default citizen service cooldown in blocks after accepting a seat.
-    pub const CITIZEN_SEAT_COOLDOWN_BLOCKS: u64 = 0;
-    /// Default maximum seats a single citizen may hold per epoch.
-    pub const CITIZEN_MAX_SEATS_PER_EPOCH: u32 = u32::MAX;
-    /// Default number of declines that do not trigger a slash per epoch.
-    pub const CITIZEN_FREE_DECLINES_PER_EPOCH: u32 = u32::MAX;
-    /// Slash applied when a citizen declines after exhausting the free budget (basis points).
-    pub const CITIZEN_DECLINE_SLASH_BPS: u16 = 0;
-    /// Slash applied when a citizen fails to appear for an assigned seat (basis points).
-    pub const CITIZEN_NO_SHOW_SLASH_BPS: u16 = 0;
-    /// Legacy service-outcome slash, disabled; misconduct uses ordinary adjudication.
-    pub const CITIZEN_MISCONDUCT_SLASH_BPS: u16 = 0;
+    /// Adaptive-corruption bounds for one finalized Parliament TLE key session.
+    pub mod parliament_tle_key_lifecycle {
+        /// Inclusive new-ballot lifetime after the mandatory `H + 1` activation.
+        ///
+        /// This matches the default maximum four-attempt timed-OVN lifecycle.
+        /// Ballots committed before expiry retain their session through their
+        /// independently committed inclusive opening deadline.
+        pub const SESSION_LIFETIME_BLOCKS: u64 = 37_600;
+        /// Conservative V1 ceiling: every fresh ballot requires a fresh DKG key.
+        pub const MAX_FRESH_BALLOTS_PER_SESSION: u32 = 1;
+    }
     /// Default per-binding reward amount ("1" XOR).
     pub const VIRAL_FOLLOW_REWARD_AMOUNT: &str = "1";
     /// Default sender bonus amount ("0.1" XOR).
@@ -4318,31 +4345,6 @@ pub mod governance {
     /// Aggregate campaign cap across the promo window (0 = unlimited).
     pub fn viral_campaign_cap() -> Quantity {
         Quantity::zero()
-    }
-    /// Default citizen service discipline parameters.
-    pub mod citizen_service {
-        use crate::parameters::defaults::governance::{
-            CITIZEN_DECLINE_SLASH_BPS, CITIZEN_FREE_DECLINES_PER_EPOCH,
-            CITIZEN_MAX_SEATS_PER_EPOCH, CITIZEN_MISCONDUCT_SLASH_BPS, CITIZEN_NO_SHOW_SLASH_BPS,
-            CITIZEN_SEAT_COOLDOWN_BLOCKS,
-        };
-        use std::collections::BTreeMap;
-        /// Default service cooldown (blocks) after accepting a seat.
-        pub const SEAT_COOLDOWN_BLOCKS: u64 = CITIZEN_SEAT_COOLDOWN_BLOCKS;
-        /// Default maximum seats a citizen may hold per epoch.
-        pub const MAX_SEATS_PER_EPOCH: u32 = CITIZEN_MAX_SEATS_PER_EPOCH;
-        /// Default number of free declines per epoch.
-        pub const FREE_DECLINES_PER_EPOCH: u32 = CITIZEN_FREE_DECLINES_PER_EPOCH;
-        /// Slash percentage applied to declines beyond the free budget (basis points).
-        pub const DECLINE_SLASH_BPS: u16 = CITIZEN_DECLINE_SLASH_BPS;
-        /// Slash percentage applied to no-show events (basis points).
-        pub const NO_SHOW_SLASH_BPS: u16 = CITIZEN_NO_SHOW_SLASH_BPS;
-        /// Slash percentage applied to misconduct events (basis points).
-        pub const MISCONDUCT_SLASH_BPS: u16 = CITIZEN_MISCONDUCT_SLASH_BPS;
-        /// Default role bond multipliers (empty map = multiplier of 1 for all roles).
-        pub fn role_bond_multipliers() -> BTreeMap<String, u64> {
-            BTreeMap::new()
-        }
     }
     /// Default SoraFS pin policy constraints enforced by governance.
     pub mod sorafs_pin_policy {
@@ -4443,8 +4445,8 @@ pub mod governance {
 /// Confidential asset/verifier defaults.
 pub mod confidential {
     use super::*;
-    /// Confidential features disabled by default.
-    pub const ENABLED: bool = false;
+    /// Enable confidential verification; validators require this capability.
+    pub const ENABLED: bool = true;
     /// Observer-only assume-valid disabled by default.
     pub const ASSUME_VALID: bool = false;
     /// Default verifier backend identifier.
@@ -4627,54 +4629,6 @@ pub mod soranet {
 }
 /// Settlement defaults.
 pub mod settlement {
-    /// Offline settlement defaults.
-    pub mod offline {
-        use std::path::PathBuf;
-        /// Maximum estimated decoded Kagemusha verifier bytes retained by one node.
-        pub const KAGEMUSHA_MAX_DECODED_BYTES: u64 = 256 * 1024 * 1024;
-        /// No Kagemusha release policy is trusted unless an operator configures one.
-        #[must_use]
-        pub const fn kagemusha_release_policy_path() -> Option<PathBuf> {
-            None
-        }
-        /// No Kagemusha artifact catalog is loaded unless an operator configures one.
-        #[must_use]
-        pub const fn kagemusha_artifact_dir() -> Option<PathBuf> {
-            None
-        }
-        /// No prequalified Kagemusha catalog is trusted unless an operator configures its seal.
-        #[must_use]
-        pub const fn kagemusha_catalog_qualification_seal_path() -> Option<PathBuf> {
-            None
-        }
-        /// No promotion controller is trusted unless an operator pins its public key.
-        #[must_use]
-        pub const fn kagemusha_promotion_controller_public_key() -> Option<iroha_crypto::PublicKey>
-        {
-            None
-        }
-        /// No catalog-revalidation authority key id is trusted unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_catalog_revalidation_authority_key_id() -> Option<String> {
-            None
-        }
-        /// No catalog-revalidation authority key is trusted unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_catalog_revalidation_authority_public_key()
-        -> Option<iroha_crypto::PublicKey> {
-            None
-        }
-        /// No root-custodied promotion reservation is read unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_promotion_reservation_path() -> Option<PathBuf> {
-            None
-        }
-        /// No validator qualification seal is published unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_validator_qualification_seal_path() -> Option<PathBuf> {
-            None
-        }
-    }
     /// Router defaults (shadow price, guard rails).
     pub mod router {
         /// Default TWAP window used for conversion quotes (seconds).

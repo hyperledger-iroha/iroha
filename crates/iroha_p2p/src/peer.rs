@@ -4882,6 +4882,52 @@ mod run {
         // an API-requested priority before the message reaches this boundary.
         inbound_priority_from_topic(message.topic())
     }
+    const INBOUND_HEALTH_FRAME_BURST: u8 = 2;
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum InboundHealthFrame {
+        Ping,
+        Pong,
+    }
+    #[derive(Clone, Copy, Debug)]
+    struct InboundHealthFrameLimiter {
+        tokens: u8,
+        last_refill: Instant,
+        refill_period: Duration,
+    }
+    impl InboundHealthFrameLimiter {
+        fn new(now: Instant, idle_timeout: Duration) -> Self {
+            Self {
+                tokens: INBOUND_HEALTH_FRAME_BURST,
+                last_refill: now,
+                refill_period: (idle_timeout / 2).max(Duration::from_nanos(1)),
+            }
+        }
+        fn admit_at(&mut self, _frame: InboundHealthFrame, now: Instant) -> bool {
+            let elapsed = now.saturating_duration_since(self.last_refill);
+            let whole_periods = elapsed.as_nanos() / self.refill_period.as_nanos();
+            if whole_periods != 0 {
+                let missing = INBOUND_HEALTH_FRAME_BURST.saturating_sub(self.tokens);
+                let replenished = u8::try_from(whole_periods.min(u128::from(missing)))
+                    .expect("health-frame refill is bounded by its two-token burst");
+                self.tokens = self.tokens.saturating_add(replenished);
+                if replenished != 0 {
+                    self.last_refill = self
+                        .last_refill
+                        .checked_add(self.refill_period.saturating_mul(u32::from(replenished)))
+                        .unwrap_or(now);
+                }
+            }
+            if self.tokens == 0 {
+                return false;
+            }
+            if self.tokens == INBOUND_HEALTH_FRAME_BURST {
+                // Time spent at capacity cannot become credit for a later burst.
+                self.last_refill = now;
+            }
+            self.tokens -= 1;
+            true
+        }
+    }
     fn try_recv_low_rr<T>(
         low_rr: &mut u8,
         lo_block_sync_rx: &mut post_channel::Receiver<T>,
@@ -5356,6 +5402,8 @@ mod run {
             let mut ping_interval = tokio::time::interval_at(Instant::now() + idle_timeout / 2, idle_timeout / 2);
             idle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut inbound_health_frames =
+                InboundHealthFrameLimiter::new(Instant::now(), idle_timeout);
             // Fairness scheduler: opportunistically service one low-priority topic
             // after processing a burst of high-priority posts. This avoids starving
             // low topics during sustained consensus traffic.
@@ -5968,7 +6016,11 @@ mod run {
                                 break;
                             }
                         };
-                        match message {
+                        let refresh_liveness = match message {
+                            Message::Ping if !inbound_health_frames.admit_at(
+                                InboundHealthFrame::Ping,
+                                Instant::now(),
+                            ) => false,
                             Message::Ping => {
                                 iroha_logger::trace!("Received peer ping");
                                 if message_sender_hi.can_prepare(
@@ -5994,9 +6046,15 @@ mod run {
                                         "Skipping peer pong while its outbound pool is backpressured"
                                     );
                                 }
+                                true
                             },
+                            Message::Pong if !inbound_health_frames.admit_at(
+                                InboundHealthFrame::Pong,
+                                Instant::now(),
+                            ) => false,
                             Message::Pong => {
                                 iroha_logger::trace!("Received peer pong");
+                                true
                             }
                             Message::Data(payload) => {
                                 iroha_logger::trace!("Received peer message");
@@ -6031,11 +6089,14 @@ mod run {
                                     iroha_logger::error!("Inbound dispatch worker terminated.");
                                     break;
                                 }
+                                true
                             }
+                        };
+                        if refresh_liveness {
+                            // Valid health cadence and all application data prove liveness.
+                            idle_interval.reset();
+                            ping_interval.reset();
                         }
-                        // Reset idle and ping timeout as peer received message from another peer
-                        idle_interval.reset();
-                        ping_interval.reset();
                             }
                             PeerStreamIo::Read(PeerStreamRead::Low(msg)) => {
                                 prefer_inbound_io = false;
@@ -6115,7 +6176,11 @@ mod run {
                                 continue;
                             }
                         };
-                        match message {
+                        let refresh_liveness = match message {
+                            Message::Ping if !inbound_health_frames.admit_at(
+                                InboundHealthFrame::Ping,
+                                Instant::now(),
+                            ) => false,
                             Message::Ping => {
                                 iroha_logger::trace!("Received peer ping (low stream)");
                                 if message_sender_hi.can_prepare(
@@ -6141,9 +6206,15 @@ mod run {
                                         "Skipping peer pong while its outbound pool is backpressured"
                                     );
                                 }
+                                true
                             },
+                            Message::Pong if !inbound_health_frames.admit_at(
+                                InboundHealthFrame::Pong,
+                                Instant::now(),
+                            ) => false,
                             Message::Pong => {
                                 iroha_logger::trace!("Received peer pong (low stream)");
+                                true
                             }
                             Message::Data(payload) => {
                                 iroha_logger::trace!("Received peer message (low stream)");
@@ -6178,11 +6249,14 @@ mod run {
                                     iroha_logger::error!("Inbound dispatch worker terminated.");
                                     break;
                                 }
+                                true
                             }
+                        };
+                        if refresh_liveness {
+                            // The limiter is shared with the high stream.
+                            idle_interval.reset();
+                            ping_interval.reset();
                         }
-                        // Reset idle and ping timeout as peer received message from another peer
-                        idle_interval.reset();
-                        ping_interval.reset();
                             }
                             PeerStreamIo::Outbound { sent_low, result } => {
                                 if let Err(error) = result {
@@ -12284,6 +12358,48 @@ mod run {
             assert_eq!(first, (HighTopic::ConsensusSafety, String::from("safety")));
             assert_eq!(control_rx.try_recv_now(), Some(String::from("control")));
             assert_eq!(consensus_rx.try_recv_now(), Some(String::from("consensus")));
+        }
+        #[test]
+        fn inbound_health_limiter_allows_only_the_initial_burst() {
+            let now = Instant::now();
+            let mut limiter = InboundHealthFrameLimiter::new(now, Duration::from_secs(20));
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
+            assert!(!limiter.admit_at(InboundHealthFrame::Ping, now));
+        }
+        #[test]
+        fn inbound_health_limiter_refills_one_token_per_period_and_caps_credit() {
+            let now = Instant::now();
+            let period = Duration::from_secs(10);
+            let mut limiter = InboundHealthFrameLimiter::new(now, period * 2);
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
+            assert!(!limiter.admit_at(InboundHealthFrame::Ping, now));
+
+            let one_period = now + period;
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, one_period));
+            assert!(!limiter.admit_at(InboundHealthFrame::Ping, one_period));
+
+            let fully_refilled = one_period + period * 20;
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, fully_refilled));
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, fully_refilled));
+            assert!(!limiter.admit_at(InboundHealthFrame::Ping, fully_refilled));
+        }
+        #[test]
+        fn inbound_ping_and_pong_share_one_health_budget() {
+            let now = Instant::now();
+            let period = Duration::from_secs(10);
+            let mut limiter = InboundHealthFrameLimiter::new(now, period * 2);
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
+            assert!(limiter.admit_at(InboundHealthFrame::Pong, now));
+            assert!(!limiter.admit_at(InboundHealthFrame::Pong, now));
+
+            let one_period = now + period;
+            assert!(limiter.admit_at(InboundHealthFrame::Ping, one_period));
+            assert!(
+                !limiter.admit_at(InboundHealthFrame::Pong, one_period),
+                "a Pong must not receive a disjoint refill from Ping"
+            );
         }
         #[test]
         fn inbound_priority_marks_control_planes_high() {

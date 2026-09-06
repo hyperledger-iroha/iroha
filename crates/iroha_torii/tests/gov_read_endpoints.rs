@@ -44,6 +44,7 @@ async fn gov_proposal_get_returns_record() {
     let rec = iroha_core::state::GovernanceProposalRecord {
         proposer: proposer.clone(),
         kind: ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: proposer.clone(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
@@ -150,23 +151,6 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
     assert_eq!(
         v.get("found").and_then(norito::json::Value::as_bool),
         Some(false)
-    );
-}
-#[tokio::test]
-async fn gov_council_current_does_not_synthesize_an_unpersisted_roster() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_store = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query_store));
-    let resp = iroha_torii::handle_gov_council_current(state)
-        .await
-        .expect("handler ok")
-        .0;
-    assert!(resp.members.is_empty());
-    assert!(resp.alternates.is_empty());
-    assert_eq!(resp.candidate_count, 0);
-    assert_eq!(
-        resp.derived_by,
-        iroha_data_model::isi::governance::CouncilDerivationKind::Manual
     );
 }
 #[tokio::test]

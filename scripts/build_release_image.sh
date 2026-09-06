@@ -1,5 +1,19 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 -u BASH_XTRACEFD -u CDPATH -u GLOBIGNORE bash -p
 set -euo pipefail
+unset BASH_ENV ENV PYTHONHOME PYTHONPATH PS4 BASH_XTRACEFD CDPATH GLOBIGNORE \
+  CARGO_ENCODED_RUSTFLAGS CARGO_ENCODED_RUSTDOCFLAGS CARGO_HOME \
+  RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTDOC RUSTDOCFLAGS RUSTFLAGS
+for release_environment_name in ${!CARGO_BUILD_@}; do
+  unset "$release_environment_name"
+done
+for release_environment_name in ${!CARGO_TARGET_@}; do
+  case "$release_environment_name" in
+    *_LINKER|*_RUNNER|*_RUSTFLAGS|*_RUSTDOCFLAGS)
+      unset "$release_environment_name"
+      ;;
+  esac
+done
+export PYTHONNOUSERSITE=1
 
 usage() {
   cat <<'EOF'
@@ -22,6 +36,8 @@ Required release controls:
 
 Build inputs and outputs:
   --prebuilt-bin-dir <path>          Required reviewed target binaries.
+  --trusted-prebuilt-provenance-sha256 <hex>
+                                      Reviewed SHA256 of the prebuilt provenance manifest.
   --features <list>                  Canonical comma-separated Cargo features.
   --binaries "<list>"                Space-separated binary inventory.
   --tag <tag>                        OCI reference annotation.
@@ -79,6 +95,7 @@ config="nexus"
 features=""
 binaries=""
 prebuilt_bin_dir=""
+trusted_prebuilt_provenance_sha256=""
 source_commit=""
 source_date_epoch=""
 platform=""
@@ -110,6 +127,11 @@ while (($#)); do
     --prebuilt-bin-dir)
       require_value "$1" "${2-}"
       prebuilt_bin_dir="$2"
+      shift 2
+      ;;
+    --trusted-prebuilt-provenance-sha256)
+      require_value "$1" "${2-}"
+      trusted_prebuilt_provenance_sha256="$2"
       shift 2
       ;;
     --source-commit)
@@ -285,9 +307,18 @@ if [[ -z "$prebuilt_bin_dir" ]]; then
   printf '%s\n' '--prebuilt-bin-dir is required for deterministic release images' >&2
   exit 1
 fi
+require_sha256 \
+  "--trusted-prebuilt-provenance-sha256" \
+  "$trusted_prebuilt_provenance_sha256"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
+release_python=(python3 -I -S "$repo_root/scripts/run_isolated_release_tool.py")
+validate_release_source() {
+  python3 -I -S "$repo_root/scripts/check_release_feature_graph.py" \
+    --validate-source-commit "$source_commit" >/dev/null
+}
+validate_release_source
 version="$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)"
 safe_token "version" "$version"
 actual_commit="$(git rev-parse HEAD)"
@@ -296,10 +327,9 @@ if [[ "$actual_commit" != "$source_commit" ]]; then
   exit 1
 fi
 source_date_epoch="$(
-  python3 - "$repo_root/scripts" "$source_date_epoch" <<'EPOCH_PY'
+  "${release_python[@]}" --stdin "$repo_root/scripts" "$source_date_epoch" <<'EPOCH_PY'
 import sys
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import parse_source_date_epoch
 
 print(parse_source_date_epoch(sys.argv[2]))
@@ -317,12 +347,11 @@ if [[ ! "$image_tag" =~ ^[a-z0-9][A-Za-z0-9._:/-]{0,254}$ ||
 fi
 
 artifacts_dir="$(
-  python3 - "$repo_root/scripts" "$artifacts_dir" <<'OUTPUT_DIR_PY'
+  "${release_python[@]}" --stdin "$repo_root/scripts" "$artifacts_dir" <<'OUTPUT_DIR_PY'
 import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import scan_inventory_paths
 
 path = Path(os.path.abspath(sys.argv[2]))
@@ -337,12 +366,11 @@ if [[ -z "$manifest_out" ]]; then
   manifest_out="$artifacts_dir/${profile}-${version}-${os_tag}-${arch}-image.json"
 else
   manifest_out="$(
-    python3 - "$repo_root/scripts" "$manifest_out" <<'MANIFEST_PATH_PY'
+    "${release_python[@]}" --stdin "$repo_root/scripts" "$manifest_out" <<'MANIFEST_PATH_PY'
 import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import scan_inventory_paths
 
 path = Path(os.path.abspath(sys.argv[2]))
@@ -359,7 +387,7 @@ for output in "$archive_path" "$checksum_path" "$manifest_out"; do
 done
 
 verify_tool_contract() {
-  python3 - \
+  "${release_python[@]}" --stdin \
     "$repo_root/scripts" \
     "$docker_path" \
     "$trusted_docker_sha256" \
@@ -369,7 +397,6 @@ import stat
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import ReleaseArtifactError, stable_hash_path
 
 for label, raw_path, expected_sha256 in (
@@ -396,16 +423,66 @@ cleanup() {
 }
 trap cleanup EXIT
 
+provenance_features="$features"
+provenance_binaries=()
+requires_external_signer_feature=0
+for binary in "${binary_inventory[@]}"; do
+  case "$binary" in
+    iroha3d|iroha3d_taira|sorafs_governance_dag)
+      package="irohad"
+      ;;
+    iroha)
+      package="iroha_cli"
+      ;;
+    kagami)
+      package="iroha_kagami"
+      ;;
+    attachment_sanitizer)
+      package="iroha_torii"
+      ;;
+    sorafs_external_software_signer)
+      package="irohad"
+      requires_external_signer_feature=1
+      ;;
+    *)
+      printf 'unsupported provenance package mapping for binary: %s\n' "$binary" >&2
+      exit 1
+      ;;
+  esac
+  provenance_binaries+=(--binary "$binary=$package")
+done
+if (( requires_external_signer_feature )); then
+  if [[ -n "$provenance_features" ]]; then
+    provenance_features+=",irohad/external-software-signer-bin"
+  else
+    provenance_features="irohad/external-software-signer-bin"
+  fi
+fi
+prebuilt_snapshot="$temp_root/prebuilt-bin"
+prebuilt_provenance_sha256="$(
+  "${release_python[@]}" "$repo_root/scripts/verify_release_prebuilt_provenance.py" \
+    --directory "$prebuilt_bin_dir" \
+    --trusted-manifest-sha256 "$trusted_prebuilt_provenance_sha256" \
+    --source-commit "$source_commit" \
+    --cargo-lock "$repo_root/Cargo.lock" \
+    --target "$target" \
+    --cargo-profile deploy \
+    --features "$provenance_features" \
+    "${provenance_binaries[@]}" \
+    --output-directory "$prebuilt_snapshot"
+)"
+prebuilt_bin_dir="$prebuilt_snapshot"
+
 docker_config="$temp_root/docker-config"
 plugin_dir="$temp_root/docker-cli-plugins"
 tool_dir="$temp_root/release-tools"
 mkdir -m 0700 "$docker_config" "$plugin_dir" "$tool_dir"
-python3 "$repo_root/scripts/copy_release_file.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
   --source "$docker_path" \
   --output "$tool_dir/docker" \
   --mode 0755 \
   --require-executable
-python3 "$repo_root/scripts/copy_release_file.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
   --source "$buildx_plugin" \
   --output "$plugin_dir/docker-buildx" \
   --mode 0755 \
@@ -414,13 +491,13 @@ export DOCKER_CONFIG="$docker_config"
 export DOCKER_CLI_PLUGIN_EXTRA_DIRS="$plugin_dir"
 
 version_capture="$temp_root/buildx-version.txt"
-python3 "$repo_root/scripts/capture_release_command.py" \
+"${release_python[@]}" "$repo_root/scripts/capture_release_command.py" \
   --output "$version_capture" \
   --executable-root "$tool_dir" \
   --executable-relative "docker" \
   --trusted-executable-sha256 "$trusted_docker_sha256" \
   -- buildx version
-observed_buildx_version="$(python3 - "$version_capture" <<'VERSION_PY'
+observed_buildx_version="$("${release_python[@]}" --stdin "$version_capture" <<'VERSION_PY'
 import sys
 from pathlib import Path
 
@@ -441,18 +518,17 @@ if [[ "$observed_buildx_version" != "$trusted_buildx_version" ]]; then
   exit 1
 fi
 builder_inspect_capture="$temp_root/buildx-builder-inspect.txt"
-python3 "$repo_root/scripts/capture_release_command.py" \
+"${release_python[@]}" "$repo_root/scripts/capture_release_command.py" \
   --output "$builder_inspect_capture" \
   --executable-root "$tool_dir" \
   --executable-relative "docker" \
   --trusted-executable-sha256 "$trusted_docker_sha256" \
   -- buildx inspect --builder "$buildx_builder" --bootstrap
 observed_builder_inspect_sha256="$(
-  python3 - "$repo_root/scripts" "$builder_inspect_capture" <<'BUILDER_INSPECT_PY'
+  "${release_python[@]}" --stdin "$repo_root/scripts" "$builder_inspect_capture" <<'BUILDER_INSPECT_PY'
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import stable_hash_path
 
 print(stable_hash_path(Path(sys.argv[2])).sha256)
@@ -466,7 +542,7 @@ fi
 
 build_context="$temp_root/context"
 mkdir -m 0700 "$build_context"
-python3 "$repo_root/scripts/copy_release_file.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
   --source "$repo_root/Dockerfile" \
   --output "$build_context/Dockerfile" \
   --mode 0644
@@ -478,48 +554,47 @@ mkdir -m 0755 \
   "$build_context/configs/sorafs" \
   "$build_context/configs/soranexus" \
   "$build_context/configs/soranexus/taira"
-python3 "$repo_root/scripts/copy_release_file.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
   --source "$repo_root/scripts/docker_entrypoint.sh" \
   --output "$build_context/scripts/docker_entrypoint.sh" \
   --mode 0755 \
   --require-executable
-python3 "$repo_root/scripts/copy_release_file.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
   --source "$repo_root/scripts/ci/package_inrou_runtime_v1.py" \
   --output "$build_context/scripts/ci/package_inrou_runtime_v1.py" \
   --mode 0644
 mkdir -m 0755 "$build_context/dist/docker-bin"
 for binary in "${binary_inventory[@]}"; do
-  python3 "$repo_root/scripts/copy_release_file.py" \
+  "${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
     --source "$prebuilt_bin_dir/$binary" \
     --output "$build_context/dist/docker-bin/$binary" \
     --mode 0755 \
     --require-executable
 done
-python3 "$repo_root/scripts/copy_release_tree.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_tree.py" \
   --source-root "$repo_root/defaults" \
   --output-root "$build_context" \
   --destination-prefix "defaults" >/dev/null
-python3 "$repo_root/scripts/copy_release_tree.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_tree.py" \
   --source-root "$repo_root/codec/rans/tables" \
   --output-root "$build_context" \
   --destination-prefix "codec/rans/tables" >/dev/null
-python3 "$repo_root/scripts/copy_release_tree.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_tree.py" \
   --source-root "$repo_root/configs/sorafs/external_software_signer" \
   --output-root "$build_context" \
   --destination-prefix "configs/sorafs/external_software_signer" >/dev/null
-python3 "$repo_root/scripts/copy_release_tree.py" \
+"${release_python[@]}" "$repo_root/scripts/copy_release_tree.py" \
   --source-root "$repo_root/configs/sorafs/runtime_provider_broker" \
   --output-root "$build_context" \
   --destination-prefix "configs/sorafs/runtime_provider_broker" >/dev/null
 context_kind="closed-prebuilt"
 context_summary="$(
-    python3 - "$repo_root/scripts" "$build_context" <<'CONTEXT_PY'
+    "${release_python[@]}" --stdin "$repo_root/scripts" "$build_context" <<'CONTEXT_PY'
 import hashlib
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import (
     canonical_json_bytes,
     scan_inventory_paths,
@@ -581,7 +656,7 @@ log "Building deterministic OCI layout for ${image_tag} (${platform})"
 "$tool_dir/docker" "${docker_build_args[@]}"
 verify_tool_contract
 private_tool_summary="$(
-  python3 - \
+  "${release_python[@]}" --stdin \
     "$repo_root/scripts" \
     "$tool_dir/docker" \
     "$plugin_dir/docker-buildx" <<'PRIVATE_TOOL_PY'
@@ -589,7 +664,6 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import stable_hash_path
 
 print(
@@ -605,7 +679,7 @@ print(
 PRIVATE_TOOL_PY
 )"
 expected_private_tool_summary="$(
-  python3 - "$trusted_docker_sha256" "$trusted_buildx_sha256" <<'EXPECTED_TOOL_PY'
+  "${release_python[@]}" --stdin "$trusted_docker_sha256" "$trusted_buildx_sha256" <<'EXPECTED_TOOL_PY'
 import json
 import sys
 
@@ -627,7 +701,7 @@ if [[ "$private_tool_summary" != "$expected_private_tool_summary" ]]; then
 fi
 
 version_capture_after="$temp_root/buildx-version-after.txt"
-python3 "$repo_root/scripts/capture_release_command.py" \
+"${release_python[@]}" "$repo_root/scripts/capture_release_command.py" \
   --output "$version_capture_after" \
   --executable-root "$tool_dir" \
   --executable-relative "docker" \
@@ -638,7 +712,7 @@ if ! cmp -s "$version_capture" "$version_capture_after"; then
   exit 1
 fi
 builder_inspect_capture_after="$temp_root/buildx-builder-inspect-after.txt"
-python3 "$repo_root/scripts/capture_release_command.py" \
+"${release_python[@]}" "$repo_root/scripts/capture_release_command.py" \
   --output "$builder_inspect_capture_after" \
   --executable-root "$tool_dir" \
   --executable-relative "docker" \
@@ -650,13 +724,12 @@ if ! cmp -s "$builder_inspect_capture" "$builder_inspect_capture_after"; then
 fi
 
 context_summary_after="$(
-    python3 - "$repo_root/scripts" "$build_context" <<'CONTEXT_AFTER_PY'
+    "${release_python[@]}" --stdin "$repo_root/scripts" "$build_context" <<'CONTEXT_AFTER_PY'
 import hashlib
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import (
     canonical_json_bytes,
     scan_inventory_paths,
@@ -695,7 +768,7 @@ fi
 
 log "Writing canonical OCI archive ${archive_name}"
 oci_summary="$(
-  python3 "$repo_root/scripts/build_release_oci_archive.py" \
+  "${release_python[@]}" "$repo_root/scripts/build_release_oci_archive.py" \
     --layout-root "$oci_layout" \
     --output "$archive_path" \
     --source-date-epoch "$source_date_epoch" \
@@ -704,13 +777,13 @@ oci_summary="$(
     --expected-architecture "$arch"
 )"
 archive_sha="$(
-  python3 "$repo_root/scripts/write_release_checksum.py" \
+  "${release_python[@]}" "$repo_root/scripts/write_release_checksum.py" \
     --artifact "$archive_path" \
     --output "$checksum_path" \
     --listed-name "$archive_name"
 )"
 
-python3 - \
+"${release_python[@]}" --stdin \
   "$repo_root/scripts" \
   "$manifest_out" \
   "$profile" \
@@ -724,6 +797,7 @@ python3 - \
   "$platform" \
   "$features" \
   "$binaries" \
+  "$prebuilt_provenance_sha256" \
   "$context_kind" \
   "$context_summary" \
   "$builder_base_image" \
@@ -741,7 +815,6 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import (
     canonical_json_bytes,
     exclusive_write_bytes,
@@ -762,6 +835,7 @@ from release_artifact_contract import (
     platform,
     features,
     binaries,
+    prebuilt_provenance_sha256,
     context_kind,
     context_summary_raw,
     builder_base_image,
@@ -798,6 +872,7 @@ manifest = {
     "platform": platform,
     "features": features,
     "binaries": binaries.split(),
+    "prebuilt_provenance_sha256": prebuilt_provenance_sha256,
     "external_software_signer": {
         "backend": "software",
         "binary": "/usr/local/bin/sorafs_external_software_signer",
@@ -851,4 +926,5 @@ exclusive_write_bytes(
 )
 MANIFEST_PY
 
+validate_release_source
 printf '%s\n' "$archive_path"

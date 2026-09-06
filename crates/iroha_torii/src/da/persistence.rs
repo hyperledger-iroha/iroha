@@ -1,10 +1,11 @@
 //! Persistence helpers for DA replay cursors, receipts, and spool artifacts.
 
 #![allow(clippy::redundant_pub_crate)]
+use crate::secure_file_metadata;
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
-use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
-use iroha_data_model::{da::prelude::*, nexus::LaneId};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
+use iroha_data_model::{NetworkId, da::prelude::*, nexus::LaneId};
 use iroha_logger::{debug, warn};
 use norito::{
     decode_from_bytes,
@@ -21,7 +22,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -55,7 +56,817 @@ pub(crate) const RECEIPT_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA5; 64];
 pub(super) const STORED_RECEIPT_VERSION: u16 = 1;
 const RECEIPT_SIGNING_PAYLOAD_VERSION: u16 = 1;
 const DA_COMMITMENT_SCHEDULE_ENTRY_VERSION: u16 = 1;
+const DA_INGEST_SERVER_ASSIGNMENT_VERSION: u16 = 1;
+const DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION: u16 = 1;
+const DA_INGEST_SERVER_ASSIGNMENT_DIR: &str = "request-intents-v1";
+const DA_INGEST_SERVER_ASSIGNMENT_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+const DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1: usize = 128 * 1024;
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+static DA_INGEST_SERVER_ASSIGNMENT_LOCK: OnceLock<NonPoisoningMutex<()>> = OnceLock::new();
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
+/// Durable server-owned choices for one signed DA ingest request.
+pub(super) struct DaIngestServerAssignmentV1 {
+    /// Assignment layout version.
+    pub(super) version: u16,
+    /// Stable digest authorised by every request signer.
+    pub(super) request_digest: [u8; 32],
+    /// Network component of the replay-slot identity.
+    pub(super) network_id: NetworkId,
+    /// Bound Nexus lane.
+    pub(super) lane_id: LaneId,
+    /// Bound lane epoch.
+    pub(super) epoch: u64,
+    /// Bound replay sequence.
+    pub(super) sequence: u64,
+    /// Bound caller content identifier.
+    pub(super) client_blob_id: BlobDigest,
+    /// Bound canonical payload digest.
+    pub(super) payload_hash: BlobDigest,
+    /// Bound canonical payload length.
+    pub(super) total_size: u64,
+    /// Server-assigned queue time reused by the manifest, PDP, and receipt.
+    pub(super) queued_at_secs: u64,
+    /// Fully transformed metadata, including server-generated encryption nonces.
+    pub(super) transformed_metadata: ExtraMetadata,
+    /// Proof scheme selected from the admitted lane policy.
+    pub(super) proof_scheme: DaProofScheme,
+    /// Retention policy selected from the admitted replication policy.
+    pub(super) enforced_retention: RetentionPolicy,
+    /// Whether the selected retention policy differs from the submitted one.
+    pub(super) retention_mismatch: bool,
+    /// Canonical manifest bytes derived from all server-owned choices.
+    pub(super) manifest_bytes: Vec<u8>,
+    /// Operator key authenticating the frozen assignment independently of metadata-key rotation.
+    pub(super) operator_public_key: PublicKey,
+    /// Signature over the complete assignment with this field replaced by a fixed placeholder.
+    pub(super) assignment_signature: Signature,
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
+struct DaIngestSignedReceiptAssignmentV1 {
+    version: u16,
+    request_digest: [u8; 32],
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    operator_public_key: PublicKey,
+    receipt: DaIngestReceipt,
+}
+
+impl DaIngestServerAssignmentV1 {
+    /// Freeze and operator-attest every server-owned choice for one validated request.
+    pub(super) fn try_new(
+        request: &DaIngestRequest,
+        queued_at_secs: u64,
+        transformed_metadata: ExtraMetadata,
+        proof_scheme: DaProofScheme,
+        enforced_retention: RetentionPolicy,
+        retention_mismatch: bool,
+        manifest_bytes: Vec<u8>,
+        signer: &KeyPair,
+    ) -> std::io::Result<Self> {
+        let mut assignment = Self {
+            version: DA_INGEST_SERVER_ASSIGNMENT_VERSION,
+            request_digest: request.signing_digest(),
+            network_id: request.network_id,
+            lane_id: request.lane_id,
+            epoch: request.epoch,
+            sequence: request.sequence,
+            client_blob_id: request.client_blob_id,
+            payload_hash: request.payload_hash,
+            total_size: request.total_size,
+            queued_at_secs,
+            transformed_metadata,
+            proof_scheme,
+            enforced_retention,
+            retention_mismatch,
+            manifest_bytes,
+            operator_public_key: signer.public_key().clone(),
+            assignment_signature: receipt_signature_placeholder(),
+        };
+        let signing_bytes = assignment.signing_bytes()?;
+        assignment.assignment_signature = Signature::try_new(signer.private_key(), &signing_bytes)
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
+        Ok(assignment)
+    }
+
+    fn signing_bytes(&self) -> std::io::Result<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.assignment_signature = receipt_signature_placeholder();
+        to_bytes(&unsigned).map_err(|err| std::io::Error::new(ErrorKind::Other, err))
+    }
+}
+
+fn validate_da_ingest_server_assignment(
+    assignment: &DaIngestServerAssignmentV1,
+    request: &DaIngestRequest,
+    trusted_operator_key: &PublicKey,
+) -> std::io::Result<()> {
+    if assignment.version != DA_INGEST_SERVER_ASSIGNMENT_VERSION {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "unsupported DA ingest server assignment version {} (expected {})",
+                assignment.version, DA_INGEST_SERVER_ASSIGNMENT_VERSION
+            ),
+        ));
+    }
+    if assignment.assignment_signature.payload().len() > DA_RECEIPT_SIGNATURE_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "DA ingest server assignment signature exceeds its first-release bound",
+        ));
+    }
+    let signing_bytes = assignment.signing_bytes().map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("failed to encode DA ingest assignment signing payload: {err}"),
+        )
+    })?;
+    assignment
+        .assignment_signature
+        .verify(&assignment.operator_public_key, &signing_bytes)
+        .map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("DA ingest server assignment signature is invalid: {err}"),
+            )
+        })?;
+    if assignment.operator_public_key != *trusted_operator_key {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "DA ingest server assignment is not attested by the configured receipt signer",
+        ));
+    }
+    let request_identity_matches = assignment.request_digest == request.signing_digest()
+        && assignment.network_id == request.network_id
+        && assignment.lane_id == request.lane_id
+        && assignment.epoch == request.epoch
+        && assignment.sequence == request.sequence
+        && assignment.client_blob_id == request.client_blob_id
+        && assignment.payload_hash == request.payload_hash
+        && assignment.total_size == request.total_size;
+    if !request_identity_matches {
+        return Err(std::io::Error::new(
+            ErrorKind::AlreadyExists,
+            "DA ingest server assignment does not match the signed request identity",
+        ));
+    }
+    if assignment.manifest_bytes.len() > DA_MANIFEST_ARTIFACT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "DA ingest server assignment manifest is {} bytes, exceeding the first-release {}-byte limit",
+                assignment.manifest_bytes.len(),
+                DA_MANIFEST_ARTIFACT_MAX_BYTES_V1
+            ),
+        ));
+    }
+    let (manifest, _) = decode_manifest_spool_body(&assignment.manifest_bytes)?;
+    let canonical_manifest = to_bytes(&manifest).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("failed to canonically re-encode assigned DA manifest: {err}"),
+        )
+    })?;
+    if canonical_manifest != assignment.manifest_bytes {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "DA ingest server assignment contains a non-canonical manifest encoding",
+        ));
+    }
+    if manifest.client_blob_id != assignment.client_blob_id
+        || manifest.lane_id != assignment.lane_id
+        || manifest.epoch != assignment.epoch
+        || manifest.blob_hash != assignment.payload_hash
+        || manifest.total_size != assignment.total_size
+        || manifest.retention_policy != assignment.enforced_retention
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "assigned DA manifest does not match its durable request identity and policy",
+        ));
+    }
+    Ok(())
+}
+
+fn decode_da_ingest_server_assignment(
+    path: &Path,
+    request: &DaIngestRequest,
+    trusted_operator_key: &PublicKey,
+) -> std::io::Result<DaIngestServerAssignmentV1> {
+    decode_da_ingest_server_assignment_with_link_policy(path, request, trusted_operator_key, false)
+}
+
+fn decode_da_ingest_server_assignment_with_link_policy(
+    path: &Path,
+    request: &DaIngestRequest,
+    trusted_operator_key: &PublicKey,
+    allow_publish_hard_link: bool,
+) -> std::io::Result<DaIngestServerAssignmentV1> {
+    let bytes = read_regular_spool_artifact_with_link_policy(
+        path,
+        "DA ingest server assignment",
+        DA_INGEST_SERVER_ASSIGNMENT_MAX_BYTES_V1,
+        allow_publish_hard_link,
+    )?;
+    let assignment = decode_from_bytes::<DaIngestServerAssignmentV1>(&bytes).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to decode DA ingest server assignment {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let canonical = to_bytes(&assignment).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to canonically re-encode DA ingest server assignment {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if canonical != bytes {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "DA ingest server assignment {} is not canonically encoded",
+                path.display()
+            ),
+        ));
+    }
+    validate_da_ingest_server_assignment(&assignment, request, trusted_operator_key)?;
+    Ok(assignment)
+}
+
+fn assignment_target_has_recoverable_temp_link(
+    target_path: &Path,
+    temp_path: &Path,
+) -> std::io::Result<bool> {
+    if !spool_artifact_exists(temp_path)? {
+        return Ok(false);
+    }
+    let target_metadata = secure_file_metadata::from_path(target_path)?;
+    let temp_metadata = secure_file_metadata::from_path(temp_path)?;
+    if !secure_file_metadata::same_file(&target_metadata, &temp_metadata) {
+        return Ok(false);
+    }
+    if !secure_file_metadata::is_direct_file(&target_metadata)
+        || !secure_file_metadata::is_direct_file(&temp_metadata)
+        || secure_file_metadata::number_of_links(&target_metadata) != Some(2)
+        || secure_file_metadata::number_of_links(&temp_metadata) != Some(2)
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "DA ingest assignment publish hard link is not an exact two-link regular file",
+        ));
+    }
+    Ok(true)
+}
+
+fn da_ingest_server_assignment_paths(
+    spool_dir: &Path,
+    network_id: &NetworkId,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+) -> std::io::Result<(PathBuf, PathBuf)> {
+    if spool_dir.as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "DA ingest spool directory is required for durable server assignments",
+        ));
+    }
+    let assignments_dir = spool_dir.join(DA_INGEST_SERVER_ASSIGNMENT_DIR);
+    let network_hash = blake3::hash(network_id.as_bytes());
+    let network_dir = assignments_dir.join(hex::encode(network_hash.as_bytes()));
+    let lane_dir = network_dir.join(format!("{:08x}", lane_id.as_u32()));
+    let epoch_dir = lane_dir.join(format!("{epoch:016x}"));
+    Ok((
+        epoch_dir.join(format!("{sequence:016x}.norito")),
+        epoch_dir.join(format!(".{sequence:016x}.tmp")),
+    ))
+}
+
+fn create_da_ingest_server_assignment_dirs(target_path: &Path) -> std::io::Result<()> {
+    let epoch_dir = target_path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no epoch directory",
+        )
+    })?;
+    let lane_dir = epoch_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no lane directory",
+        )
+    })?;
+    let network_dir = lane_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no network directory",
+        )
+    })?;
+    let assignments_dir = network_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no intent directory",
+        )
+    })?;
+    let spool_dir = assignments_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no spool directory",
+        )
+    })?;
+    for directory in [spool_dir, assignments_dir, network_dir, lane_dir, epoch_dir] {
+        create_spool_dir_no_follow(directory)?;
+    }
+    Ok(())
+}
+
+fn validate_existing_da_ingest_server_assignment_dirs(target_path: &Path) -> std::io::Result<bool> {
+    let epoch_dir = target_path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no epoch directory",
+        )
+    })?;
+    let lane_dir = epoch_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no lane directory",
+        )
+    })?;
+    let network_dir = lane_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no network directory",
+        )
+    })?;
+    let assignments_dir = network_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no intent directory",
+        )
+    })?;
+    let spool_dir = assignments_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "assignment path has no spool directory",
+        )
+    })?;
+    for directory in [spool_dir, assignments_dir, network_dir, lane_dir, epoch_dir] {
+        let metadata = match secure_file_metadata::from_path(directory) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err),
+        };
+        validate_spool_dir_metadata(directory, &metadata)?;
+    }
+    Ok(true)
+}
+
+fn da_ingest_signed_receipt_assignment_paths(
+    spool_dir: &Path,
+    network_id: &NetworkId,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+) -> std::io::Result<(PathBuf, PathBuf)> {
+    let (assignment_path, _) =
+        da_ingest_server_assignment_paths(spool_dir, network_id, lane_id, epoch, sequence)?;
+    let shard_dir = assignment_path.parent().ok_or_else(|| {
+        std::io::Error::new(ErrorKind::InvalidInput, "assignment path has no parent")
+    })?;
+    Ok((
+        shard_dir.join(format!("{sequence:016x}.receipt.norito")),
+        shard_dir.join(format!(".{sequence:016x}.receipt.tmp")),
+    ))
+}
+
+fn install_da_ingest_server_assignment(
+    temp_path: &Path,
+    target_path: &Path,
+) -> std::io::Result<()> {
+    match fs::hard_link(temp_path, target_path) {
+        Ok(()) => {
+            sync_parent_dir(target_path)?;
+            remove_temp_artifact(temp_path)?;
+            sync_parent_dir(target_path)
+        }
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            remove_temp_artifact(temp_path)?;
+            sync_parent_dir(target_path)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn spool_artifact_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+/// Load a previously published server assignment, recovering its one bounded temp if necessary.
+pub(super) fn load_da_ingest_server_assignment(
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    trusted_operator_key: &PublicKey,
+) -> std::io::Result<Option<DaIngestServerAssignmentV1>> {
+    let _guard = DA_INGEST_SERVER_ASSIGNMENT_LOCK
+        .get_or_init(|| NonPoisoningMutex::new(()))
+        .lock();
+    let (target_path, temp_path) = da_ingest_server_assignment_paths(
+        spool_dir,
+        &request.network_id,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+    )?;
+    if !validate_existing_da_ingest_server_assignment_dirs(&target_path)? {
+        return Ok(None);
+    }
+    if spool_artifact_exists(&target_path)? {
+        let allow_publish_hard_link =
+            assignment_target_has_recoverable_temp_link(&target_path, &temp_path)?;
+        return decode_da_ingest_server_assignment_with_link_policy(
+            &target_path,
+            request,
+            trusted_operator_key,
+            allow_publish_hard_link,
+        )
+        .map(Some);
+    }
+    if !spool_artifact_exists(&temp_path)? {
+        return Ok(None);
+    }
+    let metadata = fs::symlink_metadata(&temp_path)?;
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "DA ingest server assignment temp {} is not a regular file",
+                temp_path.display()
+            ),
+        ));
+    }
+    match decode_da_ingest_server_assignment(&temp_path, request, trusted_operator_key) {
+        Ok(assignment) => Ok(Some(assignment)),
+        Err(err) if err.kind() == ErrorKind::InvalidData => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// Atomically publish or recover the canonical server-owned choices for a signed ingest request.
+pub(super) fn load_or_create_da_ingest_server_assignment(
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    trusted_operator_key: &PublicKey,
+    candidate: &DaIngestServerAssignmentV1,
+) -> std::io::Result<DaIngestServerAssignmentV1> {
+    validate_da_ingest_server_assignment(candidate, request, trusted_operator_key).map_err(
+        |err| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("invalid DA ingest server assignment candidate: {err}"),
+            )
+        },
+    )?;
+    let encoded =
+        to_bytes(candidate).map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?;
+    if encoded.len() > DA_INGEST_SERVER_ASSIGNMENT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA ingest server assignment is {} bytes, exceeding the first-release {}-byte limit",
+                encoded.len(),
+                DA_INGEST_SERVER_ASSIGNMENT_MAX_BYTES_V1
+            ),
+        ));
+    }
+
+    let _guard = DA_INGEST_SERVER_ASSIGNMENT_LOCK
+        .get_or_init(|| NonPoisoningMutex::new(()))
+        .lock();
+    let (target_path, temp_path) = da_ingest_server_assignment_paths(
+        spool_dir,
+        &candidate.network_id,
+        candidate.lane_id,
+        candidate.epoch,
+        candidate.sequence,
+    )?;
+    create_da_ingest_server_assignment_dirs(&target_path)?;
+
+    if spool_artifact_exists(&target_path)? {
+        if spool_artifact_exists(&temp_path)? {
+            remove_temp_artifact(&temp_path)?;
+            sync_parent_dir(&target_path)?;
+        }
+        return decode_da_ingest_server_assignment(&target_path, request, trusted_operator_key);
+    }
+
+    match spool_artifact_exists(&temp_path) {
+        Ok(true) => {
+            let metadata = fs::symlink_metadata(&temp_path)?;
+            if !metadata.file_type().is_file() {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "DA ingest server assignment temp {} is not a regular file",
+                        temp_path.display()
+                    ),
+                ));
+            }
+            match decode_da_ingest_server_assignment(&temp_path, request, trusted_operator_key) {
+                Ok(assignment) => {
+                    install_da_ingest_server_assignment(&temp_path, &target_path)?;
+                    let installed = decode_da_ingest_server_assignment(
+                        &target_path,
+                        request,
+                        trusted_operator_key,
+                    )?;
+                    if installed != assignment {
+                        return Err(std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "installed DA ingest server assignment changed during recovery",
+                        ));
+                    }
+                    return Ok(installed);
+                }
+                Err(err) if err.kind() == ErrorKind::InvalidData => {
+                    remove_temp_artifact(&temp_path)?;
+                    sync_parent_dir(&target_path)?;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(false) => {}
+        Err(err) => return Err(err),
+    }
+
+    write_temp_artifact(&temp_path, &encoded)
+        .map_err(|err| temp_artifact_write_error(&temp_path, err))?;
+    install_da_ingest_server_assignment(&temp_path, &target_path)?;
+    decode_da_ingest_server_assignment(&target_path, request, trusted_operator_key)
+}
+
+fn validate_da_ingest_signed_receipt_assignment(
+    assignment: &DaIngestSignedReceiptAssignmentV1,
+    expected: &DaIngestSignedReceiptAssignmentV1,
+) -> std::io::Result<()> {
+    if assignment.version != DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION
+        || assignment.request_digest != expected.request_digest
+        || assignment.lane_id != expected.lane_id
+        || assignment.epoch != expected.epoch
+        || assignment.sequence != expected.sequence
+        || assignment.operator_public_key != expected.operator_public_key
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "signed DA receipt assignment does not match its request or operator identity",
+        ));
+    }
+    validate_receipt_resource_bounds(&assignment.receipt).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("signed DA receipt assignment exceeds resource bounds: {err}"),
+        )
+    })?;
+    if assignment.receipt.lane_id != assignment.lane_id
+        || assignment.receipt.epoch != assignment.epoch
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "signed DA receipt assignment lane/epoch does not match its receipt",
+        ));
+    }
+    let assigned_unsigned = unsigned_receipt_bytes(&assignment.receipt, assignment.sequence)
+        .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
+    let expected_unsigned = unsigned_receipt_bytes(&expected.receipt, expected.sequence)
+        .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err.to_string()))?;
+    if assigned_unsigned != expected_unsigned {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "signed DA receipt assignment conflicts with the deterministic receipt fields",
+        ));
+    }
+    verify_receipt_signature(
+        &assignment.receipt,
+        assignment.sequence,
+        &assignment.operator_public_key,
+    )
+    .map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("signed DA receipt assignment has an invalid operator signature: {err}"),
+        )
+    })?;
+    Ok(())
+}
+
+fn decode_da_ingest_signed_receipt_assignment(
+    path: &Path,
+    expected: &DaIngestSignedReceiptAssignmentV1,
+) -> std::io::Result<DaIngestSignedReceiptAssignmentV1> {
+    let bytes = read_regular_spool_artifact(
+        path,
+        "signed DA receipt assignment",
+        DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1,
+    )?;
+    let assignment =
+        decode_from_bytes::<DaIngestSignedReceiptAssignmentV1>(&bytes).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to decode signed DA receipt assignment {}: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+    let canonical = to_bytes(&assignment).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to re-encode signed DA receipt assignment {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if canonical != bytes {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "signed DA receipt assignment {} is not canonically encoded",
+                path.display()
+            ),
+        ));
+    }
+    validate_da_ingest_signed_receipt_assignment(&assignment, expected)?;
+    Ok(assignment)
+}
+
+fn validate_signed_receipt_against_server_assignment(
+    request: &DaIngestRequest,
+    assignment: &DaIngestServerAssignmentV1,
+    receipt: &DaIngestReceipt,
+) -> std::io::Result<()> {
+    let manifest =
+        decode_from_bytes::<DaManifestV1>(&assignment.manifest_bytes).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("failed to decode manifest from DA ingest server assignment: {err}"),
+            )
+        })?;
+    let manifest_hash = BlobDigest::from_hash(blake3::hash(&assignment.manifest_bytes));
+    if receipt.client_blob_id != request.client_blob_id
+        || receipt.lane_id != request.lane_id
+        || receipt.epoch != request.epoch
+        || receipt.blob_hash != manifest.blob_hash
+        || receipt.chunk_root != manifest.chunk_root
+        || receipt.manifest_hash != manifest_hash
+        || receipt.storage_ticket != manifest.storage_ticket
+        || receipt.stripe_layout.total_stripes != manifest.total_stripes
+        || receipt.stripe_layout.shards_per_stripe != manifest.shards_per_stripe
+        || receipt.stripe_layout.row_parity_stripes != manifest.erasure_profile.row_parity_stripes
+        || receipt.queued_at_unix != assignment.queued_at_secs
+        || receipt.rent_quote != manifest.rent_quote
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "signed DA receipt assignment does not match its durable manifest assignment",
+        ));
+    }
+    let pdp_bytes = receipt.pdp_commitment.as_deref().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            "signed DA receipt assignment is missing its PDP commitment",
+        )
+    })?;
+    let pdp = decode_pdp_commitment_spool_body(pdp_bytes)?;
+    if pdp.manifest_digest != *manifest_hash.as_bytes()
+        || pdp.payload_len != manifest.total_size
+        || pdp.sealed_at != assignment.queued_at_secs
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "signed DA receipt assignment PDP commitment does not match its manifest and queue time",
+        ));
+    }
+    Ok(())
+}
+
+/// Freeze the complete signed receipt before independently persisted DA artifacts are published.
+pub(super) fn load_or_create_da_ingest_signed_receipt(
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    operator_public_key: &PublicKey,
+    candidate: &DaIngestReceipt,
+) -> std::io::Result<DaIngestReceipt> {
+    let server_assignment =
+        load_da_ingest_server_assignment(spool_dir, request, operator_public_key)?.ok_or_else(
+            || {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "signed DA receipt cannot be frozen before its server assignment is durable",
+                )
+            },
+        )?;
+    validate_signed_receipt_against_server_assignment(request, &server_assignment, candidate)?;
+    let expected = DaIngestSignedReceiptAssignmentV1 {
+        version: DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION,
+        request_digest: request.signing_digest(),
+        lane_id: request.lane_id,
+        epoch: request.epoch,
+        sequence: request.sequence,
+        operator_public_key: operator_public_key.clone(),
+        receipt: candidate.clone(),
+    };
+    validate_da_ingest_signed_receipt_assignment(&expected, &expected).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("invalid signed DA receipt assignment candidate: {err}"),
+        )
+    })?;
+    let encoded =
+        to_bytes(&expected).map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?;
+    if encoded.len() > DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "signed DA receipt assignment is {} bytes, exceeding the first-release {}-byte limit",
+                encoded.len(),
+                DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1
+            ),
+        ));
+    }
+    let _guard = DA_INGEST_SERVER_ASSIGNMENT_LOCK
+        .get_or_init(|| NonPoisoningMutex::new(()))
+        .lock();
+    let (target_path, temp_path) = da_ingest_signed_receipt_assignment_paths(
+        spool_dir,
+        &request.network_id,
+        expected.lane_id,
+        expected.epoch,
+        expected.sequence,
+    )?;
+    create_da_ingest_server_assignment_dirs(&target_path)?;
+    match fs::symlink_metadata(&target_path) {
+        Ok(_) => {
+            if spool_artifact_exists(&temp_path)? {
+                remove_temp_artifact(&temp_path)?;
+                sync_parent_dir(&target_path)?;
+            }
+            return decode_da_ingest_signed_receipt_assignment(&target_path, &expected)
+                .map(|assignment| assignment.receipt);
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    match fs::symlink_metadata(&temp_path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "signed DA receipt assignment temp {} is not a regular file",
+                        temp_path.display()
+                    ),
+                ));
+            }
+            match decode_da_ingest_signed_receipt_assignment(&temp_path, &expected) {
+                Ok(_) => {
+                    install_da_ingest_server_assignment(&temp_path, &target_path)?;
+                    return decode_da_ingest_signed_receipt_assignment(&target_path, &expected)
+                        .map(|assignment| assignment.receipt);
+                }
+                Err(err) if err.kind() == ErrorKind::InvalidData => {
+                    remove_temp_artifact(&temp_path)?;
+                    sync_parent_dir(&target_path)?;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    write_temp_artifact(&temp_path, &encoded)
+        .map_err(|err| temp_artifact_write_error(&temp_path, err))?;
+    install_da_ingest_server_assignment(&temp_path, &target_path)?;
+    decode_da_ingest_signed_receipt_assignment(&target_path, &expected)
+        .map(|assignment| assignment.receipt)
+}
+
 pub(crate) fn receipt_signature_placeholder() -> Signature {
     Signature::try_from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER)
         .expect("DA receipt placeholder signature is non-empty and nonzero")
@@ -349,6 +1160,30 @@ impl ReplayCursorStore {
         }
         Ok(())
     }
+    fn recover_failed_journal(&self) -> eyre::Result<()> {
+        let mut guard = self.lock_state();
+        if guard.journal_healthy || self.dir.as_os_str().is_empty() {
+            return Ok(());
+        }
+        guard.journal.take();
+        let journal_path = replay_cursor_journal_path(&self.dir);
+        let recovery = read_cursor_journal(&journal_path, self.max_lane_epochs)
+            .wrap_err("failed to recover DA replay cursor journal after an interrupted record")?;
+        for record in recovery.records {
+            guard.apply_journal_record(record, self.max_lane_epochs)?;
+        }
+        let journal =
+            open_cursor_journal(&journal_path, recovery.valid_bytes, recovery.had_torn_tail)?;
+        journal
+            .sync_all()
+            .wrap_err("failed to sync recovered DA replay cursor journal")?;
+        validate_open_cursor_journal(&journal_path, &journal)?;
+        guard.journal = Some(journal);
+        guard.journal_records = recovery.record_count;
+        guard.checkpoint_pending = guard.journal_records >= self.max_lane_epochs.get();
+        guard.journal_healthy = true;
+        Ok(())
+    }
     /// Force a durable checkpoint and truncate the applied journal.
     pub(crate) fn checkpoint(&self) -> eyre::Result<()> {
         let mut guard = self.lock_state();
@@ -627,11 +1462,33 @@ fn encode_cursor_journal_frame(record: &CursorJournalRecord) -> eyre::Result<Vec
 fn replay_cursor_journal_path(dir: &Path) -> PathBuf {
     dir.join(CURSOR_JOURNAL_FILE_NAME)
 }
+fn cursor_journal_open_options(create_new: bool) -> fs::OpenOptions {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).append(true).create_new(create_new);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        options
+            // The store owns the only writer and keeps this handle for its complete lifetime.
+            // Readers may inspect the journal, but replacement and competing mutation are denied.
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+}
 fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
-    let file = fs::OpenOptions::new()
-        .create_new(true)
-        .read(true)
-        .append(true)
+    let file = cursor_journal_open_options(true)
         .open(path)
         .wrap_err_with(|| {
             format!(
@@ -639,12 +1496,14 @@ fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
                 path.display()
             )
         })?;
+    validate_open_cursor_journal(path, &file)?;
     file.sync_all().wrap_err_with(|| {
         format!(
             "failed to sync new DA replay cursor journal at {}",
             path.display()
         )
     })?;
+    validate_open_cursor_journal(path, &file)?;
     if let Some(parent) = path.parent() {
         sync_dir(parent).wrap_err_with(|| {
             format!(
@@ -653,10 +1512,11 @@ fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
             )
         })?;
     }
+    validate_open_cursor_journal(path, &file)?;
     Ok(file)
 }
 fn open_cursor_journal(path: &Path, valid_bytes: u64, had_torn_tail: bool) -> eyre::Result<File> {
-    let mut file = match fs::OpenOptions::new().read(true).append(true).open(path) {
+    let mut file = match cursor_journal_open_options(false).open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == ErrorKind::NotFound => return create_cursor_journal(path),
         Err(err) => {
@@ -696,44 +1556,41 @@ fn open_cursor_journal(path: &Path, valid_bytes: u64, had_torn_tail: bool) -> ey
                 )
             })?;
         }
+        validate_open_cursor_journal(path, &file)?;
     }
     Ok(file)
 }
 fn validate_open_cursor_journal(path: &Path, file: &File) -> eyre::Result<()> {
-    let path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+    let path_metadata = secure_file_metadata::from_path(path).wrap_err_with(|| {
         format!(
             "failed to inspect DA replay cursor journal at {}",
             path.display()
         )
     })?;
-    if !path_metadata.file_type().is_file() {
+    if !secure_file_metadata::is_direct_file(&path_metadata)
+        || secure_file_metadata::number_of_links(&path_metadata) != Some(1)
+    {
         return Err(eyre!(
-            "DA replay cursor journal {} is not a regular file",
+            "DA replay cursor journal {} is not a direct single-link regular file",
             path.display()
         ));
     }
-    let file_metadata = file.metadata().wrap_err_with(|| {
+    let file_metadata = secure_file_metadata::from_file(file).wrap_err_with(|| {
         format!(
             "failed to inspect open DA replay cursor journal at {}",
             path.display()
         )
     })?;
-    if !file_metadata.file_type().is_file() || file_metadata.len() != path_metadata.len() {
+    if !secure_file_metadata::is_direct_file(&file_metadata)
+        || secure_file_metadata::number_of_links(&file_metadata) != Some(1)
+        || file_metadata.len() != path_metadata.len()
+        || !secure_file_metadata::same_file(&path_metadata, &file_metadata)
+        || !secure_file_metadata::unchanged(&path_metadata, &file_metadata)
+    {
         return Err(eyre!(
             "DA replay cursor journal {} changed while open",
             path.display()
         ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if file_metadata.dev() != path_metadata.dev() || file_metadata.ino() != path_metadata.ino()
-        {
-            return Err(eyre!(
-                "DA replay cursor journal {} was replaced while open",
-                path.display()
-            ));
-        }
     }
     Ok(())
 }
@@ -778,6 +1635,7 @@ fn append_cursor_journal_record(
     journal
         .sync_all()
         .wrap_err("failed to sync DA replay cursor journal entry")?;
+    validate_open_cursor_journal(&journal_path, journal)?;
     Ok(())
 }
 fn create_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
@@ -785,13 +1643,16 @@ fn create_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
     validate_replay_cursor_dir_no_follow(path)
 }
 fn validate_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = secure_file_metadata::from_path(path)?;
     validate_replay_cursor_dir_metadata(path, &metadata)
 }
-fn validate_replay_cursor_dir_metadata(path: &Path, metadata: &fs::Metadata) -> eyre::Result<()> {
-    if !metadata.file_type().is_dir() {
+fn validate_replay_cursor_dir_metadata(
+    path: &Path,
+    metadata: &secure_file_metadata::SecureMetadata,
+) -> eyre::Result<()> {
+    if !secure_file_metadata::is_direct_directory(metadata) {
         return Err(eyre!(
-            "DA replay directory at {} is not a directory",
+            "DA replay directory at {} is not a direct directory",
             path.display()
         ));
     }
@@ -801,8 +1662,7 @@ pub(super) fn replay_cursor_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
 fn sync_dir(path: &Path) -> std::io::Result<()> {
-    let file = fs::File::open(path)?;
-    file.sync_all()
+    crate::durable_fs::sync_direct_directory(path)
 }
 fn read_cursor_snapshot(
     path: &Path,
@@ -1040,12 +1900,12 @@ fn archive_receipts_outside_allow_set(
         match fs::hard_link(&source, &destination) {
             Ok(()) => {}
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                let source_bytes = read_regular_spool_artifact(
+                let source_bytes = read_linked_retirement_artifact(
                     &source,
                     "retired DA receipt source",
                     DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
                 )?;
-                let archived_bytes = read_regular_spool_artifact(
+                let archived_bytes = read_linked_retirement_artifact(
                     &destination,
                     "retired DA receipt archive",
                     DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
@@ -1572,7 +2432,7 @@ impl DaReceiptLog {
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         }
-        let stored = Self::decode_receipt(&path)
+        let (receipt_key, stored) = Self::decode_receipt_with_key(&path)
             .wrap_err_with(|| format!("failed to reload durable DA receipt {}", path.display()))?;
         if stored.sequence != sequence
             || stored.receipt.lane_id != lane_epoch.lane_id
@@ -1591,6 +2451,88 @@ impl DaReceiptLog {
                     path.display()
                 )
             })?;
+        validate_receipt_manifest_artifact_if_present(&self.dir, &receipt_key, &stored.receipt)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to validate reloaded durable DA receipt {} against manifest spool",
+                    path.display()
+                )
+            })?;
+        let encoded = encode_stored_da_receipt(&stored.receipt, stored.sequence)?;
+        let receipt_digest = *blake3::hash(&encoded).as_bytes();
+        let manifest_hash = stored.receipt.manifest_hash;
+        let mut guard = self.lock_index();
+        if let Some(existing) = guard.get(&lane_epoch) {
+            if existing.sequence > sequence {
+                return Ok(Some((path, stored.receipt)));
+            }
+            if existing.sequence == sequence {
+                if existing.receipt_digest != receipt_digest
+                    || existing.manifest_hash != manifest_hash
+                    || existing.fingerprint != fingerprint
+                    || existing.path != path
+                {
+                    return Err(eyre!(
+                        "durable duplicate DA receipt conflicts with the in-memory receipt head"
+                    ));
+                }
+                self.cursor_store.recover_failed_journal()?;
+                self.cursor_store
+                    .record(lane_epoch, sequence)
+                    .wrap_err("failed to reconcile duplicate DA receipt cursor")?;
+                return Ok(Some((path, stored.receipt)));
+            }
+            let expected_next = existing.sequence.checked_add(1).ok_or_else(|| {
+                eyre!("durable DA receipt head sequence cannot advance beyond u64::MAX")
+            })?;
+            if sequence != expected_next {
+                return Err(eyre!(
+                    "durable duplicate DA receipt sequence {sequence} skips in-memory head {expected_next}"
+                ));
+            }
+        } else if guard.len() >= self.cursor_store.max_lane_epochs().get() {
+            return Err(eyre!(
+                "DA receipt lane/epoch capacity {} is exhausted while recovering a duplicate",
+                self.cursor_store.max_lane_epochs()
+            ));
+        }
+        self.cursor_store.recover_failed_journal()?;
+        match self.cursor_store.highest_sequence(lane_epoch) {
+            Some(highest) if highest > sequence => {
+                return Err(eyre!(
+                    "durable duplicate DA receipt sequence {sequence} is behind cursor {highest} without a matching in-memory head"
+                ));
+            }
+            Some(highest) if highest < sequence => {
+                let expected_next = highest.checked_add(1).ok_or_else(|| {
+                    eyre!("durable DA receipt cursor cannot advance beyond u64::MAX")
+                })?;
+                if sequence != expected_next {
+                    return Err(eyre!(
+                        "durable duplicate DA receipt sequence {sequence} skips cursor {expected_next}"
+                    ));
+                }
+            }
+            None if sequence != 0 => {
+                return Err(eyre!(
+                    "durable duplicate DA receipt sequence {sequence} has no zero-origin cursor"
+                ));
+            }
+            Some(_) | None => {}
+        }
+        self.cursor_store
+            .record(lane_epoch, sequence)
+            .wrap_err("failed to reconcile duplicate DA receipt cursor")?;
+        guard.insert(
+            lane_epoch,
+            ReceiptHead {
+                sequence,
+                manifest_hash,
+                fingerprint,
+                path: path.clone(),
+                receipt_digest,
+            },
+        );
         Ok(Some((path, stored.receipt)))
     }
     /// Load receipts for a `(lane, epoch)` window in sequence order.
@@ -1890,11 +2832,29 @@ fn read_regular_spool_artifact(
     artifact: &str,
     max_bytes: usize,
 ) -> std::io::Result<Vec<u8>> {
-    let path_metadata = fs::symlink_metadata(path)?;
-    if !path_metadata.file_type().is_file() {
+    read_regular_spool_artifact_with_link_policy(path, artifact, max_bytes, false)
+}
+fn read_linked_retirement_artifact(
+    path: &Path,
+    artifact: &str,
+    max_bytes: usize,
+) -> std::io::Result<Vec<u8>> {
+    read_regular_spool_artifact_with_link_policy(path, artifact, max_bytes, true)
+}
+fn read_regular_spool_artifact_with_link_policy(
+    path: &Path,
+    artifact: &str,
+    max_bytes: usize,
+    allow_multiple_links: bool,
+) -> std::io::Result<Vec<u8>> {
+    let path_metadata = secure_file_metadata::from_path(path)?;
+    if !secure_file_metadata::is_direct_file(&path_metadata)
+        || (!allow_multiple_links
+            && secure_file_metadata::number_of_links(&path_metadata) != Some(1))
+    {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
-            format!("{artifact} {} is not a regular file", path.display()),
+            format!("{artifact} {} is not a direct regular file", path.display()),
         ));
     }
     let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
@@ -1908,35 +2868,28 @@ fn read_regular_spool_artifact(
             ),
         ));
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
+    let mut file = secure_file_metadata::open_direct_file(path)?;
+    #[cfg(not(windows))]
+    let mut file = {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        options.open(path)?
+    };
+    let opened_metadata = secure_file_metadata::from_file(&file)?;
+    if !secure_file_metadata::is_direct_file(&opened_metadata)
+        || opened_metadata.len() != path_metadata.len()
+        || !secure_file_metadata::same_file(&path_metadata, &opened_metadata)
     {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
-    let mut file = options.open(path)?;
-    let opened_metadata = file.metadata()?;
-    if !opened_metadata.is_file() || opened_metadata.len() != path_metadata.len() {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
             format!("{artifact} {} changed while it was opened", path.display()),
         ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        if opened_metadata.dev() != path_metadata.dev()
-            || opened_metadata.ino() != path_metadata.ino()
-        {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "{artifact} {} changed identity while opening",
-                    path.display()
-                ),
-            ));
-        }
     }
     let expected_len = usize::try_from(opened_metadata.len()).map_err(|_| {
         std::io::Error::new(
@@ -1966,9 +2919,12 @@ fn read_regular_spool_artifact(
             ),
         ));
     }
-    let final_metadata = file.metadata()?;
-    if !final_metadata.is_file()
-        || final_metadata.len() != opened_metadata.len()
+    let final_metadata = secure_file_metadata::from_file(&file)?;
+    let named_after = secure_file_metadata::from_path(path)?;
+    if !secure_file_metadata::is_direct_file(&final_metadata)
+        || !secure_file_metadata::is_direct_file(&named_after)
+        || !secure_file_metadata::unchanged(&opened_metadata, &final_metadata)
+        || !secure_file_metadata::unchanged(&final_metadata, &named_after)
         || u64::try_from(bytes.len()).ok() != Some(opened_metadata.len())
     {
         return Err(std::io::Error::new(
@@ -2756,7 +3712,7 @@ fn persist_encoded_da_receipt(
     Ok(Some(target_path))
 }
 fn open_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<Option<fs::ReadDir>> {
-    let metadata = match fs::symlink_metadata(spool_dir) {
+    let metadata = match secure_file_metadata::from_path(spool_dir) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
@@ -2773,14 +3729,20 @@ fn create_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<()> {
         builder.mode(0o700);
     }
     builder.create(spool_dir)?;
-    let metadata = fs::symlink_metadata(spool_dir)?;
+    let metadata = secure_file_metadata::from_path(spool_dir)?;
     validate_spool_dir_metadata(spool_dir, &metadata)
 }
-fn validate_spool_dir_metadata(spool_dir: &Path, metadata: &fs::Metadata) -> std::io::Result<()> {
-    if !metadata.file_type().is_dir() {
+fn validate_spool_dir_metadata(
+    spool_dir: &Path,
+    metadata: &secure_file_metadata::SecureMetadata,
+) -> std::io::Result<()> {
+    if !secure_file_metadata::is_direct_directory(metadata) {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
-            format!("DA spool path `{}` is not a directory", spool_dir.display()),
+            format!(
+                "DA spool path `{}` is not a direct directory",
+                spool_dir.display()
+            ),
         ));
     }
     Ok(())
@@ -2819,7 +3781,7 @@ fn existing_ticket_artifact_dir(
         shard_dir.as_path(),
         ticket_dir.as_path(),
     ] {
-        let metadata = match fs::symlink_metadata(path) {
+        let metadata = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
@@ -3389,6 +4351,118 @@ fn validate_pin_intent_artifact_inputs(
     }
     Ok(())
 }
+
+fn da_pin_intents_have_same_signed_identity(
+    existing: &DaPinIntent,
+    candidate: &DaPinIntent,
+) -> bool {
+    let authorization_signers_match = existing
+        .authorization
+        .signatures
+        .iter()
+        .map(|signature| &signature.signer)
+        .eq(candidate
+            .authorization
+            .signatures
+            .iter()
+            .map(|signature| &signature.signer));
+    let pin_scope_signers_match = existing
+        .pin_scope_authorization
+        .signatures
+        .iter()
+        .map(|signature| &signature.signer)
+        .eq(candidate
+            .pin_scope_authorization
+            .signatures
+            .iter()
+            .map(|signature| &signature.signer));
+    existing.lane_id == candidate.lane_id
+        && existing.epoch == candidate.epoch
+        && existing.sequence == candidate.sequence
+        && existing.storage_ticket == candidate.storage_ticket
+        && existing.manifest_hash == candidate.manifest_hash
+        && existing.alias == candidate.alias
+        && existing.authorization.signing_digest() == candidate.authorization.signing_digest()
+        && authorization_signers_match
+        && existing.authorization.has_valid_canonical_signatures()
+        && candidate.authorization.has_valid_canonical_signatures()
+        && existing.pin_scope_authorization.scope == candidate.pin_scope_authorization.scope
+        && pin_scope_signers_match
+        && existing
+            .pin_scope_authorization
+            .has_valid_canonical_signatures()
+        && candidate
+            .pin_scope_authorization
+            .has_valid_canonical_signatures()
+}
+
+fn da_pin_intent_has_same_request_authorization(
+    intent: &DaPinIntent,
+    authorization: &DaIngestAuthorizationV1,
+) -> bool {
+    intent.authorization.signing_digest() == authorization.signing_digest()
+        && intent
+            .authorization
+            .signatures
+            .iter()
+            .map(|signature| &signature.signer)
+            .eq(authorization
+                .signatures
+                .iter()
+                .map(|signature| &signature.signer))
+        && intent.authorization.has_valid_canonical_signatures()
+        && authorization.has_valid_canonical_signatures()
+}
+
+/// Validate that a retry retains the primary signer set frozen into a pin intent.
+pub(super) fn validate_da_pin_intent_retry_authorization(
+    intent: &DaPinIntent,
+    authorization: &DaIngestAuthorizationV1,
+) -> std::io::Result<()> {
+    if da_pin_intent_has_same_request_authorization(intent, authorization) {
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        ErrorKind::AlreadyExists,
+        "DA pin intent replay slot is bound to a different request signer set",
+    ))
+}
+
+/// Select the first durable semantic pin intent while tolerating randomized signature bytes.
+pub(super) fn select_da_pin_intent_for_persistence(
+    spool_dir: &Path,
+    candidate: &DaPinIntent,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> std::io::Result<DaPinIntent> {
+    validate_pin_intent_artifact_inputs(candidate, lane_id, epoch, sequence, storage_ticket)?;
+    validate_ticket_fingerprint(storage_ticket, fingerprint)?;
+    if spool_dir.as_os_str().is_empty() {
+        return Ok(candidate.clone());
+    }
+    match load_da_pin_intent(
+        spool_dir,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    ) {
+        Ok(existing) if da_pin_intents_have_same_signed_identity(&existing, candidate) => {
+            Ok(existing)
+        }
+        Ok(_) => Err(std::io::Error::new(
+            ErrorKind::AlreadyExists,
+            "DA pin intent replay slot already contains a different signed identity",
+        )),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(candidate.clone()),
+        Err(err) => Err(err),
+    }
+}
+
 fn validate_pin_scope_artifact_inputs(
     scope: &DaPinScopeV1,
     lane_id: LaneId,
@@ -3683,8 +4757,16 @@ pub(super) fn persist_da_pin_intent(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
-    validate_pin_intent_artifact_inputs(intent, lane_id, epoch, sequence, storage_ticket)?;
-    validate_ticket_fingerprint(storage_ticket, fingerprint)?;
+    let selected_intent = select_da_pin_intent_for_persistence(
+        spool_dir,
+        intent,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    )?;
+    let intent = &selected_intent;
     create_spool_dir_no_follow(spool_dir)?;
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
@@ -3709,11 +4791,6 @@ pub(super) fn persist_da_pin_intent(
             ),
         ));
     }
-    if let Some(path) =
-        existing_artifact_path_if_matching(&target_path, &encoded, "DA pin intent artifact")?
-    {
-        return Ok(Some(path));
-    }
     let tmp_name = format!(
         ".da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
         artifact_temp_suffix()?
@@ -3723,12 +4800,32 @@ pub(super) fn persist_da_pin_intent(
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
-    install_artifact_without_overwrite(
+    if let Err(install_error) = install_artifact_without_overwrite(
         &tmp_path,
         &target_path,
         &encoded,
         "DA pin intent artifact",
-    )?;
+    ) {
+        match load_da_pin_intent(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            storage_ticket,
+            fingerprint,
+        ) {
+            Ok(existing) if da_pin_intents_have_same_signed_identity(&existing, intent) => {
+                return Ok(Some(target_path));
+            }
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "DA pin intent replay slot was concurrently bound to a different signed identity",
+                ));
+            }
+            Err(_) => return Err(install_error),
+        }
+    }
     debug!(
         path = ?target_path,
         lane = lane,

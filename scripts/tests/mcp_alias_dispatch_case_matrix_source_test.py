@@ -15,12 +15,12 @@ EXTENDED_PATH = (
     REPO_ROOT
     / "crates/iroha_torii/tests/mcp_endpoints/extended_tool_dispatch_tests.rs"
 )
-MAIN_MAX_LINES = 4_790
+MAIN_MAX_LINES = 4_775
 EXTENDED_MAX_LINES = 672
 
 HELPER_START = "#[derive(Clone, Copy)]\nenum McpAliasDispatchArguments"
 HELPER_END = "fn enable_writer_mcp"
-HELPER_HASH = "b165170fd4e3e07ca4277f091208a65edd1a3b958b62bcd336ef0261a9653071"
+HELPER_HASH = "2da47bf399c897b6db50ed8bdaf1d027792464ee427af94b884cb345c7a8e3b8"
 
 # file, name, expectation, request id, tool name, argument row, assertion messages
 CASES = (
@@ -147,7 +147,7 @@ CASES = (
         "success",
         10613,
         "iroha.instructions.list",
-        "PageOne",
+        "LimitTwo",
         "instructions list alias with flat query fields should dispatch successfully",
     ),
     (
@@ -201,7 +201,7 @@ CASES = (
         "success",
         10616,
         "iroha.blocks.list",
-        "PageOne",
+        "LimitTwo",
         "blocks list alias with flat query fields should dispatch successfully",
     ),
     (

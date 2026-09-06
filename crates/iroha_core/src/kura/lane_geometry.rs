@@ -10,13 +10,16 @@ use super::{
     AutonomousLaneMergeBundleV1, AutonomousLifecycleBootstrapRecoveryStage,
     AutonomousLifecycleBootstrapV1, AutonomousLifecycleCursorPhaseKindV1,
     AutonomousLifecycleCursorPhaseV1, AutonomousLifecycleCursorV1,
-    AutonomousLifecycleTerminalOutcomeSourceV1, AutonomousLifecycleTerminalOutcomeV1, BlockStore,
-    BlockStoreCommitMarker, BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
-    BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
-    CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME, DATA_FILE_NAME, Error, HASHES_FILE_NAME,
-    HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
-    HistoricalAutonomousLaneRecoveryRecordV1, INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE,
-    LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+    AutonomousLifecycleTerminalOutcomeBasisV1, AutonomousLifecycleTerminalOutcomeSourceV1,
+    AutonomousLifecycleTerminalOutcomeV1, BlockStore, BlockStoreCommitMarker,
+    BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
+    BoundProgressRecoveryFailure, CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL,
+    CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE, CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE,
+    CERTIFIED_LANE_BLOCKS_DATA_FILE, CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME,
+    DATA_FILE_NAME, Error, HASHES_FILE_NAME, HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1,
+    HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS, HistoricalAutonomousLaneRecoveryRecordV1,
+    INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME,
+    LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
     LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LANE_MERGE_APPLICATION_FRONTIER_FILE,
@@ -130,9 +133,9 @@ const MAX_GEOMETRY_ARCHIVE_ENTRIES: usize = 4_000_000;
 const MAX_LANE_MARKER_BYTES: u64 = 4 * 1024;
 const MAX_BLOCK_STORE_COMMIT_MARKER_BYTES: u64 = 4 * 1024;
 const MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR: usize = 65_536;
-const LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE: usize = 6;
+const LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE: usize = 7;
 const LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE: usize = 2;
-// Beyond six regular pairs, each route may retain certified, Native latest-index, and merge-application frontiers.
+// Beyond seven regular pairs, each route may retain certified, Native latest-index, and merge-application frontiers.
 const LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE: usize = 3;
 const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
     LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2 + LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE;
@@ -4836,6 +4839,8 @@ impl Kura {
                 Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
             let (merge_bundle_data, merge_bundle_index) =
                 Self::autonomous_lane_merge_bundle_paths_for_entry(&entry, &self.store_root);
+            let (canonical_replica_data, canonical_replica_index) =
+                Self::canonical_autonomous_lane_replica_paths_for_entry(&entry, &self.store_root);
             let (receipt_data, receipt_index) =
                 Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
             let native_receipt_latest =
@@ -4871,7 +4876,7 @@ impl Kura {
                     &frontier_read.snapshot,
                 );
             }
-            let fixed_progress_pairs: [(&Path, &Path, &str); 6] = [
+            let fixed_progress_pairs: [(&Path, &Path, &str); 7] = [
                 (
                     &lane_data,
                     &lane_index,
@@ -4892,6 +4897,11 @@ impl Kura {
                     &merge_bundle_data,
                     &merge_bundle_index,
                     "lane retirement autonomous merge bundle",
+                ),
+                (
+                    &canonical_replica_data,
+                    &canonical_replica_index,
+                    CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL,
                 ),
                 (
                     &receipt_data,
@@ -5129,6 +5139,8 @@ impl Kura {
                         | LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE
                         | AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE
                         | AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE
+                        | CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE
+                        | CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE
                         | LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE
                         | LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE
                         | NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE
@@ -5517,6 +5529,98 @@ impl Kura {
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "lane retirement autonomous merge bundle durability attestation failed",
+                ));
+            }
+            let mut canonical_replica_bound = self.open_geometry_bound_progress_sidecar(
+                &canonical_replica_data,
+                &canonical_replica_index,
+            )?;
+            self.ensure_geometry_progress_pair_uses_directory(
+                &canonical_replica_bound,
+                &lane_artifacts_guard,
+                &canonical_replica_data,
+                &canonical_replica_index,
+                "lane retirement canonical autonomous replica",
+            )?;
+            let canonical_replica_heights = canonical_replica_bound.sidecar_mut().map_or_else(
+                || Ok(BTreeSet::new()),
+                |bound| {
+                    self.validate_canonical_autonomous_lane_replica_pair_layout_locked(bound)
+                        .map(|(_, heights)| heights)
+                        .map_err(|message| {
+                            self.geometry_error_owned(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "lane retirement canonical autonomous replica pair is invalid: {message}"
+                                ),
+                            )
+                        })
+                },
+            )?;
+            count_work_items(&mut work_items_seen, canonical_replica_heights.len())?;
+            for lane_block_height in canonical_replica_heights {
+                let (record, _) = self
+                    .read_canonical_autonomous_lane_replica_from_bound_locked(
+                        storage_lane_id,
+                        lane_block_height,
+                        canonical_replica_bound.sidecar_mut().expect(
+                            "non-empty height set has a bound canonical autonomous replica sidecar",
+                        ),
+                    )
+                    .map_err(|message| {
+                        self.geometry_error_owned(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "lane retirement canonical autonomous replica is invalid: {message}"
+                            ),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "lane retirement canonical autonomous replica disappeared during validation",
+                        )
+                    })?;
+                self.require_active_lane_artifact(
+                    &entry,
+                    &record.bundle.certified.proposal.descriptor,
+                )?;
+                self.validate_canonical_autonomous_lane_replica_against_kura_under_prune_and_canonical_guards(
+                    &record,
+                )?;
+                let identity = (storage_lane_id, lane_block_height);
+                if certified
+                    .get(&identity)
+                    .is_some_and(|existing| existing != &record.bundle.certified)
+                    || inputs
+                        .get(&identity)
+                        .is_some_and(|existing| existing != &record.input)
+                    || merge_bundles
+                        .get(&identity)
+                        .is_some_and(|existing| existing != &record.bundle)
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement canonical autonomous replica conflicts with committee-owned durable evidence",
+                    ));
+                }
+                certified
+                    .entry(identity)
+                    .or_insert_with(|| record.bundle.certified.clone());
+                inputs
+                    .entry(identity)
+                    .or_insert_with(|| record.input.clone());
+                merge_bundles.entry(identity).or_insert(record.bundle);
+            }
+            if canonical_replica_bound.sidecar().is_some_and(|bound| {
+                !self.sync_bound_progress_sidecar(
+                    bound,
+                    CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL,
+                )
+            }) {
+                return Err(self.geometry_error(
+                    ErrorKind::WouldBlock,
+                    "lane retirement canonical autonomous replica durability attestation failed",
                 ));
             }
             let mut receipt_bound =
@@ -8591,6 +8695,10 @@ impl Kura {
             AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
             AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE,
         );
+        let (canonical_replica_data, canonical_replica_index) = paths(
+            CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE,
+            CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE,
+        );
         let (receipt_data, receipt_index) = paths(
             LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
             LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
@@ -8734,6 +8842,8 @@ impl Kura {
                     | LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE
                     | AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE
                     | AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE
+                    | CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE
+                    | CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE
                     | LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE
                     | LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE
                     | NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE
@@ -8859,6 +8969,71 @@ impl Kura {
                     })
             },
         )?;
+        let mut canonical_replica_bound = self.open_geometry_bound_progress_sidecar(
+            &canonical_replica_data,
+            &canonical_replica_index,
+        )?;
+        self.ensure_geometry_progress_pair_uses_directory(
+            &canonical_replica_bound,
+            &lane_artifacts_guard,
+            &canonical_replica_data,
+            &canonical_replica_index,
+            "retired canonical autonomous replica",
+        )?;
+        let canonical_replica_heights = canonical_replica_bound.sidecar_mut().map_or_else(
+            || Ok(BTreeSet::new()),
+            |bound| {
+                self.validate_canonical_autonomous_lane_replica_pair_layout_locked(bound)
+                    .map(|(_, heights)| heights)
+                    .map_err(|message| {
+                        self.geometry_error_owned(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "retired canonical autonomous replica pair is invalid: {message}"
+                            ),
+                        )
+                    })
+            },
+        )?;
+        let mut canonical_replicas = BTreeMap::new();
+        for lane_block_height in &canonical_replica_heights {
+            let (record, _) = self
+                .read_canonical_autonomous_lane_replica_from_bound_locked(
+                    binding.lane_id,
+                    *lane_block_height,
+                    canonical_replica_bound.sidecar_mut().expect(
+                        "non-empty height set has a bound retired canonical autonomous replica sidecar",
+                    ),
+                )
+                .map_err(|message| {
+                    self.geometry_error_owned(
+                        ErrorKind::InvalidData,
+                        format!("retired canonical autonomous replica is invalid: {message}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "retired canonical autonomous replica disappeared during validation",
+                    )
+                })?;
+            self.validate_canonical_autonomous_lane_replica_against_kura_under_prune_and_canonical_guards(
+                &record,
+            )?;
+            let descriptor = &record.bundle.certified.proposal.descriptor;
+            if descriptor.lane_id != binding.lane_id
+                || descriptor.lane_incarnation != binding.incarnation
+                || descriptor.proposal_height <= binding.activation_height
+                || canonical_replicas
+                    .insert(*lane_block_height, record)
+                    .is_some()
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "retired canonical autonomous replica has stale or duplicate route identity",
+                ));
+            }
+        }
         let mut receipt_bound =
             self.open_geometry_bound_progress_sidecar(&receipt_data, &receipt_index)?;
         self.ensure_geometry_progress_pair_uses_directory(
@@ -9001,6 +9176,7 @@ impl Kura {
         }
         let mut work_heights = certified_heights.clone();
         work_heights.extend(merge_bundle_heights.iter().copied());
+        work_heights.extend(canonical_replica_heights.iter().copied());
         for (lane_block_height, (_, _, retired)) in &autonomous {
             if !*retired {
                 work_heights.insert(*lane_block_height);
@@ -9016,7 +9192,7 @@ impl Kura {
             &input_index,
             "retired lane execution input",
         )?;
-        work_heights.extend(input_bound.sidecar_mut().map_or_else(
+        let input_heights = input_bound.sidecar_mut().map_or_else(
             || Ok(BTreeSet::new()),
             |bound| {
                 self.bound_indexed_sidecar_payload_heights(
@@ -9025,7 +9201,8 @@ impl Kura {
                     MAX_GEOMETRY_ARCHIVE_ENTRIES,
                 )
             },
-        )?);
+        )?;
+        work_heights.extend(input_heights.iter().copied());
         let mut preflight_bound =
             self.open_geometry_bound_progress_sidecar(&preflight_data, &preflight_index)?;
         self.ensure_geometry_progress_pair_uses_directory(
@@ -9046,14 +9223,16 @@ impl Kura {
             },
         )?);
         for lane_block_height in work_heights {
-            if !certified_heights.contains(&lane_block_height) {
+            if !certified_heights.contains(&lane_block_height)
+                && !canonical_replicas.contains_key(&lane_block_height)
+            {
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "retired lane has work without a certified settlement artifact",
                 ));
             }
-            let certified = self
-                .read_certified_lane_block_artifact_from_bound_locked(
+            let certified = if certified_heights.contains(&lane_block_height) {
+                self.read_certified_lane_block_artifact_from_bound_locked(
                     binding.lane_id,
                     lane_block_height,
                     certified_bound
@@ -9065,7 +9244,13 @@ impl Kura {
                         ErrorKind::InvalidData,
                         "retired lane certified artifact is malformed or incomplete",
                     )
-                })?;
+                })?
+            } else {
+                canonical_replicas[&lane_block_height]
+                    .bundle
+                    .certified
+                    .clone()
+            };
             let merge_bundle = if merge_bundle_heights.contains(&lane_block_height) {
                 Some(
                     self.read_autonomous_lane_merge_bundle_from_bound_locked(
@@ -9093,7 +9278,9 @@ impl Kura {
                     .0,
                 )
             } else {
-                None
+                canonical_replicas
+                    .get(&lane_block_height)
+                    .map(|record| record.bundle.clone())
             };
             let certified_is_autonomous = certified.prepare_qc.payload_availability_qc.is_some();
             if certified_is_autonomous != merge_bundle.is_some() {
@@ -9117,8 +9304,8 @@ impl Kura {
                         ),
                     )
                 })?;
-                let actual_input = self
-                    .read_geometry_execution_input_from_bound(
+                let actual_input = if input_heights.contains(&lane_block_height) {
+                    self.read_geometry_execution_input_from_bound(
                         binding.lane_id,
                         lane_block_height,
                         input_bound.sidecar_mut().ok_or_else(|| {
@@ -9133,9 +9320,29 @@ impl Kura {
                             ErrorKind::InvalidData,
                             "retired autonomous merge bundle execution input is unreadable",
                         )
-                    })?;
+                    })?
+                } else {
+                    canonical_replicas
+                        .get(&lane_block_height)
+                        .map(|record| record.input.clone())
+                        .ok_or_else(|| {
+                            self.geometry_error(
+                                ErrorKind::InvalidData,
+                                "retired autonomous merge bundle has no durable execution input",
+                            )
+                        })?
+                };
+                let replica_conflicts =
+                    canonical_replicas
+                        .get(&lane_block_height)
+                        .is_some_and(|record| {
+                            record.bundle != *bundle
+                                || record.input != actual_input
+                                || record.bundle.certified != certified
+                        });
                 if bundle.certified != certified
                     || actual_input != expected_input
+                    || replica_conflicts
                     || autonomous.get(&lane_block_height).is_some_and(
                         |(autonomous_artifact, _, retired)| {
                             *retired || &bundle.autonomous != autonomous_artifact
@@ -10245,6 +10452,59 @@ impl Kura {
                 "autonomous attempt namespace contains an orphan lifecycle cursor",
             ));
         }
+        let canonical_replica_identities = lifecycle_terminal_outcomes
+            .iter()
+            .filter_map(|(identity, (_, outcome))| {
+                matches!(
+                    outcome.basis(),
+                    AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+                )
+                .then_some(*identity)
+            })
+            .collect::<Vec<_>>();
+        for identity in canonical_replica_identities {
+            let (path, outcome) = lifecycle_terminal_outcomes
+                .get(&identity)
+                .expect("canonical replica identity was collected above");
+            if attempt_identities.contains(&identity)
+                || lifecycle_cursors.contains_key(&identity)
+                || lifecycle_bootstraps.contains_key(&identity)
+                || view_identities.contains(&identity)
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "canonical replica terminal outcome overlaps owned lifecycle custody",
+                    ),
+                    path.clone(),
+                ));
+            }
+            let replica_data_path =
+                lane_artifacts.join(CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE);
+            let replica_index_path =
+                lane_artifacts.join(CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE);
+            let receipt_data_path = lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE);
+            let receipt_index_path =
+                lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE);
+            self.validate_canonical_replica_terminal_outcome_from_paths_locked(
+                lane_id,
+                outcome,
+                &replica_data_path,
+                &replica_index_path,
+                &receipt_data_path,
+                &receipt_index_path,
+            )?;
+            if require_terminal_lifecycle && !outcome.is_complete() {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::WouldBlock,
+                        "lane retirement is blocked by a Pending canonical replica terminal outcome",
+                    ),
+                    path.clone(),
+                ));
+            }
+            lifecycle_terminal_outcomes.remove(&identity);
+        }
         let terminal_outcome_identities = lifecycle_terminal_outcomes
             .keys()
             .copied()
@@ -10337,6 +10597,7 @@ impl Kura {
                     })
             })
             .collect::<BTreeMap<_, _>>();
+        let mut validated_terminal_outcome_identities = BTreeSet::new();
         // Every initial Prepared cursor requires its exact signed bootstrap authority.
         for (lane_block_height, attempts_at_height) in &attempts {
             for (pointer, artifact, _, _) in attempts_at_height {
@@ -10382,6 +10643,17 @@ impl Kura {
                 }
                 let outcome = lifecycle_terminal_outcomes.get(&identity);
                 if let Some((path, outcome)) = outcome {
+                    if outcome.basis() != AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "owned lifecycle attempt has a non-owning terminal basis",
+                            ),
+                            path.clone(),
+                        ));
+                    }
+                    validated_terminal_outcome_identities.insert(identity);
                     outcome
                         .validate_for_payload(&artifact.executable_payload)
                         .map_err(|message| {
@@ -10695,6 +10967,15 @@ impl Kura {
                     }
                 }
             }
+        }
+        for identity in validated_terminal_outcome_identities {
+            lifecycle_terminal_outcomes.remove(&identity);
+        }
+        if !lifecycle_terminal_outcomes.is_empty() {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "autonomous attempt namespace contains an unconsumed terminal outcome",
+            ));
         }
         if attempts.is_empty() {
             if !height_pointers.is_empty()

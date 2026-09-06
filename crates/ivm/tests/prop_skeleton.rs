@@ -26,11 +26,11 @@ fn memory_merkle_compact_proofs_verify_for_deterministic_chunks() {
     for chunk_idx in chunk_indices {
         for depth_cap in depth_caps {
             let data = deterministic_chunk(chunk_idx, depth_cap.unwrap_or(13) as u8);
-            let mut memory = Memory::new(0);
+            let mut memory = Memory::new();
             let addr = Memory::HEAP_START + (chunk_idx * CHUNK_BYTES) as u64;
             memory.store_bytes(addr, &data).expect("store heap chunk");
             memory.commit();
-            let (proof, root) = memory.merkle_compact(addr, depth_cap);
+            let (proof, root) = memory.merkle_compact(addr, depth_cap).unwrap();
             let mut chunk = [0u8; CHUNK_BYTES];
             memory
                 .load_bytes((addr / CHUNK_BYTES as u64) * CHUNK_BYTES as u64, &mut chunk)

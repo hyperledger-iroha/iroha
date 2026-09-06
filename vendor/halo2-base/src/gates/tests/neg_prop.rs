@@ -1,13 +1,13 @@
 use crate::{
-    QuantumCell::Witness,
     ff::Field,
     gates::{
-        GateInstructions,
         range::RangeInstructions,
         tests::{pos_prop::rand_fr, utils},
+        GateInstructions,
     },
     halo2_proofs::halo2curves::bn256::Fr,
-    utils::{ScalarField, biguint_to_fe, bit_length, fe_to_biguint, testing::base_test},
+    utils::{biguint_to_fe, bit_length, fe_to_biguint, testing::base_test, ScalarField},
+    QuantumCell::Witness,
 };
 
 use num_bigint::BigUint;

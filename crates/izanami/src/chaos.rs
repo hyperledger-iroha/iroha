@@ -2602,15 +2602,6 @@ fn make_network_builder_with_sorafs(
                 TomlValue::Array(vec![TomlValue::String("bls_normal".into())]),
             )
             .write(
-                ["sumeragi", "keys", "allowed_hsm_providers"],
-                TomlValue::Array(
-                    iroha_config::parameters::defaults::sumeragi::key_allowed_hsm_providers()
-                        .into_iter()
-                        .map(TomlValue::String)
-                        .collect(),
-                ),
-            )
-            .write(
                 ["nexus", "fusion", "floor_teu"],
                 IZANAMI_NEXUS_FUSION_FLOOR_TEU,
             )

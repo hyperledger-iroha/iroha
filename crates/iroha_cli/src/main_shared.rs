@@ -39,9 +39,10 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{prelude::*, transaction::IvmBytecode},
 };
-use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
+use iroha_config::parameters::defaults;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_i18n::{Bundle, Localizer, detect_language};
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
 use std::num::NonZeroU64;
 use std::{
@@ -56,9 +57,9 @@ use thiserror::Error;
 use tokio::runtime::Runtime;
 // For base64 Engine trait (decode)
 use base64::Engine as _;
+use iroha_service_model::soranet::AnonymityPolicy;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
-use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
@@ -687,6 +688,7 @@ impl Command {
     }
     fn allows_fallback_config_in_machine_mode(&self) -> bool {
         match self {
+            Self::App(app::Command::Sorafs(crate::commands::sorafs::Command::Toolkit(_))) => true,
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Contract(command) => command.allows_fallback_config(),
             _ => false,
@@ -735,7 +737,7 @@ mod ledger {
         Multisig(crate::multisig::Command),
         /// Subscribe to events: state changes, transaction/block/trigger progress
         Events(crate::events::Args),
-        /// Subscribe to blocks
+        /// Subscribe to full signed blocks (requires CanReadAllLedgerData)
         Blocks(crate::blocks::Args),
     }
     impl Run for Command {
@@ -951,6 +953,7 @@ mod app {
             Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
         };
         match command {
+            SorafsCommand::Toolkit(_) => true,
             SorafsCommand::Reserve(
                 ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
             ) => true,
@@ -976,7 +979,6 @@ mod app {
             | SorafsCommand::Storage(_)
             | SorafsCommand::Gateway(_)
             | SorafsCommand::Handshake(_)
-            | SorafsCommand::Toolkit(_)
             | SorafsCommand::GuardDirectory(_)
             | SorafsCommand::Appeals(_)
             | SorafsCommand::Gar(_)
@@ -1477,14 +1479,14 @@ fn try_fallback_config() -> Result<Config> {
         .wrap_err("failed to derive offline fallback Ed25519 key pair")?;
     let account = AccountId::new(key_pair.public_key().clone());
     let alias_cache = AliasCachePolicy::new(
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     );
     Ok(Config {
         chain,
@@ -1502,7 +1504,7 @@ fn try_fallback_config() -> Result<Config> {
         soracloud_http_witness_file: None,
         sorafs_alias_cache: alias_cache,
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
-        sorafs_rollout_phase: SorafsRolloutPhase::Default,
+        sorafs_rollout_phase: RolloutPhase::Default,
     })
 }
 #[cfg(test)]
@@ -1790,7 +1792,7 @@ mod events {
             let timeout: Option<Duration> = self.timeout.map(Into::into);
             match self.command {
                 State => listen(DataEventFilter::Any, context, timeout),
-                Governance(args) => listen(args.into_filter(), context, timeout),
+                Governance(args) => listen(args.into_filter()?, context, timeout),
                 Transaction => listen(TransactionEventFilter::default(), context, timeout),
                 Block => listen(BlockEventFilter::default(), context, timeout),
                 TriggerExecute => listen(ExecuteTriggerEventFilter::new(), context, timeout),
@@ -1800,30 +1802,55 @@ mod events {
     }
     #[derive(clap::Args, Debug)]
     pub struct GovernanceArgs {
-        /// Filter by proposal id (hex)
-        #[arg(long, value_name = "ID_HEX")]
+        /// Filter by an exact 32-byte proposal id (hex; optional `0x` prefix)
+        #[arg(long, value_name = "ID_HEX", conflicts_with = "referendum_id")]
         proposal_id: Option<String>,
         /// Filter by referendum id
         #[arg(long, value_name = "RID")]
         referendum_id: Option<String>,
     }
     impl GovernanceArgs {
-        fn into_filter(self) -> DataEventFilter {
+        fn into_filter(self) -> Result<DataEventFilter> {
             let mut f = GovernanceEventFilter::new();
-            if let Some(h) = self.proposal_id
-                && let Ok(bytes) = hex::decode(h.trim_start_matches("0x"))
-                && bytes.len() == 32
-            {
-                let mut id = [0u8; 32];
-                id.copy_from_slice(&bytes);
+            if let Some(encoded_id) = self.proposal_id {
+                let hex_value = encoded_id
+                    .strip_prefix("0x")
+                    .or_else(|| encoded_id.strip_prefix("0X"))
+                    .unwrap_or(&encoded_id);
+                let bytes = hex::decode(hex_value)
+                    .map_err(|_| eyre!("--proposal-id must be exactly 32 bytes of hexadecimal"))?;
+                let id = <[u8; 32]>::try_from(bytes)
+                    .map_err(|_| eyre!("--proposal-id must be exactly 32 bytes of hexadecimal"))?;
                 f = f.for_proposal(id);
             }
             if let Some(rid) = self.referendum_id {
                 f = f.for_referendum(rid);
             }
-            DataEventFilter::Governance(f)
+            Ok(DataEventFilter::Governance(f))
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn malformed_proposal_id_never_degrades_to_an_unfiltered_subscription() {
+            for proposal_id in ["not-hex".to_owned(), "00".repeat(31), "00".repeat(33)] {
+                let error = GovernanceArgs {
+                    proposal_id: Some(proposal_id),
+                    referendum_id: None,
+                }
+                .into_filter()
+                .expect_err("malformed proposal id must fail before opening the event stream");
+                assert_eq!(
+                    error.to_string(),
+                    "--proposal-id must be exactly 32 bytes of hexadecimal"
+                );
+            }
+        }
+    }
+
     fn listen(
         filter: impl Into<EventFilterBox>,
         context: &mut impl RunContext,

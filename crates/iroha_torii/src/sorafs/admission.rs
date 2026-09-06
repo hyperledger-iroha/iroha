@@ -1,4 +1,5 @@
 //! Provider admission registry loading and verification for SoraFS adverts.
+use crate::secure_file_metadata;
 use iroha_logger::{trace, warn};
 pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
 use sorafs_manifest::{
@@ -7,11 +8,13 @@ use sorafs_manifest::{
     ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1, ProviderAdvertV1,
     verify_advert_against_record,
 };
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::{
     collections::HashMap,
-    fs::{self, OpenOptions},
+    fs,
     io::Read as _,
     path::{Path, PathBuf},
     sync::Arc,
@@ -297,17 +300,31 @@ fn validate_registry_entry(path: &Path) -> Result<bool, AdmissionRegistryError> 
     Ok(true)
 }
 fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let mut file = options
-        .open(path)
-        .map_err(|err| SingleEnvelopeError::Open { err })?;
-    let opened_metadata = file
-        .metadata()
+    let path_metadata = secure_file_metadata::from_path(path)
         .map_err(|err| SingleEnvelopeError::Metadata { err })?;
-    if !opened_metadata.file_type().is_file() {
+    if !secure_file_metadata::is_direct_file(&path_metadata)
+        || secure_file_metadata::number_of_links(&path_metadata) != Some(1)
+    {
+        return Err(SingleEnvelopeError::NotRegularFile);
+    }
+    #[cfg(windows)]
+    let mut file = secure_file_metadata::open_direct_file(path)
+        .map_err(|err| SingleEnvelopeError::Open { err })?;
+    #[cfg(not(windows))]
+    let mut file = {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        options
+            .open(path)
+            .map_err(|err| SingleEnvelopeError::Open { err })?
+    };
+    let opened_metadata = secure_file_metadata::from_file(&file)
+        .map_err(|err| SingleEnvelopeError::Metadata { err })?;
+    if !secure_file_metadata::is_direct_file(&opened_metadata)
+        || secure_file_metadata::number_of_links(&opened_metadata) != Some(1)
+    {
         return Err(SingleEnvelopeError::NotRegularFile);
     }
     if opened_metadata.len() > MAX_ADMISSION_ENVELOPE_BYTES {
@@ -316,15 +333,8 @@ fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
             limit: MAX_ADMISSION_ENVELOPE_BYTES,
         });
     }
-    #[cfg(unix)]
-    {
-        let path_metadata =
-            fs::symlink_metadata(path).map_err(|err| SingleEnvelopeError::Metadata { err })?;
-        if path_metadata.dev() != opened_metadata.dev()
-            || path_metadata.ino() != opened_metadata.ino()
-        {
-            return Err(SingleEnvelopeError::EntryChangedDuringLoad);
-        }
+    if !secure_file_metadata::unchanged(&path_metadata, &opened_metadata) {
+        return Err(SingleEnvelopeError::EntryChangedDuringLoad);
     }
     let allocation = usize::try_from(opened_metadata.len())
         .unwrap_or(usize::MAX)
@@ -340,6 +350,20 @@ fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
             size: observed_size,
             limit: MAX_ADMISSION_ENVELOPE_BYTES,
         });
+    }
+    let opened_after = secure_file_metadata::from_file(&file)
+        .map_err(|err| SingleEnvelopeError::Metadata { err })?;
+    let named_after = secure_file_metadata::from_path(path)
+        .map_err(|err| SingleEnvelopeError::Metadata { err })?;
+    if !secure_file_metadata::is_direct_file(&opened_after)
+        || !secure_file_metadata::is_direct_file(&named_after)
+        || secure_file_metadata::number_of_links(&opened_after) != Some(1)
+        || secure_file_metadata::number_of_links(&named_after) != Some(1)
+        || !secure_file_metadata::unchanged(&opened_metadata, &opened_after)
+        || !secure_file_metadata::unchanged(&opened_after, &named_after)
+        || observed_size != opened_metadata.len()
+    {
+        return Err(SingleEnvelopeError::EntryChangedDuringLoad);
     }
     Ok(bytes)
 }
@@ -649,6 +673,19 @@ mod tests {
                 source: SingleEnvelopeError::TooLarge { .. },
                 ..
             })
+        ));
+    }
+    #[test]
+    fn registry_rejects_hard_linked_envelope() {
+        let temp = TempDir::new().expect("temp directory");
+        let envelope = temp.path().join("provider.to");
+        write_fixture(temp.path(), "provider.to");
+        fs::hard_link(&envelope, temp.path().join("provider-copy.bin"))
+            .expect("create second name for envelope");
+
+        assert!(matches!(
+            read_bounded_envelope(&envelope),
+            Err(SingleEnvelopeError::NotRegularFile)
         ));
     }
     #[cfg(unix)]

@@ -2062,6 +2062,7 @@ mod tests {
             P256_VALUE_BUS_SEGMENT_ROWS_V1, P256ValueAccessKindV1, P256ValueBusBaseCellV1,
             P256ValueBusBaseEndpointTraceV1, P256ValueBusEndpointV1, P256ValueBusFixedAccessV1,
         },
+        stark::zk_x509_test_digest384_v1,
     };
     use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
     use std::sync::OnceLock;
@@ -2094,14 +2095,14 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                [seed.wrapping_add(index as u8).wrapping_add(2); 32]
+                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
             main,
-            [seed.wrapping_add(0x20); 32],
-            [seed.wrapping_add(0x40); 32],
-            [seed.wrapping_add(0x60); 32],
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x20)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x40)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x60)),
         )
         .expect("opaque X5B1 binding")
         .main_post_base()

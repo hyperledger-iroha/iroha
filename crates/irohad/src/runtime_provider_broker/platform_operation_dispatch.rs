@@ -4084,5 +4084,23 @@ fn dispatch_server_operation(
     state: &BrokerServerStateV1,
     request: &OperationRequestV1,
 ) -> Result<ScrubbedBytes, BrokerError> {
-    dispatch_server_operation_with_session(state, &mut PopBrokerServerSessionV1::default(), request)
+    // Exercise the dispatcher with the same bounded stack provisioned for
+    // production broker session workers. The exhaustive debug dispatcher can
+    // legitimately exceed Rust's two-MiB test-thread default even though its
+    // operation payloads remain heap-backed and individually bounded.
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("runtime-provider-broker-test-session".to_owned())
+            .stack_size(BROKER_SESSION_THREAD_STACK_BYTES_V1)
+            .spawn_scoped(scope, || {
+                dispatch_server_operation_with_session(
+                    state,
+                    &mut PopBrokerServerSessionV1::default(),
+                    request,
+                )
+            })
+            .expect("spawn bounded broker test session")
+            .join()
+            .expect("broker test session must not panic")
+    })
 }

@@ -1314,8 +1314,7 @@ fn network_ingress_requires_reducer_order(
         | wire::ConsensusMessageV2Payload::TimeoutVote(_)
         | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => true,
-        wire::ConsensusMessageV2Payload::PayloadManifest(_)
-        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -1358,7 +1357,6 @@ pub(crate) const fn network_ingress_is_certified_fence_escape(
         wire::ConsensusMessageV2Payload::Proposal(_)
         | wire::ConsensusMessageV2Payload::Vote(_)
         | wire::ConsensusMessageV2Payload::TimeoutVote(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)

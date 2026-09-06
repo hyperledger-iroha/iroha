@@ -121,6 +121,14 @@ ffi::ffi_item! {
     // SAFETY: `ConstVec` has no trap representation in ConstVec
     ffi_type(unsafe {robust})
 }
+impl<T: norito::NoritoSchema> norito::NoritoSchema for ConstVec<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_primitives::const_vec::ConstVec",
+            &[T::nominal_name()],
+        )
+    }
+}
 impl<T> ConstVec<T> {
     /// Create a new `ConstVec` from something convertible into a `Box<[T]>`.
     ///

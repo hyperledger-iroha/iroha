@@ -2,20 +2,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../dynamic_memory.rs"]
 mod dynamic_memory;
-#[path = "../ecadd_circuit.rs"]
-mod ecadd_circuit;
-#[path = "../ecdsa_circuit.rs"]
-mod ecdsa_circuit;
 #[path = "../ed25519_batch.rs"]
 mod ed25519_batch;
-#[path = "../ed25519_circuit.rs"]
-mod ed25519_circuit;
 #[path = "../encoding.rs"]
 mod encoding;
 #[path = "../expanded_instruction.rs"]
 mod expanded_instruction;
-#[path = "../field_circuit.rs"]
-mod field_circuit;
 #[path = "../field_dispatch.rs"]
 mod field_dispatch;
 #[path = "../field_ops.rs"]

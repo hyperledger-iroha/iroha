@@ -78,7 +78,7 @@ fn status_fixture() -> SumeragiV2Status {
         liveness: Default::default(),
     }
 }
-fn build_status_router() -> axum::Router {
+fn build_status_router() -> iroha_torii::TestApiRouterRuntime {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -108,11 +108,16 @@ fn build_status_router() -> axum::Router {
         OnlinePeersProvider::new(peers_rx),
         None,
         telemetry,
-    );
-    torii.api_router_for_tests()
+    )
+    .expect("valid Torii Sumeragi-status fixture");
+    torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes")
 }
 async fn status_response(accept: &str) -> axum::response::Response {
-    build_status_router()
+    let runtime = build_status_router();
+    let response = runtime
+        .router()
         .oneshot(
             Request::builder()
                 .uri("/v1/sumeragi/status")
@@ -125,7 +130,9 @@ async fn status_response(accept: &str) -> axum::response::Response {
                 .expect("status request"),
         )
         .await
-        .expect("status response")
+        .expect("status response");
+    runtime.shutdown().await;
+    response
 }
 #[tokio::test]
 async fn json_status_is_exact_authoritative_v2_schema() {

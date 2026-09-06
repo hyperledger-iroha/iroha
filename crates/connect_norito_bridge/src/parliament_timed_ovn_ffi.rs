@@ -1043,6 +1043,27 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let quorum = DualQuorum::from_roster(&roster).expect("valid Parliament validator roster");
+        let kagemusha_mint_finality_epoch_roster =
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 0,
+                validators: roster
+                    .iter()
+                    .enumerate()
+                    .map(|(index, validator)| {
+                        iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                            &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small fixture roster")); 32],
+                            0,
+                            validator.validator.clone(),
+                        )
+                        .expect("derive deterministic mint-finality fixture keys")
+                    })
+                    .collect(),
+            };
+        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
+            .finality_epoch_id()
+            .expect("derive mint-finality fixture roster ID");
         let pops = keys
             .iter()
             .map(|key| {
@@ -1082,6 +1103,8 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum,
                 roster: roster.clone(),
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
                 nexus_amx_context_hash: Hash::new(b"Parliament casting proof test nexus"),
                 execution_policy_hash: Hash::new(b"Parliament casting proof test policy"),
                 da_layout: DataAvailabilityLayout {
@@ -1116,13 +1139,14 @@ mod tests {
             } else {
                 Hash::new(height.to_be_bytes())
             };
-            let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"Parliament casting parent state"),
-                Hash::new(b"Parliament casting post state"),
-                ordinary_writes_root,
-                1,
-                Hash::new(b"Parliament casting executed wire"),
-            );
+            let execution_commitment =
+                ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"Parliament casting parent state"),
+                    Hash::new(b"Parliament casting post state"),
+                    ordinary_writes_root,
+                    1,
+                    Hash::new(b"Parliament casting executed wire"),
+                );
             let mut commit_qc = QuorumCertificate {
                 round,
                 proposal_round: round,

@@ -3,10 +3,12 @@ use criterion::Criterion;
 use ivm::ByteMerkleTree;
 const CHUNK: usize = 32;
 fn sequential_root(data: &[u8]) -> [u8; 32] {
-    ByteMerkleTree::from_bytes(data, CHUNK).root()
+    ByteMerkleTree::from_bytes(data, CHUNK).unwrap().root()
 }
 fn parallel_root(data: &[u8]) -> [u8; 32] {
-    ByteMerkleTree::from_bytes_parallel(data, CHUNK).root()
+    ByteMerkleTree::from_bytes_parallel(data, CHUNK)
+        .unwrap()
+        .root()
 }
 fn bench_commit(c: &mut Criterion) {
     let data = vec![0u8; 1 << 20]; // 1 MiB

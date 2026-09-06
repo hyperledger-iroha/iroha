@@ -238,6 +238,14 @@ pub mod isi {
                     .into(),
                 ));
             }
+            if key.as_ref() == iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "account metadata key `{key}` is reserved for native asset transfer controls"
+                    )
+                    .into(),
+                ));
+            }
             if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(&key) {
                 let ttl_only_update = validate_multisig_spec_ttl_update(
                     state_transaction,
@@ -293,6 +301,15 @@ pub mod isi {
                 return Err(Error::InvariantViolation(
                     format!(
                         "account metadata key `{}` is reserved for native contract deployment state",
+                        self.key()
+                    )
+                    .into(),
+                ));
+            }
+            if self.key().as_ref() == iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "account metadata key `{}` is reserved for native asset transfer controls",
                         self.key()
                     )
                     .into(),

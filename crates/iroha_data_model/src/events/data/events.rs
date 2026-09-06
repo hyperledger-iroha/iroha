@@ -412,6 +412,24 @@ pub mod bridge {
     //! Bridge events
     use super::*;
     use crate::nexus::LaneId;
+
+    /// Ledger event carrying one authenticated SCCP replay-forest transition.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(deny_unknown_fields)]
+    pub struct SccpReplayDeltaEventV1 {
+        /// Nexus lane that executed the SCCP state transition.
+        pub lane: LaneId,
+        /// Exact governed route boundary whose forest changed.
+        pub accumulator_id: crate::bridge::SccpReplayAccumulatorIdV1,
+        /// Authenticated old/new root and occupied-record commitment.
+        pub delta: crate::bridge::SccpReplayDeltaV1,
+    }
+
     data_event! {
         /// Bridge lane events
         #[has_origin(origin = LaneId)]
@@ -419,6 +437,9 @@ pub mod bridge {
             /// Emitted when a bridge receipt is recorded
             #[has_origin(receipt => &receipt.lane)]
             Emitted(crate::bridge::BridgeReceipt),
+            /// Emitted after one SCCP replay leaf is occupied.
+            #[has_origin(replay => &replay.lane)]
+            ReplayDelta(SccpReplayDeltaEventV1),
         }
     }
 }
@@ -2450,7 +2471,7 @@ pub mod prelude {
             AssetDefinitionOwnerChanged, AssetDefinitionTotalQuantityChanged, AssetEvent,
             AssetEventSet, AssetMetadataChanged, AssetTransferred,
         },
-        bridge::{BridgeEvent, BridgeEventSet},
+        bridge::{BridgeEvent, BridgeEventSet, SccpReplayDeltaEventV1},
         config::{
             ConfigurationEvent, ConfigurationEventSet, ParameterChanged, SccpRegistryChanged,
             SccpRegistryOperation,

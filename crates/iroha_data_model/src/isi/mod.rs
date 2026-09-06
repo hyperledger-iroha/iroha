@@ -118,6 +118,7 @@ macro_rules! impl_direct_instruction_box {
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyExact12QualificationV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1);
 impl_direct_instruction_box!(crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1);
@@ -146,12 +147,17 @@ impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyProofV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1);
+impl_direct_instruction_box!(
+    crate::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1
+);
 impl_direct_instruction_box!(crate::isi::private_settlement::AbortAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
 impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
 impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
 impl_direct_instruction_box!(crate::isi::bridge::ApplySccpRouteGovernance);
+impl_direct_instruction_box!(crate::isi::bridge::SubmitSccpTonBreakerObservationV1);
 impl_direct_instruction_box!(crate::isi::asset_alias::SetAssetDefinitionAlias);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferAvailability);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
@@ -263,6 +269,7 @@ impl_direct_instruction_box!(crate::isi::runtime_upgrade::CancelRuntimeUpgrade);
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
 // Allow direct boxing of consensus key lifecycle instructions.
+impl_direct_instruction_box!(crate::isi::register::RegisterCommitteePeerWithPop);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RegisterConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RotateConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);
@@ -355,6 +362,9 @@ impl_sorafs_reserve_instruction_box!(
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsPopIssuerPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::CommitSorafsPopCredentialBatch);
 impl_direct_instruction_box!(crate::isi::sorafs::PublishSorafsPopRevocationList);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsCitizenBond);
+impl_direct_instruction_box!(crate::isi::sorafs::RotateSorafsCitizenBondAuthorization);
+impl_direct_instruction_box!(crate::isi::sorafs::RequestSorafsCitizenBondExit);
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsModerationPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationAppeal);
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsModerationJurorEligibility);
@@ -364,6 +374,7 @@ impl_direct_instruction_box!(crate::isi::sorafs::ActivateSorafsModerationCase);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationCommit);
 impl_direct_instruction_box!(crate::isi::sorafs::RaiseSorafsModerationChallenge);
 impl_direct_instruction_box!(crate::isi::sorafs::ResolveSorafsModerationChallenge);
+impl_direct_instruction_box!(crate::isi::sorafs::ExpireSorafsModerationChallenge);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationReveal);
 impl_direct_instruction_box!(crate::isi::sorafs::FinalizeSorafsModerationCase);
 impl_direct_instruction_box!(crate::isi::space_directory::PublishSpaceDirectoryManifest);
@@ -415,16 +426,8 @@ impl_musubi_instruction_box!(
     SetMusubiRegistryPolicyV1,
     AssertMusubiReleaseDigestV1,
 );
-impl_direct_instruction_box!(crate::isi::offline::TopUpKagemushaRecursiveV4);
-impl_direct_instruction_box!(crate::isi::offline::RedeemKagemushaRecursiveV4);
-impl_direct_instruction_box!(crate::isi::offline::ActivateKagemushaRecursiveReleaseV4);
-impl_direct_instruction_box!(crate::isi::offline::EnableKagemushaRecursiveIssuanceV4);
-impl_direct_instruction_box!(crate::isi::offline::CancelKagemushaRecursiveReleaseV4);
-impl_direct_instruction_box!(crate::isi::offline::DeactivateKagemushaRecursiveIssuanceV4);
-impl_direct_instruction_box!(crate::isi::offline::RecordKagemushaTairaCanaryV4);
-impl_direct_instruction_box!(crate::isi::offline::AuthorizeKagemushaTairaCanaryV4);
-impl_direct_instruction_box!(crate::isi::offline::RegisterOfflineDeviceAttestation);
-impl_direct_instruction_box!(crate::isi::offline::SetOfflineDeviceAttestationPolicy);
+impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaV1);
+impl_direct_instruction_box!(crate::isi::kagemusha_v1::RedeemKagemushaV1);
 // Allow direct boxing of oracle feed instructions.
 impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);
 impl_direct_instruction_box!(crate::isi::oracle::SubmitOracleObservation);
@@ -462,6 +465,12 @@ impl_direct_instruction_box!(crate::isi::confidential::SetPoseidonParamsLifecycl
 // Allow direct boxing of governance instructions
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeDeployContract);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeContractLifecycleGovernance);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeContractEmergencyHold);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]
@@ -1817,6 +1826,8 @@ pub mod defi;
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
+/// Clean-slate pooled-reserve KAGEMUSHA V1 instructions and operation records.
+pub mod kagemusha_v1;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -1825,8 +1836,6 @@ pub mod mint_burn;
 pub mod musubi;
 /// Nexus lane governance instructions.
 pub mod nexus;
-/// Offline allowance settlement instructions.
-pub mod offline;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
@@ -1877,11 +1886,11 @@ pub use confidential::*;
 pub use contract_alias::*;
 pub use defi::*;
 pub use identifier::*;
+pub use kagemusha_v1::*;
 pub use kaigi::*;
 pub use ministry::*;
 pub use mint_burn::*;
 pub use nexus::*;
-pub use offline::*;
 pub use oracle::*;
 pub use privacy::*;
 pub use ram_lfe::*;
@@ -2675,6 +2684,7 @@ pub mod prelude {
         },
         bridge::{
             ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
+            SubmitSccpTonBreakerObservationV1,
         },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
@@ -2718,6 +2728,7 @@ pub mod prelude {
         private_settlement::{
             AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
             FinalizeAtomicPrivateSettlementV1, PrivateSettlementPoolActivationValidationErrorV1,
+            PrivateSettlementPoolRotationValidationErrorV1, RotatePrivateSettlementPoolPolicyV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
@@ -2753,15 +2764,17 @@ pub mod prelude {
             AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, BindManifestAlias,
             CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
             CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
-            DrawSorafsReserveCredit, ExpireReplicationOrder, FinalizeSorafsModerationCase,
-            FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
-            MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
-            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
-            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            DrawSorafsReserveCredit, ExpireReplicationOrder, ExpireSorafsModerationChallenge,
+            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
+            MaintainSorafsOrderbook, MatchSorafsOrderbook, PublishSorafsPopRevocationList,
+            RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+            RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
+            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsCitizenBond,
             RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            RepaySorafsReserveCredit, RequestSorafsCitizenBondExit, RequestSorafsReserveMovement,
+            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+            RotateSorafsCitizenBondAuthorization, SetPricingSchedule,
             SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,

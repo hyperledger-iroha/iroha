@@ -20,7 +20,8 @@ pub mod isi {
     use crate::governance::draw::body_committee_size;
     use crate::governance::parliament::{
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1, ParliamentBodyStateV1,
-        ParliamentDecisionModeV1, parliament_attempt_policy_v1,
+        ParliamentDecisionModeV1, canonical_governance_attempt_ids_v1,
+        parliament_attempt_policy_v1, validate_parliament_randomness_redraw_lineage_v1,
     };
     use base64::engine::Engine as _;
     use core::{
@@ -57,8 +58,8 @@ pub mod isi {
         governance::{
             CanEnactGovernance, CanManageConfidentialParams, CanManageConsensusKeys,
             CanManageParliament, CanManageRuntimeUpgrades, CanManageVerifyingKeys,
-            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
-            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRestituteGovernanceLock,
+            CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -69,6 +70,7 @@ pub mod isi {
         sccp::CanProposeSccpRouteGovernance,
         settlement::CanExecuteSettlement,
         smart_contract::CanRegisterSmartContractCode,
+        trigger::CanRegisterGlobalDataTrigger,
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -77,6 +79,8 @@ pub mod isi {
     // Governance ISIs
     use iroha_data_model::isi::confidential;
     // Bring runtime upgrade ISIs into scope
+    #[cfg(test)]
+    use iroha_data_model::governance::types::GlobalDataTriggerPermissionGovernanceProposalV1;
     use iroha_data_model::isi::runtime_upgrade;
     #[cfg(feature = "zk-stark")]
     use iroha_data_model::proof::VerifyingKeyBox;
@@ -99,14 +103,22 @@ pub mod isi {
             },
             prelude::{AccountEvent, AccountPermissionChanged, TriggerEvent},
             smart_contract::{
-                ContractCodeRegistered, ContractCodeRemoved, ContractInstanceActivated,
-                ContractInstanceDeactivated, SmartContractEvent,
+                ContractCodeRegistered, ContractCodeRemoved, ContractEmergencyHoldPlaced,
+                ContractEmergencyHoldRetrospectiveCompleted, ContractInstanceActivated,
+                ContractInstanceDeactivated, ContractOwnershipTransferCancelled,
+                ContractOwnershipTransferOffered, ContractOwnershipTransferred,
+                ContractParliamentDelegationChanged, SmartContractEvent,
             },
         },
         governance::types::{
-            AbiVersion, BodyElectionAttemptId, DeployContractProposal, GovernanceAttemptStatusV1,
-            GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
+            AbiVersion, BodyElectionAttemptId,
+            CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
+            ContractEmergencyHoldProposalV1, ContractLifecycleGovernanceActionV1,
+            ContractLifecycleGovernanceProposalV1, DeployContractProposal,
+            GlobalDataTriggerPermissionGovernanceActionV1, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+            MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1, MAX_PARLIAMENT_CITIZENS_V1,
             MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateOutcomeV1,
             ParliamentAggregateTallyV1, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
             SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal, SortitionRequestV1,
@@ -167,10 +179,6 @@ pub mod isi {
             referendum_id: String,
             owner: AccountId,
             reason: GovernanceSlashReason,
-        },
-        CitizenshipSlash {
-            owner: AccountId,
-            slash_bps: u16,
         },
         CitizenshipRelease {
             owner: AccountId,
@@ -251,13 +259,11 @@ pub mod isi {
         }
     }
     use super::*;
+    #[cfg(test)]
+    use crate::governance::timed_ovn::TIMED_OVN_BALLOT_RECORD_BYTES_V1;
     use crate::{
-        governance::{
-            draw::derive_parliament_bodies,
-            timed_ovn::{
-                TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
-                TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
-            },
+        governance::timed_ovn::{
+            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
         },
         smartcontracts::{
             code::fetch_bound_contract_record,
@@ -268,7 +274,7 @@ pub mod isi {
                 trigger_is_enabled,
             },
         },
-        state::derive_validator_key_id,
+        state::{derive_committee_key_id, derive_validator_key_id},
         sumeragi::status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
     };
@@ -280,7 +286,7 @@ pub mod isi {
         unique_vec::PushResult,
     };
     #[cfg(feature = "telemetry")]
-    use iroha_telemetry::metrics::GovernanceManifestActivation;
+    use iroha_torii_shared::status::GovernanceManifestActivation;
     use mv::storage::StorageReadOnly;
     use sha2::Digest as _;
     fn ensure_metadata_value(
@@ -311,6 +317,116 @@ pub mod isi {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message.into().into(),
         ))
+    }
+    fn validate_alias_registry_routing_activation(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
+
+        let Some(next) =
+            AliasRegistryRoutingActivationV1::from_custom_parameter(custom).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid alias registry routing activation: {error}"
+                ))
+            })?
+        else {
+            return Ok(());
+        };
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+            .map(|installed| {
+                AliasRegistryRoutingActivationV1::from_custom_parameter(installed)?.ok_or_else(
+                    || {
+                        norito::json::Error::Message(
+                            "installed activation parameter identifier does not match its key"
+                                .to_owned(),
+                        )
+                    },
+                )
+            })
+            .transpose()
+            .map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid installed alias registry routing activation: {error}"
+                ))
+            })?;
+        next.validate_installation(previous.as_ref(), state_transaction.block_height())
+            .map_err(invalid_smart_contract_parameter)
+    }
+    fn validate_alias_dataspace_bootstrap_grant(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::alias_setup::{AliasDataspaceBootstrapGrantV1, AliasTargetV1};
+
+        let Some(next) =
+            AliasDataspaceBootstrapGrantV1::from_custom_parameter(custom).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid alias dataspace bootstrap grant: {error}"
+                ))
+            })?
+        else {
+            return Ok(());
+        };
+        if let Some(installed) = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+        {
+            let previous = AliasDataspaceBootstrapGrantV1::from_custom_parameter(installed)
+                .map_err(|error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid installed alias dataspace bootstrap grant: {error}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    invalid_smart_contract_parameter(
+                        "installed alias dataspace bootstrap grant identifier does not match its key",
+                    )
+                })?;
+            return if previous == next {
+                Ok(())
+            } else {
+                Err(invalid_smart_contract_parameter(
+                    "alias dataspace bootstrap grant is immutable once installed",
+                ))
+            };
+        }
+        if state_transaction.world.accounts.get(&next.owner).is_none() {
+            return Err(invalid_smart_contract_parameter(
+                "alias dataspace bootstrap grant owner must already exist",
+            ));
+        }
+        let target = AliasTargetV1::Dataspace(next.dataspace);
+        crate::alias_setup::validate_resolved_alias_target(
+            state_transaction.world(),
+            &state_transaction.nexus.dataspace_catalog,
+            &target,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .map_err(|error| {
+            invalid_smart_contract_parameter(format!(
+                "alias dataspace bootstrap grant mapping conflicts: {error}"
+            ))
+        })?;
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
+            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+        if crate::sns::record_by_selector(state_transaction.world(), &selector)
+            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?
+            .is_some()
+        {
+            return Err(invalid_smart_contract_parameter(
+                "alias dataspace bootstrap grant must be installed before the first SNS record",
+            ));
+        }
+        Ok(())
     }
     #[derive(crate::json_macros::JsonDeserialize)]
     struct GovernedGasRate {
@@ -1200,28 +1316,7 @@ pub mod isi {
         }
         Ok(false)
     }
-    fn protected_contract_namespaces(
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> BTreeSet<String> {
-        let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") else {
-            return BTreeSet::new();
-        };
-        let id = iroha_data_model::parameter::CustomParameterId(name);
-        let params = state_transaction.world.parameters.get();
-        params
-            .custom()
-            .get(&id)
-            .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
-            .map(|namespaces| {
-                namespaces
-                    .into_iter()
-                    .map(|namespace| namespace.trim().to_owned())
-                    .filter(|namespace| !namespace.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-    fn ensure_contract_lifecycle_authority(
+    fn ensure_contract_artifact_authority(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -1229,36 +1324,6 @@ pub mod isi {
         if !has_exact_permission(&state_transaction.world, authority, &required) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("not permitted: {}", required.name()).into(),
-            ));
-        }
-        Ok(())
-    }
-    fn ensure_contract_binding_governance(
-        authority: &AccountId,
-        contract_address: &iroha_data_model::smart_contract::ContractAddress,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_contract_lifecycle_authority(authority, state_transaction)?;
-        let protected = protected_contract_namespaces(state_transaction);
-        let address_dataspace = contract_address.dataspace_id().ok();
-        let protected_address = protected.contains("*")
-            || protected.contains(contract_address.as_str())
-            || address_dataspace.is_some_and(|dataspace_id| {
-                protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
-                    || protected.iter().any(|namespace| {
-                        state_transaction
-                            .nexus
-                            .dataspace_catalog
-                            .by_alias(namespace)
-                            .is_some_and(|entry| entry.id == dataspace_id)
-                    })
-            });
-        let governance_permission: Permission = CanEnactGovernance.into();
-        if protected_address
-            && !has_exact_permission(&state_transaction.world, authority, &governance_permission)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "not permitted: CanEnactGovernance".into(),
             ));
         }
         Ok(())
@@ -1382,31 +1447,6 @@ pub mod isi {
                 }
             }
         }
-        if sumeragi.key_require_hsm && record.hsm.is_none() {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "HSM binding required for consensus key".into(),
-                ),
-            ));
-        }
-        let mut allowed_hsm_providers: Vec<String> = sumeragi.key_allowed_hsm_providers.clone();
-        allowed_hsm_providers.sort();
-        allowed_hsm_providers.dedup();
-        if let Some(hsm) = &record.hsm {
-            if !sumeragi
-                .key_allowed_hsm_providers
-                .iter()
-                .any(|provider| provider == &hsm.provider)
-            {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "HSM provider {} is not allowed; allowed providers: {}",
-                        hsm.provider,
-                        render_list(&allowed_hsm_providers)
-                    )),
-                ));
-            }
-        }
         if matches!(record.status, ConsensusKeyStatus::Disabled) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -1453,7 +1493,7 @@ pub mod isi {
         let is_admissible = |circuit_id: &str| {
             circuit_id.len() <= iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 && iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
-                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                     circuit_id,
                 )
         };
@@ -1714,7 +1754,7 @@ pub mod isi {
             )
             .into());
         }
-        if iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+        if iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
             circuit_id,
         ) {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -1736,53 +1776,10 @@ pub mod isi {
         }
         Ok(())
     }
-    // Release activation installs a digest-qualified Eq/Ep pair atomically. Generic
-    // registration or rotation can split that pair and strand issued notes.
-    fn ensure_generic_verifying_key_is_not_kagemusha_release_owned(
-        id: &VerifyingKeyId,
-        records: &[&VerifyingKeyRecord],
-    ) -> Result<(), Error> {
-        let reserved_circuits = [
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-        ];
-        let is_manifest_digest = |manifest: &str| {
-            manifest.len() == 64
-                && manifest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        };
-        let reserved_id = id.backend.as_str()
-            == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-            && reserved_circuits.iter().any(|circuit_id| {
-                let v4_manifest = id
-                    .name
-                    .strip_prefix(circuit_id)
-                    .and_then(|suffix| suffix.strip_prefix('-'));
-                let v5_manifest = id
-                    .name
-                    .strip_prefix("v5-")
-                    .and_then(|name| name.strip_prefix(circuit_id))
-                    .and_then(|suffix| suffix.strip_prefix('-'));
-                v4_manifest.or(v5_manifest).is_some_and(is_manifest_digest)
-            });
-        if reserved_id
-            || records.iter().any(|record| {
-                reserved_circuits
-                    .iter()
-                    .any(|circuit_id| record.circuit_id == *circuit_id)
-            })
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "Kagemusha release verifier records are owned by atomic release activation".into(),
-            ));
-        }
-        Ok(())
-    }
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
         if raw.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
             || !iroha_data_model::zk::open_verify_circuit_id_is_portable(raw)
-            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                 raw,
             )
         {
@@ -2061,142 +2058,6 @@ pub mod isi {
         out.copy_from_slice(&digest[..32]);
         out
     }
-    fn reset_citizen_epoch(record: &mut crate::state::CitizenshipRecord, epoch: u64) {
-        if record.last_epoch_seen != epoch {
-            record.last_epoch_seen = epoch;
-            record.seats_in_epoch = 0;
-            record.declines_used = 0;
-        }
-    }
-    fn ensure_citizen_available(
-        record: &mut crate::state::CitizenshipRecord,
-        epoch: u64,
-        current_height: u64,
-    ) -> Result<(), Error> {
-        reset_citizen_epoch(record, epoch);
-        if record.cooldown_until > current_height {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizen is in cooldown for the requested epoch".into(),
-            ));
-        }
-        Ok(())
-    }
-    fn assign_citizen_seat(
-        record: &mut crate::state::CitizenshipRecord,
-        epoch: u64,
-        current_height: u64,
-        cfg: &iroha_config::parameters::actual::CitizenServiceDiscipline,
-    ) -> Result<(), Error> {
-        reset_citizen_epoch(record, epoch);
-        if cfg.max_seats_per_epoch > 0 && record.seats_in_epoch >= cfg.max_seats_per_epoch {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizen seat limit reached for epoch".into(),
-            ));
-        }
-        if record.cooldown_until > current_height {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizen is in cooldown for the requested epoch".into(),
-            ));
-        }
-        record.seats_in_epoch = record.seats_in_epoch.saturating_add(1);
-        let cooldown = current_height.saturating_add(cfg.seat_cooldown_blocks);
-        record.cooldown_until = record.cooldown_until.max(cooldown);
-        Ok(())
-    }
-    fn slash_citizenship_bond(
-        owner: &AccountId,
-        record: &mut crate::state::CitizenshipRecord,
-        slash_bps: u16,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<Quantity, Error> {
-        if slash_bps == 0 || record.amount.is_zero() {
-            return Ok(Quantity::zero());
-        }
-        let slash_amount = record
-            .amount
-            .try_mul_decimal(&Numeric::new(u32::from(slash_bps), 4))
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        let def_id = state_transaction.gov.citizenship_asset_id.clone();
-        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id.clone(),
-            state_transaction.gov.citizenship_escrow_account.clone(),
-        );
-        let receiver_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id,
-            state_transaction.gov.slash_receiver_account.clone(),
-        );
-        let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
-            slash_amount.as_numeric(),
-            spec,
-        )?;
-        let movement = VerifiedGovernanceNumericMovement::new(
-            VerifiedGovernanceNumericPurpose::CitizenshipSlash {
-                owner: owner.clone(),
-                slash_bps,
-            },
-            escrow_asset_id,
-            receiver_asset_id,
-            slash_amount.clone(),
-        );
-        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
-            state_transaction,
-            movement,
-        )?;
-        record.amount = record
-            .amount
-            .try_sub(&slash_amount)
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        Ok(slash_amount)
-    }
-    fn required_citizenship_bond_for_role(
-        gov: &iroha_config::parameters::actual::Governance,
-        role: &str,
-    ) -> Quantity {
-        let multiplier = gov.citizen_service.bond_multiplier_for_role(role).max(1);
-        gov.citizenship_bond_amount
-            .try_mul_decimal(&Numeric::from(multiplier))
-            .expect("bounded governance bond multiplier must remain representable")
-    }
-    fn latest_governance_entropy_seed(
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<[u8; 32], Error> {
-        let pulse = crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
-            &state_transaction.world,
-            &state_transaction.network_id,
-            state_transaction.block_height().saturating_sub(1),
-        )
-        .map_err(|_| {
-            InstructionExecutionError::InvariantViolation(
-                "governance sortition requires finalized beacon entropy from an authenticated global pulse"
-                    .into(),
-            )
-        })?;
-        Ok(crate::beacon::global_threshold_beacon_governance_seed_v1(
-            &pulse,
-            state_transaction.block_height(),
-        ))
-    }
-    fn derive_epoch_parliament_beacon(
-        epoch: u64,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<[u8; 32], Error> {
-        let entropy = latest_governance_entropy_seed(state_transaction)?;
-        let mut input = Vec::with_capacity(
-            b"iroha:gov:epoch-beacon:v1|".len()
-                + state_transaction.network_id.as_bytes().len()
-                + core::mem::size_of::<u64>()
-                + entropy.len(),
-        );
-        input.extend_from_slice(b"iroha:gov:epoch-beacon:v1|");
-        input.extend_from_slice(state_transaction.network_id.as_bytes());
-        input.extend_from_slice(&epoch.to_le_bytes());
-        input.extend_from_slice(&entropy);
-        let digest = Blake2b512::digest(input);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest[..32]);
-        Ok(out)
-    }
     fn lock_voting_bond(
         ballot_amount: &Quantity,
         previous_amount: Option<&Quantity>,
@@ -2316,6 +2177,28 @@ pub mod isi {
             state_transaction,
         )
     }
+    fn consume_signed_standalone_governance_ballot_v1(
+        instruction: InstructionBox,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if state_transaction.is_trigger_execution_active() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance ballots cannot execute from trigger bodies".into(),
+            )
+            .into());
+        }
+        // Ad-hoc instruction execution is retained for genesis tooling and
+        // focused unit tests. Every signed execution must consume the exact
+        // direct singleton installed from its canonical payload.
+        if state_transaction.current_tx_hash.is_none() {
+            return Ok(());
+        }
+        state_transaction
+            .consume_governance_ballot_entrypoint_v1(&instruction)
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into()).into()
+            })
+    }
     fn ensure_exact_governance_permission(
         authority: &AccountId,
         required: &Permission,
@@ -2336,19 +2219,18 @@ pub mod isi {
         reason: GovernanceSlashReason,
         note: &'a str,
     }
-    fn governance_slash_percent(
+    fn prevalidate_governance_slash_percent(
         referendum_id: &str,
         owner: &AccountId,
         bps: u16,
         reason: GovernanceSlashReason,
-        note: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<Option<Quantity>, Error> {
         let bps = bps.min(10_000);
         if bps == 0 {
             return Ok(None);
         }
-        let Some(mut locks) = state_transaction
+        let Some(locks) = state_transaction
             .world
             .governance_locks
             .get(referendum_id)
@@ -2356,7 +2238,7 @@ pub mod isi {
         else {
             return Ok(None);
         };
-        let Some(mut rec) = locks.locks.get(owner).cloned() else {
+        let Some(rec) = locks.locks.get(owner).cloned() else {
             return Ok(None);
         };
         let slash_amount = rec
@@ -2366,15 +2248,98 @@ pub mod isi {
         if slash_amount.is_zero() {
             return Ok(None);
         }
-        let request = GovernanceSlashRequest {
+        let custody = retained_governance_lock_custody(referendum_id, &rec, state_transaction)?;
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock has no escrowed balance to slash".into(),
+            ));
+        }
+        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
+            custody.asset_definition_id.clone(),
+            custody.bond_escrow_account,
+        );
+        let receiver_asset_id = iroha_data_model::asset::AssetId::new(
+            custody.asset_definition_id,
+            custody.slash_receiver_account,
+        );
+        let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            slash_amount.as_numeric(),
+            spec,
+        )?;
+        let _ = rec
+            .amount
+            .try_sub(&slash_amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        let _ = rec
+            .slashed
+            .try_add(&slash_amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        if let Some(entry) = state_transaction
+            .world
+            .governance_slashes
+            .get(referendum_id)
+            .and_then(|ledger| ledger.slashes.get(owner))
+        {
+            let _ = entry
+                .total_slashed
+                .try_add(&slash_amount)
+                .map_err(|_| Error::from(MathError::Overflow))?;
+        }
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::LockSlash {
+                referendum_id: referendum_id.to_owned(),
+                owner: owner.clone(),
+                reason,
+            },
+            escrow_asset_id,
+            receiver_asset_id,
+            slash_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::validate_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
+        )?;
+        Ok(Some(slash_amount))
+    }
+    fn reject_governance_ballot_with_penalty(
+        referendum_id: &str,
+        owner: &AccountId,
+        slash_bps: u16,
+        slash_reason: GovernanceSlashReason,
+        slash_note: &str,
+        ballot_rejection_reason: &str,
+        rejection: Error,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let penalty_amount = prevalidate_governance_slash_percent(
             referendum_id,
             owner,
-            amount: slash_amount.clone(),
-            reason,
-            note,
-        };
-        apply_governance_slash(&request, &mut locks, &mut rec, state_transaction)?;
-        Ok(Some(slash_amount))
+            slash_bps,
+            slash_reason,
+            state_transaction,
+        )?;
+        if let Some(amount) = penalty_amount {
+            state_transaction.defer_governance_ballot_penalty_v1(
+                crate::state::DeferredGovernanceBallotPenaltyV1 {
+                    referendum_id: referendum_id.to_owned(),
+                    owner: owner.clone(),
+                    amount,
+                    slash_reason,
+                    slash_note: slash_note.to_owned(),
+                    ballot_rejection_reason: ballot_rejection_reason.to_owned(),
+                },
+            );
+        }
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                    referendum_id: referendum_id.to_owned(),
+                    reason: ballot_rejection_reason.to_owned(),
+                },
+            ),
+        ));
+        Err(rejection)
     }
     fn governance_slash_absolute(
         referendum_id: &str,
@@ -2416,6 +2381,29 @@ pub mod isi {
         };
         apply_governance_slash(&request, &mut locks, &mut rec, state_transaction)?;
         Ok(amount)
+    }
+    /// Commit one ballot penalty after the originating transaction overlay was rejected.
+    pub(crate) fn apply_deferred_governance_ballot_penalty_v1(
+        penalty: &crate::state::DeferredGovernanceBallotPenaltyV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        governance_slash_absolute(
+            &penalty.referendum_id,
+            &penalty.owner,
+            penalty.amount.clone(),
+            penalty.slash_reason,
+            &penalty.slash_note,
+            state_transaction,
+        )?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                    referendum_id: penalty.referendum_id.clone(),
+                    reason: penalty.ballot_rejection_reason.clone(),
+                },
+            ),
+        ));
+        Ok(())
     }
     fn apply_governance_slash(
         request: &GovernanceSlashRequest<'_>,
@@ -2647,7 +2635,7 @@ pub mod isi {
         rec: &crate::state::GovernanceLockRecord,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<crate::state::GovernanceLockCustody, Error> {
-        if typed_proposal_for_legacy_referendum(referendum_id, state_transaction)?.is_some() {
+        if typed_proposal_for_standalone_referendum(referendum_id, state_transaction)?.is_some() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "typed Parliament proposals cannot own public referendum locks".into(),
             )
@@ -2718,7 +2706,6 @@ pub mod isi {
             }
             let id = self.id().clone();
             let record = self.record().clone();
-            ensure_generic_verifying_key_is_not_kagemusha_release_owned(&id, &[&record])?;
             let id_backend = id.backend.as_str();
             ensure_open_verify_circuit_id_is_admitted_v1(id_backend, &record.circuit_id)?;
             if matches!(record.status, ConfidentialStatus::Withdrawn) {
@@ -2961,6 +2948,7 @@ pub mod isi {
             }
             let h_now = state_transaction._curr_block.height().get();
             let payload = DeployContractProposal {
+                proposal_operator: authority.clone(),
                 contract_address: contract_address.clone(),
                 code_hash: self.code_hash,
                 abi_hash: self.abi_hash,
@@ -2975,7 +2963,8 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.contract_address != payload.contract_address
+                if existing_payload.proposal_operator != payload.proposal_operator
+                    || existing_payload.contract_address != payload.contract_address
                     || existing_payload.code_hash != payload.code_hash
                     || existing_payload.abi_hash != payload.abi_hash
                     || existing_payload.abi_version != payload.abi_version
@@ -3006,6 +2995,328 @@ pub mod isi {
                         id,
                         proposer: authority.clone(),
                         contract_address: Some(payload.contract_address),
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+    fn is_bonded_citizen(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> bool {
+        let required = &state_transaction.gov.citizenship_bond_amount;
+        state_transaction
+            .world
+            .citizens
+            .get(authority)
+            .is_some_and(|record| &record.amount >= required)
+    }
+    fn submit_contract_governance_proposal(
+        authority: &AccountId,
+        kind: ProposalKind,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let id = kind.fingerprint();
+        if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+            if existing.kind != kind {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal id collision".into(),
+                ));
+            }
+            ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+            return Ok(());
+        }
+        let record = crate::state::GovernanceProposalRecord {
+            proposer: authority.clone(),
+            kind,
+            created_height: state_transaction.block_height(),
+            status: crate::state::GovernanceProposalStatus::Proposed,
+        };
+        ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+        state_transaction
+            .world
+            .put_governance_proposal(id, record)
+            .map_err(governance_proposal_storage_error)?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                    id,
+                    proposer: authority.clone(),
+                    contract_address: Some(contract_address),
+                },
+            ),
+        ));
+        Ok(())
+    }
+    impl Execute for gov::ProposeContractLifecycleGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let payload = self.proposal;
+            if payload.proposal_operator != *authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "contract lifecycle proposal operator must equal transaction authority".into(),
+                ));
+            }
+            if payload.expected_revision == 0 {
+                return Err(invalid_governance_parameter(
+                    "contract lifecycle expected_revision must be non-zero",
+                ));
+            }
+            let lifecycle = checked_contract_lifecycle(
+                state_transaction,
+                &payload.contract_address,
+                payload.expected_revision,
+            )?;
+            let bonded = is_bonded_citizen(authority, state_transaction);
+            let owner_is_authority = lifecycle.owner
+                == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    authority.clone(),
+                );
+            let parliament_authorized = lifecycle.owner
+                == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                || lifecycle.parliament_delegation
+                    == iroha_data_model::smart_contract::ContractParliamentDelegationV1::Lifecycle;
+            match &payload.action {
+                ContractLifecycleGovernanceActionV1::Activate(action) => {
+                    if action.abi_version != AbiVersion::new(1) {
+                        return Err(invalid_governance_parameter(
+                            "abi_version must be exactly 1",
+                        ));
+                    }
+                    if action.abi_hash.into_bytes()
+                        != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
+                    {
+                        return Err(invalid_governance_parameter(
+                            "abi_hash does not match canonical ABI V1 hash",
+                        ));
+                    }
+                    if !owner_is_authority && !(parliament_authorized && bonded) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "contract lifecycle proposal requires the account owner or a bonded citizen with Parliament authority"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::Deactivate(action) => {
+                    let active = state_transaction
+                        .world
+                        .contract_instances
+                        .get(&payload.contract_address)
+                        .copied();
+                    if active.map(<[u8; 32]>::from) != Some(action.expected_code_hash.into_bytes())
+                    {
+                        return Err(invalid_governance_parameter(
+                            "expected_code_hash does not match the active contract",
+                        ));
+                    }
+                    if !owner_is_authority && !(parliament_authorized && bonded) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "contract lifecycle proposal requires the account owner or a bonded citizen with Parliament authority"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::OfferOwnership(action) => {
+                    if lifecycle.owner
+                        != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                        || !bonded
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "only a bonded citizen may propose ownership from a Parliament-owned contract"
+                                .into(),
+                        ));
+                    }
+                    state_transaction
+                        .world
+                        .account(&action.new_owner)
+                        .map_err(Error::from)?;
+                }
+                ContractLifecycleGovernanceActionV1::CancelOwnershipOffer => {
+                    if lifecycle.owner
+                        != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                        || !bonded
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "only a bonded citizen may cancel a Parliament-owned contract offer"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::AcceptParliamentOwnership => {
+                    if lifecycle.pending_owner
+                        != Some(
+                            iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament,
+                        )
+                        || !bonded
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament ownership acceptance requires a pending Parliament offer and a bonded citizen"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(action) => {
+                    if !bonded {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "only a bonded citizen may propose an emergency-hold retrospective"
+                                .into(),
+                        ));
+                    }
+                    checked_expired_contract_emergency_hold_retrospective(
+                        &lifecycle,
+                        action,
+                        state_transaction.block_height(),
+                    )?;
+                }
+            }
+            let address = payload.contract_address.clone();
+            submit_contract_governance_proposal(
+                authority,
+                ProposalKind::ContractLifecycleGovernance(payload),
+                address,
+                state_transaction,
+            )
+        }
+    }
+    impl Execute for gov::ProposeContractEmergencyHold {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let mut payload = self.proposal;
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose emergency contract containment".into(),
+                ));
+            }
+            if payload.incident_digest == [0; 32]
+                || !(1..=iroha_data_model::smart_contract::MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1)
+                    .contains(&payload.duration_blocks)
+            {
+                return Err(invalid_governance_parameter(
+                    "emergency hold requires non-zero evidence and a duration of 1..=3600 blocks",
+                ));
+            }
+            payload.reason = payload.reason.trim().to_owned();
+            if payload.reason.is_empty() {
+                return Err(invalid_governance_parameter(
+                    "emergency hold reason must not be empty",
+                ));
+            }
+            let lifecycle = checked_contract_lifecycle(
+                state_transaction,
+                &payload.contract_address,
+                payload.expected_revision,
+            )?;
+            if lifecycle.emergency_hold.is_some() {
+                return Err(invalid_governance_parameter(
+                    "a subsequent emergency hold requires a completed Parliament retrospective",
+                ));
+            }
+            let active = state_transaction
+                .world
+                .contract_instances
+                .get(&payload.contract_address)
+                .copied()
+                .ok_or_else(|| invalid_governance_parameter("contract is not active"))?;
+            if <[u8; 32]>::from(active) != payload.expected_code_hash.into_bytes() {
+                return Err(invalid_governance_parameter(
+                    "expected_code_hash does not match the active contract",
+                ));
+            }
+            let address = payload.contract_address.clone();
+            submit_contract_governance_proposal(
+                authority,
+                ProposalKind::ContractEmergencyHold(payload),
+                address,
+                state_transaction,
+            )
+        }
+    }
+    fn global_data_trigger_permission(authority: &AccountId) -> Permission {
+        CanRegisterGlobalDataTrigger {
+            authority: authority.clone(),
+        }
+        .into()
+    }
+    fn has_direct_global_data_trigger_permission(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> bool {
+        let permission = global_data_trigger_permission(authority);
+        state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| permissions.contains(&permission))
+    }
+    impl Execute for gov::ProposeGlobalDataTriggerPermissionGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose global data-trigger permission governance"
+                        .into(),
+                ));
+            }
+            let payload = self.proposal;
+            state_transaction
+                .world
+                .account(&payload.authority)
+                .map_err(Error::from)?;
+            let is_granted =
+                has_direct_global_data_trigger_permission(&payload.authority, state_transaction);
+            match payload.action {
+                GlobalDataTriggerPermissionGovernanceActionV1::Grant if is_granted => {
+                    return Err(invalid_governance_parameter(
+                        "global data-trigger permission is already granted directly",
+                    ));
+                }
+                GlobalDataTriggerPermissionGovernanceActionV1::Revoke if !is_granted => {
+                    return Err(invalid_governance_parameter(
+                        "global data-trigger permission is not granted directly",
+                    ));
+                }
+                GlobalDataTriggerPermissionGovernanceActionV1::Grant
+                | GlobalDataTriggerPermissionGovernanceActionV1::Revoke => {}
+            }
+            let kind = ProposalKind::GlobalDataTriggerPermissionGovernance(payload);
+            let id = kind.fingerprint();
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.kind != kind {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+                return Ok(());
+            }
+            let record = crate::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: state_transaction.block_height(),
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            };
+            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+            state_transaction
+                .world
+                .put_governance_proposal(id, record)
+                .map_err(governance_proposal_storage_error)?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
                     },
                 ),
             ));
@@ -3077,6 +3388,7 @@ pub mod isi {
             ensure_runtime_upgrade_no_overlap(&self.manifest, state_transaction)?;
             let h_now = state_transaction._curr_block.height().get();
             let payload = RuntimeUpgradeProposal {
+                proposal_operator: authority.clone(),
                 manifest: self.manifest.clone(),
             };
             let kind = ProposalKind::RuntimeUpgrade(payload.clone());
@@ -3087,7 +3399,9 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.manifest != payload.manifest {
+                if existing_payload.proposal_operator != payload.proposal_operator
+                    || existing_payload.manifest != payload.manifest
+                {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governance proposal id collision".into(),
                     ));
@@ -3367,16 +3681,34 @@ pub mod isi {
         }
         Ok(registry)
     }
-    fn validation_fee_proposal_operator(kind: &ProposalKind) -> Option<&AccountId> {
-        match kind {
-            ProposalKind::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
-            ProposalKind::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
-            ProposalKind::DeployContract(_)
-            | ProposalKind::RuntimeUpgrade(_)
-            | ProposalKind::SccpRouteGovernance(_)
-            | ProposalKind::SorafsProviderGovernance(_)
-            | ProposalKind::MusubiRegistryGovernance(_) => None,
-        }
+    fn standalone_governance_state_contains_proposal_id_v1(
+        proposal_id: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> bool {
+        let aliases_proposal_id = |selector: &str| {
+            iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
+                == Some(proposal_id)
+        };
+        state_transaction
+            .world
+            .governance_referenda
+            .iter()
+            .any(|(selector, _)| aliases_proposal_id(selector))
+            || state_transaction
+                .world
+                .governance_locks
+                .iter()
+                .any(|(selector, _)| aliases_proposal_id(selector))
+            || state_transaction
+                .world
+                .governance_slashes
+                .iter()
+                .any(|(selector, _)| aliases_proposal_id(selector))
+            || state_transaction
+                .world
+                .elections
+                .iter()
+                .any(|(selector, _)| aliases_proposal_id(selector))
     }
     fn ensure_certificate_only_proposal_status_v1(
         proposal_id: [u8; 32],
@@ -3384,31 +3716,18 @@ pub mod isi {
         expected_status: crate::state::GovernanceProposalStatus,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let selector = hex::encode(proposal_id);
-        let has_legacy_state = state_transaction
-            .world
-            .governance_referenda
-            .get(&selector)
-            .is_some()
-            || state_transaction
-                .world
-                .governance_locks
-                .get(&selector)
-                .is_some()
-            || state_transaction
-                .world
-                .governance_slashes
-                .get(&selector)
-                .is_some()
-            || state_transaction.world.elections.get(&selector).is_some();
+        let has_standalone_state =
+            standalone_governance_state_contains_proposal_id_v1(proposal_id, state_transaction);
         if proposal.kind.fingerprint() != proposal_id
             || proposal.status != expected_status
             || proposal
                 .first_release_exact_json_u64_invariant_error()
                 .is_some()
-            || validation_fee_proposal_operator(&proposal.kind)
+            || proposal
+                .kind
+                .proposal_operator_v1()
                 .is_some_and(|operator| operator != &proposal.proposer)
-            || has_legacy_state
+            || has_standalone_state
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "typed governance proposal is not a canonical certificate-only Parliament record"
@@ -3795,12 +4114,17 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            consume_signed_standalone_governance_ballot_v1(
+                InstructionBox::from(self.clone()),
+                state_transaction,
+            )?;
             ensure_exact_governance_ballot_permission(
                 authority,
                 &self.election_id,
                 state_transaction,
             )?;
-            if typed_proposal_for_legacy_referendum(&self.election_id, state_transaction)?.is_some()
+            if typed_proposal_for_standalone_referendum(&self.election_id, state_transaction)?
+                .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "typed governance proposals accept only timed-private Parliament ballots"
@@ -3900,7 +4224,7 @@ pub mod isi {
                 st.domain_tag.clone()
             };
             // Early referendum existence/window checks (Zk)
-            {
+            let referendum = {
                 let rid = self.election_id.clone();
                 let now_h = state_transaction._curr_block.height().get();
                 let Some(rr) = state_transaction
@@ -3960,7 +4284,8 @@ pub mod isi {
                         "referendum has not passed the Parliament gate".into(),
                     ));
                 }
-            }
+                rr
+            };
             let lock_hint_present =
                 lock_owner.is_some() || lock_amount.is_some() || lock_duration.is_some();
             if lock_hint_present {
@@ -3991,6 +4316,31 @@ pub mod isi {
                     "lock hints required for governance bond".into(),
                 ));
             }
+            let lock_expiry = if let Some(duration_blocks) = lock_duration {
+                let expiry_height = state_transaction
+                    ._curr_block
+                    .height()
+                    .get()
+                    .checked_add(duration_blocks)
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
+                if expiry_height < referendum.h_end {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: self.election_id.clone(),
+                                reason: "ballot lock expires before the referendum end height"
+                                    .into(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "ballot lock must remain active through the referendum end height".into(),
+                    ));
+                }
+                Some(expiry_height)
+            } else {
+                None
+            };
             // 3) Verify the proof against the resolved VK (ZK1/H2* envelope dispatch)
             let vk_id = st
                 .vk_ballot
@@ -4139,90 +4489,60 @@ pub mod isi {
                 &state_transaction.zk,
             );
             if !verify_report.ok {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_invalid_proof_bps,
                     GovernanceSlashReason::Misconduct,
                     "invalid_proof",
+                    "invalid proof",
+                    InstructionExecutionError::InvariantViolation("invalid proof".into()).into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "invalid proof".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "invalid proof".into(),
-                ));
+                );
             }
             let proof_verified = true;
             let inputs = match extract_vote_public_inputs(backend, &proof_bytes) {
                 Ok(inputs) => inputs,
                 Err(err) => {
-                    let _ = governance_slash_percent(
+                    return reject_governance_ballot_with_penalty(
                         &self.election_id,
                         authority,
                         state_transaction.gov.slash_invalid_proof_bps,
                         GovernanceSlashReason::Misconduct,
                         "invalid_proof_inputs",
+                        "invalid proof inputs",
+                        err,
                         state_transaction,
-                    )?;
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "invalid proof inputs".into(),
-                            },
-                        ),
-                    ));
-                    return Err(err);
+                    );
                 }
             };
             if let Err(err) =
                 validate_open_verify_envelope_metadata("ballot", backend, &inputs.envelope, &vk_rec)
             {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_invalid_proof_bps,
                     GovernanceSlashReason::Misconduct,
                     "invalid_proof_inputs",
+                    "invalid proof inputs",
+                    err,
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "invalid proof inputs".into(),
-                        },
-                    ),
-                ));
-                return Err(err);
+                );
             }
             let (commit_bytes, root_bytes) = match ballot_inputs_from_columns(&inputs.columns) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = governance_slash_percent(
+                    return reject_governance_ballot_with_penalty(
                         &self.election_id,
                         authority,
                         state_transaction.gov.slash_invalid_proof_bps,
                         GovernanceSlashReason::Misconduct,
                         "invalid_proof_inputs",
+                        "invalid proof inputs",
+                        err,
                         state_transaction,
-                    )?;
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "invalid proof inputs".into(),
-                            },
-                        ),
-                    ));
-                    return Err(err);
+                    );
                 }
             };
             if let Some(root_hint) = root_hint_opt {
@@ -4241,25 +4561,19 @@ pub mod isi {
                 }
             }
             if root_bytes != st.eligible_root {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_ineligible_proof_bps,
                     GovernanceSlashReason::IneligibleProof,
                     "ineligible_proof",
+                    "stale or unknown eligibility root",
+                    InstructionExecutionError::InvariantViolation(
+                        "stale or unknown eligibility root".into(),
+                    )
+                    .into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "stale or unknown eligibility root".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "stale or unknown eligibility root".into(),
-                ));
+                );
             }
             let nullifier = derive_ballot_nullifier(
                 &domain_tag,
@@ -4320,25 +4634,19 @@ pub mod isi {
                 }
             }
             if !st.ballot_nullifiers.insert(nullifier) {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_double_vote_bps,
                     GovernanceSlashReason::DoubleVote,
                     "double_vote",
+                    "duplicate ballot nullifier",
+                    InstructionExecutionError::InvariantViolation(
+                        "duplicate ballot nullifier".into(),
+                    )
+                    .into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "duplicate ballot nullifier".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "duplicate ballot nullifier".into(),
-                ));
+                );
             }
             if proof_verified {
                 if let (Some(owner), Some(amount), Some(duration_blocks)) =
@@ -4387,8 +4695,11 @@ pub mod isi {
                         ));
                     }
                     let rid = self.election_id.clone();
-                    let now_h = state_transaction._curr_block.height().get();
-                    let new_expiry = now_h.saturating_add(duration_blocks);
+                    let new_expiry = lock_expiry.ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "complete lock hints must have a validated expiry height".into(),
+                        )
+                    })?;
                     let mut locks = state_transaction
                         .world
                         .governance_locks
@@ -4502,21 +4813,15 @@ pub mod isi {
             Ok(())
         }
     }
-    fn typed_proposal_for_legacy_referendum(
+    fn typed_proposal_for_standalone_referendum(
         referendum_id: &str,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Option<crate::state::GovernanceProposalRecord>, Error> {
-        if referendum_id.len() != 64
-            || !referendum_id
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Ok(None);
-        }
-        let Some(bytes) = hex::decode(referendum_id).ok() else {
-            return Ok(None);
-        };
-        let Some(proposal_id) = <[u8; 32]>::try_from(bytes).ok() else {
+        let Some(proposal_id) =
+            iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(
+                referendum_id,
+            )
+        else {
             return Ok(None);
         };
         let Some(proposal) = state_transaction
@@ -4533,7 +4838,9 @@ pub mod isi {
             )
             .into());
         }
-        if validation_fee_proposal_operator(&proposal.kind)
+        if proposal
+            .kind
+            .proposal_operator_v1()
             .is_some_and(|operator| operator != &proposal.proposer)
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -4562,7 +4869,24 @@ pub mod isi {
                 "owner must equal authority".into(),
             ));
         }
-        if typed_proposal_for_legacy_referendum(&ballot.referendum_id, state_transaction)?.is_some()
+        if ballot.direction > 2 {
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                        referendum_id: ballot.referendum_id.clone(),
+                        reason: "direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)".into(),
+                    },
+                ),
+            ));
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+                        .into(),
+                ),
+            ));
+        }
+        if typed_proposal_for_standalone_referendum(&ballot.referendum_id, state_transaction)?
+            .is_some()
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "typed governance proposals accept only timed-private Parliament ballots".into(),
@@ -4737,25 +5061,19 @@ pub mod isi {
         let new_expiry = now_h.saturating_add(ballot.duration_blocks);
         if let Some(prev) = locks.locks.get(authority) {
             if prev.direction != ballot.direction {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &rid,
                     authority,
                     state_transaction.gov.slash_double_vote_bps,
                     GovernanceSlashReason::DoubleVote,
                     "double_vote",
+                    "re-vote cannot change direction",
+                    InstructionExecutionError::InvariantViolation(
+                        "re-vote cannot change direction".into(),
+                    )
+                    .into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: rid.clone(),
-                            reason: "re-vote cannot change direction".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "re-vote cannot change direction".into(),
-                ));
+                );
             }
             if !prev.slashed.is_zero() {
                 state_transaction.world.emit_events(Some(
@@ -4866,6 +5184,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            consume_signed_standalone_governance_ballot_v1(
+                InstructionBox::from(self.clone()),
+                state_transaction,
+            )?;
             ensure_exact_governance_ballot_permission(
                 authority,
                 &self.referendum_id,
@@ -4879,6 +5201,13 @@ pub mod isi {
                 self.duration_blocks,
                 state_transaction.gov.conviction_step_blocks,
                 state_transaction.gov.max_conviction,
+            )?;
+            ensure_plain_tally_replacement_capacity_v1(
+                &self.referendum_id,
+                authority,
+                self.direction,
+                weight,
+                state_transaction,
             )?;
             let referendum = ensure_plain_referendum_open(&self, state_transaction)?;
             ensure_plain_ballot_lock_covers_window(&self, referendum, state_transaction)?;
@@ -5055,12 +5384,19 @@ pub mod isi {
                 "validation-fee proposal id differs from its exact typed fingerprint".into(),
             ));
         }
-        let proposal_operator =
-            validation_fee_proposal_operator(&proposal.kind).ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "validation-fee authorization received a non-validation-fee proposal".into(),
-                )
-            })?;
+        if !matches!(
+            &proposal.kind,
+            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee authorization received a non-validation-fee proposal".into(),
+            ));
+        }
+        let proposal_operator = proposal.kind.proposal_operator_v1().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal is missing its bound operator".into(),
+            )
+        })?;
         if proposal_operator != &proposal.proposer {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee proposal operator differs from the retained governance proposer"
@@ -5096,26 +5432,50 @@ pub mod isi {
     }
     fn parliament_certificate_for_proposal_v1(
         proposal_id: [u8; 32],
+        proposal: &ProposalKind,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(GovernanceCertificateV1, u64), Error> {
         let proposal_content_id =
             iroha_data_model::governance::types::ProposalContentId::new(proposal_id);
-        let mut matches = state_transaction
-            .world
-            .parliament_attempts
-            .iter()
-            .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-            .filter_map(|(_, attempt)| {
-                if attempt.attempt().status != GovernanceAttemptStatusV1::Enacted {
-                    return None;
-                }
-                let enacted_at_height = attempt.terminal_height()?;
-                let certificate = attempt
-                    .certificate()
-                    .filter(|certificate| certificate.enact_at_height == enacted_at_height)?
-                    .clone();
-                Some((certificate, enacted_at_height))
-            });
+        let mut history = Vec::new();
+        let mut history_ended = false;
+        for attempt_id in canonical_governance_attempt_ids_v1(proposal_content_id) {
+            let Some(attempt) = state_transaction.world.parliament_attempts.get(&attempt_id) else {
+                history_ended = true;
+                continue;
+            };
+            if history_ended {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal has a sparse Parliament attempt history".into(),
+                ));
+            }
+            attempt.validate().map_err(parliament_reducer_error)?;
+            if attempt.attempt().id != attempt_id
+                || attempt.proposal_content_id() != proposal_content_id
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal has a Parliament attempt under the wrong canonical key"
+                        .into(),
+                ));
+            }
+            attempt
+                .validate_proposal_bindings_v1(proposal)
+                .map_err(parliament_reducer_error)?;
+            history.push(attempt);
+        }
+        validate_parliament_randomness_redraw_lineage_v1(history.iter().copied())
+            .map_err(parliament_reducer_error)?;
+        let mut matches = history.into_iter().filter_map(|attempt| {
+            if attempt.attempt().status != GovernanceAttemptStatusV1::Enacted {
+                return None;
+            }
+            let enacted_at_height = attempt.terminal_height()?;
+            let certificate = attempt
+                .certificate()
+                .filter(|certificate| certificate.enact_at_height == enacted_at_height)?
+                .clone();
+            Some((certificate, enacted_at_height))
+        });
         let (certificate, enacted_at_height) = matches.next().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "governance proposal has no exact certified Parliament attempt".into(),
@@ -5170,8 +5530,11 @@ pub mod isi {
                 "validation-fee payout lifecycle must be enacted before policy enactment".into(),
             ));
         }
-        let (certificate, lifecycle_enacted_at_height) =
-            parliament_certificate_for_proposal_v1(lifecycle_id, state_transaction)?;
+        let (certificate, lifecycle_enacted_at_height) = parliament_certificate_for_proposal_v1(
+            lifecycle_id,
+            &lifecycle.kind,
+            state_transaction,
+        )?;
         let lifecycle_payload =
             lifecycle
                 .as_validation_fee_payout_lifecycle()
@@ -5312,6 +5675,7 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        new_binding: Option<crate::smartcontracts::code::ContractSubjectBinding>,
     ) -> Result<AccountId, Error> {
         let contract_subject = match state_transaction
             .world
@@ -5325,8 +5689,17 @@ pub mod isi {
                 binding.subject.clone()
             }
             None => {
-                let binding =
-                    crate::smartcontracts::code::ContractSubjectBinding::new(contract_address);
+                let binding = new_binding.ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "contract `{contract_address}` has no lifecycle binding; activate it through an atomic direct or Parliament deployment"
+                        )
+                        .into(),
+                    )
+                })?;
+                binding.validate_for(contract_address).map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(message.into())
+                })?;
                 let subject = binding.subject.clone();
                 state_transaction
                     .world
@@ -5367,10 +5740,10 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         payload: &DeployContractProposal,
         key: iroha_crypto::Hash,
+        proposal_content_id: [u8; 32],
+        governance_attempt_id: [u8; 32],
     ) -> Result<bool, Error> {
         let contract_address = payload.contract_address.clone();
-        let contract_subject =
-            ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
         let manifest = state_transaction
             .world
             .contract_manifests
@@ -5386,24 +5759,40 @@ pub mod isi {
             &key,
             &manifest,
         )?;
+        if state_transaction
+            .world
+            .contract_subject_bindings
+            .get(&contract_address)
+            .is_some()
+            || state_transaction
+                .world
+                .contract_instances
+                .get(&contract_address)
+                .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance deployment requires a never-bound contract address".into(),
+            ));
+        }
+        let contract_subject = ensure_contract_subject_binding(
+            authority,
+            state_transaction,
+            &contract_address,
+            Some(
+                crate::smartcontracts::code::ContractSubjectBinding::new_parliament(
+                    &contract_address,
+                    authority.clone(),
+                    proposal_content_id,
+                    governance_attempt_id,
+                ),
+            ),
+        )?;
         let declares_hajimari = manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
             entrypoints.iter().any(|entrypoint| {
                 entrypoint.kind
                     == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
             })
         });
-        if let Some(existing) = state_transaction
-            .world
-            .contract_instances
-            .get(&contract_address)
-        {
-            if *existing != key {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract instance already bound to a different code hash".into(),
-                ));
-            }
-            return Ok(false);
-        }
         let pending_lifecycle = declares_hajimari
             .then(|| {
                 crate::smartcontracts::code::new_pending_contract_lifecycle(
@@ -5430,11 +5819,30 @@ pub mod isi {
             .world
             .contract_instances
             .insert(contract_address.clone(), key);
+        let lifecycle = {
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("Parliament deployment installed lifecycle binding");
+            binding.lifecycle.active_code_hash = Some(key);
+            binding.lifecycle.clone()
+        };
         crate::smartcontracts::code::set_pending_contract_lifecycle(
             state_transaction,
             &contract_address,
             pending_lifecycle,
         );
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::InstanceActivated(
+                ContractInstanceActivated {
+                    contract_address,
+                    code_hash: key,
+                    activated_by: authority.clone(),
+                    lifecycle,
+                },
+            )));
         Ok(true)
     }
     #[cfg(feature = "telemetry")]
@@ -5469,6 +5877,7 @@ pub mod isi {
     fn apply_deploy_contract_governance_effect(
         payload: &DeployContractProposal,
         proposer: &AccountId,
+        certificate: &GovernanceCertificateV1,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let (code_hash, abi_hash) = extract_hashes(payload)?;
@@ -5481,7 +5890,14 @@ pub mod isi {
         )?;
         #[cfg(not(feature = "telemetry"))]
         let _ = manifest_inserted;
-        let instance_bound_new = bind_contract_instance(proposer, state_transaction, payload, key)?;
+        let instance_bound_new = bind_contract_instance(
+            proposer,
+            state_transaction,
+            payload,
+            key,
+            *certificate.proposal_content_id.as_bytes(),
+            *certificate.governance_attempt_id.as_bytes(),
+        )?;
         #[cfg(not(feature = "telemetry"))]
         let _ = instance_bound_new;
         #[cfg(feature = "telemetry")]
@@ -5493,6 +5909,330 @@ pub mod isi {
             manifest_inserted,
             instance_bound_new,
         );
+        Ok(())
+    }
+    fn apply_contract_lifecycle_governance_effect(
+        payload: &ContractLifecycleGovernanceProposalV1,
+        proposer: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let lifecycle = checked_contract_lifecycle(
+            state_transaction,
+            &payload.contract_address,
+            payload.expected_revision,
+        )?;
+        let parliament_controls_lifecycle = lifecycle.owner
+            == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+            || lifecycle.parliament_delegation
+                == iroha_data_model::smart_contract::ContractParliamentDelegationV1::Lifecycle;
+        let proposer_is_owner = lifecycle.owner
+            == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                proposer.clone(),
+            );
+        match &payload.action {
+            ContractLifecycleGovernanceActionV1::Activate(action) => {
+                if !parliament_controls_lifecycle && !proposer_is_owner {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "certified activation no longer has owner or delegated Parliament authority"
+                            .into(),
+                    ));
+                }
+                if action.abi_version != AbiVersion::new(1)
+                    || action.abi_hash.into_bytes()
+                        != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
+                {
+                    return Err(invalid_governance_parameter(
+                        "certified activation must retain the canonical ABI V1 hash",
+                    ));
+                }
+                let key = iroha_crypto::Hash::prehashed(action.code_hash.into_bytes());
+                upsert_manifest(
+                    state_transaction,
+                    key,
+                    action.abi_hash.into_bytes(),
+                    action.manifest_provenance.as_ref(),
+                )?;
+                activate_contract_instance_authorized(
+                    proposer,
+                    state_transaction,
+                    payload.contract_address.clone(),
+                    key,
+                    true,
+                )
+            }
+            ContractLifecycleGovernanceActionV1::Deactivate(action) => {
+                if !parliament_controls_lifecycle && !proposer_is_owner {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "certified deactivation no longer has owner or delegated Parliament authority"
+                            .into(),
+                    ));
+                }
+                if lifecycle.active_code_hash.map(<[u8; 32]>::from)
+                    != Some(action.expected_code_hash.into_bytes())
+                {
+                    return Err(invalid_governance_parameter(
+                        "certified deactivation expected_code_hash no longer matches",
+                    ));
+                }
+                deactivate_contract_instance_authorized(
+                    proposer,
+                    state_transaction,
+                    payload.contract_address.clone(),
+                    action.reason.clone(),
+                )
+            }
+            ContractLifecycleGovernanceActionV1::OfferOwnership(action) => {
+                if lifecycle.owner
+                    != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "delegated Parliament cannot transfer contract ownership".into(),
+                    ));
+                }
+                state_transaction
+                    .world
+                    .account(&action.new_owner)
+                    .map_err(Error::from)?;
+                let pending_owner =
+                    iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                        action.new_owner.clone(),
+                    );
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let updated_lifecycle = {
+                    let binding = state_transaction
+                        .world
+                        .contract_subject_bindings
+                        .get_mut(&payload.contract_address)
+                        .expect("lifecycle binding checked before governance ownership offer");
+                    binding.lifecycle.pending_owner = Some(pending_owner.clone());
+                    binding.lifecycle.revision = revision;
+                    binding.lifecycle.clone()
+                };
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::OwnershipTransferOffered(
+                        ContractOwnershipTransferOffered {
+                            contract_address: payload.contract_address.clone(),
+                            current_owner: lifecycle.owner,
+                            pending_owner,
+                            revision,
+                            lifecycle: updated_lifecycle,
+                        },
+                    ),
+                ));
+                Ok(())
+            }
+            ContractLifecycleGovernanceActionV1::CancelOwnershipOffer => {
+                if lifecycle.owner
+                    != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "delegated Parliament cannot change a contract ownership offer".into(),
+                    ));
+                }
+                if lifecycle.pending_owner.is_none() {
+                    return Ok(());
+                }
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let updated_lifecycle = {
+                    let binding = state_transaction
+                        .world
+                        .contract_subject_bindings
+                        .get_mut(&payload.contract_address)
+                        .expect("lifecycle binding checked before governance offer cancellation");
+                    binding.lifecycle.pending_owner = None;
+                    binding.lifecycle.revision = revision;
+                    binding.lifecycle.clone()
+                };
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::OwnershipTransferCancelled(
+                        ContractOwnershipTransferCancelled {
+                            contract_address: payload.contract_address.clone(),
+                            owner: lifecycle.owner,
+                            revision,
+                            lifecycle: updated_lifecycle,
+                        },
+                    ),
+                ));
+                Ok(())
+            }
+            ContractLifecycleGovernanceActionV1::AcceptParliamentOwnership => {
+                let parliament =
+                    iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament;
+                if lifecycle.pending_owner.as_ref() != Some(&parliament) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Parliament ownership is no longer pending".into(),
+                    ));
+                }
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let updated_lifecycle = {
+                    let binding = state_transaction
+                        .world
+                        .contract_subject_bindings
+                        .get_mut(&payload.contract_address)
+                        .expect("lifecycle binding checked before Parliament acceptance");
+                    binding.lifecycle.owner = parliament.clone();
+                    binding.lifecycle.pending_owner = None;
+                    binding.lifecycle.parliament_delegation =
+                        iroha_data_model::smart_contract::ContractParliamentDelegationV1::None;
+                    binding.lifecycle.revision = revision;
+                    binding.lifecycle.clone()
+                };
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::OwnershipTransferred(ContractOwnershipTransferred {
+                        contract_address: payload.contract_address.clone(),
+                        previous_owner: lifecycle.owner,
+                        new_owner: parliament,
+                        revision,
+                        lifecycle: updated_lifecycle,
+                    }),
+                ));
+                Ok(())
+            }
+            ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(action) => {
+                let prior_hold = checked_expired_contract_emergency_hold_retrospective(
+                    &lifecycle,
+                    action,
+                    state_transaction.block_height(),
+                )?;
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let mut updated_lifecycle = lifecycle;
+                updated_lifecycle.emergency_hold = None;
+                updated_lifecycle.revision = revision;
+                updated_lifecycle.validate().map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(message.into())
+                })?;
+                state_transaction
+                    .world
+                    .contract_subject_bindings
+                    .get_mut(&payload.contract_address)
+                    .expect("lifecycle binding checked before emergency-hold retrospective")
+                    .lifecycle = updated_lifecycle.clone();
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::EmergencyHoldRetrospectiveCompleted(
+                        ContractEmergencyHoldRetrospectiveCompleted {
+                            contract_address: payload.contract_address.clone(),
+                            prior_hold,
+                            retrospective_finding_root: action.retrospective_finding_root,
+                            revision,
+                            lifecycle: updated_lifecycle,
+                        },
+                    ),
+                ));
+                Ok(())
+            }
+        }
+    }
+    fn checked_expired_contract_emergency_hold_retrospective(
+        lifecycle: &iroha_data_model::smart_contract::ContractLifecycleControlV1,
+        action: &CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
+        current_height: u64,
+    ) -> Result<iroha_data_model::smart_contract::ContractEmergencyHoldV1, Error> {
+        if action.retrospective_finding_root == [0; 32] {
+            return Err(invalid_governance_parameter(
+                "emergency-hold retrospective finding root must be non-zero",
+            ));
+        }
+        let hold = lifecycle.emergency_hold.as_ref().ok_or_else(|| {
+            invalid_governance_parameter(
+                "emergency-hold retrospective requires the exact retained hold",
+            )
+        })?;
+        if hold.proposal_content_id != action.hold_proposal_content_id
+            || hold.governance_attempt_id != action.hold_governance_attempt_id
+            || hold.incident_digest != action.incident_digest
+        {
+            return Err(invalid_governance_parameter(
+                "emergency-hold retrospective binding differs from the retained hold",
+            ));
+        }
+        if current_height < hold.expires_at_height {
+            return Err(invalid_governance_parameter(
+                "emergency-hold retrospective cannot complete before the hold's exclusive expiry",
+            ));
+        }
+        Ok(hold.clone())
+    }
+    fn apply_contract_emergency_hold_effect(
+        payload: &ContractEmergencyHoldProposalV1,
+        certificate: &GovernanceCertificateV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        certificate.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("contract emergency-hold certificate is invalid: {error}").into(),
+            )
+        })?;
+        if certificate.risk_tier != iroha_data_model::governance::types::RiskTierV1::Emergency {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "contract emergency hold requires an Emergency-tier certificate".into(),
+            ));
+        }
+        let lifecycle = checked_contract_lifecycle(
+            state_transaction,
+            &payload.contract_address,
+            payload.expected_revision,
+        )?;
+        if lifecycle.active_code_hash.map(<[u8; 32]>::from)
+            != Some(payload.expected_code_hash.into_bytes())
+        {
+            return Err(invalid_governance_parameter(
+                "emergency-hold expected_code_hash no longer matches",
+            ));
+        }
+        if lifecycle.emergency_hold.is_some() {
+            return Err(invalid_governance_parameter(
+                "a subsequent emergency hold requires a completed Parliament retrospective",
+            ));
+        }
+        if payload.incident_digest == [0; 32]
+            || !(1..=iroha_data_model::smart_contract::MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1)
+                .contains(&payload.duration_blocks)
+        {
+            return Err(invalid_governance_parameter(
+                "invalid emergency-hold evidence or duration",
+            ));
+        }
+        let reason = payload.reason.trim().to_owned();
+        if reason.is_empty() {
+            return Err(invalid_governance_parameter(
+                "emergency-hold reason must not be empty",
+            ));
+        }
+        let imposed_at_height = state_transaction.block_height();
+        let expires_at_height = imposed_at_height
+            .checked_add(payload.duration_blocks)
+            .ok_or_else(|| invalid_governance_parameter("emergency-hold expiry overflows"))?;
+        let hold = iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+            incident_digest: payload.incident_digest,
+            proposal_content_id: *certificate.proposal_content_id.as_bytes(),
+            governance_attempt_id: *certificate.governance_attempt_id.as_bytes(),
+            reason,
+            imposed_at_height,
+            expires_at_height,
+        };
+        let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+        let mut updated_lifecycle = lifecycle;
+        updated_lifecycle.emergency_hold = Some(hold.clone());
+        updated_lifecycle.revision = revision;
+        updated_lifecycle
+            .validate()
+            .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        state_transaction
+            .world
+            .contract_subject_bindings
+            .get_mut(&payload.contract_address)
+            .expect("lifecycle binding checked before emergency hold")
+            .lifecycle = updated_lifecycle.clone();
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::EmergencyHoldPlaced(
+                ContractEmergencyHoldPlaced {
+                    contract_address: payload.contract_address.clone(),
+                    hold,
+                    revision,
+                    lifecycle: updated_lifecycle,
+                },
+            )));
         Ok(())
     }
     fn enact_runtime_upgrade_proposal(
@@ -5574,82 +6314,6 @@ pub mod isi {
                 state_transaction
                     .telemetry
                     .inc_runtime_upgrade_event("activated");
-            }
-        }
-        Ok(())
-    }
-    fn process_council_members(
-        members: &[AccountId],
-        epoch: u64,
-        required_bond: &Quantity,
-        citizen_cfg: &iroha_config::parameters::actual::CitizenServiceDiscipline,
-        current_height: u64,
-        world: &mut WorldTransaction<'_, '_>,
-        updated_citizens: &mut BTreeMap<AccountId, crate::state::CitizenshipRecord>,
-    ) -> Result<(), Error> {
-        for account_id in members {
-            let Some(mut record) = world.citizens.get(account_id).cloned() else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council members must be registered citizens".into(),
-                ));
-            };
-            if &record.amount < required_bond {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council members must meet the citizenship bond floor for the role".into(),
-                ));
-            }
-            assign_citizen_seat(&mut record, epoch, current_height, citizen_cfg)?;
-            updated_citizens.insert(account_id.clone(), record);
-        }
-        Ok(())
-    }
-    fn process_council_alternates(
-        alternates: &[AccountId],
-        epoch: u64,
-        required_bond: &Quantity,
-        current_height: u64,
-        world: &mut WorldTransaction<'_, '_>,
-        updated_citizens: &mut BTreeMap<AccountId, crate::state::CitizenshipRecord>,
-    ) -> Result<(), Error> {
-        for account_id in alternates {
-            let Some(mut record) = world.citizens.get(account_id).cloned() else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council alternates must be registered citizens".into(),
-                ));
-            };
-            if &record.amount < required_bond {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council alternates must meet the citizenship bond floor for the role".into(),
-                ));
-            }
-            ensure_citizen_available(&mut record, epoch, current_height)?;
-            updated_citizens.entry(account_id.clone()).or_insert(record);
-        }
-        Ok(())
-    }
-    fn ensure_unique_council_roster(
-        members: &[AccountId],
-        alternates: &[AccountId],
-    ) -> Result<(), Error> {
-        let mut members_seen = BTreeSet::new();
-        for member in members {
-            if !members_seen.insert(member) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council roster contains duplicate member".into(),
-                ));
-            }
-        }
-        let mut alternates_seen = BTreeSet::new();
-        for alternate in alternates {
-            if members_seen.contains(alternate) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council roster account cannot be both member and alternate".into(),
-                ));
-            }
-            if !alternates_seen.insert(alternate) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council roster contains duplicate alternate".into(),
-                ));
             }
         }
         Ok(())
@@ -6079,179 +6743,467 @@ pub mod isi {
         }
         Ok(())
     }
+    fn activate_contract_instance_authorized(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        key: iroha_crypto::Hash,
+        advance_revision: bool,
+    ) -> Result<(), Error> {
+        let Some(manifest) = state_transaction
+            .world
+            .contract_manifests
+            .get(&key)
+            .cloned()
+        else {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
+            ));
+        };
+        let code_bytes = verify_registered_contract_artifact_for_manifest(
+            &state_transaction.world,
+            &key,
+            &manifest,
+        )?;
+        let contract_subject =
+            ensure_contract_subject_binding(authority, state_transaction, &contract_address, None)?;
+        let existing = state_transaction
+            .world
+            .contract_instances
+            .get(&contract_address)
+            .copied();
+        if existing == Some(key) {
+            // idempotent when same
+            return Ok(());
+        }
+        if existing.is_some()
+            && crate::validation_fee::is_enacted_validation_fee_payout_contract(
+                state_transaction,
+                &contract_address,
+            )
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "an enacted validation-fee payout lifecycle pins this contract code".into(),
+            ));
+        }
+        if existing.is_some()
+            && crate::smartcontracts::code::pending_contract_lifecycle(
+                &state_transaction.world,
+                &contract_address,
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            })?
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                    "contract instance cannot perform kaizen/改善 while hajimari/始まり or kaizen/改善 is pending"
+                        .into(),
+                ));
+        }
+        let pending_lifecycle_kind = match existing {
+            None if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+                entrypoints.iter().any(|entrypoint| {
+                    entrypoint.kind
+                        == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
+                })
+            }) =>
+            {
+                Some((
+                    iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari,
+                    None,
+                ))
+            }
+            Some(previous_code_hash)
+                if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+                    entrypoints.iter().any(|entrypoint| {
+                        entrypoint.kind
+                            == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
+                    })
+                }) =>
+            {
+                Some((
+                    iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
+                    Some(previous_code_hash),
+                ))
+            }
+            None | Some(_) => None,
+        };
+        let pending_lifecycle = pending_lifecycle_kind
+            .map(|(kind, previous_code_hash)| {
+                crate::smartcontracts::code::new_pending_contract_lifecycle(
+                    state_transaction,
+                    &contract_address,
+                    previous_code_hash,
+                    key,
+                    kind,
+                )
+            })
+            .transpose()
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_owned().into())
+            })?;
+        if let Some(previous_code_hash) = existing {
+            let previous_trigger_ids: Vec<TriggerId> = state_transaction
+                .world
+                .contract_manifests
+                .get(&previous_code_hash)
+                .and_then(|previous_manifest| previous_manifest.entrypoints.as_ref())
+                .map(|entrypoints| {
+                    entrypoints
+                        .iter()
+                        .flat_map(|entrypoint| {
+                            entrypoint
+                                .triggers
+                                .iter()
+                                .map(|descriptor| descriptor.id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for trigger_id in previous_trigger_ids {
+                if state_transaction.world.triggers.remove(&trigger_id) {
+                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                            state_transaction,
+                            &trigger_id,
+                        );
+                    state_transaction
+                        .world
+                        .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
+                }
+            }
+        }
+        let needs_trigger_registration = manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+            entrypoints
+                .iter()
+                .any(|entrypoint| !entrypoint.triggers.is_empty())
+        });
+        if needs_trigger_registration {
+            register_manifest_triggers(
+                authority,
+                state_transaction,
+                &contract_address,
+                &contract_subject,
+                &code_bytes,
+                &manifest,
+            )?;
+        }
+        state_transaction
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), key);
+        {
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("binding checked before activation");
+            binding.lifecycle.active_code_hash = Some(key);
+            if advance_revision {
+                binding.lifecycle.revision =
+                    binding.lifecycle.revision.checked_add(1).ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "contract lifecycle revision overflow".into(),
+                        )
+                    })?;
+            }
+        }
+        crate::smartcontracts::code::set_pending_contract_lifecycle(
+            state_transaction,
+            &contract_address,
+            pending_lifecycle,
+        );
+        let lifecycle = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(&contract_address)
+            .expect("binding updated before activation event")
+            .lifecycle
+            .clone();
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::InstanceActivated(
+                ContractInstanceActivated {
+                    contract_address,
+                    code_hash: key,
+                    activated_by: authority.clone(),
+                    lifecycle,
+                },
+            )));
+        Ok(())
+    }
     impl Execute for scode::ActivateContractInstance {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_binding_governance(
-                authority,
-                self.contract_address(),
-                state_transaction,
-            )?;
-            let key = *self.code_hash();
             let contract_address = self.contract_address().clone();
-            let Some(manifest) = state_transaction
-                .world
-                .contract_manifests
-                .get(&key)
-                .cloned()
-            else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
-                ));
-            };
-            let code_bytes = verify_registered_contract_artifact_for_manifest(
-                &state_transaction.world,
-                &key,
-                &manifest,
-            )?;
-            let contract_subject =
-                ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
-            let existing = state_transaction
-                .world
-                .contract_instances
-                .get(&contract_address)
-                .copied();
-            if existing == Some(key) {
-                // idempotent when same
-                return Ok(());
-            }
-            if existing.is_some()
-                && crate::validation_fee::is_enacted_validation_fee_payout_contract(
-                    state_transaction,
-                    &contract_address,
-                )
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "an enacted validation-fee payout lifecycle pins this contract code".into(),
-                ));
-            }
-            let can_enact: Permission = CanEnactGovernance.into();
-            if existing.is_some()
-                && !has_exact_permission(&state_transaction.world, authority, &can_enact)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanEnactGovernance is required for in-place contract kaizen/改善"
-                        .into(),
-                ));
-            }
-            if existing.is_some()
-                && crate::smartcontracts::code::pending_contract_lifecycle(
-                    &state_transaction.world,
-                    &contract_address,
-                )
-                .map_err(|error| {
-                    InstructionExecutionError::InvariantViolation(error.to_string().into())
-                })?
-                .is_some()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract instance cannot perform kaizen/改善 while hajimari/始まり or kaizen/改善 is pending"
-                        .into(),
-                ));
-            }
-            let pending_lifecycle_kind = match existing {
-                None if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                    entrypoints.iter().any(|entrypoint| {
-                        entrypoint.kind
-                            == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
-                    })
-                }) => Some((
-                    iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari,
-                    None,
-                )),
-                Some(previous_code_hash)
-                    if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                        entrypoints.iter().any(|entrypoint| {
-                            entrypoint.kind
-                                == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
-                        })
-                    }) => Some((
-                        iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
-                        Some(previous_code_hash),
-                    )),
-                None | Some(_) => None,
-            };
-            let pending_lifecycle = pending_lifecycle_kind
-                .map(|(kind, previous_code_hash)| {
-                    crate::smartcontracts::code::new_pending_contract_lifecycle(
-                        state_transaction,
-                        &contract_address,
-                        previous_code_hash,
-                        key,
-                        kind,
-                    )
-                })
-                .transpose()
-                .map_err(|error| {
-                    InstructionExecutionError::InvariantViolation(error.to_owned().into())
-                })?;
-            if let Some(previous_code_hash) = existing {
-                let previous_trigger_ids: Vec<TriggerId> = state_transaction
-                    .world
-                    .contract_manifests
-                    .get(&previous_code_hash)
-                    .and_then(|previous_manifest| previous_manifest.entrypoints.as_ref())
-                    .map(|entrypoints| {
-                        entrypoints
-                            .iter()
-                            .flat_map(|entrypoint| {
-                                entrypoint
-                                    .triggers
-                                    .iter()
-                                    .map(|descriptor| descriptor.id.clone())
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for trigger_id in previous_trigger_ids {
-                    if state_transaction.world.triggers.remove(&trigger_id) {
-                        crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                            state_transaction,
-                            &trigger_id,
-                        );
-                        state_transaction
-                            .world
-                            .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
-                    }
-                }
-            }
-            let needs_trigger_registration =
-                manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .any(|entrypoint| !entrypoint.triggers.is_empty())
-                });
-            if needs_trigger_registration {
-                register_manifest_triggers(
-                    authority,
-                    state_transaction,
-                    self.contract_address(),
-                    &contract_subject,
-                    &code_bytes,
-                    &manifest,
-                )?;
-            }
-            state_transaction
-                .world
-                .contract_instances
-                .insert(contract_address.clone(), key);
-            crate::smartcontracts::code::set_pending_contract_lifecycle(
+            let lifecycle = checked_contract_lifecycle(
                 state_transaction,
                 &contract_address,
-                pending_lifecycle,
+                *self.expected_revision(),
+            )?;
+            if lifecycle.owner
+                != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    authority.clone(),
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: only the current account owner may activate contract code directly"
+                        .into(),
+                ));
+            }
+            activate_contract_instance_authorized(
+                authority,
+                state_transaction,
+                contract_address,
+                *self.code_hash(),
+                true,
+            )
+        }
+    }
+    fn next_contract_lifecycle_revision(revision: u64) -> Result<u64, Error> {
+        revision.checked_add(1).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "contract lifecycle revision overflow".into(),
+            )
+        })
+    }
+    fn checked_contract_lifecycle(
+        state_transaction: &StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        expected_revision: u64,
+    ) -> Result<iroha_data_model::smart_contract::ContractLifecycleControlV1, Error> {
+        let binding = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(contract_address)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "contract lifecycle binding not found".into(),
+                ))
+            })?;
+        binding
+            .validate_for(contract_address)
+            .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        if state_transaction
+            .world
+            .accounts
+            .get(&binding.subject)
+            .is_none()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "contract subject account `{}` for `{contract_address}` does not exist",
+                    binding.subject
+                )
+                .into(),
+            ));
+        }
+        let indexed_active_code_hash = state_transaction
+            .world
+            .contract_instances
+            .get(contract_address)
+            .copied();
+        if binding.lifecycle.active_code_hash != indexed_active_code_hash {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "contract lifecycle active code hash does not match the active-instance index"
+                    .into(),
+            ));
+        }
+        if binding.lifecycle.revision != expected_revision {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    format!(
+                        "stale contract lifecycle revision: expected {expected_revision}, current {}",
+                        binding.lifecycle.revision
+                    )
+                    .into(),
+                ),
+            ));
+        }
+        Ok(binding.lifecycle.clone())
+    }
+    fn ensure_direct_contract_owner(
+        authority: &AccountId,
+        lifecycle: &iroha_data_model::smart_contract::ContractLifecycleControlV1,
+    ) -> Result<(), Error> {
+        if lifecycle.owner
+            != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                authority.clone(),
+            )
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: only the current account owner may change lifecycle authority"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+    impl Execute for scode::SetContractParliamentDelegation {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            ensure_direct_contract_owner(authority, &lifecycle)?;
+            let delegation = if *self.delegated() {
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::Lifecycle
+            } else {
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            };
+            if lifecycle.parliament_delegation == delegation {
+                return Ok(());
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.parliament_delegation = delegation;
+            binding.lifecycle.revision = revision;
+            let lifecycle = binding.lifecycle.clone();
+            state_transaction.world.emit_events(Some(
+                SmartContractEvent::ParliamentDelegationChanged(
+                    ContractParliamentDelegationChanged {
+                        contract_address: address,
+                        delegation,
+                        changed_by: authority.clone(),
+                        revision,
+                        lifecycle,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+    impl Execute for scode::OfferContractOwnership {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            ensure_direct_contract_owner(authority, &lifecycle)?;
+            let new_owner = self.new_owner().clone();
+            if new_owner == lifecycle.owner {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "new contract owner must differ from current owner".into(),
+                    ),
+                ));
+            }
+            if let iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(account) =
+                &new_owner
+            {
+                state_transaction
+                    .world
+                    .account(account)
+                    .map_err(Error::from)?;
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.pending_owner = Some(new_owner.clone());
+            binding.lifecycle.revision = revision;
+            let updated_lifecycle = binding.lifecycle.clone();
+            state_transaction.world.emit_events(Some(
+                SmartContractEvent::OwnershipTransferOffered(ContractOwnershipTransferOffered {
+                    contract_address: address,
+                    current_owner: lifecycle.owner,
+                    pending_owner: new_owner,
+                    revision,
+                    lifecycle: updated_lifecycle,
+                }),
+            ));
+            Ok(())
+        }
+    }
+    impl Execute for scode::AcceptContractOwnership {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            let accepted = iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                authority.clone(),
             );
+            if lifecycle.pending_owner.as_ref() != Some(&accepted) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: authority is not the pending account owner".into(),
+                ));
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.owner = accepted.clone();
+            binding.lifecycle.pending_owner = None;
+            binding.lifecycle.parliament_delegation =
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None;
+            binding.lifecycle.revision = revision;
+            let updated_lifecycle = binding.lifecycle.clone();
             state_transaction
                 .world
-                .emit_events(Some(SmartContractEvent::InstanceActivated(
-                    ContractInstanceActivated {
-                        contract_address,
-                        code_hash: *self.code_hash(),
-                        activated_by: authority.clone(),
+                .emit_events(Some(SmartContractEvent::OwnershipTransferred(
+                    ContractOwnershipTransferred {
+                        contract_address: address,
+                        previous_owner: lifecycle.owner,
+                        new_owner: accepted,
+                        revision,
+                        lifecycle: updated_lifecycle,
                     },
                 )));
+            Ok(())
+        }
+    }
+    impl Execute for scode::CancelContractOwnershipOffer {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            ensure_direct_contract_owner(authority, &lifecycle)?;
+            if lifecycle.pending_owner.is_none() {
+                return Ok(());
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.pending_owner = None;
+            binding.lifecycle.revision = revision;
+            let updated_lifecycle = binding.lifecycle.clone();
+            state_transaction.world.emit_events(Some(
+                SmartContractEvent::OwnershipTransferCancelled(
+                    ContractOwnershipTransferCancelled {
+                        contract_address: address,
+                        owner: lifecycle.owner,
+                        revision,
+                        lifecycle: updated_lifecycle,
+                    },
+                ),
+            ));
             Ok(())
         }
     }
@@ -6274,7 +7226,37 @@ pub mod isi {
                 .world
                 .account(authority)
                 .map_err(Error::from)?;
-            ensure_contract_binding_governance(authority, &contract_address, state_transaction)?;
+            let protected = crate::smartcontracts::code::protected_contract_namespaces(
+                state_transaction.world.parameters.get(),
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid protected-contract namespace policy: {error}").into(),
+                )
+            })?
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+            if protected.contains("*")
+                || protected.contains(contract_address.as_str())
+                || contract_address
+                    .dataspace_id()
+                    .ok()
+                    .is_some_and(|dataspace_id| {
+                        protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
+                            || protected.iter().any(|namespace| {
+                                state_transaction
+                                    .nexus
+                                    .dataspace_catalog
+                                    .by_alias(namespace)
+                                    .is_some_and(|entry| entry.id == dataspace_id)
+                            })
+                    })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "protected contract namespaces require Parliament deployment".into(),
+                ));
+            }
             let nonce_key = Name::from_str(
                 iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
             )
@@ -6442,7 +7424,6 @@ pub mod isi {
                         .into(),
                     ));
                 }
-                ensure_contract_binding_governance(authority, previous, state_transaction)?;
             }
             crate::smartcontracts::isi::domain::isi::ensure_authority_can_manage_contract_alias(
                 state_transaction,
@@ -6470,6 +7451,17 @@ pub mod isi {
                 &code_hash,
                 &manifest,
             )?;
+            ensure_contract_subject_binding(
+                authority,
+                state_transaction,
+                &contract_address,
+                Some(
+                    crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                        &contract_address,
+                        authority.clone(),
+                    ),
+                ),
+            )?;
             // Clear a canonical but expired raw binding before rebinding. It is not a live prior
             // target for CAS purposes and therefore is not deactivated here.
             if let Some(raw_previous) = raw_previous_contract_address.as_ref() {
@@ -6479,17 +7471,31 @@ pub mod isi {
                 .execute(authority, state_transaction)?;
             }
             if let Some(previous) = current_previous_contract_address {
+                let expected_revision = state_transaction
+                    .world
+                    .contract_subject_bindings
+                    .get(&previous)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "active alias target has no retained contract lifecycle".into(),
+                        )
+                    })?
+                    .lifecycle
+                    .revision;
                 scode::DeactivateContractInstance {
                     contract_address: previous,
+                    expected_revision,
                     reason: Some("atomic contract deployment rotation".to_owned()),
                 }
                 .execute(authority, state_transaction)?;
             }
-            scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
+            activate_contract_instance_authorized(
+                authority,
+                state_transaction,
+                contract_address.clone(),
                 code_hash,
-            }
-            .execute(authority, state_transaction)?;
+                false,
+            )?;
             iroha_data_model::isi::contract_alias::SetContractAlias::bind(
                 contract_address,
                 contract_alias,
@@ -6512,87 +7518,123 @@ pub mod isi {
             Ok(())
         }
     }
+    fn deactivate_contract_instance_authorized(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        key: iroha_data_model::smart_contract::ContractAddress,
+        requested_reason: Option<String>,
+    ) -> Result<(), Error> {
+        if crate::validation_fee::is_enacted_validation_fee_payout_contract(state_transaction, &key)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "an enacted validation-fee payout lifecycle pins this contract instance".into(),
+            ));
+        }
+        let Some(prev_hash) = state_transaction
+            .world
+            .contract_instances
+            .remove(key.clone())
+        else {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract("contract instance is not active".into()),
+            ));
+        };
+        crate::smartcontracts::code::set_pending_contract_lifecycle(state_transaction, &key, None);
+        {
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&key)
+                .expect("binding checked before deactivation");
+            binding.lifecycle.active_code_hash = None;
+            binding.lifecycle.revision =
+                binding.lifecycle.revision.checked_add(1).ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "contract lifecycle revision overflow".into(),
+                    )
+                })?;
+        }
+        let reason = requested_reason.and_then(|r| {
+            let trimmed = r.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        });
+        let trigger_ids: Vec<TriggerId> = state_transaction
+            .world
+            .contract_manifests
+            .get(&prev_hash)
+            .and_then(|manifest| manifest.entrypoints.as_ref())
+            .map(|entrypoints| {
+                entrypoints
+                    .iter()
+                    .flat_map(|entrypoint| {
+                        entrypoint
+                            .triggers
+                            .iter()
+                            .map(|descriptor| descriptor.id.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for trigger_id in trigger_ids {
+            if state_transaction.world.triggers.remove(&trigger_id) {
+                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                    state_transaction,
+                    &trigger_id,
+                );
+                state_transaction
+                    .world
+                    .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
+            }
+        }
+        let lifecycle = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(&key)
+            .expect("binding updated before deactivation event")
+            .lifecycle
+            .clone();
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::InstanceDeactivated(
+                ContractInstanceDeactivated {
+                    contract_address: key,
+                    previous_code_hash: prev_hash,
+                    deactivated_by: authority.clone(),
+                    reason,
+                    lifecycle,
+                },
+            )));
+        Ok(())
+    }
     impl Execute for scode::DeactivateContractInstance {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if crate::validation_fee::is_enacted_validation_fee_payout_contract(
-                state_transaction,
-                self.contract_address(),
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "an enacted validation-fee payout lifecycle pins this contract instance".into(),
-                ));
-            }
-            ensure_contract_binding_governance(
-                authority,
-                self.contract_address(),
-                state_transaction,
-            )?;
             let key = self.contract_address().clone();
-            let Some(prev_hash) = state_transaction
-                .world
-                .contract_instances
-                .remove(key.clone())
-            else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("contract instance is not active".into()),
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &key, *self.expected_revision())?;
+            if lifecycle.owner
+                != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    authority.clone(),
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: only the current account owner may deactivate a contract directly"
+                        .into(),
                 ));
-            };
-            crate::smartcontracts::code::set_pending_contract_lifecycle(
-                state_transaction,
-                &key,
-                None,
-            );
-            let reason = self.reason().clone().and_then(|r| {
-                let trimmed = r.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_owned())
-                }
-            });
-            let trigger_ids: Vec<TriggerId> = state_transaction
-                .world
-                .contract_manifests
-                .get(&prev_hash)
-                .and_then(|manifest| manifest.entrypoints.as_ref())
-                .map(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .flat_map(|entrypoint| {
-                            entrypoint
-                                .triggers
-                                .iter()
-                                .map(|descriptor| descriptor.id.clone())
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            for trigger_id in trigger_ids {
-                if state_transaction.world.triggers.remove(&trigger_id) {
-                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                        state_transaction,
-                        &trigger_id,
-                    );
-                    state_transaction
-                        .world
-                        .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
-                }
             }
-            state_transaction
-                .world
-                .emit_events(Some(SmartContractEvent::InstanceDeactivated(
-                    ContractInstanceDeactivated {
-                        contract_address: key,
-                        previous_code_hash: prev_hash,
-                        deactivated_by: authority.clone(),
-                        reason,
-                    },
-                )));
-            Ok(())
+            deactivate_contract_instance_authorized(
+                authority,
+                state_transaction,
+                key,
+                self.reason().clone(),
+            )
         }
     }
     const DEFAULT_MAX_CONTRACT_CODE_BYTES: u64 = 16 * 1024 * 1024;
@@ -6853,7 +7895,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             register_verified_contract_code_bytes(
                 authority,
                 *self.code_hash(),
@@ -6868,7 +7910,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -6993,7 +8035,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -7098,7 +8140,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             if state_transaction
                 .world
                 .contract_manifests
@@ -7152,6 +8194,39 @@ pub mod isi {
         b"iroha.governance.parliament.expected_head.root.v1";
     const PARLIAMENT_PAYOUT_LIFECYCLE_BLOCKED_HEAD_V1: &[u8] =
         b"iroha.governance.parliament.validation_fee_payout.blocked_head.v1";
+
+    fn parliament_contract_lifecycle_head_v1(
+        subject_id: [u8; 32],
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<GovernanceExpectedHeadV1, Error> {
+        let binding = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(contract_address);
+        let active_code_hash = state_transaction
+            .world
+            .contract_instances
+            .get(contract_address)
+            .copied();
+        match binding {
+            Some(binding) if binding.lifecycle.active_code_hash == active_code_hash => {
+                parliament_present_head_v1(
+                    subject_id,
+                    binding.lifecycle.revision,
+                    &binding.lifecycle,
+                )
+            }
+            Some(_) => Err(InstructionExecutionError::InvariantViolation(
+                "contract lifecycle active code hash does not match the active-instance index"
+                    .into(),
+            )),
+            None if active_code_hash.is_none() => Ok(parliament_absent_head_v1(subject_id)),
+            None => Err(InstructionExecutionError::InvariantViolation(
+                "active contract has no lifecycle binding".into(),
+            )),
+        }
+    }
 
     fn parliament_governance_head_root_v1(value: &impl norito::codec::Encode) -> [u8; 32] {
         let encoded = norito::codec::Encode::encode(value);
@@ -7242,14 +8317,23 @@ pub mod isi {
             )
         })?;
         match proposal {
-            ProposalKind::DeployContract(payload) => state_transaction
-                .world
-                .contract_instances
-                .get(&payload.contract_address)
-                .map_or_else(
-                    || Ok(parliament_absent_head_v1(subject_id)),
-                    |code_hash| parliament_present_head_root_v1(subject_id, 1, (*code_hash).into()),
-                ),
+            ProposalKind::DeployContract(payload) => parliament_contract_lifecycle_head_v1(
+                subject_id,
+                &payload.contract_address,
+                state_transaction,
+            ),
+            ProposalKind::ContractLifecycleGovernance(payload) => {
+                parliament_contract_lifecycle_head_v1(
+                    subject_id,
+                    &payload.contract_address,
+                    state_transaction,
+                )
+            }
+            ProposalKind::ContractEmergencyHold(payload) => parliament_contract_lifecycle_head_v1(
+                subject_id,
+                &payload.contract_address,
+                state_transaction,
+            ),
             ProposalKind::RuntimeUpgrade(payload) => {
                 let runtime_upgrade_id = payload.manifest.id();
                 state_transaction
@@ -7275,6 +8359,21 @@ pub mod isi {
                         || Ok(parliament_absent_head_v1(subject_id)),
                         |owner| parliament_present_head_v1(subject_id, 1, owner),
                     )
+            }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
+                state_transaction
+                    .world
+                    .account(&payload.authority)
+                    .map_err(Error::from)?;
+                let is_granted = has_direct_global_data_trigger_permission(
+                    &payload.authority,
+                    state_transaction,
+                );
+                parliament_present_head_v1(
+                    subject_id,
+                    if is_granted { 2 } else { 1 },
+                    &(payload.authority.clone(), is_granted),
+                )
             }
             ProposalKind::MusubiRegistryGovernance(action) => {
                 use iroha_data_model::musubi::MusubiParliamentActionV1;
@@ -7363,12 +8462,25 @@ pub mod isi {
         match &proposal.kind {
             ProposalKind::DeployContract(payload) => apply_deploy_contract_governance_effect(
                 payload,
-                &proposal.proposer,
+                &payload.proposal_operator,
+                certificate,
                 state_transaction,
             ),
-            ProposalKind::RuntimeUpgrade(payload) => {
-                enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)
+            ProposalKind::ContractLifecycleGovernance(payload) => {
+                apply_contract_lifecycle_governance_effect(
+                    payload,
+                    &payload.proposal_operator,
+                    state_transaction,
+                )
             }
+            ProposalKind::ContractEmergencyHold(payload) => {
+                apply_contract_emergency_hold_effect(payload, certificate, state_transaction)
+            }
+            ProposalKind::RuntimeUpgrade(payload) => enact_runtime_upgrade_proposal(
+                state_transaction,
+                payload,
+                &payload.proposal_operator,
+            ),
             ProposalKind::SccpRouteGovernance(payload) => {
                 if payload.anchor.network_id != state_transaction.network_id {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -7388,6 +8500,35 @@ pub mod isi {
                         "certified SoraFS provider compare-and-set changed during atomic enactment"
                             .into(),
                     ))
+                }
+            }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
+                state_transaction
+                    .world
+                    .account(&payload.authority)
+                    .map_err(Error::from)?;
+                let permission = global_data_trigger_permission(&payload.authority);
+                let is_granted = has_direct_global_data_trigger_permission(
+                    &payload.authority,
+                    state_transaction,
+                );
+                match payload.action {
+                    GlobalDataTriggerPermissionGovernanceActionV1::Grant if !is_granted => {
+                        Grant::account_permission(permission, payload.authority.clone())
+                            .execute(&proposal.proposer, state_transaction)
+                    }
+                    GlobalDataTriggerPermissionGovernanceActionV1::Revoke if is_granted => {
+                        Revoke::account_permission(permission, payload.authority.clone())
+                            .execute(&proposal.proposer, state_transaction)
+                    }
+                    GlobalDataTriggerPermissionGovernanceActionV1::Grant
+                    | GlobalDataTriggerPermissionGovernanceActionV1::Revoke => {
+                        Err(InstructionExecutionError::InvariantViolation(
+                            "certified global data-trigger permission head changed during atomic enactment"
+                                .into(),
+                        )
+                        .into())
+                    }
                 }
             }
             ProposalKind::MusubiRegistryGovernance(action) => {
@@ -7739,6 +8880,7 @@ pub mod isi {
                 | gov::ParliamentLifecycleTransitionKindV1::RecordBallotDropout
                 | gov::ParliamentLifecycleTransitionKindV1::CloseBallotRegistration
                 | gov::ParliamentLifecycleTransitionKindV1::FreezeBallotSurvivors
+                | gov::ParliamentLifecycleTransitionKindV1::FreezeTimedOvnCorpus
                 | gov::ParliamentLifecycleTransitionKindV1::BeginBallotOpeningBatch
                 | gov::ParliamentLifecycleTransitionKindV1::FailBallotNoResult
                 | gov::ParliamentLifecycleTransitionKindV1::FailPublicFindingNoResult
@@ -7802,31 +8944,29 @@ pub mod isi {
                 ));
             }
             let proposal_content_id = self.proposal_content_id();
-            let previous = state_transaction
-                .world
-                .parliament_attempts
-                .iter()
-                .filter(|(_, state)| state.proposal_content_id() == proposal_content_id)
-                .map(|(_, state)| state)
-                .max_by_key(|state| state.attempt().sequence);
-            let expected_sequence = previous
-                .map(|state| {
-                    state.attempt().sequence.checked_add(1).ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "Parliament attempt sequence exhausted the u32 domain".into(),
-                        )
-                    })
+            let previous = self
+                .attempt_sequence
+                .checked_sub(1)
+                .map(|previous_sequence| {
+                    let previous_id = GovernanceAttemptId::derive_v1(
+                        proposal_content_id,
+                        previous_sequence,
+                    );
+                    state_transaction
+                        .world
+                        .parliament_attempts
+                        .get(&previous_id)
+                        .ok_or_else(|| {
+                            Error::from(InstructionExecutionError::InvariantViolation(
+                                format!(
+                                    "Parliament attempt sequence {} requires exact predecessor {previous_sequence}",
+                                    self.attempt_sequence
+                                )
+                                .into(),
+                            ))
+                        })
                 })
-                .transpose()?
-                .unwrap_or(0);
-            if self.attempt_sequence != expected_sequence {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "Parliament attempt sequence must be the exact next sequence {expected_sequence}"
-                    )
-                    .into(),
-                ));
-            }
+                .transpose()?;
             if previous.is_some_and(|state| {
                 !matches!(
                     state.attempt().status,
@@ -7837,6 +8977,19 @@ pub mod isi {
             }) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "a new Parliament retry requires a terminal non-enacted predecessor".into(),
+                ));
+            }
+            let randomness_redraws_before_attempt = previous
+                .map(crate::governance::parliament::ParliamentAttemptStateV1::randomness_redraws_used_v1)
+                .transpose()
+                .map_err(parliament_reducer_error)?
+                .unwrap_or(0);
+            if previous.is_some()
+                && randomness_redraws_before_attempt
+                    >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+            {
+                return Err(parliament_reducer_error(
+                    crate::governance::parliament::ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded,
                 ));
             }
             let expected_proposal_status = previous
@@ -7870,8 +9023,9 @@ pub mod isi {
             let (risk_tier, required_bodies) = parliament_attempt_policy_v1(&self.proposal);
             let effect_preimage_hash = self.proposal.effect_preimage_hash_v1();
             let expected_head = parliament_expected_head_v1(&self.proposal, state_transaction)?;
-            let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new(
+            let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
                 self.canonical_attempt(risk_tier),
+                randomness_redraws_before_attempt,
                 PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
                 state_transaction
                     .gov
@@ -7924,25 +9078,64 @@ pub mod isi {
         candidates
     }
 
+    fn canonical_parliament_eligible_candidates_with_limits_v1(
+        state_transaction: &StateTransaction<'_, '_>,
+        max_citizens: usize,
+        max_snapshot_bytes: usize,
+    ) -> Result<Vec<AccountId>, Error> {
+        if state_transaction.world.citizens.len() > max_citizens {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament citizen registry exceeds the V1 protocol cap".into(),
+            )
+            .into());
+        }
+
+        let required_bond = &state_transaction.gov.citizenship_bond_amount;
+        let canonical_flags = norito::core::default_encode_flags();
+        let _canonical_flags = norito::core::DecodeFlagsGuard::enter(canonical_flags);
+        let mut snapshot_bytes = norito::core::seq_len_prefix_len(0);
+        let mut candidates = Vec::new();
+        for (account_id, record) in state_transaction.world.citizens.iter() {
+            if record.amount < *required_bond {
+                continue;
+            }
+            let account_bytes = norito::core::encoded_payload_len(account_id).map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "failed to measure a Parliament candidate account identifier".into(),
+                )
+            })?;
+            snapshot_bytes = snapshot_bytes
+                .checked_add(norito::core::len_prefix_len_with_flags(
+                    account_bytes,
+                    canonical_flags,
+                ))
+                .and_then(|bytes| bytes.checked_add(account_bytes))
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "Parliament candidate snapshot byte count overflow".into(),
+                    )
+                })?;
+            if snapshot_bytes > max_snapshot_bytes {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Parliament candidate snapshot exceeds the V1 protocol byte cap".into(),
+                )
+                .into());
+            }
+            candidates.push(account_id.clone());
+        }
+        candidates.sort_unstable();
+        Ok(candidates)
+    }
+
     fn canonical_parliament_eligible_candidates_v1(
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Vec<AccountId> {
-        let current_height = state_transaction.block_height();
-        let required_bond =
-            required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
-                required_citizenship_bond_for_role(&state_transaction.gov, "council"),
-            );
-        let mut candidates = state_transaction
-            .world
-            .citizens
-            .iter()
-            .filter_map(|(account_id, record)| {
-                (record.amount >= required_bond && record.cooldown_until <= current_height)
-                    .then(|| account_id.clone())
-            })
-            .collect::<Vec<_>>();
-        candidates.sort_unstable();
-        candidates
+    ) -> Result<Vec<AccountId>, Error> {
+        canonical_parliament_eligible_candidates_with_limits_v1(
+            state_transaction,
+            usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+                .expect("the V1 Parliament citizen cap fits usize"),
+            MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1,
+        )
     }
 
     fn canonical_parliament_candidate_snapshot_v1(
@@ -7950,7 +9143,7 @@ pub mod isi {
         attempt: &crate::governance::parliament::ParliamentAttemptStateV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Vec<AccountId>, Error> {
-        let mut candidates = canonical_parliament_eligible_candidates_v1(state_transaction);
+        let mut candidates = canonical_parliament_eligible_candidates_v1(state_transaction)?;
         if body == ParliamentBody::ConfirmationJury {
             let policy_jury = attempt
                 .sealed_body_for_role(ParliamentBody::PolicyJury)
@@ -7981,9 +9174,12 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<SortitionRequestV1, Error> {
         let governance_attempt_id = attempt.attempt().id;
-        if candidates.len() < 2 {
+        if !crate::governance::parliament::hidden_ballot_population_meets_anonymity_floor_v1(
+            candidates.len(),
+        ) {
             return Err(InstructionExecutionError::InvariantViolation(
-                "atomic Confirmation Jury sortition requires at least two candidates".into(),
+                "atomic Confirmation Jury sortition requires the V1 hidden-ballot anonymity floor"
+                    .into(),
             )
             .into());
         }
@@ -8105,7 +9301,7 @@ pub mod isi {
         let Some(pulse_id) = state_transaction
             .world
             .global_beacon_pulse_slots
-            .get(&(state_transaction.network_id, height))
+            .get(&(session_id, height))
             .copied()
         else {
             return false;
@@ -8165,7 +9361,10 @@ pub mod isi {
     ) -> Result<crate::tle_release::ValidatedTleKeySessionV1, Error> {
         if !state_transaction
             .world
-            .tle_key_session_eligible_for_new_ballots(key_session_id)
+            .tle_key_session_eligible_for_new_ballots(
+                key_session_id,
+                state_transaction.block_height(),
+            )
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "Parliament ballot must use the exact active TLE key session".into(),
@@ -8232,35 +9431,15 @@ pub mod isi {
         Ok(count)
     }
 
-    fn validate_parliament_transition_digest_bound_v1(
-        transition: &gov::ParliamentLifecycleTransitionV1,
+    fn validate_parliament_transition_static_v1(
+        instruction: &gov::SubmitParliamentLifecycleTransitionV1,
     ) -> Result<(), Error> {
-        match transition {
-            gov::ParliamentLifecycleTransitionV1::RegisterBallotParticipant(payload) => {
-                if payload.registration_record.len() != TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "Parliament timed-OVN registration has a noncanonical wire width".into(),
-                    ));
-                }
-            }
-            gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
-                parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
-                if payload.ballot_records.len()
-                    > iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
-                    || payload
-                    .ballot_records
-                    .iter()
-                    .any(|record| record.len() != TIMED_OVN_BALLOT_RECORD_BYTES_V1)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "Parliament timed-OVN ballot chunk is oversized or has a noncanonical wire width"
-                            .into(),
-                    ));
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+        instruction.validate_static().map_err(|reason| {
+            InstructionExecutionError::InvariantViolation(
+                format!("Parliament transition is structurally invalid: {reason}").into(),
+            )
+            .into()
+        })
     }
 
     impl Execute for gov::SubmitParliamentLifecycleTransitionV1 {
@@ -8272,13 +9451,15 @@ pub mod isi {
             let transition_kind = self.transition.kind();
             // Intent-setting transitions require a manager; member actions remain bound to the
             // signed transaction authority, and state-derived progress transitions are
-            // permissionless. The containing finalized block supplies consensus height/order,
-            // while Core independently replays every pulse, deadline, roster, corpus, release,
-            // certificate, and compare-and-set binding below.
+            // permissionless. This includes exact-next timed-OVN corpus chunks: Core derives the
+            // starting survivor offset and verifies every record, so the relayer cannot select
+            // the corpus or its result. The containing finalized block supplies consensus
+            // height/order, while Core independently replays every pulse, deadline, roster,
+            // corpus, release, certificate, and compare-and-set binding below.
             if parliament_transition_requires_manager_v1(transition_kind) {
                 require_parliament_manager(authority, state_transaction)?;
             }
-            validate_parliament_transition_digest_bound_v1(&self.transition)?;
+            validate_parliament_transition_static_v1(&self)?;
             let transition_digest = self.transition.digest_v1();
 
             let governance_attempt_id = self.governance_attempt_id;
@@ -8351,7 +9532,10 @@ pub mod isi {
                                     == ParliamentDecisionModeV1::HiddenBindingBallot
                         })
                     });
-                    if expected_candidates.len() < 2 && hidden_body_requested {
+                    if !crate::governance::parliament::hidden_ballot_population_meets_anonymity_floor_v1(
+                        expected_candidates.len(),
+                    ) && hidden_body_requested
+                    {
                         attempt
                             .record_hidden_sortition_capacity_failure_batch(
                                 governance_attempt_id,
@@ -8775,7 +9959,7 @@ pub mod isi {
                         })?;
                     let confirmation_candidates = if body_role == ParliamentBody::PolicyJury {
                         let candidates =
-                            canonical_parliament_eligible_candidates_v1(state_transaction);
+                            canonical_parliament_eligible_candidates_v1(state_transaction)?;
                         let policy_jury = attempt
                             .sealed_body_for_role(ParliamentBody::PolicyJury)
                             .ok_or_else(|| {
@@ -8984,7 +10168,7 @@ pub mod isi {
             if let Some(lifecycle) = timed_ovn_lifecycle {
                 state_transaction
                     .world
-                    .put_timed_ovn_lifecycle(lifecycle)
+                    .put_timed_ovn_lifecycle(lifecycle, current_height)
                     .map_err(parliament_timed_ovn_error_v1)?;
             }
             state_transaction.world.emit_events(Some(
@@ -9005,125 +10189,20 @@ pub mod isi {
         }
     }
 
-    // Persist council membership for an epoch.
-    impl Execute for gov::PersistCouncilForEpoch {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let required: Permission = CanManageParliament.into();
-            if !has_exact_permission(&state_transaction.world, authority, &required) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageParliament".into(),
-                ));
-            }
-            let required_bond =
-                required_citizenship_bond_for_role(&state_transaction.gov, "council");
-            ensure_unique_council_roster(&self.members, &self.alternates)?;
-            if let Some(existing) = state_transaction.world.council.get(&self.epoch) {
-                if existing.epoch != self.epoch {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "persisted council epoch differs from its state key".into(),
-                    ));
-                }
-                if existing.members != self.members || existing.alternates != self.alternates {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "council roster is immutable once persisted for an epoch".into(),
-                    ));
-                }
-                if state_transaction
-                    .world
-                    .parliament_bodies
-                    .get(&self.epoch)
-                    .is_none()
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "persisted council is missing its parliament body rosters".into(),
-                    ));
-                }
-                return Ok(());
-            }
-            let mut updated_citizens: BTreeMap<AccountId, crate::state::CitizenshipRecord> =
-                BTreeMap::new();
-            let citizen_cfg = &state_transaction.gov.citizen_service;
-            let current_height = state_transaction._curr_block.height().get();
-            if !state_transaction.gov.citizenship_bond_amount.is_zero() {
-                process_council_members(
-                    &self.members,
-                    self.epoch,
-                    &required_bond,
-                    citizen_cfg,
-                    current_height,
-                    &mut state_transaction.world,
-                    &mut updated_citizens,
-                )?;
-                process_council_alternates(
-                    &self.alternates,
-                    self.epoch,
-                    &required_bond,
-                    current_height,
-                    &mut state_transaction.world,
-                    &mut updated_citizens,
-                )?;
-            }
-            for (account, record) in updated_citizens {
-                state_transaction.world.citizens.insert(account, record);
-            }
-            let candidate_count =
-                u32::try_from(self.members.len().saturating_add(self.alternates.len()))
-                    .unwrap_or(u32::MAX);
-            // This instruction is the privileged manual-roster path. Derivation metadata is
-            // ledger-owned so callers cannot assert that unverified cryptographic work occurred.
-            let rec = crate::state::CouncilState {
-                epoch: self.epoch,
-                members: self.members.clone(),
-                alternates: self.alternates.clone(),
-                candidate_count,
-                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
-            };
-            state_transaction
-                .world
-                .council
-                .insert(self.epoch, rec.clone());
-            // Emit event for auditability
-            let members_count = u32::try_from(self.members.len()).unwrap_or(u32::MAX);
-            let alternates_count = u32::try_from(self.alternates.len()).unwrap_or(u32::MAX);
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::CouncilPersisted(
-                    iroha_data_model::events::data::governance::GovernanceCouncilPersisted {
-                        epoch: self.epoch,
-                        members_count,
-                        alternates_count,
-                        candidates_count: candidate_count,
-                        derived_by:
-                            iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
-                    },
-                ),
-            ));
-            let beacon = derive_epoch_parliament_beacon(rec.epoch, state_transaction)?;
-            let bodies = derive_parliament_bodies(
-                &state_transaction.gov,
-                &state_transaction.network_id,
-                rec.epoch,
-                &beacon,
-                &rec,
-            );
-            state_transaction
-                .world
-                .parliament_bodies
-                .insert(rec.epoch, bodies.clone());
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ParliamentSelected(
-                    iroha_data_model::events::data::governance::GovernanceParliamentSelected {
-                        selection_epoch: rec.epoch,
-                        bodies,
-                    },
-                ),
-            ));
-            Ok(())
+    fn ensure_parliament_citizen_registry_capacity_with_limit_v1(
+        current_citizens: usize,
+        owner_is_already_citizen: bool,
+        max_citizens: usize,
+    ) -> Result<(), Error> {
+        if !owner_is_already_citizen && current_citizens >= max_citizens {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament citizen registry reached the V1 protocol cap".into(),
+            )
+            .into());
         }
+        Ok(())
     }
+
     impl Execute for gov::RegisterCitizen {
         fn execute(
             self,
@@ -9143,6 +10222,12 @@ pub mod isi {
                 ));
             }
             let existing = state_transaction.world.citizens.get(&self.owner).cloned();
+            ensure_parliament_citizen_registry_capacity_with_limit_v1(
+                state_transaction.world.citizens.len(),
+                existing.is_some(),
+                usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+                    .expect("the V1 Parliament citizen cap fits usize"),
+            )?;
             if let Some(ref rec) = existing {
                 if self.amount < rec.amount {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -9176,8 +10261,7 @@ pub mod isi {
             }
             let record = if let Some(mut record) = existing {
                 // A top-up (including a same-amount no-op) continues the
-                // original citizenship interval and must not erase service,
-                // cooldown, or discipline state.
+                // original citizenship interval.
                 record.amount = self.amount.clone();
                 record
             } else {
@@ -9199,14 +10283,6 @@ pub mod isi {
                     },
                 ),
             ));
-            #[cfg(feature = "telemetry")]
-            {
-                let citizens_total = u64::try_from(state_transaction.world.citizens.iter().count())
-                    .unwrap_or(u64::MAX);
-                state_transaction
-                    .telemetry
-                    .record_citizens_total(citizens_total);
-            }
             Ok(())
         }
     }
@@ -9214,41 +10290,15 @@ pub mod isi {
         owner: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let current_height = state_transaction._curr_block.height().get();
-        let current_epoch = current_height
-            .saturating_sub(1)
-            .saturating_div(state_transaction.gov.parliament_term_blocks.max(1));
-        let has_current_or_scheduled_service = state_transaction
-            .world
-            .council
-            .range(current_epoch..)
-            .any(|(_, council)| {
-                council.members.contains(owner) || council.alternates.contains(owner)
-            })
-            || state_transaction
-                .world
-                .parliament_bodies
-                .range(current_epoch..)
-                .any(|(_, bodies)| {
-                    bodies.rosters.values().any(|roster| {
-                        roster.members.contains(owner) || roster.alternates.contains(owner)
-                    })
-                });
-        if has_current_or_scheduled_service {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizenship bond cannot be released during a current or scheduled parliament service epoch"
-                    .into(),
-            ));
-        }
-
         if state_transaction
             .world
-            .parliament_attempts
-            .iter()
-            .any(|(_, attempt)| attempt.retains_citizenship_bond(owner))
+            .parliament_member_reference_counts
+            .get(owner)
+            .copied()
+            .is_some_and(crate::state::ParliamentMemberReferenceCountsV1::retains_citizenship_bond)
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "citizenship bond cannot be released while retained by an active Parliament attempt"
+                "citizenship bond cannot be released while retained by an active or certified Parliament attempt"
                     .into(),
             ));
         }
@@ -9321,114 +10371,6 @@ pub mod isi {
                     },
                 ),
             ));
-            #[cfg(feature = "telemetry")]
-            {
-                let citizens_total = u64::try_from(state_transaction.world.citizens.iter().count())
-                    .unwrap_or(u64::MAX);
-                state_transaction
-                    .telemetry
-                    .record_citizens_total(citizens_total);
-            }
-            Ok(())
-        }
-    }
-    impl Execute for gov::RecordCitizenServiceOutcome {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if self.role.trim().is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("role must not be blank".into()),
-                ));
-            }
-            let required: Permission = CanRecordCitizenService {
-                owner: self.owner.clone(),
-            }
-            .into();
-            ensure_exact_governance_permission(
-                authority,
-                &required,
-                "CanRecordCitizenService",
-                state_transaction,
-            )?;
-            let Some(mut record) = state_transaction.world.citizens.get(&self.owner).cloned()
-            else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "citizen not found for service record".into(),
-                ));
-            };
-            let required_bond =
-                required_citizenship_bond_for_role(&state_transaction.gov, &self.role);
-            if record.amount < required_bond {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "citizenship bond below role requirement".into(),
-                ));
-            }
-            let citizen_cfg = state_transaction.gov.citizen_service.clone();
-            let current_height = state_transaction._curr_block.height().get();
-            reset_citizen_epoch(&mut record, self.epoch);
-            let slashed = match self.event {
-                gov::CitizenServiceEvent::Decline => {
-                    let penalty = if record.declines_used >= citizen_cfg.free_declines_per_epoch {
-                        slash_citizenship_bond(
-                            &self.owner,
-                            &mut record,
-                            citizen_cfg.decline_slash_bps,
-                            state_transaction,
-                        )?
-                    } else {
-                        Quantity::zero()
-                    };
-                    record.declines_used = record.declines_used.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    penalty
-                }
-                gov::CitizenServiceEvent::NoShow => {
-                    record.no_show_strikes = record.no_show_strikes.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    slash_citizenship_bond(
-                        &self.owner,
-                        &mut record,
-                        citizen_cfg.no_show_slash_bps,
-                        state_transaction,
-                    )?
-                }
-                gov::CitizenServiceEvent::Misconduct => {
-                    record.misconduct_strikes = record.misconduct_strikes.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    slash_citizenship_bond(
-                        &self.owner,
-                        &mut record,
-                        citizen_cfg.misconduct_slash_bps,
-                        state_transaction,
-                    )?
-                }
-            };
-            state_transaction
-                .world
-                .citizens
-                .insert(self.owner.clone(), record.clone());
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::CitizenServiceRecorded(
-                    iroha_data_model::events::data::governance::GovernanceCitizenServiceRecorded {
-                        owner: self.owner.clone(),
-                        epoch: self.epoch,
-                        role: self.role.clone(),
-                        event: self.event,
-                        slashed: slashed.clone(),
-                        cooldown_until: record.cooldown_until,
-                    },
-                ),
-            ));
-            #[cfg(feature = "telemetry")]
-            state_transaction
-                .telemetry
-                .record_citizen_service_event(self.event, &slashed);
             Ok(())
         }
     }
@@ -9456,17 +10398,181 @@ pub mod isi {
     ///
     /// The conviction factor is evaluated in `u128` before it is capped so a
     /// `u64::MAX` duration cannot wrap at `1 + duration / step`.
-    fn plain_ballot_weight(
+    pub(crate) fn plain_ballot_weight(
         amount: &Quantity,
         duration_blocks: u64,
         conviction_step_blocks: u64,
         max_conviction: u64,
     ) -> Result<u128, Error> {
+        if conviction_step_blocks == 0 || max_conviction == 0 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "plain-governance conviction parameters must be non-zero".into(),
+            )
+            .into());
+        }
         let base = integer_sqrt_u128(quantity_to_voting_units(amount)?);
-        let step = conviction_step_blocks.max(1);
-        let factor = (u128::from(duration_blocks / step) + 1).min(u128::from(max_conviction));
+        let factor = (u128::from(duration_blocks / conviction_step_blocks) + 1)
+            .min(u128::from(max_conviction));
         base.checked_mul(factor)
             .ok_or_else(|| Error::from(MathError::Overflow))
+    }
+    /// Maximum retained ballots in one first-release standalone PLAIN referendum.
+    pub(crate) const MAX_STANDALONE_PLAIN_BALLOTS_V1: usize = 1_000;
+    fn ensure_plain_ballot_corpus_size_v1(ballot_count: usize) -> Result<(), Error> {
+        if ballot_count > MAX_STANDALONE_PLAIN_BALLOTS_V1 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "standalone PLAIN referendum ballot corpus exceeds the first-release limit of {MAX_STANDALONE_PLAIN_BALLOTS_V1}"
+                )
+                .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+    fn add_plain_tally_weight_v1(
+        tally: &mut [u128; 3],
+        direction: u8,
+        weight: u128,
+    ) -> Result<(), Error> {
+        let slot = tally.get_mut(usize::from(direction)).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "persisted plain-governance lock direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+                    .into(),
+            )
+        })?;
+        *slot = slot.checked_add(weight).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "plain-governance category tally exceeds the exact u128 domain".into(),
+            )
+        })?;
+        Ok(())
+    }
+    fn checked_plain_tally_turnout_v1(tally: [u128; 3]) -> Result<u128, Error> {
+        tally[0]
+            .checked_add(tally[1])
+            .and_then(|value| value.checked_add(tally[2]))
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "plain-governance turnout exceeds the exact u128 domain".into(),
+                )
+                .into()
+            })
+    }
+    pub(crate) fn plain_governance_tally_v1(
+        locks: &crate::state::GovernanceLocksForReferendum,
+        excluded_owner: Option<&AccountId>,
+        minimum_expiry_height: Option<u64>,
+        conviction_step_blocks: u64,
+        max_conviction: u64,
+    ) -> Result<[u128; 3], Error> {
+        ensure_plain_ballot_corpus_size_v1(locks.locks.len())?;
+        let mut tally = [0_u128; 3];
+        for (owner, record) in &locks.locks {
+            if record.direction > 2 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "persisted plain-governance lock direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+                        .into(),
+                )
+                .into());
+            }
+            let weight = plain_ballot_weight(
+                &record.amount,
+                record.duration_blocks,
+                conviction_step_blocks,
+                max_conviction,
+            )?;
+            if excluded_owner.is_some_and(|excluded| excluded == owner)
+                || minimum_expiry_height.is_some_and(|minimum| record.expiry_height < minimum)
+            {
+                continue;
+            }
+            add_plain_tally_weight_v1(&mut tally, record.direction, weight)?;
+        }
+        checked_plain_tally_turnout_v1(tally)?;
+        Ok(tally)
+    }
+    fn ensure_plain_tally_replacement_capacity_v1(
+        referendum_id: &str,
+        authority: &AccountId,
+        direction: u8,
+        weight: u128,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let mut tally = state_transaction
+            .world
+            .governance_locks
+            .get(referendum_id)
+            .map_or(Ok([0_u128; 3]), |locks| {
+                let next_ballot_count = locks
+                    .locks
+                    .len()
+                    .checked_add(usize::from(!locks.locks.contains_key(authority)))
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
+                ensure_plain_ballot_corpus_size_v1(next_ballot_count)?;
+                plain_governance_tally_v1(
+                    locks,
+                    Some(authority),
+                    None,
+                    state_transaction.gov.conviction_step_blocks,
+                    state_transaction.gov.max_conviction,
+                )
+            })?;
+        add_plain_tally_weight_v1(&mut tally, direction, weight)?;
+        checked_plain_tally_turnout_v1(tally)?;
+        Ok(())
+    }
+    fn mul_u128_u64_wide_v1(value: u128, factor: u64) -> [u64; 3] {
+        let low_product = u128::from(value as u64) * u128::from(factor);
+        let high_product = u128::from((value >> 64) as u64) * u128::from(factor);
+        let middle = high_product + (low_product >> 64);
+        [(middle >> 64) as u64, middle as u64, low_product as u64]
+    }
+    pub(crate) fn standalone_referendum_decision_v1(
+        referendum_id: String,
+        approve: u128,
+        reject: u128,
+        abstain: u128,
+        approval_threshold_numerator: u64,
+        approval_threshold_denominator: u64,
+        minimum_turnout: u128,
+    ) -> Result<iroha_data_model::events::data::governance::GovernanceReferendumDecided, Error>
+    {
+        let turnout = approve
+            .checked_add(reject)
+            .and_then(|value| value.checked_add(abstain))
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "standalone referendum turnout exceeds the exact u128 domain".into(),
+                )
+            })?;
+        let decisive = approve.checked_add(reject).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "standalone referendum decisive tally exceeds the exact u128 domain".into(),
+            )
+        })?;
+        if approval_threshold_denominator == 0
+            || approval_threshold_numerator > approval_threshold_denominator
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "standalone referendum approval threshold must be within the closed unit interval with a nonzero denominator"
+                    .into(),
+            )
+            .into());
+        }
+        let approved = turnout >= minimum_turnout
+            && decisive != 0
+            && mul_u128_u64_wide_v1(approve, approval_threshold_denominator)
+                >= mul_u128_u64_wide_v1(decisive, approval_threshold_numerator);
+        Ok(
+            iroha_data_model::events::data::governance::GovernanceReferendumDecided {
+                referendum_id,
+                approve,
+                reject,
+                abstain,
+                approved,
+            },
+        )
     }
     fn integer_sqrt_u128(n: u128) -> u128 {
         if n == 0 {
@@ -9771,7 +10877,6 @@ pub mod isi {
         old: &VerifyingKeyRecord,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_generic_verifying_key_is_not_kagemusha_release_owned(id, &[old, new])?;
         if matches!(old.status, ConfidentialStatus::Withdrawn) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "cannot update withdrawn verifying key".into(),
@@ -10122,7 +11227,13 @@ pub mod isi {
 
             let certificate = self.certificate;
             let current_height = state_transaction.block_height();
-            let ordered_roster = state_transaction.commit_topology().get().clone();
+            let ordered_roster = state_transaction
+                .threshold_key_lifecycle_frozen_roster_v1()
+                .map_err(|_| {
+                    threshold_key_lifecycle_error_v1(
+                        "threshold-key lifecycle certificate authentication failed",
+                    )
+                })?;
             crate::state::verify_threshold_key_lifecycle_certificate_v1(
                 &certificate,
                 &state_transaction.network_id,
@@ -10153,18 +11264,11 @@ pub mod isi {
                 )
                 .into());
             }
-            let next_height = if matches!(
-                certificate.action,
-                Action::InstallGlobalBeaconKey | Action::RetireGlobalBeaconKey
-            ) {
-                current_height.checked_add(1).ok_or_else(|| {
-                    threshold_key_lifecycle_error_v1(
-                        "threshold-key lifecycle activation height overflows",
-                    )
-                })?
-            } else {
-                current_height
-            };
+            let next_height = current_height.checked_add(1).ok_or_else(|| {
+                threshold_key_lifecycle_error_v1(
+                    "threshold-key lifecycle activation height overflows",
+                )
+            })?;
 
             match certificate.action {
                 Action::InstallGlobalBeaconKey => {
@@ -10186,14 +11290,19 @@ pub mod isi {
                         || record.session.session_id != certificate.session_id
                         || record.session.transcript_hash != certificate.transcript_hash
                         || record.session.network_id != certificate.network_id
-                        || record.session.roster_hash != certificate.roster_hash
-                        || record.session.committee_size != certificate.committee_size
                     {
                         return Err(threshold_key_lifecycle_error_v1(
                             "global-beacon lifecycle binding is invalid",
                         )
                         .into());
                     }
+                    // The certificate roster is the exact block-H authorization
+                    // roster. Its signed canonical public-state hash independently
+                    // commits the installed DKG target roster and committee size;
+                    // the H+1 producer checks that target against its authenticated
+                    // HeightContext before producing any pulse. Keeping these two
+                    // bindings distinct permits an epoch-boundary successor roster
+                    // without weakening either exact-roster check.
                     if state_transaction
                         .world
                         .global_beacon_key_sessions()
@@ -10307,9 +11416,10 @@ pub mod isi {
                                 "Parliament TLE public key session cannot be persisted",
                             )
                         })?;
+                    let lifecycle_policy = state_transaction.gov.parliament_tle_key_lifecycle;
                     state_transaction
                         .world
-                        .activate_tle_key_session(key_session_id)
+                        .activate_tle_key_session(key_session_id, current_height, lifecycle_policy)
                         .map_err(|_| {
                             threshold_key_lifecycle_error_v1(
                                 "Parliament TLE public key session cannot be activated",
@@ -10337,15 +11447,8 @@ pub mod isi {
                     }
                     let retain_through = state_transaction
                         .world
-                        .tle_key_session_retention_deadline_v1(key_session_id)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "Parliament TLE retirement state is invalid",
-                            )
-                        })?;
-                    if retain_through
-                        .is_some_and(|deadline| deadline == u64::MAX || current_height <= deadline)
-                    {
+                        .tle_key_session_retention_deadline_v1(key_session_id);
+                    if retain_through.is_some_and(|deadline| current_height <= deadline) {
                         return Err(threshold_key_lifecycle_error_v1(
                             "Parliament TLE key session is retained by a committed ballot deadline",
                         )
@@ -10353,7 +11456,7 @@ pub mod isi {
                     }
                     state_transaction
                         .world
-                        .retire_tle_key_session(key_session_id)
+                        .retire_tle_key_session(key_session_id, current_height)
                         .map_err(|_| {
                             threshold_key_lifecycle_error_v1(
                                 "Parliament TLE key session is not exactly active",
@@ -10361,10 +11464,7 @@ pub mod isi {
                         })?;
                 }
             }
-            let effective_height = match certificate.action {
-                Action::InstallGlobalBeaconKey | Action::RetireGlobalBeaconKey => next_height,
-                Action::InstallParliamentTleKey | Action::RetireParliamentTleKey => current_height,
-            };
+            let effective_height = next_height;
             state_transaction.world.emit_events(Some(
                 GovernanceEvent::ThresholdKeyLifecycleApplied(
                     iroha_data_model::events::data::governance::GovernanceThresholdKeyLifecycleAppliedV1 {
@@ -10502,6 +11602,30 @@ pub mod isi {
         };
         Ok((prev_id, prev_record))
     }
+    fn ensure_consensus_key_not_bound_to_retained_validator(
+        world: &WorldTransaction<'_, '_>,
+        public_key: &PublicKey,
+        block_height: u64,
+        operation: &str,
+    ) -> Result<(), Error> {
+        let Some((_, record)) = world.public_lane_validators.iter().find(|(_, record)| {
+            record.peer_id.public_key() == public_key
+                && record
+                    .deactivation_height
+                    .is_none_or(|deactivation_height| {
+                        deactivation_height < record.activation_height
+                            || block_height < deactivation_height
+                    })
+        }) else {
+            return Ok(());
+        };
+        Err(InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(format!(
+                "cannot {operation} consensus key while peer remains bound to validator {} on lane {}; exit the validator and wait for its deactivation height first",
+                record.validator, record.lane_id,
+            )),
+        ))
+    }
     fn validate_rotation_pair(
         new_record: &ConsensusKeyRecord,
         prev_record: &ConsensusKeyRecord,
@@ -10605,6 +11729,12 @@ pub mod isi {
             }
             let (prev_id, mut prev_record) =
                 load_prev_record_for_rotation(&new_record, state_transaction)?;
+            ensure_consensus_key_not_bound_to_retained_validator(
+                &state_transaction.world,
+                &prev_record.public_key,
+                block_height,
+                "rotate",
+            )?;
             validate_consensus_key_record(
                 &new_record,
                 &params.sumeragi,
@@ -10643,6 +11773,12 @@ pub mod isi {
                     InvalidParameterError::SmartContract("consensus key not found".into()),
                 ));
             };
+            ensure_consensus_key_not_bound_to_retained_validator(
+                &state_transaction.world,
+                &record.public_key,
+                state_transaction.block_height(),
+                "disable",
+            )?;
             record.status = ConsensusKeyStatus::Disabled;
             record
                 .expiry_height
@@ -11005,11 +12141,44 @@ pub mod isi {
         commitment_index: u32,
         finality_block_hash: [u8; 32],
     }
+    impl ValidatedSccpOutboundProofV1 {
+        fn descriptor(self) -> iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+                destination_binding_hash: self.destination_binding_hash,
+                route_configuration_hash: self.route_configuration_hash,
+                payload_hash: self.payload_hash,
+                recorded_at_height: self.finality_height,
+                commitment_index: self.commitment_index,
+            }
+        }
+
+        fn is_well_formed_for_admission(
+            self,
+            destination_proof_commitment: [u8; 32],
+            accepted_at_height: u64,
+        ) -> bool {
+            let hashes = [
+                self.key.message_id,
+                self.payload_hash,
+                self.destination_binding_hash,
+                self.route_configuration_hash,
+                self.finality_block_hash,
+                destination_proof_commitment,
+            ];
+            accepted_at_height >= self.finality_height
+                && self.descriptor().is_well_formed_for_key(&self.key)
+                && hashes.iter().all(|hash| hash.iter().any(|byte| *byte != 0))
+                && hashes
+                    .iter()
+                    .enumerate()
+                    .all(|(index, hash)| !hashes[index + 1..].contains(hash))
+        }
+    }
     #[derive(Clone, Debug)]
     struct PreparedSccpOutboundTerminalTransitionV1 {
         key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
         pending: iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1,
-        terminal: iroha_data_model::bridge::SccpOutboundProofRecordV1,
+        index: iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1,
         next_usage: iroha_data_model::bridge::SccpOutboundPendingUsageV1,
     }
     fn validate_sccp_destination_bridge_proof(
@@ -11051,16 +12220,6 @@ pub mod isi {
         if key.lane != context.lane {
             return Err(invalid_bridge_proof(
                 "SCCP destination proof lane differs from its global outbound locator",
-            ));
-        }
-        if state_transaction
-            .world
-            .sccp_outbound_proofs
-            .get(&key)
-            .is_some()
-        {
-            return Err(invalid_bridge_proof(
-                "an SCCP destination proof for this exact outbound lane and message has already been accepted",
             ));
         }
         let record = state_transaction
@@ -11136,10 +12295,10 @@ pub mod isi {
         )
         .ok_or_else(|| {
             invalid_bridge_proof(
-                "SCCP destination artifact failed exact governed request, key, pairing, finality, or calldata verification",
+                "SCCP destination artifact failed exact governed request, key, pairing, finality, proof, or material validation",
             )
         })?;
-        if record.recorded_at_height != artifact.public_inputs.finality_height {
+        if record.recorded_at_height != artifact.public_inputs().finality_height {
             return Err(invalid_bridge_proof(
                 "SCCP destination proof finality height differs from the authoritative outbound record height",
             ));
@@ -11149,9 +12308,9 @@ pub mod isi {
             payload_hash: record.payload_hash,
             destination_binding_hash: record.destination_binding_hash,
             route_configuration_hash: record.route_configuration_hash,
-            finality_height: artifact.public_inputs.finality_height,
+            finality_height: artifact.public_inputs().finality_height,
             commitment_index: record.commitment_index,
-            finality_block_hash: artifact.public_inputs.finality_block_hash,
+            finality_block_hash: artifact.public_inputs().finality_block_hash,
         })
     }
     #[derive(Debug)]
@@ -11163,6 +12322,9 @@ pub mod isi {
         admission: iroha_sccp::ValidatedSccpNativeInboundMessageV1,
         route_configuration_hash: [u8; 32],
         settlement: SccpInboundSettlementV1,
+        replay_accumulator_id: iroha_data_model::bridge::SccpReplayAccumulatorIdV1,
+        replay_domain: iroha_data_model::bridge::SccpReplayDomainV1,
+        replay_record: iroha_data_model::bridge::SccpReplayRecordV1,
     }
     fn parse_sccp_taira_recipient_v1(recipient_literal: &str) -> Result<AccountId, Error> {
         let recipient_address = iroha_data_model::account::AccountAddress::parse_encoded(
@@ -11229,21 +12391,13 @@ pub mod isi {
                 "SCCP native proof targets a different exact SORA profile",
             ));
         }
-        let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-            decoded.source.lane,
-            decoded.source.message_id,
-        )
-        .ok_or_else(|| {
-            invalid_bridge_proof("SCCP native message cannot form an exact durable lane replay key")
-        })?;
-        if state_transaction
-            .world
-            .sccp_inbound_messages
-            .get(&replay_key)
-            .is_some()
+        if !decoded.source.lane.is_well_formed()
+            || !decoded.source.lane.source.is_external()
+            || !decoded.source.lane.target.is_sora()
+            || decoded.source.message_id.iter().all(|byte| *byte == 0)
         {
             return Err(invalid_bridge_proof(
-                "SCCP native message has already been admitted on this exact lane",
+                "SCCP native message cannot form an exact replay identity",
             ));
         }
         let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &decoded.payload;
@@ -11309,7 +12463,7 @@ pub mod isi {
             .expect("resolved historical route exists in the validated registry"))
         .clone();
         let governed_anchor = *governed_anchor;
-        let settlement = {
+        let (settlement, replay_principal) = {
             validate_sccp_route_fields_match_manifest(
                 transfer.route_id_codec,
                 &transfer.route_id,
@@ -11354,11 +12508,11 @@ pub mod isi {
                 crate::smartcontracts::isi::asset::isi::prepare_sccp_inbound_numeric_asset_release(
                     state_transaction,
                     &route.route_key,
-                    recipient,
+                    recipient.clone(),
                     transfer.amount,
                     amount,
                 )?;
-            SccpInboundSettlementV1::Transfer(prepared)
+            (SccpInboundSettlementV1::Transfer(prepared), recipient)
         };
         // Ledger-domain failures are completely determined before this reservation. From this
         // point onward, rejected source proofs intentionally consume their deterministic work
@@ -11394,22 +12548,47 @@ pub mod isi {
                 validated.source_finality.height
             )));
         }
+        let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: decoded.source.lane.source,
+            target_network: decoded.source.lane.target,
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            route_revision: route.route_key.revision,
+            route_configuration_hash: route.route_configuration_hash,
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+        };
+        let replay_accumulator_id =
+            iroha_data_model::bridge::SccpReplayAccumulatorIdV1::from_domain(
+                route.route_key.clone(),
+                &replay_domain,
+            )
+            .map_err(|_| {
+                invalid_bridge_proof(
+                    "SCCP replay accumulator identity differs from the authenticated route domain",
+                )
+            })?;
+        let canonical_payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&decoded.payload)
+            .map_err(|_| {
+                invalid_bridge_proof(
+                    "verified SCCP native payload could not be re-encoded canonically",
+                )
+            })?;
+        let replay_record = iroha_data_model::bridge::SccpReplayRecordV1 {
+            operation: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            replay_id: validated.message_id,
+            payload_sha256: sha2::Sha256::digest(canonical_payload_bytes).into(),
+            amount: transfer.amount,
+            principal: iroha_data_model::bridge::SccpReplayPrincipalV1::SoraAccount(
+                replay_principal,
+            ),
+            auxiliary_identity_sha256: sha2::Sha256::digest(validated.source_event_digest).into(),
+        };
         Ok(ValidatedSccpNativeBridgeMessageV1 {
             admission: validated,
             route_configuration_hash: route.route_configuration_hash,
             settlement,
-        })
-    }
-    fn sccp_solana_native_verifier_work(
-        encoded_envelope_len: usize,
-    ) -> Result<crate::state::SccpVerifierWorkV1, Error> {
-        let native_header_bytes = u64::try_from(encoded_envelope_len).map_err(|_| {
-            invalid_bridge_proof("SCCP Solana native proof byte count overflows u64")
-        })?;
-        Ok(crate::state::SccpVerifierWorkV1 {
-            native_header_bytes,
-            bn254_pairing_checks: 1,
-            ..crate::state::SccpVerifierWorkV1::default()
+            replay_accumulator_id,
+            replay_domain,
+            replay_record,
         })
     }
     fn sccp_bsc_native_verifier_work(
@@ -11486,9 +12665,6 @@ pub mod isi {
                         ))
                     })?;
                 Ok(sccp_bsc_native_verifier_work(estimate))
-            }
-            SccpNativeSourceProofV1::SolanaAgave(_) => {
-                sccp_solana_native_verifier_work(encoded_envelope_len)
             }
             SccpNativeSourceProofV1::TronDpos(proof) => {
                 let estimate = iroha_sccp::tron_native_finality_work_estimate(&proof.finality)
@@ -11655,23 +12831,6 @@ pub mod isi {
                             "SCCP destination proof or its embedded message/finality bundle is non-canonical or internally inconsistent",
                         )
                     })?;
-                let parsed_bundle = parsed.bundle();
-                if let Some(key) = state_transaction
-                    .world
-                    .sccp_outbound_message_locator
-                    .get(&parsed_bundle.commitment.message_id)
-                    .copied()
-                    && key.lane == parsed_bundle.commitment.context.lane
-                    && state_transaction
-                        .world
-                        .sccp_outbound_proofs
-                        .get(&key)
-                        .is_some()
-                {
-                    return Err(invalid_bridge_proof(
-                        "an SCCP destination proof for this exact outbound lane and message has already been accepted",
-                    ));
-                }
                 // Reserve two full Taira-roster passes before validating proof-controlled keys:
                 // one for key/hash reconstruction, one for worst-case signer PoP/aggregation.
                 // Bounded parsing exposes the replay key, so exact replay consumes no verifier work.
@@ -11933,12 +13092,29 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if matches!(
+            let is_native_sccp = matches!(
                 &self.proof.payload,
                 iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(_)
-            ) {
+            );
+            if is_native_sccp {
+                let replay_witness = self.replay_witness.as_ref().ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "SCCP native claim requires a canonical replay non-membership witness",
+                    )
+                })?;
+                if replay_witness.prior_record_digest != [0; 32]
+                    || replay_witness.validate().is_err()
+                {
+                    return Err(invalid_bridge_proof(
+                        "SCCP native claim requires a canonical replay non-membership witness",
+                    ));
+                }
                 state_transaction
                     .require_transfer_transcript_identity("SCCP native inbound settlement")?;
+            } else if self.replay_witness.is_some() {
+                return Err(invalid_bridge_proof(
+                    "only an SCCP native claim may carry a replay witness",
+                ));
             }
             let current_height = state_transaction._curr_block.height.get();
             let validated = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
@@ -11959,38 +13135,18 @@ pub mod isi {
                     ),
                 ));
             }
-            let outbound_proof_replay_entry = if let Some(validated_proof) = outbound_proof {
-                if state_transaction
-                    .world
-                    .sccp_outbound_proofs
-                    .get(&validated_proof.key)
-                    .is_some()
-                {
+            let outbound_proof_descriptor = if let Some(validated_proof) = outbound_proof {
+                if !validated_proof.is_well_formed_for_admission(commitment, current_height) {
                     return Err(invalid_bridge_proof(
-                        "an SCCP destination proof for this exact outbound lane and message has already been accepted",
+                        "validated SCCP destination proof produced an invalid terminal descriptor",
                     ));
                 }
-                let record = iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                    payload_hash: validated_proof.payload_hash,
-                    destination_binding_hash: validated_proof.destination_binding_hash,
-                    route_configuration_hash: validated_proof.route_configuration_hash,
-                    finality_block_hash: validated_proof.finality_block_hash,
-                    destination_proof_commitment: commitment,
-                    finality_height: validated_proof.finality_height,
-                    commitment_index: validated_proof.commitment_index,
-                    accepted_at_height: current_height,
-                };
-                if !record.is_well_formed_for_key(&validated_proof.key) {
-                    return Err(invalid_bridge_proof(
-                        "validated SCCP destination proof produced an invalid durable outbound-proof replay record",
-                    ));
-                }
-                Some((validated_proof.key, record))
+                Some((validated_proof.key, validated_proof.descriptor()))
             } else {
                 None
             };
-            let outbound_terminal_transition = if let Some((key, terminal)) =
-                outbound_proof_replay_entry
+            let outbound_terminal_transition = if let Some((key, descriptor)) =
+                outbound_proof_descriptor
             {
                 let pending = state_transaction
                     .world
@@ -12003,7 +13159,7 @@ pub mod isi {
                                 .into(),
                         )
                     })?;
-                if pending.descriptor() != terminal.descriptor() {
+                if pending.descriptor() != descriptor {
                     return Err(InstructionExecutionError::InvariantViolation(
                             "validated SCCP destination proof descriptor changed before terminal transition"
                                 .into(),
@@ -12057,60 +13213,34 @@ pub mod isi {
                 Some(PreparedSccpOutboundTerminalTransitionV1 {
                     key,
                     pending,
-                    terminal,
+                    index: expected_index,
                     next_usage,
                 })
             } else {
                 None
             };
-            let native_replay_entry = if let Some(native) = native_message.as_ref() {
+            let native_high_water = if let Some(native) = native_message.as_ref() {
                 let admission = &native.admission;
-                let key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                    admission.message_key.lane,
-                    admission.message_key.message_id,
-                )
-                .ok_or_else(|| {
-                    invalid_bridge_proof(
-                        "validated SCCP native message produced an invalid durable replay key",
-                    )
-                })?;
-                if state_transaction
-                    .world
-                    .sccp_inbound_messages
-                    .get(&key)
-                    .is_some()
+                if !admission.lane.is_well_formed()
+                    || !admission.lane.source.is_external()
+                    || !admission.lane.target.is_sora()
+                    || admission.message_id.iter().all(|byte| *byte == 0)
                 {
                     return Err(invalid_bridge_proof(
-                        "SCCP native message has already been admitted on this exact lane",
-                    ));
-                }
-                let record = iroha_data_model::bridge::SccpInboundMessageRecordV1 {
-                    payload_hash: admission.payload_hash,
-                    source_identity_hash: admission.source_identity_hash,
-                    route_configuration_hash: native.route_configuration_hash,
-                    trust_anchor: admission.trust_anchor,
-                    anchor_interval_height: admission.anchor_interval_height,
-                    source_finality_height: admission.source_finality.height,
-                    source_finality_hash: admission.source_finality.block_hash,
-                    source_proof_commitment: commitment,
-                    admitted_at_height: current_height,
-                };
-                if !record.is_well_formed_for_lane(key.lane) {
-                    return Err(invalid_bridge_proof(
-                        "validated SCCP native message produced an invalid durable replay record",
+                        "validated SCCP native message produced an invalid replay identity",
                     ));
                 }
                 let high_water_key =
                     iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1::new(
-                        key.lane,
-                        record.trust_anchor.anchor_hash,
+                        admission.lane,
+                        admission.trust_anchor.anchor_hash,
                     )
                     .ok_or_else(|| {
                         invalid_bridge_proof(
                             "validated SCCP native message produced an invalid anchor high-water key",
                         )
                     })?;
-                Some((key, record, high_water_key))
+                Some((high_water_key, admission.anchor_interval_height))
             } else {
                 None
             };
@@ -12127,8 +13257,24 @@ pub mod isi {
                 ));
             }
             ensure_unique_proof(state_transaction, &pid)?;
+            let replay_mutation = native_message
+                .as_ref()
+                .map(|native| {
+                    state_transaction.prepare_sccp_replay_leaf(
+                        native.replay_accumulator_id.clone(),
+                        &native.replay_domain,
+                        &native.replay_record,
+                        self.replay_witness
+                            .as_ref()
+                            .expect("native SCCP witness was required before validation"),
+                    )
+                })
+                .transpose()?;
             if let Some(native) = native_message {
                 execute_sccp_inbound_settlement(native.settlement, authority, state_transaction)?;
+            }
+            if let Some(replay_mutation) = replay_mutation {
+                state_transaction.apply_sccp_replay_leaf(replay_mutation)?;
             }
             let height = current_height;
             let call_hash_opt: Option<[u8; 32]> = state_transaction
@@ -12163,21 +13309,21 @@ pub mod isi {
                     .get_mut() = transition.next_usage;
                 state_transaction
                     .world
-                    .sccp_outbound_proofs
-                    .insert(transition.key, transition.terminal);
+                    .sccp_outbound_message_locator
+                    .remove(transition.key.message_id);
+                state_transaction
+                    .world
+                    .sccp_outbound_message_index
+                    .remove(transition.index);
             }
-            if let Some((key, record, high_water_key)) = native_replay_entry {
+            if let Some((high_water_key, anchor_interval_height)) = native_high_water {
                 let high_water = state_transaction
                     .world
                     .sccp_inbound_anchor_high_water
                     .get(&high_water_key)
                     .copied()
                     .unwrap_or_default()
-                    .max(record.anchor_interval_height);
-                state_transaction
-                    .world
-                    .sccp_inbound_messages
-                    .insert(key, record);
+                    .max(anchor_interval_height);
                 state_transaction
                     .world
                     .sccp_inbound_anchor_high_water
@@ -12420,6 +13566,22 @@ pub mod isi {
         route: &iroha_data_model::bridge::SccpGovernedRouteV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<bool, Error> {
+        if state_transaction
+            .world
+            .sccp_route_liabilities
+            .get(&route.key())
+            .is_some()
+        {
+            return Ok(true);
+        }
+        if state_transaction
+            .world
+            .sccp_ton_breaker_observations
+            .get(&route.key())
+            .is_some()
+        {
+            return Ok(true);
+        }
         let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
             &state_transaction.network_id,
             &route.key(),
@@ -12438,23 +13600,12 @@ pub mod isi {
         })?;
         Ok(state_transaction
             .world
-            .sccp_inbound_messages
+            .sccp_replay_forests
             .iter()
-            .any(|(key, record)| {
-                key.lane == route.lane_id && record.route_configuration_hash == configuration_hash
-            })
+            .any(|(id, forest)| id.route_key == route.key() && forest.leaf_count != 0)
             || state_transaction
                 .world
                 .sccp_outbound_pending_messages
-                .iter()
-                .any(|(key, record)| {
-                    key.lane.source == route.lane_id.target
-                        && key.lane.target == route.lane_id.source
-                        && record.route_configuration_hash == configuration_hash
-                })
-            || state_transaction
-                .world
-                .sccp_outbound_proofs
                 .iter()
                 .any(|(key, record)| {
                     key.lane.source == route.lane_id.target
@@ -12473,11 +13624,6 @@ pub mod isi {
                 )
             }
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(deployment) => {
-                iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
-                    &deployment.verifying_key,
-                )
-            }
-            iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment) => {
                 iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
                     &deployment.verifying_key,
                 )
@@ -12527,14 +13673,6 @@ pub mod isi {
             )
             .into());
         }
-        state_transaction
-            .world
-            .account(&route.settlement.custody_owner)
-            .map_err(|error| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("SCCP route custody owner is not registered: {error}"),
-                ))
-            })?;
         let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
             &state_transaction.network_id,
             &route.key(),
@@ -12701,6 +13839,12 @@ pub mod isi {
                     )
                     .into());
                 }
+                if update.next.allows_outbound() {
+                    ensure_fresh_ton_breaker_observation_for_outbound(
+                        &update.key,
+                        state_transaction,
+                    )?;
+                }
                 route.activation = update.next;
                 route.inbound_finality_cutoff = update.inbound_finality_cutoff;
                 (
@@ -12766,6 +13910,12 @@ pub mod isi {
                         ),
                     )
                     .into());
+                }
+                if update.successor_next.allows_outbound() {
+                    ensure_fresh_ton_breaker_observation_for_outbound(
+                        &update.successor_key,
+                        state_transaction,
+                    )?;
                 }
                 lane.routes[previous_index].activation = update.previous_next;
                 lane.routes[previous_index].inbound_finality_cutoff =
@@ -12960,6 +14110,317 @@ pub mod isi {
             ))
         }
     }
+    fn ton_breaker_block_id_readback(
+        block: iroha_sccp::TonBlockIdExtV1,
+    ) -> iroha_data_model::bridge::SccpTonBlockIdExtV1 {
+        iroha_data_model::bridge::SccpTonBlockIdExtV1 {
+            workchain: block.workchain,
+            shard: block.shard,
+            seqno: block.seqno,
+            root_hash: block.root_hash,
+            file_hash: block.file_hash,
+        }
+    }
+    fn ton_breaker_account_readback(
+        account: iroha_sccp::TonAccountStateReadbackV1,
+    ) -> iroha_data_model::bridge::SccpTonAccountStateReadbackV1 {
+        iroha_data_model::bridge::SccpTonAccountStateReadbackV1 {
+            address: account.address,
+            shard_block: ton_breaker_block_id_readback(account.shard_block_id),
+            registered_masterchain_seqno: account.registered_masterchain_seqno,
+            shard_state_hash: account.shard_state_root_hash,
+            account_state_hash: account.account_state_hash,
+            code_hash: account.code_hash,
+            data_hash: account.data_hash,
+            last_transaction_hash: account.last_transaction_hash,
+            last_transaction_lt: account.last_transaction_lt,
+            storage_last_transaction_lt: account.storage_last_transaction_lt,
+        }
+    }
+    fn ton_breaker_replay_readback(
+        replay: iroha_sccp::TonReplayForestReadbackV1,
+    ) -> iroha_data_model::bridge::SccpTonReplayForestReadbackV1 {
+        iroha_data_model::bridge::SccpTonReplayForestReadbackV1 {
+            root_hash: replay.nonempty_shard_roots_hash,
+            leaf_count: replay.leaf_count,
+            update_sequence: replay.update_sequence,
+        }
+    }
+    fn ton_breaker_pending_readback(
+        mints: iroha_sccp::TonPendingMapReadbackV1,
+        burns: iroha_sccp::TonPendingMapReadbackV1,
+    ) -> iroha_data_model::bridge::SccpTonBridgePendingReadbackV1 {
+        iroha_data_model::bridge::SccpTonBridgePendingReadbackV1 {
+            mint_root_hash: mints.dictionary_root_hash,
+            burn_root_hash: burns.dictionary_root_hash,
+            mint_count: mints.count,
+            burn_count: burns.count,
+        }
+    }
+    fn ton_breaker_deployment_readback(
+        route_address: iroha_data_model::bridge::SccpTonAddressV1,
+        jetton_master_address: iroha_data_model::bridge::SccpTonAddressV1,
+        deployment: iroha_sccp::TonDeploymentReadbackV1,
+    ) -> iroha_data_model::bridge::SccpTonDeploymentReadbackV1 {
+        iroha_data_model::bridge::SccpTonDeploymentReadbackV1 {
+            jetton_master_address,
+            route_address,
+            expected_global_id: deployment.expected_global_id,
+            route_revision: deployment.route_revision,
+            taira_to_ton_multiplier: deployment.taira_to_ton_multiplier,
+            max_wrapped_supply: deployment.max_wrapped_supply,
+            source_lane_bytes: deployment.source_lane_bytes,
+            destination_lane_bytes: deployment.destination_lane_bytes,
+            source_lane_hash: deployment.source_lane_hash,
+            destination_lane_hash: deployment.destination_lane_hash,
+            route_configuration_hash: deployment.route_configuration_hash,
+            destination_binding_hash: deployment.destination_binding_hash,
+            bridge_config_cell_hash: deployment.bridge_config_cell_hash,
+            jetton_master_code_hash: deployment.jetton_master_code_hash,
+            jetton_master_initial_data_hash: deployment.jetton_master_initial_data_hash,
+            jetton_wallet_code_hash: deployment.jetton_wallet_code_hash,
+            route_code_hash: deployment.route_code_hash,
+            route_initial_data_hash: deployment.route_initial_data_hash,
+            embedded_verifier_code_hash: deployment.embedded_verifier_code_hash,
+            verifier_circuit_hash: deployment.verifier_circuit_hash,
+            verifying_key_hash: deployment.verifying_key_hash,
+            verifying_key_cell_hash: deployment.verifying_key_cell_hash,
+            proof_profile_commitment: deployment.proof_profile_commitment,
+            semantic_proof_profile_hash: deployment.semantic_proof_profile_hash,
+            sora_finality_anchor_hash: deployment.sora_finality_anchor_hash,
+            mint_breaker_guardian_keys: deployment.mint_breaker_guardian_keys,
+            master_metadata_hash: deployment.master_metadata_hash,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct TonBreakerPriorTransitionV1 {
+        observation_digest: [u8; 32],
+        masterchain_seqno: u32,
+        masterchain_gen_utime: u32,
+        disabled_latched: bool,
+    }
+
+    fn ton_breaker_disabled_latch_transition_v1(
+        expected_prior_observation_digest: [u8; 32],
+        prior: Option<TonBreakerPriorTransitionV1>,
+        masterchain_seqno: u32,
+        masterchain_gen_utime: u32,
+        effective_disabled: bool,
+    ) -> Result<bool, &'static str> {
+        let Some(prior) = prior else {
+            if expected_prior_observation_digest != [0; 32] {
+                return Err("first TON breaker observation must compare-and-swap from absence");
+            }
+            return Ok(effective_disabled);
+        };
+        if expected_prior_observation_digest != prior.observation_digest {
+            return Err("TON breaker observation prior-record digest compare-and-swap failed");
+        }
+        if masterchain_seqno <= prior.masterchain_seqno {
+            return Err("TON breaker observation masterchain sequence must strictly increase");
+        }
+        if masterchain_gen_utime < prior.masterchain_gen_utime {
+            return Err("TON breaker observation authenticated time must not decrease");
+        }
+        Ok(prior.disabled_latched || effective_disabled)
+    }
+
+    fn ton_breaker_anchor_matches_current_governance_v1(
+        lane_id: iroha_data_model::bridge::SccpLaneIdV1,
+        anchor: iroha_data_model::bridge::SccpNativeTrustAnchorV1,
+        proof_checkpoint_seqno: u32,
+    ) -> bool {
+        lane_id.source == iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+            && lane_id.target == iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+            && anchor.backend
+                == iroha_data_model::bridge::BridgeNativeProofBackendV1::TonMasterchain
+            && anchor.backend.supports_source_network(lane_id.source)
+            && u64::from(proof_checkpoint_seqno) == anchor.checkpoint_height
+    }
+
+    impl Execute for bridge::SubmitSccpTonBreakerObservationV1 {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let proof_size = self.encoded_observation.len();
+            state_transaction.preflight_sccp_proof(proof_size)?;
+            let proof = norito::decode_canonical::<iroha_sccp::SccpTonBreakerObservationProofV1>(
+                &self.encoded_observation,
+            )
+            .map_err(|error| {
+                invalid_bridge_proof(format!(
+                    "TON breaker observation is not canonical Norito: {error}"
+                ))
+            })?;
+            if proof.route_key != self.route_key {
+                return Err(invalid_bridge_proof(
+                    "TON breaker observation route key differs from the instruction key",
+                ));
+            }
+            let work =
+                iroha_sccp::ton_breaker_observation_work_estimate(&proof).map_err(|error| {
+                    invalid_bridge_proof(format!(
+                        "TON breaker observation exceeds native verifier bounds: {error}"
+                    ))
+                })?;
+            state_transaction.register_sccp_proof(
+                proof_size,
+                crate::state::SccpVerifierWorkV1 {
+                    native_headers: u64::from(work.continuation_blocks),
+                    native_header_bytes: u64::from(work.framed_boc_bytes),
+                    ed25519_signature_checks: u64::from(work.ed25519_signature_checks),
+                    ed25519_validator_key_checks: u64::from(work.validator_key_checks_upper_bound),
+                    ..crate::state::SccpVerifierWorkV1::default()
+                },
+            )?;
+            let governed_route = state_transaction
+                .sccp_registry
+                .route(&self.route_key)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "TON breaker observation has no retained governed route revision",
+                    )
+                })?;
+            let governed_anchor = state_transaction
+                .sccp_registry
+                .lane(self.route_key.lane_id)
+                .and_then(|lane| lane.current_native_trust_anchor())
+                .ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "TON breaker observation requires the lane's current native trust anchor",
+                    )
+                })?;
+            if !ton_breaker_anchor_matches_current_governance_v1(
+                self.route_key.lane_id,
+                governed_anchor,
+                proof.finality.anchor.checkpoint.seqno,
+            ) {
+                return Err(invalid_bridge_proof(
+                    "TON breaker observation anchor checkpoint differs from exact current governance",
+                ));
+            }
+            let expected_anchor_hash = governed_anchor.anchor_hash;
+            let verified = iroha_sccp::verify_sccp_ton_breaker_observation_v1(
+                &proof,
+                &governed_route,
+                expected_anchor_hash,
+            )
+            .map_err(|error| {
+                invalid_bridge_proof(format!("TON breaker observation rejected: {error}"))
+            })?;
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            let ton_time_ms = u64::from(verified.masterchain_gen_utime)
+                .checked_mul(1_000)
+                .ok_or_else(|| {
+                    invalid_bridge_proof("TON breaker observation timestamp overflows milliseconds")
+                })?;
+            if !iroha_data_model::bridge::observation_is_fresh_at(ton_time_ms, now_ms) {
+                return Err(invalid_bridge_proof(
+                    "TON breaker observation is stale or too far in the future at consensus time",
+                ));
+            }
+            let prior = state_transaction
+                .world
+                .sccp_ton_breaker_observations
+                .get(&self.route_key)
+                .cloned();
+            let disabled_latched = ton_breaker_disabled_latch_transition_v1(
+                self.expected_prior_observation_digest,
+                prior.as_ref().map(|prior| TonBreakerPriorTransitionV1 {
+                    observation_digest: prior.observation_digest,
+                    masterchain_seqno: prior.masterchain.block_id.seqno,
+                    masterchain_gen_utime: prior.masterchain.gen_utime,
+                    disabled_latched: prior.disabled_latched,
+                }),
+                verified.masterchain_block_id.seqno,
+                verified.masterchain_gen_utime,
+                verified.effective_disabled,
+            )
+            .map_err(invalid_bridge_proof)?;
+            let route_storage = verified.route_storage;
+            let master_storage = verified.master_storage;
+            let mut record = iroha_data_model::bridge::SccpTonBreakerObservationRecordV1 {
+                route_key: self.route_key.clone(),
+                authenticated_native_anchor_hash: expected_anchor_hash,
+                masterchain: iroha_data_model::bridge::SccpTonFinalizedMasterchainBlockV1 {
+                    block_id: ton_breaker_block_id_readback(verified.masterchain_block_id),
+                    gen_utime: verified.masterchain_gen_utime,
+                },
+                route_account: ton_breaker_account_readback(verified.route_account),
+                jetton_master_account: ton_breaker_account_readback(verified.jetton_master_account),
+                deployment: ton_breaker_deployment_readback(
+                    verified.route_account.address,
+                    verified.jetton_master_account.address,
+                    verified.deployment,
+                ),
+                route_storage: iroha_data_model::bridge::SccpTonRouteStorageReadbackV1 {
+                    storage_version: iroha_data_model::bridge::SCCP_V1_TON_STORAGE_VERSION,
+                    route_configuration_hash: route_storage.route_configuration_hash,
+                    bridge_config_cell_hash: route_storage.bridge_config_cell_hash,
+                    inbound_mint_replay: ton_breaker_replay_readback(
+                        route_storage.inbound_mint_replay,
+                    ),
+                    outbound_burn_replay: ton_breaker_replay_readback(
+                        route_storage.outbound_burn_replay,
+                    ),
+                    pending: ton_breaker_pending_readback(
+                        route_storage.pending_mints,
+                        route_storage.pending_burns,
+                    ),
+                    minting_disabled: route_storage.minting_disabled,
+                },
+                master_storage: iroha_data_model::bridge::SccpTonMasterStorageReadbackV1 {
+                    storage_version: iroha_data_model::bridge::SCCP_V1_TON_STORAGE_VERSION,
+                    route_configuration_hash: master_storage.route_configuration_hash,
+                    bridge_config_cell_hash: master_storage.bridge_config_cell_hash,
+                    total_supply: master_storage.total_supply,
+                    metadata_hash: master_storage.metadata_hash,
+                    route_address: master_storage.bridge_address,
+                    mint_replay: ton_breaker_replay_readback(master_storage.mint_replay),
+                    burn_replay: ton_breaker_replay_readback(master_storage.burn_replay),
+                    pending_mint_root_hash: master_storage.pending_mints.dictionary_root_hash,
+                    pending_mint_count: master_storage.pending_mints.count,
+                    minting_disabled: master_storage.minting_disabled,
+                },
+                effective_disabled: verified.effective_disabled,
+                disabled_latched,
+                proof_sha256: verified.canonical_proof_sha256,
+                proof_size_bytes: verified.canonical_proof_byte_len,
+                accepted_at_height: state_transaction.block_height(),
+                accepted_at_unix_ms: now_ms,
+                observation_digest: [0; 32],
+            };
+            let encoded_observation_sha256: [u8; 32] =
+                sha2::Sha256::digest(&self.encoded_observation).into();
+            if usize::try_from(record.proof_size_bytes).ok() != Some(proof_size)
+                || record.proof_sha256 != encoded_observation_sha256
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "TON breaker verifier reported different canonical proof bytes".into(),
+                ));
+            }
+            record.observation_digest = record.computed_digest();
+            if !record.is_well_formed() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verified TON breaker observation could not form a canonical state record"
+                        .into(),
+                ));
+            }
+            state_transaction
+                .world
+                .sccp_ton_breaker_observations
+                .insert(self.route_key, record);
+            // Do not emit a triggerable `BridgeEvent` here. Data-trigger failure rejects the
+            // surrounding transaction, which would let an unrelated trigger veto a valid
+            // emergency disable observation. The committed route-keyed readback is the
+            // consensus audit channel for this fail-safe transition.
+            Ok(())
+        }
+    }
     impl Execute for bridge::RecordBridgeReceipt {
         fn execute(
             self,
@@ -13148,6 +14609,10 @@ pub mod isi {
             None,
             local_network,
         )?;
+        ensure_fresh_ton_breaker_observation_for_outbound(
+            &settlement.route_key,
+            state_transaction,
+        )?;
         let route_binding_hash = settlement
             .destination
             .destination_binding_hash(governed_lane_id)
@@ -13163,6 +14628,45 @@ pub mod isi {
             ));
         }
         Ok(settlement)
+    }
+    fn ensure_fresh_ton_breaker_observation_for_outbound(
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if route_key.lane_id.source != iroha_data_model::bridge::SccpNetworkV1::TonMainnet {
+            return Ok(());
+        }
+        let observation = state_transaction
+            .world
+            .sccp_ton_breaker_observations
+            .get(route_key);
+        ton_breaker_observation_allows_outbound_v1(
+            route_key,
+            observation,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .map_err(invalid_bridge_proof)
+    }
+    fn ton_breaker_observation_allows_outbound_v1(
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        observation: Option<&iroha_data_model::bridge::SccpTonBreakerObservationRecordV1>,
+        now_ms: u64,
+    ) -> Result<(), &'static str> {
+        let observation = observation.ok_or(
+            "TonMainnet outbound admission requires a proof-authenticated breaker observation",
+        )?;
+        if !observation.is_well_formed() || observation.route_key != *route_key {
+            return Err("TonMainnet breaker observation is not self-consistent");
+        }
+        if observation.disabled_latched {
+            return Err(
+                "TonMainnet outbound admission is permanently disabled for this route revision",
+            );
+        }
+        if !observation.is_fresh_at(now_ms) {
+            return Err("TonMainnet breaker observation is stale at the consensus block time");
+        }
+        Ok(())
     }
     fn validate_sccp_route_fields_match_manifest(
         route_id_codec: u8,
@@ -13262,12 +14766,21 @@ pub mod isi {
         }
         if !iroha_sccp::sccp_destination_contract_supports_account_v1(authority) {
             return Err(invalid_bridge_proof(
-                "SCCP outbound sender controller is not supported by the V1 destination contracts",
+                "SCCP outbound sender controller is not supported by the V1 semantic circuit",
             ));
         }
         if transfer.recipient_codec != settlement.counterparty_account_codec {
             return Err(invalid_bridge_proof(
                 "SCCP outbound recipient codec does not match the exact external profile",
+            ));
+        }
+        if !iroha_sccp::sccp_destination_contract_accepts_recipient_v1(
+            &settlement.destination,
+            transfer.recipient_codec,
+            &transfer.recipient,
+        ) {
+            return Err(invalid_bridge_proof(
+                "SCCP outbound recipient cannot be executed by the governed V1 destination deployment",
             ));
         }
         if settlement.escrow_account_id == *authority {
@@ -13471,6 +14984,42 @@ pub mod isi {
                     )),
                 ));
             }
+            let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+                source_network: validated.context.lane.source,
+                target_network: validated.context.lane.target,
+                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+                route_revision: settlement.route_key.revision,
+                route_configuration_hash: settlement.route_configuration_hash,
+                actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+            };
+            let replay_accumulator_id =
+                iroha_data_model::bridge::SccpReplayAccumulatorIdV1::from_domain(
+                    settlement.route_key.clone(),
+                    &replay_domain,
+                )
+                .map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "SCCP replay accumulator identity differs from the settled route domain"
+                            .into(),
+                    )
+                })?;
+            let replay_record = iroha_data_model::bridge::SccpReplayRecordV1 {
+                operation: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+                replay_id: key.message_id,
+                payload_sha256: sha2::Sha256::digest(&record.payload_bytes).into(),
+                amount: transfer.amount,
+                principal: iroha_data_model::bridge::SccpReplayPrincipalV1::SoraAccount(
+                    authority.clone(),
+                ),
+                auxiliary_identity_sha256: sha2::Sha256::digest(record.destination_binding_hash)
+                    .into(),
+            };
+            let replay_mutation = state_transaction.prepare_sccp_replay_leaf(
+                replay_accumulator_id,
+                &replay_domain,
+                &replay_record,
+                &self.replay_witness,
+            )?;
             validate_sccp_outbound_transfer_and_lock(
                 transfer,
                 authority,
@@ -13493,6 +15042,7 @@ pub mod isi {
                 .world
                 .sccp_outbound_pending_usage
                 .get_mut() = next_usage;
+            state_transaction.apply_sccp_replay_leaf(replay_mutation)?;
             Ok(())
         }
     }
@@ -14417,32 +15967,10 @@ pub mod isi {
                     )
                 })?;
             }
-            if let Some(binding) = vk_shield_binding.as_ref() {
-                let record = state_transaction
-                    .world
-                    .verifying_keys
-                    .get(&binding.id)
-                    .expect("binding was resolved from the verifying-key registry");
-                if !crate::zk::confidential_v2::is_kagemusha_topup_shield_v2_circuit_id(
-                    &record.circuit_id,
-                ) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "vk_shield must name the canonical Kagemusha top-up shield circuit".into(),
-                    ));
-                }
-                let vk_box = record.key.as_ref().ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "vk_shield verifying key bytes are missing".into(),
-                    )
-                })?;
-                crate::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(
-                    vk_box,
-                )
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid vk_shield verifying key: {err}").into(),
-                    )
-                })?;
+            if vk_shield_binding.is_some() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "vk_shield is not part of the first-release confidential asset model".into(),
+                ));
             }
             let mut derived_tree_profile = None;
             for (role, binding) in [
@@ -14865,11 +16393,11 @@ pub mod isi {
                 ));
             }
             ensure_valid_governance_selector_v1("election_id", self.election_id())?;
-            if typed_proposal_for_legacy_referendum(self.election_id(), state_transaction)?
+            if typed_proposal_for_standalone_referendum(self.election_id(), state_transaction)?
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals cannot create legacy ZK elections".into(),
+                    "typed governance proposals cannot create standalone ZK elections".into(),
                 ));
             }
             let options = *self.options();
@@ -14987,10 +16515,11 @@ pub mod isi {
                 &self.election_id,
                 state_transaction,
             )?;
-            if typed_proposal_for_legacy_referendum(&self.election_id, state_transaction)?.is_some()
+            if typed_proposal_for_standalone_referendum(&self.election_id, state_transaction)?
+                .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals cannot use legacy ZK ballots".into(),
+                    "typed governance proposals cannot use standalone ZK ballots".into(),
                 ));
             }
             ensure_citizen_for_ballot(authority, &self.election_id, state_transaction)?;
@@ -15090,6 +16619,59 @@ pub mod isi {
             Ok(())
         }
     }
+    fn persist_finalized_standalone_election_v1(
+        election_id: String,
+        mut election: crate::state::ElectionState,
+        tally: &[u64],
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if election.finalized {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "election already finalized".into(),
+            ));
+        }
+        if tally.len() != election.tally.len() || tally.len() < 2 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "finalized election tally has the wrong width".into(),
+            ));
+        }
+        let late_decision = state_transaction
+            .world
+            .governance_referenda
+            .get(&election_id)
+            .filter(|referendum| {
+                referendum.mode == crate::state::GovernanceReferendumMode::Zk
+                    && referendum.status == crate::state::GovernanceReferendumStatus::Closed
+            })
+            .map(|_| {
+                standalone_referendum_decision_v1(
+                    election_id.clone(),
+                    u128::from(tally[0]),
+                    u128::from(tally[1]),
+                    tally.get(2).copied().map_or(0, u128::from),
+                    state_transaction.gov.approval_threshold_q_num,
+                    state_transaction.gov.approval_threshold_q_den,
+                    state_transaction.gov.min_turnout,
+                )
+            })
+            .transpose()?;
+        election.tally.clone_from_slice(tally);
+        election.finalized = true;
+        state_transaction
+            .world
+            .elections
+            .remove(election_id.clone());
+        state_transaction
+            .world
+            .elections
+            .insert(election_id, election);
+        if let Some(decision) = late_decision {
+            state_transaction
+                .world
+                .emit_events(Some(GovernanceEvent::ReferendumDecided(decision)));
+        }
+        Ok(())
+    }
     impl Execute for zk::FinalizeElection {
         fn execute(
             self,
@@ -15103,17 +16685,17 @@ pub mod isi {
                 ));
             }
             ensure_valid_governance_selector_v1("election_id", self.election_id())?;
-            if typed_proposal_for_legacy_referendum(self.election_id(), state_transaction)?
+            if typed_proposal_for_standalone_referendum(self.election_id(), state_transaction)?
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals cannot finalize legacy ZK elections".into(),
+                    "typed governance proposals cannot finalize standalone ZK elections".into(),
                 ));
             }
             let id = self.election_id().clone();
             let now_ms = u64::try_from(state_transaction._curr_block.creation_time().as_millis())
                 .unwrap_or(u64::MAX);
-            let (mut st, expected_tally_len) = {
+            let (st, expected_tally_len) = {
                 let st = state_transaction.world.elections.get(&id).ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation("unknown election id".into())
                 })?;
@@ -15175,11 +16757,7 @@ pub mod isi {
                     "tally does not match proof".into(),
                 ));
             }
-            st.tally.clone_from(self.tally());
-            st.finalized = true;
-            state_transaction.world.elections.remove(id.clone());
-            state_transaction.world.elections.insert(id, st);
-            Ok(())
+            persist_finalized_standalone_election_v1(id, st, self.tally(), state_transaction)
         }
     }
     impl Execute for smart_contract_code::RegisterSmartContractCode {
@@ -15188,7 +16766,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             let manifest = self.manifest().clone();
             let Some(key @ Hash { .. }) = manifest.code_hash else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -15268,7 +16846,230 @@ pub mod isi {
             .cloned()
             .unwrap_or_default()
     }
-    /// Register a peer (BLS-normal with `PoP`)
+    fn peer_key_policy_reason(
+        err: &InstructionExecutionError,
+    ) -> Option<PeerKeyPolicyRejectReason> {
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)) =
+            err
+        else {
+            return None;
+        };
+        if msg.contains("lead-time policy") {
+            Some(PeerKeyPolicyRejectReason::LeadTimeViolation)
+        } else if msg.contains("activation height cannot be in the past") {
+            Some(PeerKeyPolicyRejectReason::ActivationInPast)
+        } else if msg.contains("expiry must exceed activation height") {
+            Some(PeerKeyPolicyRejectReason::ExpiryBeforeActivation)
+        } else if msg.contains("algorithm") && msg.contains("not allowed") {
+            Some(PeerKeyPolicyRejectReason::DisallowedAlgorithm)
+        } else if msg.contains("identifier collision") {
+            Some(PeerKeyPolicyRejectReason::IdentifierCollision)
+        } else {
+            None
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn register_peer_identity_with_pop(
+        peer_id: PeerId,
+        pop: Vec<u8>,
+        activation_at: Option<u64>,
+        expiry_at: Option<u64>,
+        role: ConsensusKeyRole,
+        instruction_name: &'static str,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        // Every lane-consensus identity must support BLS batching.
+        if state_transaction.pipeline.signature_batch_max_bls == 0 {
+            iroha_logger::error!(
+                peer = %peer_id,
+                cap = state_transaction.pipeline.signature_batch_max_bls,
+                instruction = instruction_name,
+                "peer registration rejected: signature_batch_max_bls is zero"
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "signature_batch_max_bls must be > 0 to register a consensus peer".into(),
+                ),
+            ));
+        }
+        if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::DisallowedAlgorithm,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "peer public_key must use BLS-Normal (BLS-Small unsupported for peers)".into(),
+                ),
+            ));
+        }
+        if let Err(err) = iroha_crypto::bls_normal_pop_verify(peer_id.public_key(), &pop) {
+            iroha_logger::error!(
+                %peer_id,
+                ?err,
+                instruction = instruction_name,
+                "peer registration rejected: invalid BLS PoP"
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "invalid BLS proof-of-possession: {err}"
+                )),
+            ));
+        }
+        let (activation_lead_blocks, sumeragi_params) = {
+            let params = state_transaction.world.parameters.get();
+            (
+                params.sumeragi.key_activation_lead_blocks,
+                params.sumeragi.clone(),
+            )
+        };
+        let is_genesis = state_transaction._curr_block.is_genesis();
+        let world = &mut state_transaction.world;
+        let block_height = state_transaction._curr_block.height().get();
+        let activation_expected = if is_genesis {
+            block_height
+        } else {
+            block_height.saturating_add(activation_lead_blocks)
+        };
+        let activation_height = activation_at.unwrap_or(activation_expected);
+        if activation_height < block_height {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::ActivationInPast,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "consensus key activation height cannot be in the past".into(),
+                ),
+            ));
+        }
+        if activation_height != activation_expected
+            && !(is_genesis && activation_height == block_height)
+        {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::LeadTimeViolation,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "activation height {activation_height} violates lead-time policy; expected {activation_expected}"
+                )),
+            ));
+        }
+        let status = if activation_height > block_height {
+            ConsensusKeyStatus::Pending
+        } else {
+            ConsensusKeyStatus::Active
+        };
+        let key_label = peer_id.public_key().to_string();
+        let candidate_id = match role {
+            ConsensusKeyRole::Validator => derive_validator_key_id(peer_id.public_key()),
+            ConsensusKeyRole::Committee => derive_committee_key_id(peer_id.public_key()),
+            ConsensusKeyRole::Endorsement => {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "peer registration cannot create an endorsement key".into(),
+                    ),
+                ));
+            }
+        };
+        if world.peers.iter().any(|id| id == &peer_id) {
+            if is_genesis {
+                let exact_duplicate =
+                    world
+                        .consensus_keys
+                        .get(&candidate_id)
+                        .is_some_and(|record| {
+                            record.public_key == *peer_id.public_key()
+                                && record.pop.as_deref() == Some(pop.as_slice())
+                                && record.activation_height == activation_height
+                                && record.expiry_height == expiry_at
+                                && record.status == status
+                        });
+                if exact_duplicate {
+                    iroha_logger::debug!(
+                        %peer_id,
+                        instruction = instruction_name,
+                        "exact duplicate peer registration during genesis; treating as no-op"
+                    );
+                    return Ok(());
+                }
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "duplicate genesis peer registration must match the existing consensus role, proof-of-possession, and lifecycle"
+                            .into(),
+                    ),
+                ));
+            }
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::PeerId(peer_id),
+            }
+            .into());
+        }
+        if let Some(conflict) = consensus_key_ids_for_public_key(world, &key_label)
+            .into_iter()
+            .find(|id| id != &candidate_id)
+        {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::IdentifierCollision,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "consensus key identifier collision for peer public key; existing id: {conflict}"
+                )),
+            ));
+        }
+        if let Some(existing) = world.consensus_keys.get(&candidate_id)
+            && existing.public_key != *peer_id.public_key()
+        {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::IdentifierCollision,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "consensus key identifier collision for peer public key".into(),
+                ),
+            ));
+        }
+        let lifecycle_record = ConsensusKeyRecord {
+            id: candidate_id,
+            public_key: peer_id.public_key().clone(),
+            pop: Some(pop),
+            activation_height,
+            expiry_height: expiry_at,
+            replaces: None,
+            status,
+        };
+        if let Err(err) = validate_consensus_key_record(
+            &lifecycle_record,
+            &sumeragi_params,
+            None,
+            block_height,
+            is_genesis,
+        ) {
+            if let Some(reason) = peer_key_policy_reason(&err) {
+                crate::sumeragi::status::record_peer_key_policy_reject(reason);
+            }
+            return Err(err);
+        }
+        if let PushResult::Duplicate(duplicate) = world.peers.push(peer_id.clone()) {
+            if is_genesis {
+                iroha_logger::debug!(
+                    %duplicate,
+                    instruction = instruction_name,
+                    "duplicate peer registration during genesis; treating as no-op"
+                );
+                return Ok(());
+            }
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::PeerId(duplicate),
+            }
+            .into());
+        }
+        upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
+        world.emit_events(Some(PeerEvent::Added(peer_id)));
+        Ok(())
+    }
+    /// Register a global-voter peer (BLS-normal with `PoP`).
     impl Execute for iroha_data_model::isi::register::RegisterPeerWithPop {
         #[metrics(+"register_peer")]
         fn execute(
@@ -15276,209 +17077,34 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            fn peer_key_policy_reason(
-                err: &InstructionExecutionError,
-            ) -> Option<PeerKeyPolicyRejectReason> {
-                let InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(msg),
-                ) = err
-                else {
-                    return None;
-                };
-                if msg.contains("lead-time policy") {
-                    Some(PeerKeyPolicyRejectReason::LeadTimeViolation)
-                } else if msg.contains("activation height cannot be in the past") {
-                    Some(PeerKeyPolicyRejectReason::ActivationInPast)
-                } else if msg.contains("expiry must exceed activation height") {
-                    Some(PeerKeyPolicyRejectReason::ExpiryBeforeActivation)
-                } else if msg.contains("algorithm") && msg.contains("not allowed") {
-                    Some(PeerKeyPolicyRejectReason::DisallowedAlgorithm)
-                } else if msg.contains("HSM binding required") {
-                    Some(PeerKeyPolicyRejectReason::MissingHsm)
-                } else if msg.contains("HSM provider") {
-                    Some(PeerKeyPolicyRejectReason::DisallowedProvider)
-                } else if msg.contains("identifier collision") {
-                    Some(PeerKeyPolicyRejectReason::IdentifierCollision)
-                } else {
-                    None
-                }
-            }
-            // Validators must support BLS batching: require non-zero cap in pipeline config.
-            if state_transaction.pipeline.signature_batch_max_bls == 0 {
-                iroha_logger::error!(
-                    peer = %self.peer,
-                    cap = state_transaction.pipeline.signature_batch_max_bls,
-                    "RegisterPeerWithPop rejected: signature_batch_max_bls is zero"
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "signature_batch_max_bls must be > 0 to register a validator peer".into(),
-                    ),
-                ));
-            }
-            let peer_id = self.peer.clone();
-            // Enforce BLS-normal only for consensus peers.
-            if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::DisallowedAlgorithm,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "peer public_key must use BLS-Normal (BLS-Small unsupported for peers)"
-                            .into(),
-                    ),
-                ));
-            }
-            // Verify PoP
-            if let Err(err) = iroha_crypto::bls_normal_pop_verify(peer_id.public_key(), &self.pop) {
-                iroha_logger::error!(
-                    %peer_id,
-                    ?err,
-                    "RegisterPeerWithPop rejected: invalid BLS PoP"
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "invalid BLS proof-of-possession: {err}"
-                    )),
-                ));
-            }
-            let (activation_lead_blocks, sumeragi_params) = {
-                let params = state_transaction.world.parameters.get();
-                (
-                    params.sumeragi.key_activation_lead_blocks,
-                    params.sumeragi.clone(),
-                )
-            };
-            let world = &mut state_transaction.world;
-            if world.peers.iter().any(|id| id == &peer_id) {
-                if state_transaction._curr_block.is_genesis() {
-                    iroha_logger::debug!(
-                        %peer_id,
-                        "Duplicate RegisterPeerWithPop during genesis; treating as no-op"
-                    );
-                    return Ok(());
-                }
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::PeerId(peer_id),
-                }
-                .into());
-            }
-            let block_height = state_transaction._curr_block.height().get();
-            let activation_expected = if state_transaction._curr_block.is_genesis() {
-                block_height
-            } else {
-                block_height.saturating_add(activation_lead_blocks)
-            };
-            let activation_height = self.activation_at.unwrap_or(activation_expected);
-            if activation_height < block_height {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::ActivationInPast,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "consensus key activation height cannot be in the past".into(),
-                    ),
-                ));
-            }
-            if activation_height != activation_expected
-                && !(state_transaction._curr_block.is_genesis()
-                    && activation_height == block_height)
-            {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::LeadTimeViolation,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "activation height {activation_height} violates lead-time policy; expected {activation_expected}"
-                    )),
-                ));
-            }
-            let status = if activation_height > block_height {
-                ConsensusKeyStatus::Pending
-            } else {
-                ConsensusKeyStatus::Active
-            };
-            let hsm_binding = match (self.hsm.clone(), sumeragi_params.key_require_hsm) {
-                (Some(binding), _) => Some(binding),
-                (None, true) => {
-                    crate::sumeragi::status::record_peer_key_policy_reject(
-                        PeerKeyPolicyRejectReason::MissingHsm,
-                    );
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "HSM binding required for consensus key".into(),
-                        ),
-                    ));
-                }
-                (None, false) => None,
-            };
-            let key_label = peer_id.public_key().to_string();
-            let candidate_id = derive_validator_key_id(peer_id.public_key());
-            if let Some(conflict) = consensus_key_ids_for_public_key(world, &key_label)
-                .into_iter()
-                .find(|id| id != &candidate_id)
-            {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::IdentifierCollision,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "consensus key identifier collision for peer public key; existing id: {conflict}"
-                    )),
-                ));
-            }
-            if let Some(existing) = world.consensus_keys.get(&candidate_id) {
-                if existing.public_key != *peer_id.public_key() {
-                    crate::sumeragi::status::record_peer_key_policy_reject(
-                        PeerKeyPolicyRejectReason::IdentifierCollision,
-                    );
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "consensus key identifier collision for peer public key".into(),
-                        ),
-                    ));
-                }
-            }
-            let lifecycle_record = ConsensusKeyRecord {
-                id: candidate_id,
-                public_key: peer_id.public_key().clone(),
-                pop: Some(self.pop.clone()),
-                activation_height,
-                expiry_height: self.expiry_at,
-                hsm: hsm_binding,
-                replaces: None,
-                status,
-            };
-            if let Err(err) = validate_consensus_key_record(
-                &lifecycle_record,
-                &sumeragi_params,
+            register_peer_identity_with_pop(
+                self.peer,
+                self.pop,
+                self.activation_at,
+                self.expiry_at,
+                ConsensusKeyRole::Validator,
+                "RegisterPeerWithPop",
+                state_transaction,
+            )
+        }
+    }
+    /// Register a non-global-voting participant-lane committee peer (BLS-normal with `PoP`).
+    impl Execute for iroha_data_model::isi::register::RegisterCommitteePeerWithPop {
+        #[metrics(+"register_committee_peer")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            register_peer_identity_with_pop(
+                self.peer,
+                self.pop,
+                self.activation_at,
                 None,
-                block_height,
-                state_transaction._curr_block.is_genesis(),
-            ) {
-                if let Some(reason) = peer_key_policy_reason(&err) {
-                    crate::sumeragi::status::record_peer_key_policy_reject(reason);
-                }
-                return Err(err);
-            }
-            if let PushResult::Duplicate(duplicate) = world.peers.push(peer_id.clone()) {
-                if state_transaction._curr_block.is_genesis() {
-                    iroha_logger::debug!(
-                        %duplicate,
-                        "Duplicate RegisterPeerWithPop during genesis; treating as no-op"
-                    );
-                    return Ok(());
-                }
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::PeerId(duplicate),
-                }
-                .into());
-            }
-            upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
-            world.emit_events(Some(PeerEvent::Added(peer_id)));
-            Ok(())
+                ConsensusKeyRole::Committee,
+                "RegisterCommitteePeerWithPop",
+                state_transaction,
+            )
         }
     }
     impl Execute for Unregister<Peer> {
@@ -15489,70 +17115,64 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let peer_id = self.object().clone();
+            let block_height = state_transaction._curr_block.height().get();
+            if state_transaction
+                .commit_topology
+                .iter()
+                .any(|topology_peer| topology_peer == &peer_id)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "cannot unregister a peer from the current authenticated consensus roster"
+                            .to_owned(),
+                    ),
+                ));
+            }
             let world = &mut state_transaction.world;
             let Some(index) = world.peers.iter().position(|id| id == &peer_id) else {
                 return Err(FindError::Peer(peer_id).into());
             };
-            world.peers.remove(index);
-            // Mark any validators tied to this peer as exited to avoid dangling roster entries.
-            let exited_keys: Vec<_> = world
-                .public_lane_validators
-                .iter()
-                .filter(|(key, record)| {
+            if let Some(((lane_id, validator), _)) =
+                world.public_lane_validators.iter().find(|(key, record)| {
                     public_lane_validator_record_matches_key(key, record)
-                        && record
-                            .validator
-                            .try_signatory()
-                            .is_some_and(|pk| pk == peer_id.public_key())
-                })
-                .map(|(key, _)| key.clone())
-                .collect();
-            for key in exited_keys {
-                if let Some(record) = world.public_lane_validators.get_mut(&key) {
-                    record.status = iroha_data_model::nexus::PublicLaneValidatorStatus::Exited;
-                    // Prune stake shares so roster/state snapshots do not retain exited validators.
-                    let share_keys: Vec<_> = world
-                        .public_lane_stake_shares
-                        .iter()
-                        .filter(|((lane, validator_id, _), _)| {
-                            *lane == key.0 && validator_id == &record.validator
+                        && record.peer_id == peer_id
+                        && record.deactivation_height.is_none_or(|height| {
+                            height < record.activation_height || block_height < height
                         })
-                        .map(|(share_key, _)| share_key.clone())
-                        .collect();
-                    for share_key in share_keys {
-                        world.public_lane_stake_shares.remove(share_key);
-                    }
-                }
+                })
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "peer remains bound to validator {validator} on lane {lane_id}; exit the validator and wait for its deactivation height before unregistering the peer"
+                    )),
+                ));
             }
+            world.peers.remove(index);
             let key_label = peer_id.public_key().to_string();
-            let block_height = state_transaction._curr_block.height().get();
-            let candidate_id = derive_validator_key_id(peer_id.public_key());
-            let existing_pop = world
-                .consensus_keys
-                .get(&candidate_id)
-                .and_then(|record| record.pop.clone());
-            let lifecycle_record = ConsensusKeyRecord {
-                id: candidate_id,
-                public_key: peer_id.public_key().clone(),
-                pop: existing_pop,
-                activation_height: block_height,
-                expiry_height: Some(block_height),
-                hsm: None,
-                replaces: None,
-                status: ConsensusKeyStatus::Disabled,
-            };
-            upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
             let mut ids = consensus_key_ids_for_public_key(world, &key_label);
-            if !ids.contains(&lifecycle_record.id) {
-                ids.push(lifecycle_record.id.clone());
+            if ids.is_empty() {
+                // Preserve deterministic lifecycle history for legacy fixture
+                // peers that predate proof-bound registration. Never synthesize
+                // this Validator role when a Committee record already exists.
+                let candidate_id = derive_validator_key_id(peer_id.public_key());
+                let lifecycle_record = ConsensusKeyRecord {
+                    id: candidate_id.clone(),
+                    public_key: peer_id.public_key().clone(),
+                    pop: None,
+                    activation_height: block_height,
+                    expiry_height: Some(block_height),
+                    replaces: None,
+                    status: ConsensusKeyStatus::Disabled,
+                };
+                world
+                    .consensus_keys
+                    .insert(candidate_id.clone(), lifecycle_record);
+                ids.push(candidate_id);
             }
             ids.sort();
             ids.dedup();
             world.consensus_keys_by_pk.insert(key_label, ids.clone());
             for id in ids {
-                if id == lifecycle_record.id {
-                    continue;
-                }
                 if let Some(mut record) = world.consensus_keys.get(&id).cloned() {
                     if !matches!(record.status, ConsensusKeyStatus::Disabled) {
                         record.status = ConsensusKeyStatus::Disabled;
@@ -15626,6 +17246,10 @@ pub mod isi {
             };
             let mut domain = new_domain.build(authority);
             domain.id = canonical_id.clone();
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                domain.metadata(),
+            )?;
             if let Some((key, _)) = domain.metadata.iter().find(|(key, _)| {
                 crate::smartcontracts::isi::kaigi::is_reserved_kaigi_metadata_key(key)
             }) {
@@ -16248,7 +17872,10 @@ pub mod isi {
                         )),
                     ));
                 }
-                if enforce_topology_membership && !topology_peers.contains(peer) {
+                if lane_id == LaneId::SINGLE
+                    && enforce_topology_membership
+                    && !topology_peers.contains(peer)
+                {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(format!(
                             "lane relay emergency peer {} is not in the current commit topology",
@@ -16256,10 +17883,11 @@ pub mod isi {
                         )),
                     ));
                 }
-                if crate::state::live_consensus_key_pop_for_peer(
+                if crate::state::live_consensus_key_pop_for_peer_on_lane(
                     &state_transaction.world,
                     peer,
                     current_height,
+                    lane_id,
                 )
                 .is_none()
                 {
@@ -18184,6 +19812,25 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_transfer_controls(
+                state_transaction,
+                &remove_asset_definitions,
+                &format!("unregister domain {domain_id}"),
+            )?;
+            if let Some((asset_definition_id, reference)) =
+                crate::smartcontracts::isi::sorafs_moderation::retained_moderation_asset_definition_reference_in(
+                    state_transaction.world(),
+                    &remove_asset_definitions,
+                )?
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained by moderation {reference}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some((proposal_id, reference_kind, asset_definition_id)) =
                 crate::validation_fee::retained_enacted_validation_fee_asset_reference_in(
                     state_transaction,
@@ -18471,15 +20118,6 @@ pub mod isi {
                     )
                     .into());
                 }
-                if asset_definition_id == &state_transaction.gov.parliament_eligibility_asset_id {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as governance parliament eligibility asset definition (`gov.parliament_eligibility_asset_id`); update governance config first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
                 if asset_definition_id
                     == &state_transaction
                         .gov
@@ -18684,8 +20322,8 @@ pub mod isi {
             for asset_definition_id in remove_asset_definitions {
                 state_transaction
                     .settlement
-                    .offline
-                    .escrow_accounts
+                    .kagemusha
+                    .reserve_accounts
                     .remove(&asset_definition_id);
                 state_transaction
                     .world
@@ -18957,13 +20595,10 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            crate::smartcontracts::isi::offline::validate_runtime_consensus_parameter_update(
-                self.inner(),
-                &state_transaction.world,
-                state_transaction.kagemusha_release_catalog.is_configured(),
-            )?;
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
+                validate_alias_registry_routing_activation(custom, state_transaction)?;
+                validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
                 validate_governed_pipeline_gas_parameter(custom)?;
                 validate_hijiri_parameters(custom, state_transaction)?;
                 validate_da_ingest_admission_policy(custom, state_transaction)?;
@@ -19149,6 +20784,92 @@ pub mod isi {
                                         )),
                                     )
                                 })?;
+                                if let Some(previous_custom) = state_transaction
+                                    .world
+                                    .parameters
+                                    .get()
+                                    .custom()
+                                    .get(next.id())
+                                {
+                                    let previous = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(previous_custom)
+                                        .ok_or_else(|| {
+                                            InstructionExecutionError::InvalidParameter(
+                                                InvalidParameterError::SmartContract(
+                                                    "installed signed NPoS parameters are invalid"
+                                                        .to_owned(),
+                                                ),
+                                            )
+                                        })?;
+                                    if npos.evidence_horizon_blocks
+                                        != previous.evidence_horizon_blocks
+                                    {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: {} -> {}",
+                                                previous.evidence_horizon_blocks,
+                                                npos.evidence_horizon_blocks,
+                                            )),
+                                        ));
+                                    }
+                                    if npos.slashing_delay_blocks != previous.slashing_delay_blocks {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: {} -> {}",
+                                                previous.slashing_delay_blocks,
+                                                npos.slashing_delay_blocks,
+                                            )),
+                                        ));
+                                    }
+                                    if npos.epoch_length_blocks != previous.epoch_length_blocks {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "SumeragiNposParameters.reconfig.epoch_length_blocks is immutable after installation: {} -> {}",
+                                                previous.epoch_length_blocks,
+                                                npos.epoch_length_blocks,
+                                            )),
+                                        ));
+                                    }
+                                }
+                            }
+                            if next.id()
+                                == &iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::parameter_id()
+                            {
+                                let staged = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
+                                    .ok_or_else(|| {
+                                        InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "invalid Kagemusha V1 next mint-finality roster parameter"
+                                                    .to_owned(),
+                                            ),
+                                        )
+                                    })?;
+                                if let Some(previous_custom) = state_transaction
+                                    .world
+                                    .parameters
+                                    .get()
+                                    .custom()
+                                    .get(next.id())
+                                {
+                                    let previous = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
+                                        .ok_or_else(|| {
+                                            InstructionExecutionError::InvalidParameter(
+                                                InvalidParameterError::SmartContract(
+                                                    "installed Kagemusha V1 next mint-finality roster parameter is invalid"
+                                                        .to_owned(),
+                                                ),
+                                            )
+                                        })?;
+                                    if staged.roster.network_id != previous.roster.network_id
+                                        || staged.roster.epoch < previous.roster.epoch
+                                    {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "Kagemusha V1 next mint-finality roster cannot change network or roll back its epoch"
+                                                    .to_owned(),
+                                            ),
+                                        ));
+                                    }
+                                }
                             }
                             let previous = {
                                 let params = state_transaction.world.parameters.get_mut();
@@ -19247,8 +20968,19 @@ pub mod isi {
     }
     #[cfg(test)]
     mod tests {
+        use super::{
+            TonBreakerPriorTransitionV1, canonical_parliament_eligible_candidates_with_limits_v1,
+            ensure_parliament_citizen_registry_capacity_with_limit_v1,
+            ton_breaker_anchor_matches_current_governance_v1,
+            ton_breaker_disabled_latch_transition_v1, ton_breaker_observation_allows_outbound_v1,
+        };
         use crate::{
-            governance::parliament::{ParliamentDecisionModeV1, RequiredParliamentBodyV1},
+            governance::{
+                parliament::{ParliamentDecisionModeV1, RequiredParliamentBodyV1},
+                timed_ovn::{
+                    TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+                },
+            },
             smartcontracts::triggers::set::SetReadOnly,
             state::StateBlock,
         };
@@ -19256,7 +20988,14 @@ pub mod isi {
         use iroha_config::parameters::actual::{
             LaneConfig as RuntimeLaneConfig, ParliamentTimedOvn,
         };
-        use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+        use iroha_crypto::{
+            Algorithm, Hash, KeyPair, Signature,
+            threshold_bls::{
+                AdaptiveThresholdBlsParameters, DasRenDealerSecret, ThresholdBlsSession,
+                TleReleasePurpose,
+            },
+            timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1},
+        };
         #[allow(unused_imports)]
         use iroha_data_model::{
             IntoKeyValue,
@@ -19265,23 +21004,20 @@ pub mod isi {
                 BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeReceipt,
                 BridgeTransparentProof, SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
                 SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
-                SccpOutboundProofRecordV1,
+                SccpReplayAccumulatorIdV1, SccpReplayForestV1,
             },
             confidential::ConfidentialStatus,
-            consensus::{
-                ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
-                HsmBinding,
-            },
-            events::data::{DataEvent, prelude::BridgeEvent},
+            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+            events::data::{DataEvent, governance::GovernanceEvent, prelude::BridgeEvent},
             governance::types::{
                 BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
                 BodyElectionAttemptStatusV1, ContractAbiHash, ContractCodeHash,
-                GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
-                GovernanceCertificateId, GovernanceCertificateV1, GovernanceExpectedHeadV1,
-                GovernanceStageV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-                ParliamentBody, ProposalContentId, ProposalKind, SortitionRequestV1,
-                TleKeySessionId, TleSessionId, parliament_candidate_root_v1,
-                parliament_execution_failure_root_v1,
+                DeactivateContractGovernanceActionV1, GovernanceAttemptId,
+                GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceCertificateId,
+                GovernanceCertificateV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+                ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBody,
+                ProposalContentId, ProposalKind, SortitionRequestV1, TleKeySessionId, TleSessionId,
+                parliament_candidate_root_v1, parliament_execution_failure_root_v1,
             },
             isi::{
                 Grant, Revoke, consensus_keys, error::AssetTransferAdmissionError,
@@ -19295,7 +21031,7 @@ pub mod isi {
                 LaneCatalog, LaneConfig, LaneId,
             },
             permission::Permission,
-            privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
+            privacy::PrivacyProtocolIdV1,
             proof::{
                 ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
             },
@@ -19327,6 +21063,7 @@ pub mod isi {
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
+        use rand::{SeedableRng as _, rngs::StdRng};
         use std::{
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
@@ -19336,6 +21073,188 @@ pub mod isi {
         const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-execution-v1";
         const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
+
+        #[test]
+        fn ton_breaker_account_conversion_binds_authenticated_transaction_coordinates() {
+            let (_, _, record) = crate::state::ton_breaker_hydration_fixture_for_testing();
+            let expected = record.route_account;
+            let native = iroha_sccp::TonAccountStateReadbackV1 {
+                address: expected.address,
+                shard_block_id: iroha_sccp::TonBlockIdExtV1 {
+                    workchain: expected.shard_block.workchain,
+                    shard: expected.shard_block.shard,
+                    seqno: expected.shard_block.seqno,
+                    root_hash: expected.shard_block.root_hash,
+                    file_hash: expected.shard_block.file_hash,
+                },
+                registered_masterchain_seqno: expected.registered_masterchain_seqno,
+                shard_state_root_hash: expected.shard_state_hash,
+                account_state_hash: expected.account_state_hash,
+                code_hash: expected.code_hash,
+                data_hash: expected.data_hash,
+                last_transaction_hash: expected.last_transaction_hash,
+                last_transaction_lt: expected.last_transaction_lt,
+                storage_last_transaction_lt: expected.storage_last_transaction_lt,
+            };
+            assert_eq!(ton_breaker_account_readback(native), expected);
+            for field in 0..3 {
+                let mut changed = record.clone();
+                match field {
+                    0 => changed.route_account.last_transaction_hash[0] ^= 1,
+                    1 => changed.route_account.last_transaction_lt -= 1,
+                    _ => changed.route_account.storage_last_transaction_lt += 1,
+                }
+                assert_ne!(changed.computed_digest(), record.observation_digest);
+            }
+        }
+
+        #[test]
+        fn ton_breaker_transition_enforces_full_cas_monotonicity_and_one_way_latch() {
+            assert_eq!(
+                ton_breaker_disabled_latch_transition_v1([0; 32], None, 1, 10, false),
+                Ok(false)
+            );
+            assert_eq!(
+                ton_breaker_disabled_latch_transition_v1([0; 32], None, 1, 10, true),
+                Ok(true)
+            );
+            assert!(ton_breaker_disabled_latch_transition_v1([1; 32], None, 1, 10, false).is_err());
+
+            let prior = TonBreakerPriorTransitionV1 {
+                observation_digest: [0x51; 32],
+                masterchain_seqno: 7,
+                masterchain_gen_utime: 100,
+                disabled_latched: false,
+            };
+            assert!(
+                ton_breaker_disabled_latch_transition_v1([0x52; 32], Some(prior), 8, 100, false)
+                    .is_err()
+            );
+            assert!(
+                ton_breaker_disabled_latch_transition_v1([0x51; 32], Some(prior), 7, 101, false)
+                    .is_err()
+            );
+            assert!(
+                ton_breaker_disabled_latch_transition_v1([0x51; 32], Some(prior), 6, 101, false)
+                    .is_err()
+            );
+            assert!(
+                ton_breaker_disabled_latch_transition_v1([0x51; 32], Some(prior), 8, 99, false)
+                    .is_err()
+            );
+            assert_eq!(
+                ton_breaker_disabled_latch_transition_v1([0x51; 32], Some(prior), 8, 100, false,),
+                Ok(false)
+            );
+            assert_eq!(
+                ton_breaker_disabled_latch_transition_v1([0x51; 32], Some(prior), 8, 100, true,),
+                Ok(true)
+            );
+            assert_eq!(
+                ton_breaker_disabled_latch_transition_v1(
+                    [0x51; 32],
+                    Some(TonBreakerPriorTransitionV1 {
+                        disabled_latched: true,
+                        ..prior
+                    }),
+                    8,
+                    101,
+                    false,
+                ),
+                Ok(true)
+            );
+        }
+
+        #[test]
+        fn ton_breaker_submission_anchor_requires_exact_current_checkpoint() {
+            use iroha_data_model::bridge::{
+                BridgeNativeProofBackendV1, SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1,
+            };
+
+            let lane_id = SccpLaneIdV1 {
+                source: SccpNetworkV1::TonMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            };
+            let anchor = SccpNativeTrustAnchorV1 {
+                backend: BridgeNativeProofBackendV1::TonMasterchain,
+                anchor_hash: [0x71; 32],
+                checkpoint_height: 40,
+            };
+            assert!(ton_breaker_anchor_matches_current_governance_v1(
+                lane_id, anchor, 40,
+            ));
+            assert!(!ton_breaker_anchor_matches_current_governance_v1(
+                lane_id, anchor, 39,
+            ));
+            assert!(!ton_breaker_anchor_matches_current_governance_v1(
+                lane_id, anchor, 41,
+            ));
+            assert!(!ton_breaker_anchor_matches_current_governance_v1(
+                SccpLaneIdV1 {
+                    source: SccpNetworkV1::BscMainnet,
+                    target: SccpNetworkV1::SoraTaira,
+                },
+                anchor,
+                40,
+            ));
+            assert!(!ton_breaker_anchor_matches_current_governance_v1(
+                lane_id,
+                SccpNativeTrustAnchorV1 {
+                    backend: BridgeNativeProofBackendV1::BscParlia,
+                    ..anchor
+                },
+                40,
+            ));
+        }
+
+        #[test]
+        fn ton_breaker_outbound_gate_fails_closed_for_missing_stale_and_latched_observations() {
+            let (_registry, route_key, mut record) =
+                crate::state::ton_breaker_hydration_fixture_for_testing();
+            let ton_time_ms = record.masterchain.gen_utime_ms();
+
+            assert_eq!(
+                ton_breaker_observation_allows_outbound_v1(&route_key, None, ton_time_ms),
+                Err(
+                    "TonMainnet outbound admission requires a proof-authenticated breaker observation"
+                )
+            );
+            assert_eq!(
+                ton_breaker_observation_allows_outbound_v1(&route_key, Some(&record), ton_time_ms,),
+                Ok(())
+            );
+
+            let too_old = ton_time_ms
+                .checked_add(iroha_data_model::bridge::SCCP_TON_BREAKER_MAX_AGE_MS_V1 + 1)
+                .expect("fixture time leaves room for the stale boundary");
+            assert_eq!(
+                ton_breaker_observation_allows_outbound_v1(&route_key, Some(&record), too_old,),
+                Err("TonMainnet breaker observation is stale at the consensus block time")
+            );
+            let too_far_in_future = ton_time_ms
+                .checked_sub(iroha_data_model::bridge::SCCP_TON_BREAKER_MAX_FUTURE_SKEW_MS_V1 + 1)
+                .expect("fixture time exceeds the future-skew boundary");
+            assert_eq!(
+                ton_breaker_observation_allows_outbound_v1(
+                    &route_key,
+                    Some(&record),
+                    too_far_in_future,
+                ),
+                Err("TonMainnet breaker observation is stale at the consensus block time")
+            );
+
+            record.route_storage.minting_disabled = true;
+            record.effective_disabled = true;
+            record.disabled_latched = true;
+            record.observation_digest = record.computed_digest();
+            assert!(record.is_well_formed());
+            assert_eq!(
+                ton_breaker_observation_allows_outbound_v1(&route_key, Some(&record), ton_time_ms,),
+                Err(
+                    "TonMainnet outbound admission is permanently disabled for this route revision"
+                )
+            );
+        }
 
         #[test]
         fn proposal_status_mirrors_every_parliament_attempt_outcome() {
@@ -19386,12 +21305,32 @@ pub mod isi {
                 .expect_err("an ordinary account must not create a Parliament attempt");
             assert!(format!("{unauthorized_create:?}").contains("CanManageParliament"));
 
+            let governance_attempt_id =
+                iroha_data_model::governance::types::GovernanceAttemptId::new([0x91; 32]);
+            let body = ParliamentBody::RulesCommittee;
+            let body_election_attempt_id =
+                BodyElectionAttemptId::derive_v1(governance_attempt_id, body, 0);
+            let request = SortitionRequestV1::try_new_canonical(
+                governance_attempt_id,
+                body_election_attempt_id,
+                body,
+                [0x92; 32],
+                1,
+                1,
+                1,
+                2,
+                BeaconSessionId::new([0x93; 32]),
+                None,
+            )
+            .expect("valid unknown-attempt sortition fixture");
             let instruction = gov::SubmitParliamentLifecycleTransitionV1 {
-                governance_attempt_id:
-                    iroha_data_model::governance::types::GovernanceAttemptId::new([0x91; 32]),
+                governance_attempt_id,
                 transition: gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
                     gov::ParliamentRegisterSortitionRequestV1 {
-                        requests: Vec::new(),
+                        requests: vec![gov::ParliamentSortitionRequestRegistrationV1 {
+                            sequence: 0,
+                            request,
+                        }],
                     },
                 ),
             };
@@ -19443,12 +21382,6 @@ pub mod isi {
                             owner: candidate,
                             amount: Quantity::zero(),
                             bonded_height: 0,
-                            seats_in_epoch: 0,
-                            last_epoch_seen: 0,
-                            cooldown_until: 0,
-                            declines_used: 0,
-                            no_show_strikes: 0,
-                            misconduct_strikes: 0,
                         },
                     );
                 }
@@ -19492,7 +21425,8 @@ pub mod isi {
                     .put_parliament_attempt(attempt)
                     .expect("store capacity fixture attempt");
 
-                let candidates = canonical_parliament_eligible_candidates_v1(&state_transaction);
+                let candidates = canonical_parliament_eligible_candidates_v1(&state_transaction)
+                    .expect("capacity fixture candidate snapshot fits V1 resource bounds");
                 assert_eq!(
                     u32::try_from(candidates.len()).expect("candidate count fits u32"),
                     candidate_count
@@ -19581,10 +21515,11 @@ pub mod isi {
                 Kind::BeginInvitationAcceptance,
                 Kind::FailBodyElectionNoRoster,
                 Kind::SealBodyRoster,
+                Kind::FreezeTimedOvnCorpus,
             ] {
                 assert!(
                     !parliament_transition_requires_manager_v1(kind),
-                    "objective election progress must not depend on manager liveness: {kind:?}"
+                    "objective Parliament progress must not depend on manager liveness: {kind:?}"
                 );
             }
             for kind in [
@@ -19593,7 +21528,6 @@ pub mod isi {
                 Kind::RegisterSortitionRequest,
                 Kind::AdvanceBodyPhase,
                 Kind::RegisterBallotAttempt,
-                Kind::FreezeTimedOvnCorpus,
             ] {
                 assert!(
                     parliament_transition_requires_manager_v1(kind),
@@ -19603,7 +21537,42 @@ pub mod isi {
         }
 
         #[test]
-        fn parliament_attempt_creation_defends_exact_json_proposal_bounds() {
+        fn contract_lifecycle_proposal_rejects_mismatched_bound_operator() {
+            let state = blank_test_state();
+            let header = first_test_block_header();
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let proposal = gov::ProposeContractLifecycleGovernance {
+                proposal: ContractLifecycleGovernanceProposalV1 {
+                    proposal_operator: BOB_ID.clone(),
+                    contract_address:
+                        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                            .parse()
+                            .expect("contract address"),
+                    expected_revision: 1,
+                    action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+                },
+            };
+
+            let error = proposal
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("transaction authority cannot forge the bound proposal operator");
+            assert!(
+                format!("{error:?}").contains("operator must equal transaction authority"),
+                "unexpected operator-mismatch error: {error:?}"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn parliament_attempt_creation_defends_retry_and_exact_json_bounds() {
             let state = blank_test_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
@@ -19615,6 +21584,7 @@ pub mod isi {
 
             let canonical = ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: ALICE_ID.clone(),
                     contract_address:
                         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                             .parse()
@@ -19655,7 +21625,16 @@ pub mod isi {
                     .get(&attempt_id)
                     .is_some()
             );
-
+            let skipped_predecessor_error = gov::CreateParliamentGovernanceAttemptV1 {
+                proposal: canonical.clone(),
+                attempt_sequence: 2,
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a retry must resolve its exact canonical predecessor directly");
+            assert!(
+                format!("{skipped_predecessor_error:?}").contains("requires exact predecessor 1"),
+                "unexpected missing-predecessor rejection: {skipped_predecessor_error:?}"
+            );
             let retry_limit_error = gov::CreateParliamentGovernanceAttemptV1 {
                 proposal: canonical,
                 attempt_sequence: MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1,
@@ -19670,6 +21649,7 @@ pub mod isi {
             let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
             let hostile = ProposalKind::RuntimeUpgrade(
                 iroha_data_model::governance::types::RuntimeUpgradeProposal {
+                    proposal_operator: ALICE_ID.clone(),
                     manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
                         name: "hostile".to_owned(),
                         description: "inexact height".to_owned(),
@@ -19698,7 +21678,7 @@ pub mod isi {
         }
 
         #[test]
-        fn parliament_proof_heavy_ballot_corpus_requires_manager_before_validation() {
+        fn parliament_proof_heavy_ballot_corpus_is_permissionless_but_shape_checked() {
             let state = blank_test_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
@@ -19715,23 +21695,14 @@ pub mod isi {
                 ),
             };
 
-            let unauthorized = instruction
-                .clone()
-                .execute(&ALICE_ID, &mut state_transaction)
-                .expect_err("an ordinary account must not submit the proof-heavy corpus");
-            assert!(format!("{unauthorized:?}").contains("CanManageParliament"));
-
-            state_transaction.world.account_permissions.insert(
-                ALICE_ID.clone(),
-                BTreeSet::from([Permission::from(CanManageParliament)]),
-            );
             let validation_error = instruction
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("the fixture intentionally names an unknown attempt");
             assert!(
                 format!("{validation_error:?}").contains("unknown Parliament governance attempt"),
-                "an authorized manager must reach deterministic corpus validation: {validation_error:?}"
+                "a non-manager relayer must reach deterministic corpus validation: {validation_error:?}"
             );
+            assert!(!format!("{validation_error:?}").contains("CanManageParliament"));
 
             let oversized = gov::SubmitParliamentLifecycleTransitionV1 {
                 governance_attempt_id:
@@ -19752,9 +21723,169 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("a 33-record timed-OVN chunk must fail before state lookup");
             assert!(
-                format!("{oversized_error:?}").contains("chunk is oversized"),
+                format!("{oversized_error:?}").contains("count or record-width bound"),
                 "unexpected oversized-chunk rejection: {oversized_error:?}"
             );
+        }
+
+        #[test]
+        fn parliament_non_manager_can_append_the_exact_next_timed_ovn_chunks() {
+            use iroha_data_model::governance::types::BallotAttemptStatusV1;
+
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(38).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_corpus_fixture(&mut state_transaction);
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                    gov::ParliamentFreezeTimedOvnCorpusV1 {
+                        ballot_attempt_id: fixture.ballot_attempt_id,
+                        ballot_records: vec![fixture.ballot_records[0].clone()],
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may append the exact first proof-valid corpus chunk");
+            let corpus_open = state_transaction
+                .world
+                .timed_ovn_evidence
+                .get(&fixture.ballot_attempt_id)
+                .expect("permissionless first chunk persists");
+            assert!(matches!(
+                corpus_open,
+                TimedOvnLifecycleStateV1::CorpusOpen(_)
+            ));
+            assert_eq!(corpus_open.accepted_ballot_prefix_count(), Some(1));
+            assert_eq!(
+                state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("permissionless corpus attempt remains")
+                    .ballot(&fixture.ballot_attempt_id)
+                    .expect("permissionless corpus ballot remains")
+                    .attempt()
+                    .status,
+                BallotAttemptStatusV1::TimedCommitment,
+                "a nonterminal chunk cannot prematurely seal the reducer corpus"
+            );
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                    gov::ParliamentFreezeTimedOvnCorpusV1 {
+                        ballot_attempt_id: fixture.ballot_attempt_id,
+                        ballot_records: fixture.ballot_records[1..].to_vec(),
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may append the exact remaining proof-valid corpus chunk");
+            let sealed = state_transaction
+                .world
+                .timed_ovn_evidence
+                .get(&fixture.ballot_attempt_id)
+                .expect("permissionless terminal chunk persists");
+            assert!(matches!(sealed, TimedOvnLifecycleStateV1::Sealed(_)));
+            assert_eq!(sealed.accepted_ballot_prefix_count(), Some(3));
+            let ballot = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .expect("sealed permissionless corpus attempt")
+                .ballot(&fixture.ballot_attempt_id)
+                .expect("sealed permissionless corpus ballot");
+            assert_eq!(
+                ballot.attempt().status,
+                BallotAttemptStatusV1::AwaitingRelease
+            );
+            assert_eq!(ballot.accepted_ballots(), Some(3));
+            assert!(ballot.corpus_root().is_some());
+        }
+
+        #[test]
+        fn parliament_permissionless_timed_ovn_chunk_rejects_shape_order_and_proof_tampering() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(38).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_corpus_fixture(&mut state_transaction);
+            let original_lifecycle = state_transaction
+                .world
+                .timed_ovn_evidence
+                .get(&fixture.ballot_attempt_id)
+                .cloned()
+                .expect("original survivor-frozen lifecycle");
+            let original_attempt = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .cloned()
+                .expect("original permissionless corpus attempt");
+
+            let mut malformed = fixture.ballot_records[0].clone();
+            malformed.pop();
+            let mut invalid_proof = fixture.ballot_records[0].clone();
+            *invalid_proof
+                .last_mut()
+                .expect("fixed-width ballot has a final proof byte") ^= 1;
+            for (description, ballot_records, expected_error) in [
+                (
+                    "wrong-width record",
+                    vec![malformed],
+                    "timed-OVN ballot chunk violates its count or record-width bound",
+                ),
+                (
+                    "out-of-order proof-valid record",
+                    vec![fixture.ballot_records[1].clone()],
+                    "timed-OVN transcript binding mismatch",
+                ),
+                (
+                    "tampered one-hot proof",
+                    vec![invalid_proof],
+                    "timed-OVN ballot one-hot proof failed",
+                ),
+            ] {
+                let error = gov::SubmitParliamentLifecycleTransitionV1 {
+                    governance_attempt_id: fixture.governance_attempt_id,
+                    transition: gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                        gov::ParliamentFreezeTimedOvnCorpusV1 {
+                            ballot_attempt_id: fixture.ballot_attempt_id,
+                            ballot_records,
+                        },
+                    ),
+                }
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err(description);
+                let rendered = format!("{error:?}");
+                assert!(
+                    rendered.contains(expected_error),
+                    "unexpected {description} rejection: {rendered}"
+                );
+                assert!(
+                    !rendered.contains("CanManageParliament"),
+                    "cryptographic corpus rejection must not be an authority failure: {rendered}"
+                );
+                assert_eq!(
+                    state_transaction
+                        .world
+                        .timed_ovn_evidence
+                        .get(&fixture.ballot_attempt_id),
+                    Some(&original_lifecycle),
+                    "rejected {description} must not advance the authoritative corpus"
+                );
+                assert_eq!(
+                    state_transaction
+                        .world
+                        .parliament_attempts
+                        .get(&fixture.governance_attempt_id),
+                    Some(&original_attempt),
+                    "rejected {description} must not mutate the Parliament reducer"
+                );
+            }
         }
 
         #[test]
@@ -19819,10 +21950,13 @@ pub mod isi {
                 .world
                 .global_beacon_pulses
                 .insert(pulse.pulse_id, pulse);
-            state_transaction
-                .world
-                .global_beacon_pulse_slots
-                .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+            state_transaction.world.global_beacon_pulse_slots.insert(
+                (
+                    BeaconSessionId::for_network_v1(&pulse.network_id),
+                    pulse.height,
+                ),
+                pulse.pulse_id,
+            );
             let logical_session =
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
                     &state_transaction.network_id,
@@ -19906,6 +22040,88 @@ pub mod isi {
                 parliament_certificate_enactment_height_v1(current_height, delay)
                     .expect_err("a zero-delay or overflowing enactment height must fail");
             }
+        }
+
+        #[test]
+        fn parliament_candidate_snapshot_derivation_has_preallocation_resource_bounds() {
+            assert!(
+                ensure_parliament_citizen_registry_capacity_with_limit_v1(2, true, 2).is_ok(),
+                "an existing citizen may top up at the cardinality ceiling"
+            );
+            let capacity_error =
+                ensure_parliament_citizen_registry_capacity_with_limit_v1(2, false, 2)
+                    .expect_err("a new citizen must not exceed the registry ceiling");
+            assert!(
+                format!("{capacity_error:?}").contains("citizen registry reached"),
+                "unexpected capacity error: {capacity_error:?}"
+            );
+
+            let state = blank_test_state();
+            let header = first_test_block_header();
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            let mut expected = vec![
+                parliament_test_account(0xD3),
+                parliament_test_account(0xD1),
+                parliament_test_account(0xD2),
+            ];
+            for candidate in &expected {
+                state_transaction.world.citizens.insert(
+                    candidate.clone(),
+                    crate::state::CitizenshipRecord {
+                        owner: candidate.clone(),
+                        amount: Quantity::zero(),
+                        bonded_height: 1,
+                    },
+                );
+            }
+
+            let registry_error = canonical_parliament_eligible_candidates_with_limits_v1(
+                &state_transaction,
+                2,
+                usize::MAX,
+            )
+            .expect_err("the registry count must be checked before candidate collection");
+            assert!(
+                format!("{registry_error:?}").contains("citizen registry exceeds"),
+                "unexpected registry-bound error: {registry_error:?}"
+            );
+
+            let byte_error = canonical_parliament_eligible_candidates_with_limits_v1(
+                &state_transaction,
+                3,
+                norito::core::seq_len_prefix_len(0),
+            )
+            .expect_err("the first candidate must exceed an empty-sequence-only byte budget");
+            assert!(
+                format!("{byte_error:?}").contains("snapshot exceeds"),
+                "unexpected snapshot-bound error: {byte_error:?}"
+            );
+
+            expected.sort_unstable();
+            let exact_snapshot_bytes = norito::core::encoded_payload_len(&expected)
+                .expect("measure the canonical candidate snapshot payload");
+            assert_eq!(
+                canonical_parliament_eligible_candidates_with_limits_v1(
+                    &state_transaction,
+                    3,
+                    exact_snapshot_bytes,
+                )
+                .expect("bounded complete candidate snapshot"),
+                expected,
+                "resource admission must preserve the complete canonical electorate"
+            );
+            let exact_byte_error = canonical_parliament_eligible_candidates_with_limits_v1(
+                &state_transaction,
+                3,
+                exact_snapshot_bytes - 1,
+            )
+            .expect_err("the canonical byte cap must be exact");
+            assert!(
+                format!("{exact_byte_error:?}").contains("snapshot exceeds"),
+                "unexpected exact byte-bound error: {exact_byte_error:?}"
+            );
         }
 
         #[test]
@@ -20056,7 +22272,7 @@ pub mod isi {
             };
             let action = bridge::SccpRouteGovernanceActionV1::AdvanceTrustAnchor(
                 bridge::SccpAdvanceLaneTrustAnchorV1 {
-                    lane_id: native.message_key.lane,
+                    lane_id: native.lane,
                     expected_current: current,
                     next,
                 },
@@ -20145,7 +22361,7 @@ pub mod isi {
             assert_eq!(
                 state_transaction
                     .sccp_registry
-                    .lane(native.message_key.lane)
+                    .lane(native.lane)
                     .expect("governed lane remains present")
                     .current_native_trust_anchor(),
                 Some(next)
@@ -20188,7 +22404,7 @@ pub mod isi {
             requirements: &[RequiredParliamentBodyV1],
         ) -> iroha_config::parameters::actual::Governance {
             let mut governance = iroha_config::parameters::actual::Governance {
-                parliament_alternate_size: Some(0),
+                parliament_alternate_size: 0,
                 ..iroha_config::parameters::actual::Governance::default()
             };
             for requirement in requirements {
@@ -20215,6 +22431,7 @@ pub mod isi {
         fn parliament_permissionless_progress_proposal() -> ProposalKind {
             ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: ALICE_ID.clone(),
                     contract_address:
                         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                             .parse()
@@ -20332,10 +22549,13 @@ pub mod isi {
                     .world
                     .global_beacon_pulses
                     .insert(pulse.pulse_id, pulse);
-                state_transaction
-                    .world
-                    .global_beacon_pulse_slots
-                    .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+                state_transaction.world.global_beacon_pulse_slots.insert(
+                    (
+                        BeaconSessionId::for_network_v1(&pulse.network_id),
+                        pulse.height,
+                    ),
+                    pulse.pulse_id,
+                );
                 BeaconPulseId::new(pulse.pulse_id)
             } else {
                 let pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
@@ -20423,6 +22643,276 @@ pub mod isi {
                 beacon_session_id,
                 pulse_height: PULSE_HEIGHT,
                 pulse_id,
+            }
+        }
+
+        struct ParliamentPermissionlessCorpusFixture {
+            governance_attempt_id: GovernanceAttemptId,
+            ballot_attempt_id: BallotAttemptId,
+            ballot_records: Vec<Vec<u8>>,
+        }
+
+        fn seed_parliament_permissionless_corpus_fixture(
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> ParliamentPermissionlessCorpusFixture {
+            use iroha_data_model::governance::types::DeliberationPhaseV1;
+
+            let progress = seed_parliament_permissionless_progress_fixture(
+                state_transaction,
+                ParliamentPermissionlessProgressPhase::Drawing,
+            );
+            let governance_attempt_id = progress.governance_attempt_id;
+            let mut attempt = state_transaction
+                .world
+                .parliament_attempts
+                .get(&governance_attempt_id)
+                .cloned()
+                .expect("permissionless corpus fixture attempt");
+            let requirements = attempt.required_bodies().to_vec();
+            let (policy_requirement, public_requirements) = requirements
+                .split_last()
+                .expect("canonical Parliament pipeline is nonempty");
+            assert_eq!(policy_requirement.body, ParliamentBody::PolicyJury);
+            assert_eq!(
+                policy_requirement.decision_mode,
+                ParliamentDecisionModeV1::HiddenBindingBallot
+            );
+            for (index, requirement) in public_requirements.iter().copied().enumerate() {
+                let election_attempt_id =
+                    BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
+                complete_parliament_body_for_due_certificate(
+                    &mut attempt,
+                    requirement,
+                    election_attempt_id,
+                    0x40_u8.wrapping_add(u8::try_from(index).expect("small body index")),
+                );
+            }
+
+            let policy_election_id =
+                BodyElectionAttemptId::derive_v1(governance_attempt_id, policy_requirement.body, 0);
+            attempt
+                .begin_invitation_acceptance(governance_attempt_id, policy_election_id, 20, 1)
+                .expect("open Policy Jury invitation window");
+            let policy_members = attempt
+                .election(&policy_election_id)
+                .expect("drawn Policy Jury election")
+                .primary_assignments()
+                .iter()
+                .map(|assignment| assignment.member.clone())
+                .collect::<Vec<_>>();
+            for member in &policy_members {
+                attempt
+                    .record_invitation_response(
+                        governance_attempt_id,
+                        policy_election_id,
+                        member,
+                        true,
+                        20,
+                    )
+                    .expect("accept Policy Jury invitation");
+            }
+            let body_instance_id = attempt
+                .seal_body_roster(governance_attempt_id, policy_election_id, 21)
+                .expect("seal Policy Jury roster");
+            for phase in [
+                DeliberationPhaseV1::Orientation,
+                DeliberationPhaseV1::Evidence,
+                DeliberationPhaseV1::Questions,
+                DeliberationPhaseV1::Responses,
+                DeliberationPhaseV1::Deliberation,
+                DeliberationPhaseV1::Reflection,
+                DeliberationPhaseV1::Vote,
+            ] {
+                attempt
+                    .advance_body_phase(governance_attempt_id, body_instance_id, phase, 22, 10)
+                    .expect("advance Policy Jury to its private ballot");
+            }
+
+            let ordered_tle_roster = (0_u8..4)
+                .map(|index| {
+                    let keypair = KeyPair::from_seed(
+                        vec![0xD8_u8.wrapping_add(index); 32],
+                        Algorithm::Ed25519,
+                    );
+                    iroha_data_model::peer::PeerId::new(keypair.public_key().clone())
+                })
+                .collect::<Vec<_>>();
+            let threshold_session = ThresholdBlsSession::<TleReleasePurpose>::new(
+                *state_transaction.network_id.as_bytes(),
+                parliament_test_root(0xD1),
+                crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_tle_roster),
+                4,
+                2,
+            )
+            .expect("permissionless corpus threshold session");
+            let parameters = AdaptiveThresholdBlsParameters::derive(&threshold_session)
+                .expect("permissionless corpus threshold parameters");
+            let mut rng = StdRng::from_seed([0xDB; 32]);
+            let dealers = (1_u16..=3)
+                .map(|index| {
+                    DasRenDealerSecret::generate_with_rng(&parameters, index, &mut rng)
+                        .expect("permissionless corpus TLE dealer")
+                        .1
+                })
+                .collect::<Vec<_>>();
+            let tle_key = crate::tle_release::ValidatedTleKeySessionV1::from_qualified_dealers(
+                threshold_session,
+                &dealers,
+                &[1, 2, 3],
+                parliament_test_root(0xDC),
+            )
+            .expect("permissionless corpus TLE key");
+            let tle_key_session_id = tle_key.public_state().key_session_id;
+            state_transaction
+                .world
+                .put_tle_key_session(tle_key.public_state().clone(), ordered_tle_roster)
+                .expect("persist permissionless corpus TLE key");
+
+            let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
+            let release_beacon_session_id = BeaconSessionId::new(parliament_test_root(0xD0));
+            let release_height = 42;
+            let tle_session_id = TleSessionId::derive_v1(
+                ballot_attempt_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                release_height,
+            );
+            attempt
+                .register_ballot_attempt(
+                    governance_attempt_id,
+                    body_instance_id,
+                    ballot_attempt_id,
+                    0,
+                    tle_session_id,
+                    tle_key_session_id,
+                    release_beacon_session_id,
+                    30,
+                    ParliamentTimedOvn {
+                        registration_phase_blocks: 4,
+                        survivor_freeze_phase_blocks: 3,
+                        commitment_phase_blocks: 1,
+                        release_delay_blocks: 4,
+                        opening_phase_blocks: 2,
+                        max_ballot_retries: 2,
+                        max_corpus_entries: 3,
+                    },
+                    release_height,
+                )
+                .expect("register permissionless corpus ballot");
+            let session = TimedOvnSessionPublicV1 {
+                network_id: *state_transaction.network_id.as_bytes(),
+                proposal_content_id: *attempt.proposal_content_id().as_bytes(),
+                governance_attempt_id: *governance_attempt_id.as_bytes(),
+                body_instance_id: *body_instance_id.as_bytes(),
+                ballot_attempt_id: *ballot_attempt_id.as_bytes(),
+                parameter_hash: timed_ovn_parameter_hash_v1(),
+                tle_key_session_id,
+                tle_key_transcript_hash: tle_key.public_state().transcript_hash,
+                tle_master_public_key: *tle_key.master_public_key().as_bytes(),
+            };
+            let crypto_session = session
+                .rebuild(&tle_key)
+                .expect("rebuild permissionless corpus timed-OVN session");
+            let mut registrations = policy_members
+                .iter()
+                .map(|member| {
+                    let participant_hash =
+                        parliament_ballot_participant_hash_v1(ballot_attempt_id, member);
+                    let (secret, registration) = TimedOvnRegistrationSecretV1::generate_with_rng(
+                        &crypto_session,
+                        participant_hash,
+                        &mut rng,
+                    )
+                    .expect("generate permissionless corpus registration");
+                    (participant_hash, secret, registration.to_bytes())
+                })
+                .collect::<Vec<_>>();
+            registrations.sort_unstable_by_key(|(participant_hash, _, _)| *participant_hash);
+            let mut lifecycle =
+                TimedOvnLifecycleStateV1::open_registration(session, 30, release_height, &tle_key)
+                    .expect("open permissionless corpus registration");
+            for (participant_hash, _, registration) in &registrations {
+                lifecycle = lifecycle
+                    .register_participant(*participant_hash, registration.clone(), &tle_key)
+                    .expect("register permissionless corpus participant");
+            }
+            lifecycle = lifecycle
+                .close_registration(&tle_key)
+                .expect("close permissionless corpus registration");
+            let (registration_binding, _) = lifecycle
+                .validated_parliament_reducer_binding(&tle_key)
+                .expect("derive permissionless corpus registration binding");
+            attempt
+                .close_ballot_registration(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    registration_binding
+                        .registration_root
+                        .expect("registration root"),
+                    registration_binding
+                        .registered_voters
+                        .expect("registered voter count"),
+                    34,
+                )
+                .expect("close permissionless corpus reducer registration");
+            lifecycle = lifecycle
+                .freeze_survivors(&tle_key)
+                .expect("freeze permissionless corpus survivors");
+            let (survivor_binding, _) = lifecycle
+                .validated_parliament_reducer_binding(&tle_key)
+                .expect("derive permissionless corpus survivor binding");
+            attempt
+                .freeze_ballot_survivors(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    survivor_binding.dropout_root.expect("dropout root"),
+                    survivor_binding.survivor_root.expect("survivor root"),
+                    survivor_binding.survivors.expect("survivor count"),
+                    survivor_binding.no_recovery_root.expect("no-recovery root"),
+                    37,
+                )
+                .expect("freeze permissionless corpus reducer survivors");
+            let TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) = &lifecycle else {
+                unreachable!("survivor freeze returns the frozen phase")
+            };
+            let prepared = frozen
+                .validate(&tle_key)
+                .expect("validate permissionless corpus survivor roster");
+            let choices = [
+                TimedOvnChoiceV1::Aye,
+                TimedOvnChoiceV1::Nay,
+                TimedOvnChoiceV1::Abstain,
+            ];
+            let ballot_records = registrations
+                .iter()
+                .zip(choices)
+                .map(|((_, secret, _), choice)| {
+                    secret
+                        .cast_ballot_with_rng(prepared.survivor_roster(), choice, &mut rng)
+                        .expect("cast permissionless corpus ballot")
+                        .to_bytes()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ballot_records.len(), policy_members.len());
+
+            state_transaction
+                .world
+                .put_parliament_attempt(attempt)
+                .expect("persist permissionless corpus attempt");
+            state_transaction
+                .world
+                .timed_ovn_evidence
+                .insert(ballot_attempt_id, lifecycle);
+            let manager_permission: Permission = CanManageParliament.into();
+            assert!(
+                !has_exact_permission(&state_transaction.world, &ALICE_ID, &manager_permission,),
+                "permissionless corpus fixture must not grant manager authority"
+            );
+
+            ParliamentPermissionlessCorpusFixture {
+                governance_attempt_id,
+                ballot_attempt_id,
+                ballot_records,
             }
         }
 
@@ -20734,7 +23224,7 @@ pub mod isi {
             requirement: RequiredParliamentBodyV1,
             election_attempt_id: BodyElectionAttemptId,
             result_tag: u8,
-        ) {
+        ) -> u64 {
             let governance_attempt_id = attempt.attempt().id;
             attempt
                 .begin_invitation_acceptance(governance_attempt_id, election_attempt_id, 20, 1)
@@ -20904,6 +23394,10 @@ pub mod isi {
                     assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
                 }
             }
+            attempt
+                .body(&body_instance_id)
+                .and_then(|body| body.result_height())
+                .expect("completed due-certificate body result height")
         }
 
         fn seed_due_parliament_certificate(
@@ -20990,8 +23484,9 @@ pub mod isi {
                 )
                 .expect("consume deterministic simultaneous Parliament draw");
 
+            let mut certified_at_height = 0;
             for (index, requirement) in requirements.iter().copied().enumerate() {
-                complete_parliament_body_for_due_certificate(
+                let result_height = complete_parliament_body_for_due_certificate(
                     &mut attempt,
                     requirement,
                     BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0),
@@ -20999,12 +23494,13 @@ pub mod isi {
                         .checked_add(u8::try_from(index).expect("fixture body index fits u8"))
                         .expect("fixture result tag does not overflow"),
                 );
+                certified_at_height = certified_at_height.max(result_height);
             }
             assert_eq!(attempt.attempt().stage, GovernanceStageV1::Certification);
             let certificate = attempt
                 .construct_certificate(
                     governance_attempt_id,
-                    PARLIAMENT_DUE_CERTIFICATE_HEIGHT - 1,
+                    certified_at_height,
                     PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
                 )
                 .expect("construct complete exact-due Parliament certificate");
@@ -21042,7 +23538,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> ActiveSccpGovernanceFixture {
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
-            let lane_id = native.message_key.lane;
+            let lane_id = native.lane;
             let route_key = registry
                 .lane(lane_id)
                 .expect("active SCCP fixture lane")
@@ -21200,6 +23696,838 @@ pub mod isi {
                 &execution,
                 &fixture,
                 gov::ParliamentAutomaticExecutionOutcomeV1::Enacted,
+            );
+        }
+
+        #[test]
+        fn parliament_due_certificate_grants_and_revokes_exact_global_trigger_permission() {
+            fn run(action: GlobalDataTriggerPermissionGovernanceActionV1, initially_granted: bool) {
+                let state = blank_test_state();
+                let block = new_dummy_block_at_height(
+                    NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT)
+                        .expect("due height is nonzero"),
+                );
+                let mut state_block = state.block(block.as_ref().header());
+                let permission = Permission::from(CanRegisterGlobalDataTrigger {
+                    authority: ALICE_ID.clone(),
+                });
+                let fixture = {
+                    let mut seed = state_block.transaction();
+                    Register::account(Account::new(ALICE_ID.clone()))
+                        .execute(&ALICE_ID, &mut seed)
+                        .expect("seed exact permission target");
+                    if initially_granted {
+                        seed.world
+                            .add_account_permission(&ALICE_ID, permission.clone());
+                    }
+                    let fixture = seed_due_parliament_certificate(
+                        &mut seed,
+                        ProposalKind::GlobalDataTriggerPermissionGovernance(
+                            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                                authority: ALICE_ID.clone(),
+                                action,
+                            },
+                        ),
+                    );
+                    seed.apply();
+                    fixture
+                };
+
+                let mut execution = state_block.transaction();
+                assert_eq!(
+                    execute_due_parliament_certificate_v1(
+                        fixture.governance_attempt_id,
+                        &mut execution,
+                    )
+                    .expect("execute certified exact-account permission transition"),
+                    DueParliamentCertificateExecutionV1::Applied
+                );
+                let is_granted = execution
+                    .world
+                    .account_permissions
+                    .get(&ALICE_ID)
+                    .is_some_and(|permissions| permissions.contains(&permission));
+                assert_eq!(
+                    is_granted,
+                    action == GlobalDataTriggerPermissionGovernanceActionV1::Grant
+                );
+                let permission_event = execution.world.internal_event_buf.iter().any(|event| {
+                    matches!(
+                        event.as_ref(),
+                        DataEvent::Account(AccountEvent::PermissionAdded(change))
+                            | DataEvent::Account(AccountEvent::PermissionRemoved(change))
+                            if change.account == *ALICE_ID && change.permission == permission
+                    )
+                });
+                assert!(
+                    permission_event,
+                    "certified transition must emit an account event"
+                );
+            }
+
+            run(GlobalDataTriggerPermissionGovernanceActionV1::Grant, false);
+            run(GlobalDataTriggerPermissionGovernanceActionV1::Revoke, true);
+        }
+
+        #[test]
+        fn parliament_due_certificate_completes_contract_ownership_transfer_to_account() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer");
+                Register::account(Account::new(BOB_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposed owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    81,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive governed contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed contract subject");
+                seed.world.contract_subject_bindings.insert(
+                    contract_address.clone(),
+                    crate::smartcontracts::code::ContractSubjectBinding::new_parliament(
+                        &contract_address,
+                        ALICE_ID.clone(),
+                        [0x81; 32],
+                        [0x82; 32],
+                    ),
+                );
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
+                            contract_address: contract_address.clone(),
+                            expected_revision: 1,
+                            action: ContractLifecycleGovernanceActionV1::OfferOwnership(
+                                iroha_data_model::governance::types::OfferContractOwnershipGovernanceActionV1 {
+                                    new_owner: BOB_ID.clone(),
+                                },
+                            ),
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute certified ownership offer"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("governed lifecycle binding")
+                .lifecycle;
+            assert_eq!(lifecycle.revision, 2);
+            assert_eq!(
+                lifecycle.pending_owner,
+                Some(
+                    iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                        BOB_ID.clone()
+                    )
+                )
+            );
+            assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            let offered_lifecycle = lifecycle.clone();
+            assert_eq!(
+                execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("governed proposal")
+                    .status,
+                crate::state::GovernanceProposalStatus::Enacted
+            );
+            let event = execution
+                .world
+                .internal_event_buf
+                .iter()
+                .find_map(|event| match event.as_ref() {
+                    DataEvent::SmartContract(SmartContractEvent::OwnershipTransferOffered(
+                        event,
+                    )) if event.contract_address == contract_address => Some(event),
+                    _ => None,
+                })
+                .expect("certified ownership event");
+            assert_eq!(event.revision, 2);
+            assert_eq!(event.lifecycle, offered_lifecycle);
+
+            let stale = scode::AcceptContractOwnership {
+                contract_address: contract_address.clone(),
+                expected_revision: 1,
+            }
+            .execute(&BOB_ID, &mut execution)
+            .expect_err("stale account acceptance must fail closed");
+            assert!(
+                matches!(
+                    &stale,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("stale contract lifecycle revision")
+                ),
+                "unexpected stale ownership-acceptance error: {stale:?}"
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("stale acceptance preserves lifecycle binding")
+                    .lifecycle,
+                offered_lifecycle
+            );
+
+            scode::AcceptContractOwnership {
+                contract_address: contract_address.clone(),
+                expected_revision: 2,
+            }
+            .execute(&BOB_ID, &mut execution)
+            .expect("pending account completes Parliament ownership transfer");
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("transferred lifecycle binding")
+                .lifecycle;
+            assert_eq!(
+                lifecycle.owner,
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(BOB_ID.clone())
+            );
+            assert_eq!(lifecycle.revision, 3);
+            assert!(lifecycle.pending_owner.is_none());
+            assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            let stale_replay = scode::AcceptContractOwnership {
+                contract_address,
+                expected_revision: 2,
+            }
+            .execute(&BOB_ID, &mut execution)
+            .expect_err("accepted ownership transfer cannot replay at the consumed revision");
+            assert!(
+                matches!(
+                    &stale_replay,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("stale contract lifecycle revision")
+                ),
+                "unexpected ownership-acceptance replay error: {stale_replay:?}"
+            );
+        }
+
+        #[test]
+        fn parliament_due_certificate_completes_contract_ownership_transfer_from_account() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer and owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    84,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive governed contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed contract subject");
+                seed.world.contract_subject_bindings.insert(
+                    contract_address.clone(),
+                    crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                        &contract_address,
+                        ALICE_ID.clone(),
+                    ),
+                );
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                scode::SetContractParliamentDelegation {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 1,
+                    delegated: true,
+                }
+                .execute(&ALICE_ID, &mut seed)
+                .expect("account owner delegates lifecycle authority before transfer");
+                scode::OfferContractOwnership {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 2,
+                    new_owner:
+                        iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament,
+                }
+                .execute(&ALICE_ID, &mut seed)
+                .expect("account owner offers ownership to Parliament");
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
+                            contract_address: contract_address.clone(),
+                            expected_revision: 3,
+                            action: ContractLifecycleGovernanceActionV1::AcceptParliamentOwnership,
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute certified Parliament ownership acceptance"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("Parliament-owned lifecycle binding")
+                .lifecycle;
+            assert_eq!(
+                lifecycle.owner,
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+            );
+            assert_eq!(lifecycle.revision, 4);
+            assert!(lifecycle.pending_owner.is_none());
+            assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("governed proposal")
+                    .status,
+                crate::state::GovernanceProposalStatus::Enacted
+            );
+            let event =
+                execution
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .find_map(|event| match event.as_ref() {
+                        DataEvent::SmartContract(SmartContractEvent::OwnershipTransferred(
+                            event,
+                        )) if event.contract_address == contract_address => Some(event),
+                        _ => None,
+                    })
+                    .expect("certified ownership-transfer event");
+            assert_eq!(event.revision, 4);
+            assert_eq!(&event.lifecycle, lifecycle);
+        }
+
+        #[test]
+        fn revoking_contract_parliament_delegation_supersedes_certified_lifecycle_effect() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let active_code_hash = Hash::new(b"contract-delegation-revocation-test");
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed Parliament proposal author");
+                Register::account(Account::new(BOB_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed direct contract owner");
+                let contract_address =
+                    ContractAddress::derive(seed.network_id(), &BOB_ID, 85, DataSpaceId::UNIVERSAL)
+                        .expect("derive delegated contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed delegated contract subject");
+                let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    BOB_ID.clone(),
+                );
+                binding.lifecycle.active_code_hash = Some(active_code_hash);
+                seed.world
+                    .contract_subject_bindings
+                    .insert(contract_address.clone(), binding);
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                seed.world
+                    .contract_instances
+                    .insert(contract_address.clone(), active_code_hash);
+                scode::SetContractParliamentDelegation {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 1,
+                    delegated: true,
+                }
+                .execute(&BOB_ID, &mut seed)
+                .expect("owner delegates contract lifecycle authority");
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
+                            contract_address: contract_address.clone(),
+                            expected_revision: 2,
+                            action: ContractLifecycleGovernanceActionV1::Deactivate(
+                                DeactivateContractGovernanceActionV1 {
+                                    expected_code_hash: ContractCodeHash::new(
+                                        active_code_hash.into(),
+                                    ),
+                                    reason: Some("certified Parliament suspension".to_owned()),
+                                },
+                            ),
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let revoked_lifecycle = {
+                let mut revocation = state_block.transaction();
+                scode::SetContractParliamentDelegation {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 2,
+                    delegated: false,
+                }
+                .execute(&BOB_ID, &mut revocation)
+                .expect("owner revokes lifecycle authority after certification");
+                let lifecycle = revocation
+                    .world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("revoked lifecycle binding")
+                    .lifecycle
+                    .clone();
+                revocation.apply();
+                lifecycle
+            };
+            assert_eq!(revoked_lifecycle.revision, 3);
+            assert_eq!(
+                revoked_lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+
+            let mut execution = state_block.transaction();
+            execution.world.internal_event_buf.clear();
+            let observed_head = parliament_expected_head_v1(
+                &execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("retained lifecycle proposal")
+                    .kind,
+                &execution,
+            )
+            .expect("derive post-revocation lifecycle head");
+            assert_ne!(observed_head, fixture.certificate.expected_head);
+            let outcome = gov::ParliamentAutomaticExecutionOutcomeV1::Superseded(
+                gov::ParliamentAutomaticSupersededV1 { observed_head },
+            );
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("supersede lifecycle certificate after delegation revocation"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("unchanged lifecycle binding")
+                .lifecycle;
+            assert_eq!(lifecycle, &revoked_lifecycle);
+            assert_eq!(lifecycle.active_code_hash, Some(active_code_hash));
+            assert_eq!(
+                execution.world.contract_instances.get(&contract_address),
+                Some(&active_code_hash),
+                "the superseded deactivation must not change the active-instance index"
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("superseded Parliament attempt")
+                    .attempt()
+                    .status,
+                GovernanceAttemptStatusV1::Superseded
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("superseded lifecycle proposal")
+                    .status,
+                crate::state::GovernanceProposalStatus::Superseded
+            );
+            assert_automatic_parliament_execution_event(&execution, &fixture, outcome);
+        }
+
+        #[test]
+        fn parliament_due_certificate_applies_bounded_contract_emergency_hold() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let active_code_hash = Hash::new(b"contract-emergency-hold-test");
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer and owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    82,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive contained contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed contained contract subject");
+                let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                );
+                binding.lifecycle.active_code_hash = Some(active_code_hash);
+                seed.world
+                    .contract_subject_bindings
+                    .insert(contract_address.clone(), binding);
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                seed.world
+                    .contract_instances
+                    .insert(contract_address.clone(), active_code_hash);
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+                        contract_address: contract_address.clone(),
+                        expected_revision: 1,
+                        expected_code_hash:
+                            iroha_data_model::governance::types::ContractCodeHash::new(
+                                active_code_hash.into(),
+                            ),
+                        incident_digest: [0x83; 32],
+                        reason: "bounded incident containment".to_owned(),
+                        duration_blocks: 9,
+                    }),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute certified emergency hold"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("contained lifecycle binding")
+                .lifecycle;
+            let hold = lifecycle.emergency_hold.as_ref().expect("bounded hold");
+            assert_eq!(lifecycle.revision, 2);
+            assert_eq!(
+                hold.proposal_content_id,
+                *fixture.certificate.proposal_content_id.as_bytes()
+            );
+            assert_eq!(
+                hold.governance_attempt_id,
+                *fixture.certificate.governance_attempt_id.as_bytes()
+            );
+            assert_eq!(
+                hold.expires_at_height,
+                PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 9
+            );
+            assert!(lifecycle.is_held_at(PARLIAMENT_DUE_CERTIFICATE_HEIGHT));
+            assert!(!lifecycle.is_held_at(PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 9));
+            let event =
+                execution
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .find_map(|event| match event.as_ref() {
+                        DataEvent::SmartContract(SmartContractEvent::EmergencyHoldPlaced(
+                            event,
+                        )) if event.contract_address == contract_address => Some(event),
+                        _ => None,
+                    })
+                    .expect("certified emergency-hold event");
+            assert_eq!(event.revision, 2);
+            assert_eq!(&event.lifecycle, lifecycle);
+            assert_eq!(&event.hold, hold);
+        }
+
+        #[test]
+        fn emergency_hold_retrospective_requires_exact_expired_hold_and_nonzero_finding() {
+            let mut lifecycle =
+                iroha_data_model::smart_contract::ContractLifecycleControlV1::direct(
+                    ALICE_ID.clone(),
+                );
+            lifecycle.emergency_hold =
+                Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                    incident_digest: [0x91; 32],
+                    proposal_content_id: [0x92; 32],
+                    governance_attempt_id: [0x93; 32],
+                    reason: "review this incident".to_owned(),
+                    imposed_at_height: 50,
+                    expires_at_height: 60,
+                });
+            let action = CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                hold_proposal_content_id: [0x92; 32],
+                hold_governance_attempt_id: [0x93; 32],
+                incident_digest: [0x91; 32],
+                retrospective_finding_root: [0x94; 32],
+            };
+
+            assert!(
+                checked_expired_contract_emergency_hold_retrospective(&lifecycle, &action, 59)
+                    .is_err(),
+                "the exclusive expiry must be reached before completion"
+            );
+            assert_eq!(
+                checked_expired_contract_emergency_hold_retrospective(&lifecycle, &action, 60)
+                    .expect("the exact exclusive expiry height is eligible"),
+                lifecycle.emergency_hold.clone().expect("fixture hold")
+            );
+
+            for invalid in [
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    hold_proposal_content_id: [0x95; 32],
+                    ..action
+                },
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    hold_governance_attempt_id: [0x95; 32],
+                    ..action
+                },
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    incident_digest: [0x95; 32],
+                    ..action
+                },
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    retrospective_finding_root: [0; 32],
+                    ..action
+                },
+            ] {
+                assert!(
+                    checked_expired_contract_emergency_hold_retrospective(
+                        &lifecycle, &invalid, 60,
+                    )
+                    .is_err(),
+                    "a substituted hold binding or zero finding root must fail closed"
+                );
+            }
+            lifecycle.emergency_hold = None;
+            assert!(
+                checked_expired_contract_emergency_hold_retrospective(&lifecycle, &action, 60)
+                    .is_err(),
+                "a retrospective cannot replay after its hold was cleared"
+            );
+        }
+
+        #[test]
+        fn certified_retrospective_clears_exact_hold_and_allows_independent_successor_hold() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let active_code_hash = Hash::new(b"contract-emergency-retrospective-test");
+            let prior_hold = iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                incident_digest: [0x91; 32],
+                proposal_content_id: [0x92; 32],
+                governance_attempt_id: [0x93; 32],
+                reason: "expired incident containment".to_owned(),
+                imposed_at_height: PARLIAMENT_DUE_CERTIFICATE_HEIGHT - 10,
+                expires_at_height: PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
+            };
+            let finding_root = [0x94; 32];
+            let (retrospective, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer and owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    83,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive reviewed contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed reviewed contract subject");
+                let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                );
+                binding.lifecycle.active_code_hash = Some(active_code_hash);
+                binding.lifecycle.revision = 2;
+                binding.lifecycle.emergency_hold = Some(prior_hold.clone());
+                seed.world
+                    .contract_subject_bindings
+                    .insert(contract_address.clone(), binding);
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                seed.world
+                    .contract_instances
+                    .insert(contract_address.clone(), active_code_hash);
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
+                            contract_address: contract_address.clone(),
+                            expected_revision: 2,
+                            action: ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(
+                                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                                    hold_proposal_content_id: prior_hold.proposal_content_id,
+                                    hold_governance_attempt_id: prior_hold.governance_attempt_id,
+                                    incident_digest: prior_hold.incident_digest,
+                                    retrospective_finding_root: finding_root,
+                                },
+                            ),
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            {
+                let mut execution = state_block.transaction();
+                assert_eq!(
+                    execute_due_parliament_certificate_v1(
+                        retrospective.governance_attempt_id,
+                        &mut execution,
+                    )
+                    .expect("execute certified retrospective"),
+                    DueParliamentCertificateExecutionV1::Applied
+                );
+                let lifecycle = &execution
+                    .world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("reviewed lifecycle binding")
+                    .lifecycle;
+                assert_eq!(lifecycle.revision, 3);
+                assert_eq!(lifecycle.emergency_hold, None);
+                let event = execution
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .find_map(|event| match event.as_ref() {
+                        DataEvent::SmartContract(
+                            SmartContractEvent::EmergencyHoldRetrospectiveCompleted(event),
+                        ) if event.contract_address == contract_address => Some(event),
+                        _ => None,
+                    })
+                    .expect("complete retrospective audit event");
+                assert_eq!(event.prior_hold, prior_hold);
+                assert_eq!(event.retrospective_finding_root, finding_root);
+                assert_eq!(event.revision, 3);
+                assert_eq!(&event.lifecycle, lifecycle);
+                execution.apply();
+            }
+
+            let successor = {
+                let mut seed = state_block.transaction();
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+                        contract_address: contract_address.clone(),
+                        expected_revision: 3,
+                        expected_code_hash:
+                            iroha_data_model::governance::types::ContractCodeHash::new(
+                                active_code_hash.into(),
+                            ),
+                        incident_digest: [0x95; 32],
+                        reason: "independent successor incident".to_owned(),
+                        duration_blocks: 2,
+                    }),
+                );
+                seed.apply();
+                fixture
+            };
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    successor.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute independent successor hold"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let successor_hold = execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("successor lifecycle binding")
+                .lifecycle
+                .emergency_hold
+                .as_ref()
+                .expect("independent successor hold");
+            assert_eq!(successor_hold.incident_digest, [0x95; 32]);
+            assert_ne!(
+                successor_hold.proposal_content_id,
+                prior_hold.proposal_content_id
+            );
+            assert_ne!(
+                successor_hold.governance_attempt_id,
+                prior_hold.governance_attempt_id
             );
         }
 
@@ -21640,19 +24968,6 @@ pub mod isi {
                 stx.apply();
                 params
             }};
-            (require_hsm $state_block:ident) => {{
-                let mut stx = $state_block.transaction();
-                grant_alice_typed_permission(
-                    &mut stx,
-                    CanManageConsensusKeys,
-                    "grant manage consensus keys",
-                );
-                let params = stx.world.parameters.get_mut();
-                params.sumeragi.key_require_hsm = true;
-                let params = stx.world.parameters.get().sumeragi.clone();
-                stx.apply();
-                params
-            }};
         }
         macro_rules! second_height_transaction {
             ($state:ident, $block:ident, $state_transaction:ident) => {
@@ -21683,7 +24998,6 @@ pub mod isi {
                     pop: None,
                     activation_height: $stx.block_height(),
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Active,
                 };
@@ -21770,8 +25084,18 @@ pub mod isi {
             consensus_keys::ApplyThresholdKeyLifecycleCertificateV1 { certificate }
         }
 
-        world_test!(threshold_key_lifecycle_qc_rotates_tle_atomically_rejects_replay_and_blocks_premature_retirement {
-            blank_state_transaction!(state, block, state_block, state_transaction);
+        world_test!(threshold_key_lifecycle_qc_rotates_tle_atomically_rejects_replay_and_blocks_retirement_at_inclusive_deadline {
+            let state = blank_test_state();
+            let header = BlockHeader::new(
+                NonZeroU64::new(62).expect("nonzero lifecycle height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut state_block = state.block(header);
+            let mut state_transaction = state_block.transaction();
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
                 .iter()
@@ -21787,18 +25111,20 @@ pub mod isi {
                 roster_hash,
             );
             let key_a_id = key_a.key_session_id;
-            let install_a = certified_threshold_key_lifecycle_instruction_v1(
-                &state_transaction,
-                &validator_keys,
-                consensus_keys::ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
-                *key_a_id.as_bytes(),
-                key_a.transcript_hash,
-                norito::encode_canonical(&key_a).expect("encode canonical TLE key A"),
-            );
-            install_a
-                .clone()
-                .execute(&ALICE_ID, &mut state_transaction)
-                .expect("current-roster QC installs TLE key A without manager authority");
+            state_transaction
+                .world
+                .put_tle_key_session(key_a.clone(), ordered_roster.clone())
+                .expect("persist proof-valid predecessor TLE key A");
+            let predecessor_install_height = state_transaction.block_height() - 1;
+            let tle_lifecycle_policy = state_transaction.gov.parliament_tle_key_lifecycle;
+            state_transaction
+                .world
+                .activate_tle_key_session(
+                    key_a_id,
+                    predecessor_install_height,
+                    tle_lifecycle_policy,
+                )
+                .expect("predecessor TLE key A is active at the test height");
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_a_id));
             assert_eq!(
                 state_transaction
@@ -21807,11 +25133,6 @@ pub mod isi {
                     .get(&key_a_id),
                 Some(&ordered_roster)
             );
-            let replay = install_a
-                .execute(&ALICE_ID, &mut state_transaction)
-                .expect_err("an installed threshold-key certificate must not replay");
-            assert!(format!("{replay:?}").contains("compare-and-set predecessor changed"));
-
             let key_b = crate::tle_release::tests::public_key_session_fixture_for_context_v1(
                 *state_transaction.network_id.as_bytes(),
                 0xB2,
@@ -21832,16 +25153,18 @@ pub mod isi {
                 key_c.transcript_hash,
                 norito::encode_canonical(&key_c).expect("encode canonical TLE key C"),
             );
-            certified_threshold_key_lifecycle_instruction_v1(
+            let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
                 &validator_keys,
                 consensus_keys::ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
                 *key_b_id.as_bytes(),
                 key_b.transcript_hash,
                 norito::encode_canonical(&key_b).expect("encode canonical TLE key B"),
-            )
-            .execute(&ALICE_ID, &mut state_transaction)
-            .expect("current-roster QC atomically rotates new ballots to TLE key B");
+            );
+            install_b
+                .clone()
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect("current-roster QC atomically rotates new ballots to TLE key B");
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
             assert!(state_transaction.world.tle_key_sessions.get(&key_a_id).is_some());
             assert_eq!(
@@ -21859,6 +25182,10 @@ pub mod isi {
                     .get(&key_b_id),
                 Some(&ordered_roster)
             );
+            let replay = install_b
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("an installed threshold-key certificate must not replay");
+            assert!(format!("{replay:?}").contains("compare-and-set predecessor changed"));
             let stale_replacement = stale_install_c
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("a certificate signed against predecessor A must not replace B");
@@ -21886,12 +25213,12 @@ pub mod isi {
                 Vec::new(),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("a committed future ballot deadline must block TLE retirement");
+            .expect_err("the inclusive committed ballot deadline must block TLE retirement");
             assert!(format!("{retire_b:?}").contains("retained by a committed ballot deadline"));
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
         });
 
-        world_test!(global_beacon_lifecycle_rotation_is_effective_at_the_next_height {
+        world_test!(global_beacon_boundary_rotation_signs_the_successor_dkg_target {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(40).expect("nonzero lifecycle height"),
@@ -21903,20 +25230,32 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            let mut validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            validator_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let ordered_roster = validator_keys
                 .iter()
                 .map(|key| crate::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
-            let roster_hash =
+            let authorization_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster);
+            let mut successor_validator_keys =
+                (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            successor_validator_keys
+                .sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let successor_roster = successor_validator_keys
+                .iter()
+                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>();
+            let successor_roster_hash =
+                crate::beacon::global_threshold_beacon_roster_hash_v1(&successor_roster);
+            assert_ne!(authorization_roster_hash, successor_roster_hash);
 
             let mut key_a =
                 crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                     state_transaction.network_id,
                     [0xA4; 32],
-                    roster_hash,
+                    authorization_roster_hash,
                 );
             let key_a_activation = key_a.session.adaptive_dkg.finalized_at_height;
             key_a
@@ -21934,18 +25273,27 @@ pub mod isi {
             let key_b = crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                 state_transaction.network_id,
                 [0xB4; 32],
-                roster_hash,
+                successor_roster_hash,
             );
-            certified_threshold_key_lifecycle_instruction_v1(
+            let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
                 &validator_keys,
                 consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
                 key_b.session.session_id,
                 key_b.session.transcript_hash,
                 norito::encode_canonical(&key_b).expect("encode canonical beacon key B"),
-            )
-            .execute(&ALICE_ID, &mut state_transaction)
-            .expect("current-roster QC schedules an atomic beacon-key rotation");
+            );
+            assert_eq!(
+                install_b.certificate.roster_hash, authorization_roster_hash,
+                "the block-H roster remains the sole lifecycle-signature authority"
+            );
+            assert_eq!(
+                key_b.session.roster_hash, successor_roster_hash,
+                "the signed public state independently names the H+1 DKG target"
+            );
+            install_b
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect("block-H exact-roster QC schedules the successor DKG key");
 
             let persisted_a = state_transaction
                 .world
@@ -21964,6 +25312,22 @@ pub mod isi {
             assert!(!persisted_b.is_active_at(40));
             assert!(persisted_b.is_active_at(41));
             assert_eq!(
+                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+                    &persisted_b.session,
+                    &successor_roster,
+                ),
+                Ok(successor_roster_hash),
+                "the installed key is usable by the authenticated successor roster"
+            );
+            assert_eq!(
+                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+                    &persisted_b.session,
+                    &ordered_roster,
+                ),
+                Err(crate::beacon::GlobalThresholdBeaconError::RosterMismatch),
+                "the authorization roster cannot be substituted as the DKG target"
+            );
+            assert_eq!(
                 state_transaction
                     .world
                     .global_beacon_active_session
@@ -21972,7 +25336,7 @@ pub mod isi {
             );
         });
 
-        world_test!(parliament_tle_rotation_rejects_old_key_for_new_ballots_but_retains_it_for_bound_openings {
+        world_test!(parliament_tle_rotation_cuts_over_at_next_height_and_retains_bound_openings {
             blank_state_transaction!(state, block, state_block, state_transaction);
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
@@ -21994,6 +25358,11 @@ pub mod isi {
             );
             let key_a_id = key_a.key_session_id;
             let key_b_id = key_b.key_session_id;
+            let current_height = state_transaction.block_height();
+            let predecessor_install_height = current_height
+                .checked_sub(1)
+                .expect("test block height leaves room for an active predecessor");
+            let policy = state_transaction.gov.parliament_tle_key_lifecycle;
 
             state_transaction
                 .world
@@ -22001,7 +25370,7 @@ pub mod isi {
                 .expect("persist proof-valid TLE key A");
             state_transaction
                 .world
-                .activate_tle_key_session(key_a_id)
+                .activate_tle_key_session(key_a_id, predecessor_install_height, policy)
                 .expect("activate TLE key A");
             super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
                 key_a_id,
@@ -22015,24 +25384,22 @@ pub mod isi {
                 .expect("persist proof-valid TLE key B");
             state_transaction
                 .world
-                .activate_tle_key_session(key_b_id)
-                .expect("atomically cut new ballots over to TLE key B");
+                .activate_tle_key_session(key_b_id, current_height, policy)
+                .expect("schedule an atomic next-height cutover to TLE key B");
 
-            let old_key_error =
-                super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
-                    key_a_id,
-                    &state_transaction,
-                )
-                .expect_err("retained key A must not be selectable after the B cutover");
-            assert!(
-                format!("{old_key_error:?}").contains("exact active TLE key session"),
-                "unexpected inactive-key rejection: {old_key_error:?}"
-            );
             super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
-                key_b_id,
+                key_a_id,
                 &state_transaction,
             )
-            .expect("active key B must be selectable by a new ballot");
+            .expect("predecessor A remains selectable through the cutover height");
+            let next_height = current_height.checked_add(1).expect("test height advances");
+            assert_eq!(
+                state_transaction
+                    .world
+                    .selectable_tle_key_session_for_fresh_ballot_at(next_height),
+                Some(key_b_id),
+                "successor B becomes selectable exactly at H + 1"
+            );
 
             let successor_roster = (0..4)
                 .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
@@ -22040,10 +25407,10 @@ pub mod isi {
             *state_transaction.commit_topology.get_mut() = successor_roster;
             let stale_roster_error =
                 super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
-                    key_b_id,
+                    key_a_id,
                     &state_transaction,
                 )
-                .expect_err("a topology change must make active key B ineligible for new ballots");
+                .expect_err("a topology change must make active key A ineligible for new ballots");
             assert!(
                 format!("{stale_roster_error:?}")
                     .contains("not bound to the current commit topology"),
@@ -22292,7 +25659,7 @@ pub mod isi {
                 1,
                 *Hash::new(b"fee-sponsor-manifest").as_ref(),
                 iroha_data_model::nexus::AxtFastpqBinding {
-                    parameter: "fastpq-lane-balanced".to_owned(),
+                    parameter: "fastpq-state-transition-stark-v1".to_owned(),
                     source_dsid: dataspace_id.as_u64(),
                     source_dataspace: format!("dataspace-{}", dataspace_id.as_u64()),
                     source_receipt_id: "fee-sponsor-allocation".to_owned(),
@@ -22598,19 +25965,6 @@ pub mod isi {
             assert_eq!(ambient_encoded, canonical);
             assert_eq!(ambient_hash, canonical_hash);
         });
-        world_test!(solana_native_verifier_work_reserves_bytes_and_pairing {
-            let encoded_envelope_len = 1_337;
-            assert_eq!(
-                sccp_solana_native_verifier_work(encoded_envelope_len)
-                    .expect("Solana verifier work must fit deterministic counters"),
-                crate::state::SccpVerifierWorkV1 {
-                    native_header_bytes: u64::try_from(encoded_envelope_len)
-                        .expect("fixture length fits u64"),
-                    bn254_pairing_checks: 1,
-                    ..crate::state::SccpVerifierWorkV1::default()
-                }
-            );
-        });
         world_test!(bsc_native_verifier_work_uses_complete_sccp_estimate {
             let estimate = iroha_sccp::BscNativeFinalityWorkEstimateV1 {
                 continuation_headers: 11,
@@ -22682,6 +26036,10 @@ pub mod isi {
                 outbound_proof_policy: evm.outbound_proof_policy,
                 route_address: evm.route_address,
                 route_code_hash: evm.route_code_hash,
+                replay_verifier_address: evm.replay_verifier_address,
+                replay_verifier_code_hash: evm.replay_verifier_code_hash,
+                mint_breaker_address: evm.mint_breaker_address,
+                mint_breaker_code_hash: evm.mint_breaker_code_hash,
                 taira_to_token_multiplier: evm.taira_to_token_multiplier,
                 max_wrapped_supply: evm.max_wrapped_supply,
             };
@@ -22749,8 +26107,6 @@ pub mod isi {
                 &mut stx,
                 "register dataspace-restricted SCCP settlement fixture",
             );
-            Register::account(Account::new(route.settlement.custody_owner.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register SCCP custody owner fixture");
             let registry_before = stx.sccp_registry.to_wire();
             let durable_registry_before = stx.world.sccp_registry.get().clone();
             stx.world.internal_event_buf.clear();
@@ -22836,6 +26192,48 @@ pub mod isi {
             .expect("a never-used staged EVM route remains removable");
 
             assert!(stx.sccp_registry.to_wire().lanes.is_empty());
+        });
+        world_test!(staged_evm_route_with_liability_cannot_be_removed {
+            blank_state_transaction!(state, block, state_block, stx);
+            stx.chain_id =
+                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+            );
+            let key = route.key();
+            let registry = crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                    lane_id: route.lane_id,
+                    native_trust_anchors: Vec::new(),
+                    current_native_trust_anchor_hash: None,
+                    routes: vec![route],
+                }],
+            };
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
+                .expect("exact staged EVM registry");
+            stx.world.sccp_route_liabilities.insert(
+                key.clone(),
+                iroha_data_model::bridge::SccpRouteLiabilityV1::new(1)
+                    .expect("nonzero liability fixture"),
+            );
+
+            let error = apply_sccp_route_governance_action(
+                bridge::SccpRouteGovernanceActionV1::Remove(key.clone()),
+                &mut stx,
+            )
+            .expect_err("a staged route with outstanding liability must remain retained");
+
+            assert_err!(format!("{error:?}"), "never-used staged SCCP route", "{error:?}");
+            assert!(stx.sccp_registry.route(&key).is_some());
+            assert_eq!(
+                stx.world
+                    .sccp_route_liabilities
+                    .get(&key)
+                    .map(|record| record.outstanding_liability),
+                Some(1)
+            );
         });
         world_test!(old_sccp_destination_exempts_age_window_but_not_exact_finality_range {
             let finality_height = 7;
@@ -22942,6 +26340,11 @@ pub mod isi {
                 .expect("native Ethereum registry must validate");
             (proof, validated, registry)
         }
+        fn native_submit_bridge_proof_for_test(proof: BridgeProof) -> SubmitBridgeProof {
+            SubmitBridgeProof::new(proof).with_replay_witness(
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            )
+        }
         fn replace_native_proof_trust_anchor_for_test(
             mut proof: BridgeProof,
             trust_anchor: iroha_data_model::bridge::SccpNativeTrustAnchorV1,
@@ -23018,6 +26421,43 @@ pub mod isi {
                 route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 route_id: b"taira_eth_xor".to_vec(),
             })
+        }
+        fn sccp_replay_accumulator_id_for_route_key_for_test(
+            route_key: iroha_data_model::bridge::SccpRouteKeyV1,
+            route_configuration_hash: [u8; 32],
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1,
+        ) -> SccpReplayAccumulatorIdV1 {
+            use iroha_data_model::bridge::SccpReplayBoundaryV1::{
+                SoraInboundRelease, SoraOutboundLock,
+            };
+
+            let (source_network, target_network) = match boundary {
+                SoraOutboundLock => (route_key.lane_id.target, route_key.lane_id.source),
+                SoraInboundRelease => (route_key.lane_id.source, route_key.lane_id.target),
+                _ => panic!("test helper only constructs SORA replay boundaries"),
+            };
+            let domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+                source_network,
+                target_network,
+                boundary,
+                route_revision: route_key.revision,
+                route_configuration_hash,
+                actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+            };
+            SccpReplayAccumulatorIdV1::from_domain(route_key, &domain)
+                .expect("test route and replay domain match")
+        }
+        fn sccp_replay_accumulator_id_for_test(
+            route: &iroha_data_model::bridge::SccpGovernedRouteV1,
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1,
+        ) -> SccpReplayAccumulatorIdV1 {
+            sccp_replay_accumulator_id_for_route_key_for_test(
+                route.key(),
+                route
+                    .route_configuration_hash()
+                    .expect("test route configuration hashes"),
+                boundary,
+            )
         }
         world_test!(sccp_taira_recipient_requires_exact_single_ed25519_i105 {
             let taira = ALICE_ID
@@ -23122,19 +26562,29 @@ pub mod isi {
         }
         #[derive(Clone)]
         struct SccpReceiptArtifactFixture {
-            call: iroha_sccp::SccpVerifiedDestinationCallV1,
+            material: iroha_sccp::SccpVerifiedDestinationMaterialV1,
             destination_proof: iroha_data_model::bridge::BridgeSccpDestinationProofV1,
             proof_seed: u8,
         }
         impl core::ops::Deref for SccpReceiptArtifactFixture {
-            type Target = iroha_sccp::SccpVerifiedDestinationCallV1;
+            type Target = iroha_sccp::SccpVerifiedBn254DestinationMaterialV1;
             fn deref(&self) -> &Self::Target {
-                &self.call
+                let iroha_sccp::SccpVerifiedDestinationMaterialV1::EvmOrTron(material) =
+                    &self.material
+                else {
+                    panic!("EVM receipt fixture produced non-BN254 material")
+                };
+                material
             }
         }
         impl core::ops::DerefMut for SccpReceiptArtifactFixture {
             fn deref_mut(&mut self) -> &mut Self::Target {
-                &mut self.call
+                let iroha_sccp::SccpVerifiedDestinationMaterialV1::EvmOrTron(material) =
+                    &mut self.material
+                else {
+                    panic!("EVM receipt fixture produced non-BN254 material")
+                };
+                material
             }
         }
         fn sccp_transfer_payload_for_receipt_test(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
@@ -23152,7 +26602,7 @@ pub mod isi {
                 exact.bundle.payload, payload,
                 "receipt fixture payload must be one exact transfer"
             );
-            let call = iroha_sccp::verify_sccp_destination_proof_v1(
+            let material = iroha_sccp::verify_sccp_destination_proof_v1(
                 &exact.bridge_proof,
                 &exact.bundle,
                 &exact.route,
@@ -23160,41 +26610,15 @@ pub mod isi {
             )
             .expect("exact receipt artifact fixture");
             SccpReceiptArtifactFixture {
-                call,
+                material,
                 destination_proof: exact.bridge_proof,
                 proof_seed,
             }
         }
-        fn sccp_outbound_proof_key_for_test(
-            artifact: &SccpReceiptArtifactFixture,
-        ) -> iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
-            iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-                artifact.bundle.commitment.context.lane,
-                artifact.bundle.commitment.message_id,
-            )
-            .expect("exact destination artifact must name one outbound replay key")
-        }
-        fn sccp_outbound_proof_record_for_test(
-            artifact: &SccpReceiptArtifactFixture,
-            proof_commitment: [u8; 32],
-        ) -> iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-            let record = iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                payload_hash: artifact.bundle.commitment.payload_hash,
-                destination_binding_hash: artifact.destination_binding_hash,
-                route_configuration_hash: artifact.route_configuration_hash,
-                finality_block_hash: artifact.public_inputs.finality_block_hash,
-                destination_proof_commitment: proof_commitment,
-                finality_height: artifact.public_inputs.finality_height,
-                commitment_index: 0,
-                accepted_at_height: artifact.public_inputs.finality_height + 1,
-            };
-            assert!(record.is_well_formed_for_key(&sccp_outbound_proof_key_for_test(artifact)));
-            record
-        }
         fn sccp_bridge_proof_for_receipt_test(
             artifact: &SccpReceiptArtifactFixture,
         ) -> BridgeProof {
-            let height = artifact.public_inputs.finality_height;
+            let height = artifact.material.public_inputs().finality_height;
             BridgeProof {
                 range: BridgeProofRange {
                     start_height: height.saturating_add(u64::from(artifact.proof_seed)),
@@ -23596,6 +27020,228 @@ pub mod isi {
                 );
             }
         });
+        world_test!(typed_proposal_admission_rejects_preexisting_standalone_selector_alias {
+            second_height_transaction!(state, block, state_transaction);
+            let contract_address =
+                ContractAddress::derive(
+                    state_transaction.network_id(),
+                    &ALICE_ID,
+                    801,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("contract address");
+            let proposal = gov::ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash: ContractCodeHash::new([0x31; 32]),
+                abi_hash: ContractAbiHash::new(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                )),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            };
+            let kind = ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
+                contract_address: contract_address.clone(),
+                code_hash: proposal.code_hash,
+                abi_hash: proposal.abi_hash,
+                abi_version: proposal.abi_version,
+                manifest_provenance: None,
+            });
+            let proposal_id = kind.fingerprint();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanProposeContractDeployment {
+                    contract_address,
+                })]),
+            );
+            macro_rules! assert_alias_rejected {
+                ($selector:expr) => {{
+                    let selector = $selector;
+                    let error = proposal.clone().expect_execute_err(
+                        &ALICE_ID,
+                        &mut state_transaction,
+                        "a pre-existing standalone alias must block typed proposal admission",
+                    );
+                    assert_err!(
+                        format!("{error:?}"),
+                        "canonical certificate-only Parliament record",
+                        "unexpected typed-proposal alias rejection for {selector:?}: {error:?}"
+                    );
+                    assert!(
+                        state_transaction
+                            .world
+                            .governance_proposals
+                            .get(&proposal_id)
+                            .is_none(),
+                        "rejected typed proposal {selector:?} must not be retained"
+                    );
+                }};
+            }
+            let lowercase = hex::encode(proposal_id);
+            let uppercase = lowercase.to_ascii_uppercase();
+            let mixed = lowercase
+                .chars()
+                .enumerate()
+                .map(|(index, character)| {
+                    if index % 2 == 0 {
+                        character.to_ascii_uppercase()
+                    } else {
+                        character
+                    }
+                })
+                .collect::<String>();
+
+            state_transaction.world.governance_referenda.insert(
+                lowercase.clone(),
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 2,
+                    status: crate::state::GovernanceReferendumStatus::Proposed,
+                    mode: crate::state::GovernanceReferendumMode::Plain,
+                },
+            );
+            assert_alias_rejected!(&lowercase);
+            state_transaction.world.governance_referenda.remove(lowercase.clone());
+
+            state_transaction.world.governance_locks.insert(
+                uppercase.clone(),
+                crate::state::GovernanceLocksForReferendum::default(),
+            );
+            assert_alias_rejected!(&uppercase);
+            state_transaction.world.governance_locks.remove(uppercase.clone());
+
+            state_transaction.world.governance_slashes.insert(
+                mixed.clone(),
+                crate::state::GovernanceSlashLedger::default(),
+            );
+            assert_alias_rejected!(&mixed);
+            state_transaction.world.governance_slashes.remove(mixed);
+
+            let lower_prefixed = format!("0x{lowercase}");
+            state_transaction
+                .world
+                .elections
+                .insert(lower_prefixed.clone(), crate::state::ElectionState::default());
+            assert_alias_rejected!(&lower_prefixed);
+            state_transaction.world.elections.remove(lower_prefixed);
+
+            let upper_prefixed = format!("0X{uppercase}");
+            state_transaction.world.governance_referenda.insert(
+                upper_prefixed.clone(),
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 2,
+                    status: crate::state::GovernanceReferendumStatus::Proposed,
+                    mode: crate::state::GovernanceReferendumMode::Plain,
+                },
+            );
+            assert_alias_rejected!(&upper_prefixed);
+            state_transaction
+                .world
+                .governance_referenda
+                .remove(upper_prefixed);
+
+            proposal.expect_execute(
+                &ALICE_ID,
+                &mut state_transaction,
+                "typed proposal admission succeeds after all standalone aliases are absent",
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_proposals
+                    .get(&proposal_id)
+                    .is_some(),
+                "alias-free typed proposal must be retained"
+            );
+        });
+        world_test!(standalone_plain_and_zk_ballots_reject_every_typed_proposal_selector_alias {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            let kind = ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
+                contract_address:
+                    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                        .parse()
+                        .expect("contract address"),
+                code_hash: ContractCodeHash::new([0x31; 32]),
+                abi_hash: ContractAbiHash::new([0x41; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            });
+            let proposal_id = kind.fingerprint();
+            state_transaction
+                .world
+                .put_governance_proposal(
+                    proposal_id,
+                    crate::state::GovernanceProposalRecord {
+                        proposer: ALICE_ID.clone(),
+                        kind,
+                        created_height: 1,
+                        status: crate::state::GovernanceProposalStatus::Proposed,
+                    },
+                )
+                .expect("store exact typed proposal");
+            let lowercase = hex::encode(proposal_id);
+            let uppercase = lowercase.to_ascii_uppercase();
+            let mixed = lowercase
+                .chars()
+                .enumerate()
+                .map(|(index, character)| {
+                    if index % 2 == 0 {
+                        character.to_ascii_uppercase()
+                    } else {
+                        character
+                    }
+                })
+                .collect::<String>();
+            for selector in [
+                lowercase.clone(),
+                uppercase.clone(),
+                mixed,
+                format!("0x{lowercase}"),
+                format!("0X{uppercase}"),
+            ] {
+                state_transaction.world.account_permissions.insert(
+                    ALICE_ID.clone(),
+                    BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                        referendum_id: selector.clone(),
+                    })]),
+                );
+                let plain_error = gov::CastPlainBallot {
+                    referendum_id: selector.clone(),
+                    owner: ALICE_ID.clone(),
+                    amount: Quantity::zero(),
+                    duration_blocks: 0,
+                    direction: 0,
+                }
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut state_transaction,
+                    "typed proposal alias must not enter standalone PLAIN voting",
+                );
+                assert_err!(
+                    format!("{plain_error:?}"),
+                    "only timed-private Parliament ballots",
+                    "unexpected PLAIN alias rejection for {selector:?}: {plain_error:?}"
+                );
+                let zk_error = gov::CastZkBallot {
+                    election_id: selector.clone(),
+                    proof_b64: "AA==".to_owned(),
+                    public_inputs_json: "{}".to_owned(),
+                }
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut state_transaction,
+                    "typed proposal alias must not enter standalone ZK voting",
+                );
+                assert_err!(
+                    format!("{zk_error:?}"),
+                    "only timed-private Parliament ballots",
+                    "unexpected ZK alias rejection for {selector:?}: {zk_error:?}"
+                );
+            }
+        });
         world_test!(direct_zk_ballot_isi_rejects_closed_input_bypasses_before_proof_dispatch {
             second_height_transaction!(state, block, state_transaction);
             state_transaction.gov.citizenship_bond_amount = Quantity::zero();
@@ -23672,6 +27318,152 @@ pub mod isi {
             }
             .expect_execute_err(&ALICE_ID, &mut state_transaction, "a ballot grant for another election must not authorize this ballot");
             assert_err!(format!("{error:?}"), "exact CanSubmitGovernanceBallot target", "unexpected ballot target-scope rejection: {error:?}");
+        });
+        world_test!(direct_zk_ballot_lock_must_cover_the_inclusive_referendum_window {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction.gov.min_bond_amount = Quantity::zero();
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            state_transaction.world.elections.insert(
+                referendum_id.clone(),
+                crate::state::ElectionState {
+                    options: 3,
+                    ..Default::default()
+                },
+            );
+            let referendum = crate::state::GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 4,
+                status: crate::state::GovernanceReferendumStatus::Open,
+                mode: crate::state::GovernanceReferendumMode::Zk,
+            };
+            state_transaction
+                .world
+                .governance_referenda
+                .insert(referendum_id.clone(), referendum);
+            state_transaction.world.take_external_events();
+
+            let error = gov::CastZkBallot {
+                election_id: referendum_id.clone(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: format!(
+                    r#"{{"owner":"{}","amount":"0","duration_blocks":1}}"#,
+                    &*ALICE_ID,
+                ),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "a ZK ballot lock ending before h_end must reject",
+            );
+
+            assert_err!(
+                format!("{error:?}"),
+                "must remain active through the referendum end height"
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&referendum_id),
+                Some(&referendum),
+                "window rejection must not alter the referendum"
+            );
+            let election = state_transaction
+                .world
+                .elections
+                .get(&referendum_id)
+                .expect("the election remains present");
+            assert!(election.ballot_nullifiers.is_empty());
+            assert!(election.ciphertexts.is_empty());
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .is_none(),
+                "window rejection must not create a governance lock"
+            );
+        });
+        world_test!(direct_zk_ballot_lock_expiry_overflow_rejects_before_state_mutation {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction.gov.min_bond_amount = Quantity::zero();
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            state_transaction.world.elections.insert(
+                referendum_id.clone(),
+                crate::state::ElectionState {
+                    options: 3,
+                    ..Default::default()
+                },
+            );
+            let referendum = crate::state::GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: u64::MAX,
+                status: crate::state::GovernanceReferendumStatus::Open,
+                mode: crate::state::GovernanceReferendumMode::Zk,
+            };
+            state_transaction
+                .world
+                .governance_referenda
+                .insert(referendum_id.clone(), referendum);
+            state_transaction.world.take_external_events();
+
+            let error = gov::CastZkBallot {
+                election_id: referendum_id.clone(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: format!(
+                    r#"{{"owner":"{}","amount":"0","duration_blocks":{}}}"#,
+                    &*ALICE_ID,
+                    u64::MAX,
+                ),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "overflowing ZK ballot lock arithmetic must reject",
+            );
+
+            assert_err!(format!("{error:?}"), "Overflow");
+            assert_eq!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&referendum_id),
+                Some(&referendum),
+                "overflow rejection must not alter the referendum"
+            );
+            let election = state_transaction
+                .world
+                .elections
+                .get(&referendum_id)
+                .expect("the election remains present");
+            assert!(election.ballot_nullifiers.is_empty());
+            assert!(election.ciphertexts.is_empty());
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .is_none(),
+                "overflow rejection must not create a governance lock"
+            );
+            assert!(
+                state_transaction.world.take_external_events().is_empty(),
+                "checked arithmetic rejection must not emit acceptance or lock events"
+            );
         });
         world_test!(direct_zk_ballot_cannot_open_a_proposed_referendum {
             second_height_transaction!(state, block, state_transaction);
@@ -23788,17 +27580,217 @@ pub mod isi {
                 "the complete accepted corpus must never be pruned"
             );
         });
-        world_test!(governance_sortition_has_no_synthetic_entropy_fallback {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let state_transaction = state_block.transaction();
-            let error = latest_governance_entropy_seed(&state_transaction)
-                .expect_err("missing finalized beacon entropy must fail closed");
-            assert_err!(
+        world_test!(standalone_referendum_decision_uses_exact_wide_decisive_arithmetic {
+            let rejected = super::standalone_referendum_decision_v1(
+                "wide-reject".to_owned(),
+                1_u128 << 127,
+                (1_u128 << 126) + 1,
+                0,
+                2,
+                3,
+                0,
+            )
+            .expect("wide exact comparison remains representable");
+            assert!(
+                !rejected.approved,
+                "saturating both products would have incorrectly approved this tally"
+            );
+            let approved = super::standalone_referendum_decision_v1(
+                "wide-approve".to_owned(),
+                1_u128 << 127,
+                1_u128 << 126,
+                0,
+                2,
+                3,
+                0,
+            )
+            .expect("wide equality comparison remains representable");
+            assert!(approved.approved);
+
+            let abstention_heavy = super::standalone_referendum_decision_v1(
+                "abstention-heavy".to_owned(),
+                2,
+                1,
+                100,
+                2,
+                3,
+                103,
+            )
+            .expect("small tally");
+            assert!(
+                abstention_heavy.approved,
+                "abstention counts toward turnout but not the decisive approval denominator"
+            );
+            let below_turnout = super::standalone_referendum_decision_v1(
+                "below-turnout".to_owned(),
+                2,
+                1,
+                100,
+                2,
+                3,
+                104,
+            )
+            .expect("small tally");
+            assert!(!below_turnout.approved);
+            let empty = super::standalone_referendum_decision_v1(
+                "empty".to_owned(),
+                0,
+                0,
+                0,
+                1,
+                2,
+                0,
+            )
+            .expect("empty tally is representable");
+            assert!(!empty.approved, "an empty decisive tally must fail closed");
+            assert!(
+                super::standalone_referendum_decision_v1(
+                    "invalid-threshold".to_owned(),
+                    1,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                )
+                .is_err(),
+                "zero-denominator runtime state must fail closed"
+            );
+        });
+        world_test!(plain_tally_accumulation_rejects_category_overflow {
+            let mut tally = [u128::MAX, 0, 0];
+            let error = super::add_plain_tally_weight_v1(&mut tally, 0, 1)
+                .expect_err("category overflow must reject");
+            assert_contains!(
+                error.to_string(),
+                "category tally exceeds the exact u128 domain"
+            );
+            assert_eq!(tally, [u128::MAX, 0, 0]);
+        });
+        world_test!(plain_ballot_resource_and_conviction_limits_fail_closed {
+            super::ensure_plain_ballot_corpus_size_v1(
+                super::MAX_STANDALONE_PLAIN_BALLOTS_V1,
+            )
+            .expect("the exact first-release corpus limit is accepted");
+            let error = super::ensure_plain_ballot_corpus_size_v1(
+                super::MAX_STANDALONE_PLAIN_BALLOTS_V1 + 1,
+            )
+            .expect_err("a larger PLAIN corpus must reject");
+            assert_contains!(error.to_string(), "ballot corpus exceeds");
+
+            let amount = Quantity::from(100_u64);
+            for (step, maximum) in [(0, 1), (1, 0)] {
+                let error = super::plain_ballot_weight(&amount, 100, step, maximum)
+                    .expect_err("zero conviction parameters must reject");
+                assert_contains!(error.to_string(), "conviction parameters must be non-zero");
+            }
+        });
+        world_test!(plain_ballot_rejects_invalid_direction_before_state_mutation {
+            second_height_transaction!(state, block, state_transaction);
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            let error = gov::CastPlainBallot {
+                referendum_id: referendum_id.clone(),
+                owner: ALICE_ID.clone(),
+                amount: Quantity::zero(),
+                duration_blocks: 0,
+                direction: 3,
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "out-of-domain PLAIN direction must reject",
+            );
+            assert_contains!(
                 format!("{error:?}"),
-                "requires finalized beacon entropy",
-                "unexpected missing-beacon rejection: {error:?}"
+                "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .is_none()
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&referendum_id)
+                    .is_none()
+            );
+        });
+        world_test!(late_zk_tally_emits_exact_referendum_decision_once {
+            second_height_transaction!(state, block, state_transaction);
+            let referendum_id = format!("0X{}", "aB".repeat(32));
+            state_transaction.gov.approval_threshold_q_num = 1;
+            state_transaction.gov.approval_threshold_q_den = 2;
+            state_transaction.gov.min_turnout = 0;
+            state_transaction.world.governance_referenda.insert(
+                referendum_id.clone(),
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 1,
+                    status: crate::state::GovernanceReferendumStatus::Closed,
+                    mode: crate::state::GovernanceReferendumMode::Zk,
+                },
+            );
+            let election = crate::state::ElectionState {
+                options: 3,
+                tally: vec![0; 3],
+                ..Default::default()
+            };
+            state_transaction
+                .world
+                .elections
+                .insert(referendum_id.clone(), election.clone());
+            state_transaction.world.take_external_events();
+
+            super::persist_finalized_standalone_election_v1(
+                referendum_id.clone(),
+                election,
+                &[2, 1, 7],
+                &mut state_transaction,
+            )
+            .expect("verified tally persisted after referendum closure");
+
+            let events = state_transaction.world.take_external_events();
+            assert_eq!(events.len(), 1, "late finalization emits one decision only");
+            let Some(DataEvent::Governance(GovernanceEvent::ReferendumDecided(decision))) =
+                events[0].as_data_event()
+            else {
+                panic!("late finalization emitted the wrong event: {:?}", events[0]);
+            };
+            assert_eq!(decision.referendum_id, referendum_id);
+            assert_eq!(decision.approve, 2);
+            assert_eq!(decision.reject, 1);
+            assert_eq!(decision.abstain, 7);
+            assert!(decision.approved);
+            let finalized = state_transaction
+                .world
+                .elections
+                .get(&referendum_id)
+                .cloned()
+                .expect("finalized election retained");
+            assert!(finalized.finalized);
+            assert_eq!(finalized.tally, vec![2, 1, 7]);
+
+            let replay = super::persist_finalized_standalone_election_v1(
+                referendum_id,
+                finalized,
+                &[2, 1, 7],
+                &mut state_transaction,
+            )
+            .expect_err("finalized election cannot replay");
+            assert_contains!(replay.to_string(), "election already finalized");
+            assert!(
+                state_transaction.world.take_external_events().is_empty(),
+                "replay rejection must not emit a second decision"
             );
         });
         world_test!(direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission {
@@ -23968,17 +27960,6 @@ pub mod isi {
         });
         world_test!(scoped_governance_mutation_isis_reject_wrong_targets_without_state_changes {
             second_height_transaction!(state, block, state_transaction);
-            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
-            state_transaction
-                .gov
-                .citizen_service
-                .free_declines_per_epoch = u32::MAX;
-            let citizen =
-                crate::state::CitizenshipRecord::new(BOB_ID.clone(), Quantity::from(10_u64), 1);
-            state_transaction
-                .world
-                .citizens
-                .insert(BOB_ID.clone(), citizen.clone());
             let target_referendum = "target-referendum";
             let mut locks = crate::state::GovernanceLocksForReferendum::default();
             locks.locks.insert(
@@ -23998,9 +27979,6 @@ pub mod isi {
                 .governance_locks
                 .insert(target_referendum.to_owned(), locks);
             let wrong_target_permissions = BTreeSet::from([
-                Permission::from(CanRecordCitizenService {
-                    owner: ALICE_ID.clone(),
-                }),
                 Permission::from(CanSlashGovernanceLock {
                     referendum_id: "other-referendum".to_owned(),
                 }),
@@ -24012,12 +27990,6 @@ pub mod isi {
                 .world
                 .account_permissions
                 .insert(ALICE_ID.clone(), wrong_target_permissions);
-            let citizen_before = state_transaction
-                .world
-                .citizens
-                .get(&*BOB_ID)
-                .cloned()
-                .expect("seeded citizen");
             let lock_before = state_transaction
                 .world
                 .governance_locks
@@ -24025,14 +27997,6 @@ pub mod isi {
                 .and_then(|referendum| referendum.locks.get(&*BOB_ID))
                 .map(|record| (record.amount.clone(), record.slashed.clone()))
                 .expect("seeded governance lock");
-            let service_error = gov::RecordCitizenServiceOutcome {
-                owner: BOB_ID.clone(),
-                epoch: 2,
-                role: "observer".to_owned(),
-                event: gov::CitizenServiceEvent::Decline,
-            }
-            .expect_execute_err(&ALICE_ID, &mut state_transaction, "a service grant for another citizen must fail closed");
-            assert_err!(format!("{service_error:?}"), "exact CanRecordCitizenService target", "unexpected citizen-service target rejection: {service_error:?}");
             let slash_error = gov::SlashGovernanceLock {
                 referendum_id: target_referendum.to_owned(),
                 owner: BOB_ID.clone(),
@@ -24049,11 +28013,6 @@ pub mod isi {
             }
             .expect_execute_err(&ALICE_ID, &mut state_transaction, "a restitution grant for another referendum must fail closed");
             assert_contains!(format!("{restitution_error:?}"), "exact CanRestituteGovernanceLock target", "unexpected restitution target rejection: {restitution_error:?}");
-            assert_eq!(
-                state_transaction.world.citizens.get(&*BOB_ID),
-                Some(&citizen_before),
-                "wrong-target service recording must not mutate citizen state"
-            );
             let lock_after = state_transaction
                 .world
                 .governance_locks
@@ -24611,12 +28570,12 @@ pub mod isi {
                     SccpOutboundMessageContextV1::new(
                         SccpLaneIdV1 {
                             source: SccpNetworkV1::SoraTaira,
-                            target: SccpNetworkV1::EthereumSepolia,
+                            target: SccpNetworkV1::BscMainnet,
                         },
                         [0x36; 32],
                         [0x37; 32],
                     )
-                    .expect("same-domain foreign-profile context"),
+                    .expect("foreign-profile context"),
                     "no active exact governed reverse lane",
                 ),
                 (
@@ -24632,6 +28591,7 @@ pub mod isi {
                 let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
                     context,
                     payload_bytes.clone(),
+                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
                 );
                 let error = instruction
                     .expect_execute_err(&ALICE_ID, &mut stx, "stale or cross-profile context must fail closed");
@@ -25056,6 +29016,96 @@ pub mod isi {
                     .checked_add(&locked_amount)
                     .expect("custody addition")
             );
+            let route = &stx.sccp_registry.lanes()[0].routes[0];
+            let route_key = route.key();
+            assert_eq!(
+                stx.world
+                    .sccp_route_liabilities
+                    .get(&route_key)
+                    .map(|record| record.outstanding_liability),
+                Some(7),
+                "the escrow balance and canonical payload-unit liability advance together"
+            );
+        });
+        world_test!(record_sccp_message_rejects_unaccounted_escrow_balance_without_mutation {
+            sccp_recording_transaction!(state, block, stx);
+            seed_sccp_test_tx_call_hash(&mut stx, 0xB7);
+            let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
+            let custody_asset = AssetId::new(settlement_asset.clone(), custody);
+            let corrupt_balance = sccp_test_transfer_quantity();
+            crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                &mut stx.world,
+                &custody_asset,
+                &corrupt_balance,
+            )
+            .expect("seed deliberately unaccounted SCCP escrow balance");
+            stx.world
+                .increase_asset_total_amount(&settlement_asset, &corrupt_balance)
+                .expect("account for deliberately seeded escrow supply");
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+            let payload = sora_outbound_sccp_payload(244);
+            let error = crate::bridge::test_record_sccp_message(
+                canonical_test_sccp_payload_bytes(&payload),
+            )
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "an escrow balance without matching liability must fail closed",
+            );
+            assert_err!(format!("{error:?}"), "not fully backed before outbound lock");
+            assert_eq!(
+                sccp_outbound_mutation_snapshot(&stx, &ALICE_ID),
+                before,
+                "backing mismatch rejection must not debit the user or mutate liability/outbox state"
+            );
+        });
+        world_test!(record_sccp_message_rejects_route_liability_cap_atomically {
+            sccp_recording_transaction!(state, block, stx);
+            seed_sccp_test_tx_call_hash(&mut stx, 0xBA);
+            let route = stx.sccp_registry.lanes()[0].routes[0].clone();
+            let route_key = route.key();
+            let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
+            let custody_asset = AssetId::new(settlement_asset.clone(), custody);
+            let cap_balance = Quantity::from_canonical_numeric(
+                Numeric::try_new(
+                    route.settlement.max_outstanding_liability,
+                    route.settlement.payload_amount_scale,
+                )
+                .expect("fixture liability cap must fit its governed scale"),
+            )
+            .expect("fixture liability cap must fit the non-negative quantity domain");
+            crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                &mut stx.world,
+                &custody_asset,
+                &cap_balance,
+            )
+            .expect("seed exactly capped SCCP escrow balance");
+            stx.world
+                .increase_asset_total_amount(&settlement_asset, &cap_balance)
+                .expect("account for exactly capped SCCP escrow supply");
+            stx.world.sccp_route_liabilities.insert(
+                route_key,
+                iroha_data_model::bridge::SccpRouteLiabilityV1::new(
+                    route.settlement.max_outstanding_liability,
+                )
+                .expect("fixture cap is positive"),
+            );
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+            let payload = sora_outbound_sccp_payload(247);
+            let error = crate::bridge::test_record_sccp_message(
+                canonical_test_sccp_payload_bytes(&payload),
+            )
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "an outbound lock beyond the immutable liability cap must fail closed",
+            );
+            assert_err!(format!("{error:?}"), "immutable route cap exceeded");
+            assert_eq!(
+                sccp_outbound_mutation_snapshot(&stx, &ALICE_ID),
+                before,
+                "liability cap rejection must not debit the user or mutate escrow/outbox state"
+            );
         });
         world_test!(record_sccp_message_pending_count_limit_is_exact_and_atomic {
             blank_test_state_transaction!(checked state, block, stx);
@@ -25198,7 +29248,7 @@ pub mod isi {
                     "the first instruction must make observable overlay changes"
                 );
                 assert_ne!(
-                    staged.route_liabilities, baseline.route_liabilities,
+                    staged.liabilities, baseline.liabilities,
                     "the outbound lock must stage exact route-liability accounting"
                 );
                 instruction
@@ -25245,7 +29295,6 @@ pub mod isi {
                 },
                 payload: BridgeProofPayload::SccpDestination(fixture.bridge_proof.clone()),
             };
-            let terminal_descriptor;
             let exact_index;
             {
                 let mut setup = state_block.transaction();
@@ -25258,6 +29307,14 @@ pub mod isi {
                     &fixture.bundle.payload,
                 ))
                 .expect_execute(&exact_sender, &mut setup, "record exact finalized SCCP payload");
+                setup.apply();
+            }
+            {
+                let mut setup = state_block.transaction();
+                enable_sccp_recording_for_test(&mut setup, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut setup, 0xA1);
+                setup.zk.sccp.max_pending_outbound_messages =
+                    NonZeroU64::new(2).expect("two pending messages");
                 crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
                     &sibling_payload,
                 ))
@@ -25308,7 +29365,6 @@ pub mod isi {
                     .get(&sibling_key)
                     .cloned()
                     .expect("sibling payload is pending before proof acceptance");
-                terminal_descriptor = exact_pending.descriptor();
                 exact_index = SccpOutboundMessageIndexKeyV1::new(exact_key, &exact_pending)
                     .expect("exact pending record forms its ordered index");
                 let usage_before = *stx.world.sccp_outbound_pending_usage.get();
@@ -25337,21 +29393,14 @@ pub mod isi {
                     stx.world
                         .sccp_outbound_message_locator
                         .get(&exact_key.message_id),
-                    Some(&exact_key),
-                    "terminalization must preserve the global replay locator"
+                    None,
+                    "terminalization must remove the bounded pending locator"
                 );
                 assert_eq!(
                     stx.world.sccp_outbound_message_index.get(&exact_index),
-                    Some(&()),
-                    "terminalization must preserve the ordered commitment locator"
+                    None,
+                    "terminalization must remove the bounded pending commitment locator"
                 );
-                let terminal = stx
-                    .world
-                    .sccp_outbound_proofs
-                    .get(&exact_key)
-                    .expect("accepted proof inserts the fixed terminal descriptor");
-                assert_eq!(terminal.descriptor(), terminal_descriptor);
-                assert_eq!(terminal.commitment_index, exact_pending.commitment_index);
                 crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
                     &replacement_payload,
                 ))
@@ -25377,25 +29426,16 @@ pub mod isi {
             replay.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let terminal_state = sccp_outbound_mutation_snapshot(&replay, &exact_sender);
             let error = SubmitBridgeProof::new(proof)
-                .expect_execute_err(&ALICE_ID, &mut replay, "terminal replay state must reject the exact destination proof");
-            assert_err!(format!("{error:?}"), "already been accepted", "unexpected terminal replay rejection: {error:?}");
+                .expect_execute_err(&ALICE_ID, &mut replay, "a consumed pending message must reject the exact destination proof");
+            assert_err!(format!("{error:?}"), "no pending authoritative payload", "unexpected consumed-message rejection: {error:?}");
             assert_eq!(
                 sccp_outbound_mutation_snapshot(&replay, &exact_sender),
                 terminal_state,
-                "terminal replay rejection must be side-effect free"
-            );
-            assert_eq!(
-                replay
-                    .world
-                    .sccp_outbound_proofs
-                    .get(&exact_key)
-                    .expect("terminal descriptor survives replay rejection")
-                    .descriptor(),
-                terminal_descriptor
+                "consumed-message replay rejection must be side-effect free"
             );
             assert_eq!(
                 replay.world.sccp_outbound_message_index.get(&exact_index),
-                Some(&())
+                None
             );
         });
         world_test!(record_sccp_message_rejects_sender_authority_mismatch_without_lock_or_outbox {
@@ -25421,6 +29461,7 @@ pub mod isi {
             assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
+            assert!(stx.world.sccp_route_liabilities.is_empty());
         });
         world_test!(record_sccp_message_rejects_non_taira_sender_discriminant_without_side_effects {
             sccp_recording_transaction!(state, block, stx);
@@ -25445,26 +29486,41 @@ pub mod isi {
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
         });
-        #[cfg(feature = "bls")]
         world_test!(record_sccp_message_rejects_unsupported_controllers_before_lock_or_outbox {
             sccp_recording_transaction!(state, block, stx);
-            let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
-            let custody_asset = AssetId::new(settlement_asset.clone(), custody);
-            let bls_key = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::BlsNormal)
-                .expect("deterministic BLS SCCP authority fixture")
+            let (settlement_asset, _) = sccp_test_settlement_ids(&stx);
+            let ed25519_key = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::Ed25519)
+                .expect("deterministic Ed25519 SCCP authority fixture")
                 .public_key()
                 .clone();
-            let unsupported_single = AccountId::new(bls_key.clone());
-            let unsupported_multisig = AccountId::new_multisig(
+            let secp256k1_key = KeyPair::try_from_seed(vec![0x75; 32], Algorithm::Secp256k1)
+                .expect("deterministic secp256k1 SCCP authority fixture")
+                .public_key()
+                .clone();
+            let unsupported_single = AccountId::new(secp256k1_key.clone());
+            let one_member_multisig = AccountId::new_multisig(
                 MultisigPolicy::new(
                     1,
-                    vec![MultisigMember::new(bls_key, 1).expect("BLS multisig member")],
+                    vec![MultisigMember::new(ed25519_key.clone(), 1)
+                        .expect("Ed25519 multisig member")],
                 )
-                .expect("valid one-member BLS policy"),
+                .expect("valid one-member Ed25519 policy"),
+            );
+            let mixed_multisig = AccountId::new_multisig(
+                MultisigPolicy::new(
+                    2,
+                    vec![
+                        MultisigMember::new(ed25519_key, 1).expect("Ed25519 multisig member"),
+                        MultisigMember::new(secp256k1_key, 1)
+                            .expect("secp256k1 multisig member"),
+                    ],
+                )
+                .expect("valid mixed-controller policy"),
             );
             for (index, (label, authority)) in [
-                ("single BLS", unsupported_single),
-                ("BLS multisig", unsupported_multisig),
+                ("single secp256k1", unsupported_single),
+                ("one-member Ed25519 multisig", one_member_multisig),
+                ("mixed Ed25519/secp256k1 multisig", mixed_multisig),
             ]
             .into_iter()
             .enumerate()
@@ -25474,8 +29530,7 @@ pub mod isi {
                 let sender_asset = AssetId::new(settlement_asset.clone(), authority.clone());
                 Mint::asset_quantity(100_u64, sender_asset.clone())
                     .expect_execute(&ALICE_ID, &mut stx, "fund unsupported SCCP authority fixture");
-                let sender_before = sccp_asset_balance(&stx, &sender_asset);
-                let custody_before = sccp_asset_balance(&stx, &custody_asset);
+                let before = sccp_outbound_mutation_snapshot(&stx, &authority);
                 let mut payload = sora_outbound_sccp_payload(
                     74 + u64::try_from(index).expect("small fixture index"),
                 );
@@ -25494,11 +29549,100 @@ pub mod isi {
                     canonical_test_sccp_payload_bytes(&payload),
                 )
                 .expect_execute_err(&authority, &mut stx, "unsupported controller must not create an unfinalizable lock");
-                assert_err!(format!("{error:?}"), "not supported by the V1 destination contracts", "unexpected {label} admission error: {error:?}");
-                assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
-                assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
+                assert_err!(format!("{error:?}"), "not supported by the V1 semantic circuit", "unexpected {label} admission error: {error:?}");
+                assert_eq!(sccp_outbound_mutation_snapshot(&stx, &authority), before);
                 assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
             }
+        });
+        world_test!(record_sccp_message_rejects_ton_master_recipient_before_lock_or_outbox {
+            let (registry, route_key, observation) =
+                crate::state::ton_breaker_hydration_fixture_for_testing();
+            let mut wire = registry.to_wire();
+            wire.lanes[0].routes[0].activation =
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional;
+            let route = wire.lanes[0].routes[0].clone();
+            let iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) =
+                route.destination
+            else {
+                unreachable!("TON breaker fixture must contain a TON destination")
+            };
+            let registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire)
+                .expect("active TON registry fixture");
+            let state = blank_test_state();
+            let header = BlockHeader::new(
+                NonZeroU64::new(8).expect("nonzero fixture height"),
+                None,
+                None,
+                None,
+                observation.masterchain.gen_utime_ms(),
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.sccp_registry = registry;
+            stx.world
+                .sccp_ton_breaker_observations
+                .insert(route_key, observation);
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let payload = iroha_sccp::SccpPayloadV1::Transfer(
+                iroha_sccp::TransferPayloadV1 {
+                    version: 1,
+                    source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+                    nonce: 76,
+                    route_revision: route.revision,
+                    asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    asset_id: route.asset_key.as_bytes().to_vec(),
+                    amount: 7,
+                    sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    sender: ALICE_ID
+                        .to_i105_for_discriminant(
+                            iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1,
+                        )
+                        .expect("canonical ALICE fixture")
+                        .into_bytes(),
+                    recipient_codec: iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
+                    recipient: iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
+                        deployment.jetton_master_address,
+                    )
+                    .expect("fixture master has a canonical TON address")
+                    .to_vec(),
+                    route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    route_id: route.route_id.as_bytes().to_vec(),
+                },
+            );
+            let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+            let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
+                iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                    target: iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
+                },
+                route
+                    .destination_binding_hash()
+                    .expect("fixture TON destination binding"),
+                route
+                    .route_configuration_hash()
+                    .expect("fixture TON route configuration"),
+            )
+            .expect("fixture outbound TON context");
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                context,
+                payload_bytes,
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            );
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+            let error = instruction.expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "the TON Jetton master cannot own its own derived wallet",
+            );
+            assert_err!(
+                format!("{error:?}"),
+                "recipient cannot be executed by the governed V1 destination deployment"
+            );
+            assert_eq!(sccp_outbound_mutation_snapshot(&stx, &ALICE_ID), before);
         });
         world_test!(record_sccp_message_rejects_insufficient_balance_without_partial_lock_or_outbox {
             sccp_recording_transaction!(state, block, stx);
@@ -25516,6 +29660,7 @@ pub mod isi {
             assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
+            assert!(stx.world.sccp_route_liabilities.is_empty());
         });
         world_test!(record_sccp_message_rejects_route_scale_incompatible_with_asset_spec {
             blank_test_state_transaction!(state, block, stx);
@@ -25547,26 +29692,12 @@ pub mod isi {
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
         });
-        world_test!(route_owner_never_aliases_its_network_bound_protocol_escrow {
-            blank_test_state_transaction!(state, block, stx);
-            let mut registry = test_active_eth_registry();
-            registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
-            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
-                .expect("self-custody route is structurally valid but unsafe for transfer");
-            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-            let (_settlement_asset, escrow) = sccp_test_settlement_ids(&stx);
-            assert_ne!(escrow, *ALICE_ID);
-            assert!(crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(&stx, &escrow));
-            assert!(
-                crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(&stx, &ALICE_ID,)
-            );
-        });
         world_test!(sccp_route_escrow_rejects_ordinary_credit_and_drain {
             blank_test_state_transaction!(state, block, stx);
-            let mut registry = test_active_eth_registry();
-            registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
-            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
-                .expect("owner-bound SCCP route fixture");
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(
+                test_active_eth_registry(),
+            )
+            .expect("deterministic-escrow SCCP route fixture");
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let route = stx.sccp_registry.lanes()[0].routes[0].clone();
             let route_key = route.key();
@@ -25810,6 +29941,7 @@ seiyaku GovernanceLifecycle {
             let code_hash_bytes: [u8; 32] = code_hash.into();
             let abi_hash_bytes: [u8; 32] = abi_hash.into();
             DeployContractProposal {
+                proposal_operator: authority.clone(),
                 contract_address: ContractAddress::derive(
                     &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                         .parse()
@@ -25862,7 +29994,14 @@ seiyaku GovernanceLifecycle {
             Register::account(Account::new(payload.contract_address.subject_id()))
                 .expect_execute(&ALICE_ID, &mut transaction, "register derived governance contract subject");
             assert!(
-                super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
+                super::bind_contract_instance(
+                    &ALICE_ID,
+                    &mut transaction,
+                    &payload,
+                    code_hash,
+                    [1; 32],
+                    [2; 32],
+                )
                     .expect("bind verified governance contract")
             );
             assert!(matches!(
@@ -25914,7 +30053,14 @@ seiyaku GovernanceLifecycle {
                 .contract_manifests
                 .insert(code_hash, manifest);
             let error =
-                super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
+                super::bind_contract_instance(
+                    &ALICE_ID,
+                    &mut transaction,
+                    &payload,
+                    code_hash,
+                    [1; 32],
+                    [2; 32],
+                )
                     .expect_err("binding before verified bytes must fail closed");
             let message = format!("{error:?}");
             assert!(
@@ -25931,7 +30077,14 @@ seiyaku GovernanceLifecycle {
             );
             transaction.world.contract_code.insert(code_hash, artifact);
             assert!(
-                super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
+                super::bind_contract_instance(
+                    &ALICE_ID,
+                    &mut transaction,
+                    &payload,
+                    code_hash,
+                    [1; 32],
+                    [2; 32],
+                )
                     .expect("bind after bytes and exact manifest are present")
             );
             assert!(matches!(
@@ -25978,6 +30131,8 @@ seiyaku GovernanceLifecycle {
                 &mut transaction,
                 &malformed,
                 malformed_hash,
+                [1; 32],
+                [2; 32],
             )
             .expect_err("malformed stored bytes must reject governance binding");
             assert_err!(format!("{error:?}"), "invalid");
@@ -26006,6 +30161,8 @@ seiyaku GovernanceLifecycle {
                 &mut transaction,
                 &mismatched,
                 mismatched_hash,
+                [1; 32],
+                [2; 32],
             )
             .expect_err("stored bytes under the wrong hash must reject governance binding");
             assert_err!(format!("{error:?}"), "hash does not match");
@@ -26043,6 +30200,8 @@ seiyaku GovernanceLifecycle {
                 &mut transaction,
                 &stub_payload,
                 valid_hash,
+                [1; 32],
+                [2; 32],
             )
             .expect_err("a hash-only manifest must not activate verified bytecode");
             assert_err!(format!("{error:?}"), "manifest payload does not match");
@@ -26169,7 +30328,7 @@ seiyaku GovernanceLifecycle {
                 },
             ));
             let fastpq_binding = iroha_data_model::nexus::AxtFastpqBinding {
-                parameter: "fastpq-lane-balanced".to_string(),
+                parameter: "fastpq-state-transition-stark-v1".to_string(),
                 source_dsid: 12,
                 source_dataspace: "cbuae".to_string(),
                 source_receipt_id:
@@ -26508,13 +30667,13 @@ seiyaku GovernanceLifecycle {
             }
             assert!(is_no_trusted_setup_halo2_backend_id("halo2/ipa"));
             assert!(!voting_circuit_matches(
-                "stark/fri/sha256-goldilocks",
-                "stark/fri/sha256-goldilocks:vote-ballot",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-ballot",
                 "vote-ballot"
             ));
             assert!(!voting_circuit_matches(
-                "stark/fri/sha256-goldilocks",
-                "stark/fri/sha256-goldilocks:vote-tally",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-tally",
                 "vote-ballot"
             ));
         });
@@ -26544,7 +30703,7 @@ seiyaku GovernanceLifecycle {
                 for circuit_id in [
                     label.to_owned(),
                     format!("halo2/ipa::{label}"),
-                    format!("stark/fri/sha256-goldilocks:{label}"),
+                    format!("stark/fri/poseidon-x7-goldilocks-6x64-v1:{label}"),
                     format!("generic/namespace/{label}"),
                 ] {
                     let error =
@@ -26613,9 +30772,6 @@ seiyaku GovernanceLifecycle {
             }
             for protocol in PrivacyProtocolIdV1::ALL {
                 assert_reserved(protocol.canonical_label());
-            }
-            for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
-                assert_reserved(label);
             }
         });
         world_test!(register_domain_requires_active_sns_lease_for_non_genesis_owner {
@@ -27034,7 +31190,7 @@ seiyaku GovernanceLifecycle {
                 proof_bytes,
             );
             let payload = norito::encode_canonical(&envelope).expect("encode canonical envelope");
-            let parsed = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &payload)
+            let parsed = extract_vote_public_inputs("stark/fri/poseidon-x7-goldilocks-6x64-v1", &payload)
                 .expect("extract inputs");
             assert_eq!(parsed.columns, columns);
             assert_eq!(parsed.envelope.backend, BackendTag::Stark);
@@ -27063,7 +31219,7 @@ seiyaku GovernanceLifecycle {
             assert_ne!(alternate, canonical);
             norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate)
                 .expect("ordinary Norito accepts the advertised alternate layout");
-            let error = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &alternate)
+            let error = extract_vote_public_inputs("stark/fri/poseidon-x7-goldilocks-6x64-v1", &alternate)
                 .err()
                 .expect("alternate-layout outer envelope must fail");
             assert_err!(format!("{error:?}"), "invalid OpenVerifyEnvelope payload", "unexpected alternate-layout rejection: {error:?}");
@@ -27094,7 +31250,7 @@ seiyaku GovernanceLifecycle {
             );
             let canonical_outer = norito::encode_canonical(&envelope)
                 .expect("encode canonical outer around alternate nested proof");
-            let error = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &canonical_outer)
+            let error = extract_vote_public_inputs("stark/fri/poseidon-x7-goldilocks-6x64-v1", &canonical_outer)
                 .err()
                 .expect("alternate-layout nested STARK proof must fail");
             assert_err!(format!("{error:?}"), "invalid STARK open proof payload", "unexpected nested-layout rejection: {error:?}");
@@ -27109,7 +31265,7 @@ seiyaku GovernanceLifecycle {
             );
             let canonical =
                 norito::encode_canonical(&envelope).expect("encode canonical outer envelope");
-            let tag_error = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &canonical)
+            let tag_error = extract_vote_public_inputs("stark/fri/poseidon-x7-goldilocks-6x64-v1", &canonical)
                 .err()
                 .expect("wrong canonical backend tag must fail");
             assert_err!(format!("{tag_error:?}"), "unexpected OpenVerifyEnvelope backend tag", "wrong canonical tag was reported as a framing error: {tag_error:?}");
@@ -27121,13 +31277,13 @@ seiyaku GovernanceLifecycle {
         world_test!(decode_open_verify_envelope_accepts_stark_backend {
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Stark,
-                "stark/fri/sha256-goldilocks:dummy-circuit",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:dummy-circuit",
                 [0u8; 32],
                 vec![1, 2, 3],
                 vec![4, 5, 6],
             );
             let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
-            let proof_box = ProofBox::new("stark/fri/sha256-goldilocks".into(), bytes.clone());
+            let proof_box = ProofBox::new("stark/fri/poseidon-x7-goldilocks-6x64-v1".into(), bytes.clone());
             let decoded = decode_open_verify_envelope(&proof_box).expect("decode");
             assert_eq!(decoded.backend, BackendTag::Stark);
             assert_eq!(decoded.circuit_id, envelope.circuit_id);
@@ -27154,9 +31310,9 @@ seiyaku GovernanceLifecycle {
                 "halo2/unknown-native-v1",
                 "halo2/ipa: KZG",
                 "halo2/ipa:Mock-Proof",
-                " stark/fri/sha256-goldilocks",
-                "stark/fri/sha256-goldilocks ",
-                "stark/fri/sha256-goldilocks\0",
+                " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1\0",
                 "../stark/fri",
                 "stark/fri/miden",
             ] {
@@ -27182,11 +31338,11 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Halo2IpaPasta
             ));
             assert!(open_verify_backend_tag_matches(
-                "stark/fri/sha256-goldilocks",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
                 BackendTag::Stark
             ));
             assert!(backend_requires_open_verify_envelope(
-                "stark/fri/sha256-goldilocks"
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1"
             ));
             assert!(backend_requires_open_verify_envelope(
                 "stark/fri/poseidon2-goldilocks"
@@ -27195,7 +31351,7 @@ seiyaku GovernanceLifecycle {
                 "stark/fri/sha256_goldilocks.v1"
             ));
             assert!(!open_verify_backend_tag_matches(
-                "stark/fri/sha256-goldilocks",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
                 BackendTag::Halo2IpaPasta
             ));
             assert!(!open_verify_backend_tag_matches(
@@ -27445,18 +31601,18 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(resolve_ballot_and_tally_vk_reject_generic_stark_role_labels {
             blank_state_transaction!(state, block, state_block, stx);
-            let backend = "stark/fri/sha256-goldilocks";
+            let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_ok");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
-            vk_record!(ballot_rec, 1, "stark/fri/sha256-goldilocks:vote-ballot", BackendTag::Stark, "goldilocks", [0u8; 32], ballot_commitment; status = ConfidentialStatus::Active, key = Some(ballot_vk_box.clone()), vk_len = u32::try_from(ballot_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
+            vk_record!(ballot_rec, 1, "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-ballot", BackendTag::Stark, "goldilocks", [0u8; 32], ballot_commitment; status = ConfidentialStatus::Active, key = Some(ballot_vk_box.clone()), vk_len = u32::try_from(ballot_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
             stx.world
                 .verifying_keys
                 .insert(ballot_vk_id.clone(), ballot_rec);
             let tally_vk_id = VerifyingKeyId::new(backend, "vk_stark_tally_ok");
             let tally_vk_box = VerifyingKeyBox::new(backend.into(), vec![5, 6, 7, 8, 9]);
             let tally_commitment = hash_vk(&tally_vk_box);
-            vk_record!(tally_rec, 1, "stark/fri/sha256-goldilocks:vote-tally", BackendTag::Stark, "goldilocks", [0u8; 32], tally_commitment; status = ConfidentialStatus::Active, key = Some(tally_vk_box.clone()), vk_len = u32::try_from(tally_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
+            vk_record!(tally_rec, 1, "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-tally", BackendTag::Stark, "goldilocks", [0u8; 32], tally_commitment; status = ConfidentialStatus::Active, key = Some(tally_vk_box.clone()), vk_len = u32::try_from(tally_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
             stx.world
                 .verifying_keys
                 .insert(tally_vk_id.clone(), tally_rec);
@@ -27478,18 +31634,18 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(resolve_ballot_and_tally_vk_reject_stark_role_mismatch {
             blank_state_transaction!(state, block, state_block, stx);
-            let backend = "stark/fri/sha256-goldilocks";
+            let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_bad");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
-            vk_record!(ballot_rec, 1, "stark/fri/sha256-goldilocks:not-a-ballot-circuit", BackendTag::Stark, "goldilocks", [0u8; 32], ballot_commitment; status = ConfidentialStatus::Active, key = Some(ballot_vk_box));
+            vk_record!(ballot_rec, 1, "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-a-ballot-circuit", BackendTag::Stark, "goldilocks", [0u8; 32], ballot_commitment; status = ConfidentialStatus::Active, key = Some(ballot_vk_box));
             stx.world
                 .verifying_keys
                 .insert(ballot_vk_id.clone(), ballot_rec);
             let tally_vk_id = VerifyingKeyId::new(backend, "vk_stark_tally_bad");
             let tally_vk_box = VerifyingKeyBox::new(backend.into(), vec![5, 4, 3, 2, 1]);
             let tally_commitment = hash_vk(&tally_vk_box);
-            vk_record!(tally_rec, 1, "stark/fri/sha256-goldilocks:not-a-tally-circuit", BackendTag::Stark, "goldilocks", [0u8; 32], tally_commitment; status = ConfidentialStatus::Active, key = Some(tally_vk_box));
+            vk_record!(tally_rec, 1, "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-a-tally-circuit", BackendTag::Stark, "goldilocks", [0u8; 32], tally_commitment; status = ConfidentialStatus::Active, key = Some(tally_vk_box));
             stx.world
                 .verifying_keys
                 .insert(tally_vk_id.clone(), tally_rec);
@@ -27604,17 +31760,11 @@ seiyaku GovernanceLifecycle {
                 .first()
                 .expect("active ETH route fixture");
             let settlement_asset_definition_id = route.settlement.asset_definition_id.clone();
-            let custody_owner = route.settlement.custody_owner.clone();
             let route_key = route.key();
             if stx.world.account(&ALICE_ID).is_err() {
                 Register::account(Account::new(ALICE_ID.clone()))
                     .execute(&ALICE_ID, stx)
                     .expect("register SCCP sender fixture");
-            }
-            if stx.world.account(&custody_owner).is_err() {
-                Register::account(Account::new(custody_owner))
-                    .execute(&ALICE_ID, stx)
-                    .expect("register SCCP route custody owner fixture");
             }
             if stx
                 .world
@@ -27704,15 +31854,15 @@ seiyaku GovernanceLifecycle {
         }
         #[derive(Debug, Clone, PartialEq, Eq)]
         struct SccpOutboundMutationSnapshot {
-            route_liabilities: BTreeMap<
-                iroha_data_model::bridge::SccpRouteKeyV1,
-                iroha_data_model::bridge::SccpRouteLiabilityV1,
-            >,
             pending: BTreeMap<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
             locators: BTreeMap<[u8; 32], SccpOutboundMessageKeyV1>,
             ordered_index: BTreeSet<SccpOutboundMessageIndexKeyV1>,
-            terminal: BTreeMap<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
+            replay_forests: BTreeMap<SccpReplayAccumulatorIdV1, SccpReplayForestV1>,
             usage: SccpOutboundPendingUsageV1,
+            liabilities: BTreeMap<
+                iroha_data_model::bridge::SccpRouteKeyV1,
+                iroha_data_model::bridge::SccpRouteLiabilityV1,
+            >,
             sender_balance: Quantity,
             custody_balance: Quantity,
         }
@@ -27724,12 +31874,6 @@ seiyaku GovernanceLifecycle {
             let sender_asset = AssetId::new(settlement_asset.clone(), sender.clone());
             let custody_asset = AssetId::new(settlement_asset, custody);
             SccpOutboundMutationSnapshot {
-                route_liabilities: stx
-                    .world
-                    .sccp_route_liabilities
-                    .iter()
-                    .map(|(key, liability)| (key.clone(), *liability))
-                    .collect(),
                 pending: stx
                     .world
                     .sccp_outbound_pending_messages
@@ -27748,13 +31892,19 @@ seiyaku GovernanceLifecycle {
                     .iter()
                     .map(|(key, ())| *key)
                     .collect(),
-                terminal: stx
+                replay_forests: stx
                     .world
-                    .sccp_outbound_proofs
+                    .sccp_replay_forests
                     .iter()
-                    .map(|(key, record)| (*key, *record))
+                    .map(|(id, forest)| (id.clone(), forest.clone()))
                     .collect(),
                 usage: *stx.world.sccp_outbound_pending_usage.get(),
+                liabilities: stx
+                    .world
+                    .sccp_route_liabilities
+                    .iter()
+                    .map(|(key, liability)| (key.clone(), *liability))
+                    .collect(),
                 sender_balance: sccp_asset_balance(stx, &sender_asset),
                 custody_balance: sccp_asset_balance(stx, &custody_asset),
             }
@@ -27765,10 +31915,6 @@ seiyaku GovernanceLifecycle {
                 crate::state::SccpVerifierWorkV1,
                 crate::state::SccpVerifierWorkV1,
             ),
-            route_liabilities: BTreeMap<
-                iroha_data_model::bridge::SccpRouteKeyV1,
-                iroha_data_model::bridge::SccpRouteLiabilityV1,
-            >,
             custody_balance: Quantity,
             recipient_balance: Quantity,
             holders: Option<BTreeSet<AccountId>>,
@@ -27782,11 +31928,12 @@ seiyaku GovernanceLifecycle {
             >,
             proof_tags: BTreeMap<iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
             proofs_by_tag: BTreeMap<[u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-            inbound: BTreeMap<
-                iroha_data_model::bridge::SccpInboundMessageKeyV1,
-                iroha_data_model::bridge::SccpInboundMessageRecordV1,
-            >,
+            replay_forests: BTreeMap<SccpReplayAccumulatorIdV1, SccpReplayForestV1>,
             high_water: BTreeMap<iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1, u64>,
+            liabilities: BTreeMap<
+                iroha_data_model::bridge::SccpRouteKeyV1,
+                iroha_data_model::bridge::SccpRouteLiabilityV1,
+            >,
             receipt_markers: BTreeSet<[u8; 32]>,
             transfer_transcripts: usize,
             custody_transfer_controls: Option<AssetTransferControlStoreV1>,
@@ -27802,12 +31949,6 @@ seiyaku GovernanceLifecycle {
             let recipient_asset = AssetId::new(settlement_asset.clone(), recipient.clone());
             SccpInboundMutationSnapshot {
                 verifier_work: stx.sccp_verifier_work_for_testing(),
-                route_liabilities: stx
-                    .world
-                    .sccp_route_liabilities
-                    .iter()
-                    .map(|(key, liability)| (key.clone(), *liability))
-                    .collect(),
                 custody_balance: sccp_asset_balance(stx, &custody_asset),
                 recipient_balance: sccp_asset_balance(stx, &recipient_asset),
                 holders: stx
@@ -27849,17 +31990,23 @@ seiyaku GovernanceLifecycle {
                     .iter()
                     .map(|(tag, ids)| (*tag, ids.clone()))
                     .collect(),
-                inbound: stx
+                replay_forests: stx
                     .world
-                    .sccp_inbound_messages
+                    .sccp_replay_forests
                     .iter()
-                    .map(|(key, record)| (*key, *record))
+                    .map(|(id, forest)| (id.clone(), forest.clone()))
                     .collect(),
                 high_water: stx
                     .world
                     .sccp_inbound_anchor_high_water
                     .iter()
                     .map(|(key, height)| (*key, *height))
+                    .collect(),
+                liabilities: stx
+                    .world
+                    .sccp_route_liabilities
+                    .iter()
+                    .map(|(key, liability)| (key.clone(), *liability))
                     .collect(),
                 receipt_markers: stx.bridge_receipt_proofs_available_in_tx.clone(),
                 transfer_transcripts: stx.pending_transfer_transcript_count_for_testing(),
@@ -28044,60 +32191,42 @@ seiyaku GovernanceLifecycle {
             ensure_sccp_route_escrow_account(&route_key, &asset, stx)
                 .expect("create the reserved SCCP protocol escrow fixture");
             if !custody_amount.is_zero() {
-                let scale_factor = 10_u128
-                    .checked_pow(payload_amount_scale)
-                    .expect("governed SCCP payload scale fits the u128 fixture domain");
-                let scaled_amount = custody_amount
-                    .try_mul_decimal(&Numeric::new(scale_factor, 0))
-                    .expect("SCCP custody fixture amount scales exactly");
-                assert_eq!(
-                    scaled_amount.scale(),
-                    0,
-                    "SCCP custody fixture amount must be exact at the governed payload scale"
-                );
-                let payload_amount = scaled_amount
-                    .as_numeric()
+                let custody_asset = AssetId::new(asset.clone(), custody.clone());
+                crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                    &mut stx.world,
+                    &custody_asset,
+                    &custody_amount,
+                )
+                .expect("seed the SCCP protocol escrow fixture directly");
+                stx.world
+                    .increase_asset_total_amount(&asset, &custody_amount)
+                    .expect("account for the directly seeded SCCP escrow supply");
+                let numeric = custody_amount.as_numeric();
+                let scale_delta = payload_amount_scale
+                    .checked_sub(numeric.scale())
+                    .expect("custody fixture precision fits the governed payload scale");
+                let payload_amount = numeric
                     .try_mantissa_u128()
-                    .expect("scaled SCCP custody fixture amount fits payload units");
+                    .expect("custody fixture has a nonnegative u128 mantissa")
+                    .checked_mul(
+                        10_u128
+                            .checked_pow(scale_delta)
+                            .expect("governed route scale multiplier fits u128"),
+                    )
+                    .expect("custody fixture payload units fit u128");
                 assert!(
                     payload_amount <= max_outstanding_liability,
                     "SCCP custody fixture amount must fit the immutable route liability cap"
                 );
-                let sender_asset = AssetId::new(asset.clone(), ALICE_ID.clone());
-                Mint::asset_quantity(custody_amount.clone(), sender_asset.clone())
-                    .execute(&ALICE_ID, stx)
-                    .expect("fund SCCP outbound sender fixture");
-                crate::smartcontracts::isi::asset::isi::execute_sccp_outbound_route_lock(
-                    stx,
-                    &ALICE_ID,
-                    &route_key,
-                    &asset,
-                    payload_amount,
-                    custody_amount.clone(),
-                )
-                .expect("lock the SCCP custody fixture through the canonical outbound path");
-                let liability = stx
-                    .world
-                    .sccp_route_liabilities
-                    .get(&route_key)
-                    .copied()
-                    .expect("canonical outbound lock creates a route liability");
-                assert_eq!(liability.outstanding_liability, payload_amount);
-                let liability_quantity = Quantity::from_canonical_numeric(
-                    Numeric::try_new(liability.outstanding_liability, payload_amount_scale)
-                        .expect("fixture liability is representable at its governed scale"),
-                )
-                .expect("fixture liability is a non-negative quantity");
-                assert_eq!(liability_quantity, custody_amount);
-                assert_eq!(
-                    sccp_asset_balance(stx, &AssetId::new(asset.clone(), custody.clone()),),
-                    liability_quantity,
-                    "SCCP fixture escrow must exactly back its route liability"
+                stx.world.sccp_route_liabilities.insert(
+                    route_key,
+                    iroha_data_model::bridge::SccpRouteLiabilityV1::new(payload_amount)
+                        .expect("nonzero custody fixture creates a liability row"),
                 );
                 assert_eq!(
-                    sccp_asset_balance(stx, &sender_asset),
-                    Quantity::zero(),
-                    "canonical outbound lock must move the entire fixture amount into escrow"
+                    sccp_asset_balance(stx, &custody_asset),
+                    custody_amount,
+                    "direct fixture seeding must exactly back its route liability"
                 );
             } else {
                 assert!(
@@ -28143,12 +32272,30 @@ seiyaku GovernanceLifecycle {
                 .insert(account.clone(), BTreeSet::from([permission]));
         }
         fn seed_live_peer(stx: &mut StateTransaction<'_, '_>, keypair: &KeyPair) -> PeerId {
+            seed_live_peer_with_role(stx, keypair, ConsensusKeyRole::Validator)
+        }
+        fn seed_live_peer_with_role(
+            stx: &mut StateTransaction<'_, '_>,
+            keypair: &KeyPair,
+            role: ConsensusKeyRole,
+        ) -> PeerId {
             let peer = PeerId::new(keypair.public_key().clone());
             if stx.world.peers.iter().all(|existing| existing != &peer) {
                 let _ = stx.world.peers.push(peer.clone());
             }
+            let id = match role {
+                ConsensusKeyRole::Validator => {
+                    crate::state::derive_validator_key_id(keypair.public_key())
+                }
+                ConsensusKeyRole::Committee => {
+                    crate::state::derive_committee_key_id(keypair.public_key())
+                }
+                ConsensusKeyRole::Endorsement => {
+                    panic!("lane relay peers cannot use endorsement keys")
+                }
+            };
             let record = ConsensusKeyRecord {
-                id: crate::state::derive_validator_key_id(keypair.public_key()),
+                id,
                 public_key: keypair.public_key().clone(),
                 pop: Some(
                     iroha_crypto::bls_normal_pop_prove(keypair.private_key())
@@ -28156,7 +32303,6 @@ seiyaku GovernanceLifecycle {
                 ),
                 activation_height: 0,
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             };
@@ -28571,6 +32717,75 @@ seiyaku GovernanceLifecycle {
             assert!(
                 stx.world.asset_metadata.get(&asset_id).is_none(),
                 "asset metadata should be removed with assets"
+            );
+        });
+        world_test!(unregister_domain_rejects_retained_native_transfer_controls_atomically {
+            alice_state_transaction!(state, block, state_block, stx);
+            let domain_id =
+                DomainId::try_new("transfer-controls", "world").expect("domain id parses");
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register controlled domain");
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "rose".parse().expect("asset name parses"),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "rose",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register controlled asset definition");
+            SetAssetTransferBlacklist::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                true,
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "install native transfer control");
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("transfer-control metadata key parses");
+            let transfer_controls_before = stx
+                .world
+                .account(&ALICE_ID)
+                .expect("Alice account exists")
+                .metadata()
+                .get(&metadata_key)
+                .cloned()
+                .expect("dedicated instruction persists transfer controls");
+            stx.world.take_external_events();
+
+            let error = Unregister::domain(domain_id.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "domain removal must not orphan native transfer-control state",
+            );
+
+            assert_contains!(
+                error.to_string(),
+                "retains native asset transfer-control state",
+                "unexpected domain-removal rejection: {error}"
+            );
+            assert!(
+                stx.world.domain(&domain_id).is_ok(),
+                "rejected removal must preserve the domain"
+            );
+            assert!(
+                stx.world.asset_definition(&asset_definition_id).is_ok(),
+                "rejected removal must preserve the referenced asset definition"
+            );
+            assert_eq!(
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("Alice account remains")
+                    .metadata()
+                    .get(&metadata_key),
+                Some(&transfer_controls_before),
+                "rejected removal must preserve the canonical transfer-control store"
+            );
+            assert!(
+                stx.world.take_external_events().is_empty(),
+                "rejected removal must not emit events"
             );
         });
         world_test!(unregister_domain_preserves_surviving_account_foreign_ownerships {
@@ -29048,6 +33263,68 @@ seiyaku GovernanceLifecycle {
                 "custody asset definition must remain after rejected unregister"
             );
         });
+        world_test!(unregister_domain_rejects_retained_moderation_policy_after_config_change {
+            let state = blank_state();
+            let domain_id: DomainId =
+                DomainId::try_new("moderation", "history").expect("domain id parses");
+            state_transaction!(state, block, state_block, stx);
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register moderation domain");
+            let retained_definition = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "bond".parse().expect("asset name"),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                retained_definition.clone(),
+                "moderation bond",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register moderation bond definition");
+            assert_ne!(
+                stx.gov.voting_asset_id, retained_definition,
+                "the fixture must exercise retained state after current config changed"
+            );
+            crate::smartcontracts::isi::sorafs_moderation::seed_moderation_policy_asset_reference_for_test(
+                &mut stx.world,
+                retained_definition.clone(),
+                (*ALICE_ID).clone(),
+                (*ALICE_ID).clone(),
+            )
+            .expect("seed a valid retained moderation policy");
+            let policy_path: iroha_data_model::state_path::StatePath =
+                "sorafs_moderation_policy_v1"
+                    .parse()
+                    .expect("moderation policy state path");
+            let policy_before = stx.world.smart_contract_state.get(&policy_path).cloned();
+
+            let error = Unregister::domain(domain_id.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "domain containing moderation-retained definition must remain registered",
+            );
+            assert_contains!(
+                error.to_string(),
+                "retained by moderation active policy challenge voting asset",
+                "error should identify moderation retention: {error}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain must remain after rejected unregister"
+            );
+            assert!(
+                stx.world
+                    .asset_definitions
+                    .get(&retained_definition)
+                    .is_some(),
+                "moderation-retained definition must remain after rejected domain cascade"
+            );
+            assert_eq!(
+                stx.world.smart_contract_state.get(&policy_path),
+                policy_before.as_ref(),
+                "rejected domain cascade must not mutate moderation state"
+            );
+        });
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_governance_viral_reward_asset()
         {
@@ -29192,7 +33469,7 @@ seiyaku GovernanceLifecycle {
                 "asset definition should remain after rejected unregister"
             );
         });
-        world_test!(unregister_domain_removes_offline_escrow_mappings_for_domain_asset_definitions {
+        world_test!(unregister_domain_removes_kagemusha_reserve_mappings_for_domain_asset_definitions {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -29201,11 +33478,11 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
             let reward_def = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
-                "offline".parse().unwrap(),
+                "kagemusha".parse().unwrap(),
             );
             Register::asset_definition(NewAssetDefinition {
                 id: reward_def.clone(),
-                name: "offline".to_owned(),
+                name: "Kagemusha".to_owned(),
                 description: None,
                 alias: None,
                 spec: NumericSpec::integer(),
@@ -29216,38 +33493,38 @@ seiyaku GovernanceLifecycle {
                 owning_domain: None,
             })
             .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
-            let escrow = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+            let escrow = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
                 stx.network_id(),
                 &reward_def,
             );
             stx.settlement
-                .offline
-                .escrow_accounts
+                .kagemusha
+                .reserve_accounts
                 .insert(reward_def.clone(), escrow);
             assert!(
                 stx.settlement
-                    .offline
-                    .escrow_accounts
+                    .kagemusha
+                    .reserve_accounts
                     .get(&reward_def)
                     .is_some(),
-                "offline escrow mapping should exist before domain unregister"
+                "Kagemusha reserve mapping should exist before domain unregister"
             );
             Unregister::domain(domain_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local offline escrow mapping");
+                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local Kagemusha reserve mapping");
             assert!(
                 stx.settlement
-                    .offline
-                    .escrow_accounts
+                    .kagemusha
+                    .reserve_accounts
                     .get(&reward_def)
                     .is_none(),
-                "offline escrow mapping should be removed with domain asset definitions"
+                "Kagemusha reserve mapping should be removed with domain asset definitions"
             );
             assert!(
                 stx.world.domains.get(&domain_id).is_none(),
                 "domain should be removed"
             );
         });
-        world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_offline_state {
+        world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_kagemusha_state {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -29401,8 +33678,8 @@ seiyaku GovernanceLifecycle {
                     self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                    activation_epoch: Some(1),
-                    activation_height: Some(1),
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -29457,6 +33734,7 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register account in cleanup domain");
             let proposal_id = [0xB7; 32];
             let kind = ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: account_id.clone(),
                 contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
                     .expect("contract address"),
@@ -29742,89 +34020,6 @@ seiyaku GovernanceLifecycle {
                 "grant account-target permission to holder",
             );
             let role_id: RoleId = "ACCOUNT_SCOPE_ADMIN".parse().expect("role id parses");
-            Register::role(Role::new(role_id.clone(), ALICE_ID.clone())).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register role",
-            );
-            Grant::role_permission(permission.clone(), role_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant account-target permission to role",
-            );
-            Grant::account_role(role_id.clone(), holder_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant role to holder",
-            );
-            assert!(
-                stx.world
-                    .account_permissions
-                    .get(&holder_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "holder should have permission before unregister"
-            );
-            let role = stx.world.roles.get(&role_id).expect("role should exist");
-            assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role should include permission before unregister"
-            );
-            Unregister::domain(domain_id).expect_execute(&ALICE_ID, &mut stx, "unregister domain");
-            assert!(
-                stx.world
-                    .account_permissions
-                    .get(&holder_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "holder permission should remain"
-            );
-            let role = stx.world.roles.get(&role_id).expect("role should exist");
-            assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role permission should remain"
-            );
-            assert!(
-                role.permission_epochs().contains_key(&permission),
-                "permission epochs should remain"
-            );
-        }
-        #[test]
-        fn unregister_domain_preserves_citizen_service_permissions_for_surviving_accounts_and_roles()
-         {
-            let state = blank_state();
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
-            state_transaction!(state, block, state_block, stx);
-            bootstrap_alice_account(&mut stx);
-            Register::domain(Domain::new(domain_id.clone())).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register cleanup domain",
-            );
-            let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id)).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register account in cleanup domain",
-            );
-            let owner_domain: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let (holder_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&holder_id)).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register holder account",
-            );
-            let permission: Permission =
-                iroha_executor_data_model::permission::governance::CanRecordCitizenService {
-                    owner: target_id.clone(),
-                }
-                .into();
-            Grant::account_permission(permission.clone(), holder_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant account-target permission to holder",
-            );
-            let role_id: RoleId = "CITIZEN_SERVICE_ADMIN".parse().expect("role id parses");
             Register::role(Role::new(role_id.clone(), ALICE_ID.clone())).expect_execute(
                 &ALICE_ID,
                 &mut stx,
@@ -30156,6 +34351,202 @@ seiyaku GovernanceLifecycle {
             // World should not contain the peer
             assert!(stx.world.peers().iter().all(|p| p != &peer_id));
         });
+        world_test!(unregister_peer_rejects_live_validator_and_preserves_stake_custody {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let delegator = AccountId::new(
+                checked_keypair_with_algorithm(Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            let request_id = Hash::new(b"peer-unregister-preserves-pending-unbond");
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: peer_id.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: iroha_primitives::numeric::Quantity::from(9_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(5_u32),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                    activation_height: 1,
+                    deactivation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            let self_share = iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: validator.clone(),
+                bonded: iroha_primitives::numeric::Quantity::from(5_u32),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            };
+            let delegated_share = iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: delegator.clone(),
+                bonded: iroha_primitives::numeric::Quantity::from(4_u32),
+                pending_unbonds: BTreeMap::from([(
+                    request_id,
+                    iroha_data_model::nexus::PublicLaneUnbonding {
+                        request_id,
+                        amount: iroha_primitives::numeric::Quantity::from(3_u32),
+                        release_at_ms: 10,
+                        slashable_through_height: 2,
+                        liability_release_height: 20,
+                    },
+                )]),
+                metadata: Metadata::default(),
+            };
+            stx.world.public_lane_stake_shares.insert(
+                (LaneId::SINGLE, validator.clone(), validator.clone()),
+                self_share.clone(),
+            );
+            stx.world.public_lane_stake_shares.insert(
+                (LaneId::SINGLE, validator.clone(), delegator.clone()),
+                delegated_share.clone(),
+            );
+
+            let error = Unregister::<Peer>::peer(peer_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("a peer in a live validator tenure must not unregister");
+            assert!(
+                format!("{error}").contains("wait for its deactivation height"),
+                "unexpected rejection: {error}"
+            );
+
+            assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
+            assert!(matches!(
+                stx.world
+                    .public_lane_validators
+                    .get(&(LaneId::SINGLE, validator.clone()))
+                    .expect("matching validator record remains")
+                    .status,
+                iroha_data_model::nexus::PublicLaneValidatorStatus::Active
+            ));
+            assert_eq!(
+                stx.world.public_lane_stake_shares.get(&(
+                    LaneId::SINGLE,
+                    validator.clone(),
+                    validator.clone(),
+                )),
+                Some(&self_share),
+                "peer removal must preserve self stake custody"
+            );
+            assert_eq!(
+                stx.world.public_lane_stake_shares.get(&(
+                    LaneId::SINGLE,
+                    validator,
+                    delegator,
+                )),
+                Some(&delegated_share),
+                "peer removal must preserve delegated and pending-unbond custody"
+            );
+        });
+        world_test!(unregister_peer_rejects_current_authenticated_roster_member {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.commit_topology.get_mut().push(peer_id.clone());
+
+            let error = Unregister::<Peer>::peer(peer_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("an authenticated roster member must not unregister");
+
+            assert_contains!(
+                error.to_string(),
+                "current authenticated consensus roster",
+                "unexpected rejection: {error}"
+            );
+            assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
+        });
+        world_test!(unregister_peer_allows_a_completed_validator_tenure {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let current_height = stx.block_height();
+            assert!(current_height > 0);
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: peer_id.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: iroha_primitives::numeric::Quantity::zero(),
+                    self_stake: iroha_primitives::numeric::Quantity::zero(),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Exited,
+                    activation_height: current_height,
+                    deactivation_height: Some(current_height),
+                    last_reward_epoch: None,
+                },
+            );
+
+            Unregister::<Peer>::peer(peer_id.clone()).expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "a peer whose validator tenure has ended should unregister",
+            );
+
+            assert!(stx.world.peers().iter().all(|peer| peer != &peer_id));
+            let record = stx
+                .world
+                .public_lane_validators
+                .get(&(LaneId::SINGLE, validator))
+                .expect("historical validator tenure remains retained");
+            assert_eq!(record.deactivation_height, Some(current_height));
+        });
+        world_test!(unregister_peer_uses_authoritative_validator_peer_binding {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let other_peer = PeerId::new(
+                checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            );
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: other_peer,
+                    stake_account: validator.clone(),
+                    total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                    activation_height: 1,
+                    deactivation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+
+            Unregister::<Peer>::peer(peer_id)
+                .expect_execute(&ALICE_ID, &mut stx, "registered peer should unregister");
+
+            let record = stx
+                .world
+                .public_lane_validators
+                .get(&(LaneId::SINGLE, validator))
+                .expect("validator associated with another peer remains");
+            assert!(matches!(
+                record.status,
+                iroha_data_model::nexus::PublicLaneValidatorStatus::Active
+            ));
+        });
         world_test!(unregister_peer_ignores_mismatched_public_lane_validator_rows {
             blank_state_transaction!(state, block, state_block, stx);
             let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -30173,8 +34564,8 @@ seiyaku GovernanceLifecycle {
                     self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                    activation_epoch: Some(1),
-                    activation_height: Some(1),
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -30271,15 +34662,10 @@ seiyaku GovernanceLifecycle {
                 iroha_sccp::SccpDestinationProofWorkCountersV1::default(),
             );
             assert!(stx.world.proofs.is_empty());
-            assert!(stx.world.sccp_outbound_proofs.is_empty());
+            assert!(stx.world.sccp_replay_forests.is_empty());
         });
         world_test!(destination_replay_index_rejects_before_pairing_or_bls {
             let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-            let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-                exact.bundle.commitment.context.lane,
-                exact.bundle.commitment.message_id,
-            )
-            .expect("exact outbound replay key");
             let message = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
                 payload_hash: exact.bundle.commitment.payload_hash,
                 payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
@@ -30289,18 +34675,6 @@ seiyaku GovernanceLifecycle {
                 recorded_at_height: exact.request.public_inputs.finality_height,
                 commitment_index: 0,
             };
-            let replay = iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                payload_hash: message.payload_hash,
-                destination_binding_hash: message.destination_binding_hash,
-                route_configuration_hash: message.route_configuration_hash,
-                finality_block_hash: exact.request.public_inputs.finality_block_hash,
-                destination_proof_commitment: [0xE7; 32],
-                finality_height: message.recorded_at_height,
-                commitment_index: message.commitment_index,
-                accepted_at_height: message.recorded_at_height,
-            };
-            assert!(message.is_well_formed_for_key(&key));
-            assert!(replay.is_well_formed_for_key(&key));
             let proof = BridgeProof {
                 range: BridgeProofRange {
                     start_height: message.recorded_at_height,
@@ -30311,18 +34685,11 @@ seiyaku GovernanceLifecycle {
             blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
-            stx.world
-                .sccp_outbound_message_locator
-                .insert(key.message_id, key);
-            let index = SccpOutboundMessageIndexKeyV1::from_terminal(key, &replay)
-                .expect("terminal replay fixture forms its ordered index");
-            stx.world.sccp_outbound_message_index.insert(index, ());
-            stx.world.sccp_outbound_proofs.insert(key, replay);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
             let verifier_work_before = stx.sccp_verifier_work_for_testing();
             let error = SubmitBridgeProof::new(proof)
-                .expect_execute_err(&ALICE_ID, &mut stx, "durable exact replay must fail before expensive verification");
-            assert_err!(format!("{error:?}"), "exact outbound lane and message", "{error:?}");
+                .expect_execute_err(&ALICE_ID, &mut stx, "a consumed terminal message must fail before expensive verification");
+            assert_err!(format!("{error:?}"), "no pending authoritative payload", "{error:?}");
             assert_eq!(
                 iroha_sccp::sccp_destination_proof_work_counters_v1(),
                 iroha_sccp::SccpDestinationProofWorkCountersV1 {
@@ -30339,9 +34706,66 @@ seiyaku GovernanceLifecycle {
                 "durable destination replay rejection must precede verifier-work reservation"
             );
         });
+        world_test!(submit_native_transfer_proof_requires_sparse_replay_witness {
+            blank_state_transaction!(state, block, state_block, stx);
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(79, 7),
+            );
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Quantity::from(100_u64),
+            );
+            seed_sccp_test_tx_call_hash(&mut stx, 0x8B);
+            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+            let error = SubmitBridgeProof::new(proof.clone())
+                .expect_execute_err(&ALICE_ID, &mut stx, "native settlement without a sparse replay witness must fail closed");
+            assert_err!(format!("{error:?}"), "requires a canonical replay non-membership witness");
+            assert_eq!(
+                sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
+                before,
+                "missing-witness rejection must not mutate balances, proof state, or replay state"
+            );
+            let mut membership_witness =
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard();
+            membership_witness.prior_record_digest = [0xA5; 32];
+            let error = SubmitBridgeProof::new(proof.clone())
+                .with_replay_witness(membership_witness)
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "native settlement with a membership witness must fail closed",
+                );
+            assert_err!(
+                format!("{error:?}"),
+                "requires a canonical replay non-membership witness"
+            );
+            let mut zero_root_witness =
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard();
+            zero_root_witness.expected_shard_root = [0; 32];
+            let error = SubmitBridgeProof::new(proof)
+                .with_replay_witness(zero_root_witness)
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "native settlement with a zero-root witness must fail closed",
+                );
+            assert_err!(
+                format!("{error:?}"),
+                "requires a canonical replay non-membership witness"
+            );
+            assert_eq!(
+                sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
+                before,
+                "non-membership shape rejection must not mutate balances, proof state, or replay state"
+            );
+            assert!(stx.world.proofs.is_empty());
+            assert!(stx.world.sccp_replay_forests.is_empty());
+        });
         world_test!(submit_native_transfer_proof_rejects_missing_call_hash_without_mutation_and_retries {
             blank_state_transaction!(state, block, state_block, stx);
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(80, 7),
             );
             let (asset, custody) = configure_native_sccp_settlement_for_test(
@@ -30353,7 +34777,7 @@ seiyaku GovernanceLifecycle {
             assert!(stx.tx_call_hash.is_none());
             let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
-            let error = SubmitBridgeProof::new(proof.clone())
+            let error = native_submit_bridge_proof_for_test(proof.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "native settlement without transaction identity must fail closed");
             assert_err!(format!("{error:?}"), "transaction call_hash", "unexpected missing-call-hash error: {error:?}");
             assert_eq!(
@@ -30367,7 +34791,7 @@ seiyaku GovernanceLifecycle {
                 "identity rejection must precede every instrumented SCCP proof operation"
             );
             seed_sccp_test_tx_call_hash(&mut stx, 0x8C);
-            SubmitBridgeProof::new(proof.clone())
+            native_submit_bridge_proof_for_test(proof.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "the exact same proof must succeed after supplying transaction identity");
             let after = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
             assert_eq!(
@@ -30386,23 +34810,97 @@ seiyaku GovernanceLifecycle {
             );
             assert_eq!(after.transfer_transcripts, before.transfer_transcripts + 1);
             assert_eq!(after.proofs.len(), before.proofs.len() + 1);
-            assert_eq!(after.inbound.len(), before.inbound.len() + 1);
+            assert_eq!(
+                after.replay_forests.len(),
+                before.replay_forests.len() + 1
+            );
             assert_eq!(after.high_water.len(), before.high_water.len() + 1);
-            assert_ne!(
-                after.route_liabilities, before.route_liabilities,
-                "the successful inbound release must debit exact route liability"
+            let route_key = stx.sccp_registry.lanes()[0].routes[0].key();
+            assert_eq!(
+                after
+                    .liabilities
+                    .get(&route_key)
+                    .map(|record| record.outstanding_liability),
+                Some(100_000_000_000_u128 - 7),
+                "validated external burn must debit liability by the exact payload amount"
             );
             assert_eq!(
                 after.receipt_markers.len(),
                 before.receipt_markers.len() + 1
             );
             assert_contains!(after .receipt_markers, &bridge_proof_hash_for_test(&proof));
-            let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
+            assert_eq!(
+                after
+                    .replay_forests
+                    .get(&replay_accumulator_id)
+                    .map(|forest| forest.leaf_count),
+                Some(1)
+            );
+        });
+        world_test!(submit_native_transfer_proof_cannot_consume_overlapping_moderation_bond_reserve {
+            blank_state_transaction!(state, block, state_block, stx);
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(198, 7),
+            );
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Quantity::from(
+                    iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+                ),
+            );
+            let custody_asset = AssetId::new(asset.clone(), custody.clone());
+            crate::smartcontracts::isi::sorafs_moderation::seed_unsettled_moderation_bond_liability_for_test(
+                &mut stx.world,
+                custody_asset.clone(),
+                ALICE_ID.clone(),
             )
-            .expect("validated native replay key");
-            assert!(after.inbound.contains_key(&replay_key));
+            .expect("seed a valid moderation claim over the same protocol custody");
+            assert_eq!(
+                crate::smartcontracts::isi::sorafs_moderation::unsettled_moderation_bond_liability(
+                    stx.world(),
+                    &custody_asset,
+                )
+                .expect("read overlapping moderation liability"),
+                Quantity::from(
+                    iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+                )
+            );
+            seed_sccp_test_tx_call_hash(&mut stx, 0xBC);
+            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+
+            let error = native_submit_bridge_proof_for_test(proof)
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "SCCP release must not consume a co-located moderation bond",
+                );
+
+            assert_err!(
+                format!("{error:?}"),
+                "must retain unsettled bond liability",
+                "unexpected overlapping-custody rejection: {error:?}"
+            );
+            assert_eq!(
+                sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
+                before,
+                "reserve rejection must precede balances, liability, proof, replay, transcript, marker, control, and event mutation"
+            );
+            assert_eq!(
+                crate::smartcontracts::isi::sorafs_moderation::unsettled_moderation_bond_liability(
+                    stx.world(),
+                    &custody_asset,
+                )
+                .expect("retained moderation liability remains valid after rejection"),
+                Quantity::from(
+                    iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+                )
+            );
         });
         world_test!(submit_native_transfer_proof_rejects_blacklisted_custody_before_proof_work {
             blank_state_transaction!(state, block, state_block, stx);
@@ -30421,7 +34919,7 @@ seiyaku GovernanceLifecycle {
             seed_sccp_test_tx_call_hash(&mut stx, 0x9A);
             let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
-            let error = SubmitBridgeProof::new(proof)
+            let error = native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "blacklisted SCCP custody source must reject release");
             assert!(matches!(
                 error,
@@ -30438,6 +34936,29 @@ seiyaku GovernanceLifecycle {
                 iroha_sccp::sccp_destination_proof_work_counters_v1(),
                 iroha_sccp::SccpDestinationProofWorkCountersV1::default(),
                 "custody blacklist rejection must precede every instrumented SCCP proof operation"
+            );
+        });
+        world_test!(submit_native_transfer_proof_removes_zero_liability_row {
+            blank_state_transaction!(state, block, state_block, stx);
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(246, 7),
+            );
+            let exact_liability = sccp_test_transfer_quantity();
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                exact_liability,
+            );
+            let route_key = stx.sccp_registry.lanes()[0].routes[0].key();
+            seed_sccp_test_tx_call_hash(&mut stx, 0xB9);
+            native_submit_bridge_proof_for_test(proof)
+                .expect_execute(&ALICE_ID, &mut stx, "exact liability release must settle");
+            assert!(stx.world.sccp_route_liabilities.get(&route_key).is_none());
+            assert_eq!(
+                sccp_asset_balance(&stx, &AssetId::new(asset, custody)),
+                Quantity::zero(),
+                "zero escrow and omitted zero liability row must remain equivalent"
             );
         });
         world_test!(submit_native_transfer_proof_rejects_custody_cap_before_proof_work {
@@ -30466,7 +34987,7 @@ seiyaku GovernanceLifecycle {
             seed_sccp_test_tx_call_hash(&mut stx, 0x98);
             let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
-            let error = SubmitBridgeProof::new(proof)
+            let error = native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "SCCP release above the custody cap must reject");
             assert!(matches!(
                 error,
@@ -30507,7 +35028,7 @@ seiyaku GovernanceLifecycle {
             )
             .expect_execute(&ALICE_ID, &mut stx, "asset owner configures exact SCCP custody daily cap");
             seed_sccp_test_tx_call_hash(&mut stx, 0x99);
-            SubmitBridgeProof::new(proof)
+            native_submit_bridge_proof_for_test(proof)
                 .expect_execute(&ALICE_ID, &mut stx, "exact-cap SCCP custody release must succeed");
             let store = sccp_asset_transfer_control_store(&stx, &custody);
             let record = store
@@ -30557,7 +35078,7 @@ seiyaku GovernanceLifecycle {
             stx.world.internal_event_buf.clear();
             seed_sccp_test_tx_call_hash(&mut stx, 0x8E);
             let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
-            let error = SubmitBridgeProof::new(proof.clone())
+            let error = native_submit_bridge_proof_for_test(proof.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "recipient-domain overflow must reject the inbound release");
             assert_err!(format!("{error:?}"), "Overflow", "unexpected recipient overflow rejection: {error:?}");
             assert_eq!(
@@ -30573,7 +35094,7 @@ seiyaku GovernanceLifecycle {
             );
             stx.world.internal_event_buf.clear();
             let retry_before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
-            SubmitBridgeProof::new(proof)
+            native_submit_bridge_proof_for_test(proof)
                 .expect_execute(&ALICE_ID, &mut stx, "the exact proof must succeed once the recipient has capacity");
             let after = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
             let released = sccp_test_transfer_quantity();
@@ -30590,7 +35111,10 @@ seiyaku GovernanceLifecycle {
                 retry_before.transfer_transcripts + 1
             );
             assert_eq!(after.proofs.len(), retry_before.proofs.len() + 1);
-            assert_eq!(after.inbound.len(), retry_before.inbound.len() + 1);
+            assert_eq!(
+                after.replay_forests.len(),
+                retry_before.replay_forests.len() + 1
+            );
             assert_eq!(
                 after.receipt_markers.len(),
                 retry_before.receipt_markers.len() + 1
@@ -30598,7 +35122,7 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(submit_native_transfer_proof_releases_custody_atomically_and_only_once {
             blank_state_transaction!(state, block, state_block, stx);
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(81, 7),
             );
             let (asset, custody) = configure_native_sccp_settlement_for_test(
@@ -30613,7 +35137,7 @@ seiyaku GovernanceLifecycle {
             let recipient_before = sccp_asset_balance(&stx, &recipient_asset);
             let released = sccp_test_transfer_quantity();
             seed_sccp_test_tx_call_hash(&mut stx, 0x8D);
-            SubmitBridgeProof::new(proof.clone())
+            native_submit_bridge_proof_for_test(proof.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "fully verified native transfer must release custody");
             let custody_after = sccp_asset_balance(&stx, &custody_asset);
             let recipient_after = sccp_asset_balance(&stx, &recipient_asset);
@@ -30629,13 +35153,18 @@ seiyaku GovernanceLifecycle {
                     .checked_add(&released)
                     .expect("recipient addition")
             );
-            let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native replay key");
-            assert!(stx.world.sccp_inbound_messages.get(&replay_key).is_some());
-            SubmitBridgeProof::new(proof)
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
+            assert_eq!(
+                stx.world
+                    .sccp_replay_forests
+                    .get(&replay_accumulator_id)
+                    .map(|forest| forest.leaf_count),
+                Some(1)
+            );
+            native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "exact proof replay must not release custody twice");
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_after);
             assert_eq!(sccp_asset_balance(&stx, &recipient_asset), recipient_after);
@@ -30654,11 +35183,11 @@ seiyaku GovernanceLifecycle {
             };
             let rotated = rotate_native_registry_for_test(registry.as_ref(), next);
             let lane = rotated
-                .lane(native.message_key.lane)
+                .lane(native.lane)
                 .expect("rotated lane remains governed");
             assert_eq!(lane.current_native_trust_anchor(), Some(next));
             assert_eq!(
-                rotated.native_trust_anchor(native.message_key.lane, previous.anchor_hash),
+                rotated.native_trust_anchor(native.lane, previous.anchor_hash),
                 Some(&previous)
             );
             let (asset, custody) = configure_native_sccp_settlement_for_test(
@@ -30671,7 +35200,7 @@ seiyaku GovernanceLifecycle {
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
             seed_sccp_test_tx_call_hash(&mut stx, 0x8E);
-            SubmitBridgeProof::new(proof.clone())
+            native_submit_bridge_proof_for_test(proof.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "proof under retained anchor A must settle after rotation to B");
             let released = sccp_test_transfer_quantity();
             assert_eq!(
@@ -30682,7 +35211,7 @@ seiyaku GovernanceLifecycle {
             );
             assert_eq!(sccp_asset_balance(&stx, &recipient_asset), released);
             let proof_count = stx.world.proofs.iter().count();
-            let error = SubmitBridgeProof::new(proof)
+            let error = native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "retained historical anchor must not weaken exact-lane replay safety");
             let message = format!("{error:?}");
             assert!(
@@ -30703,7 +35232,7 @@ seiyaku GovernanceLifecycle {
                 .checked_add(10)
                 .expect("fixture checkpoint has headroom");
             let high_water_key = iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1::new(
-                native.message_key.lane,
+                native.lane,
                 current.anchor_hash,
             )
             .expect("valid governed high-water key");
@@ -30719,7 +35248,7 @@ seiyaku GovernanceLifecycle {
             let error = apply_sccp_route_governance_action(
                 bridge::SccpRouteGovernanceActionV1::AdvanceTrustAnchor(
                     bridge::SccpAdvanceLaneTrustAnchorV1 {
-                        lane_id: native.message_key.lane,
+                        lane_id: native.lane,
                         expected_current: current,
                         next: below,
                     },
@@ -30731,7 +35260,7 @@ seiyaku GovernanceLifecycle {
             assert_eq!(stx.sccp_registry.revision(), before);
             assert_eq!(
                 stx.sccp_registry
-                    .lane(native.message_key.lane)
+                    .lane(native.lane)
                     .expect("governed lane")
                     .current_native_trust_anchor(),
                 Some(current)
@@ -30744,7 +35273,7 @@ seiyaku GovernanceLifecycle {
             apply_sccp_route_governance_action(
                 bridge::SccpRouteGovernanceActionV1::AdvanceTrustAnchor(
                     bridge::SccpAdvanceLaneTrustAnchorV1 {
-                        lane_id: native.message_key.lane,
+                        lane_id: native.lane,
                         expected_current: current,
                         next: boundary,
                     },
@@ -30754,7 +35283,7 @@ seiyaku GovernanceLifecycle {
             .expect("inclusive successor boundary may equal admitted high-water");
             let lane = stx
                 .sccp_registry
-                .lane(native.message_key.lane)
+                .lane(native.lane)
                 .expect("advanced governed lane");
             assert_eq!(lane.current_native_trust_anchor(), Some(boundary));
             assert_eq!(lane.native_trust_anchors, vec![current, boundary]);
@@ -30858,7 +35387,7 @@ seiyaku GovernanceLifecycle {
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
             seed_sccp_test_tx_call_hash(&mut pre_cutoff, 0x8F);
-            SubmitBridgeProof::new(proof.clone())
+            native_submit_bridge_proof_for_test(proof.clone())
                 .expect_execute(&ALICE_ID, &mut pre_cutoff, "event finalized at the governed retirement cutoff must remain claimable");
             assert_eq!(
                 sccp_asset_balance(&pre_cutoff, &recipient_asset),
@@ -30869,6 +35398,16 @@ seiyaku GovernanceLifecycle {
                 Quantity::from(100_u64)
                     .checked_sub(&sccp_test_transfer_quantity())
                     .expect("funded custody subtraction")
+            );
+            let retired_route_key = retired.lanes()[0].routes[0].key();
+            assert_eq!(
+                pre_cutoff
+                    .world
+                    .sccp_route_liabilities
+                    .get(&retired_route_key)
+                    .map(|record| record.outstanding_liability),
+                Some(100_000_000_000_u128 - 7),
+                "retirement cannot release liability and a pre-cutoff claim remains payable"
             );
             let retired_route = retired
                 .route(&retired.lanes()[0].routes[0].key())
@@ -30904,7 +35443,7 @@ seiyaku GovernanceLifecycle {
                     ..previous
                 },
             );
-            let error = SubmitBridgeProof::new(unknown)
+            let error = native_submit_bridge_proof_for_test(unknown)
                 .expect_execute_err(&ALICE_ID, &mut stx, "unknown historical anchor hash must fail closed");
             assert_err!(format!("{error:?}"), "unknown historical", "{error:?}");
             let forged = replace_native_proof_trust_anchor_for_test(
@@ -30914,16 +35453,16 @@ seiyaku GovernanceLifecycle {
                     ..previous
                 },
             );
-            let error = SubmitBridgeProof::new(forged)
+            let error = native_submit_bridge_proof_for_test(forged)
                 .expect_execute_err(&ALICE_ID, &mut stx, "known hash with forged checkpoint material must fail closed");
             assert_err!(format!("{error:?}"), "forges governed", "{error:?}");
-            assert!(stx.world.sccp_inbound_messages.is_empty());
+            assert!(stx.world.sccp_replay_forests.is_empty());
             assert!(stx.world.proofs.is_empty());
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
         });
         world_test!(submit_native_transfer_proof_rejects_empty_custody_without_proof_or_replay {
             blank_state_transaction!(state, block, state_block, stx);
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(82, 7),
             );
             let (asset, custody) = configure_native_sccp_settlement_for_test(
@@ -30934,24 +35473,47 @@ seiyaku GovernanceLifecycle {
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
-            let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native replay key");
             let proof_count_before = stx.world.proofs.iter().count();
             seed_sccp_test_tx_call_hash(&mut stx, 0x91);
-            SubmitBridgeProof::new(proof)
+            native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "an unfunded custody account must reject native release");
             assert_eq!(stx.world.proofs.iter().count(), proof_count_before);
-            assert!(stx.world.sccp_inbound_messages.get(&replay_key).is_none());
+            assert!(stx.world.sccp_replay_forests.is_empty());
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), Quantity::zero());
             assert_eq!(sccp_asset_balance(&stx, &recipient_asset), Quantity::zero());
         });
+        world_test!(submit_native_transfer_proof_rejects_liability_underflow_atomically {
+            blank_state_transaction!(state, block, state_block, stx);
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(245, 7),
+            );
+            let six_units: Quantity = "0.000000006"
+                .parse()
+                .expect("six payload units at scale nine");
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                six_units,
+            );
+            seed_sccp_test_tx_call_hash(&mut stx, 0xB8);
+            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+            let error = native_submit_bridge_proof_for_test(proof).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "a burn claim above outstanding liability must reject",
+            );
+            assert_err!(format!("{error:?}"), "exceeds outstanding route liability");
+            assert_eq!(
+                sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
+                before,
+                "liability underflow must not debit escrow or consume proof/replay state"
+            );
+        });
         world_test!(submit_native_transfer_proof_rejects_asset_precision_loss_without_side_effects {
             blank_state_transaction!(state, block, state_block, stx);
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(83, 7),
             );
             let (asset, custody) = configure_native_sccp_settlement_for_test(
@@ -30963,17 +35525,12 @@ seiyaku GovernanceLifecycle {
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
-            let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native replay key");
             seed_sccp_test_tx_call_hash(&mut stx, 0x92);
-            SubmitBridgeProof::new(proof)
+            native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "settlement must not round a governed fractional payload amount");
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert_eq!(sccp_asset_balance(&stx, &recipient_asset), Quantity::zero());
-            assert!(stx.world.sccp_inbound_messages.get(&replay_key).is_none());
+            assert!(stx.world.sccp_replay_forests.is_empty());
             assert!(stx.world.proofs.is_empty());
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
         });
@@ -30982,7 +35539,7 @@ seiyaku GovernanceLifecycle {
             let mut payload = sccp_native_inbound_transfer_payload_for_test(84, 7);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
-            let (proof, native, registry) =
+            let (proof, _native, registry) =
                 native_ethereum_bridge_proof_for_payload_for_test(payload);
             let (asset, custody) = configure_native_sccp_settlement_for_test(
                 &mut stx,
@@ -30993,18 +35550,13 @@ seiyaku GovernanceLifecycle {
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
-            let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native replay key");
             seed_sccp_test_tx_call_hash(&mut stx, 0x93);
-            let error = SubmitBridgeProof::new(proof)
+            let error = native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "first release must reject non-SORA-home inbound assets");
             assert_err!(format!("{error:?}"), "SORA-home asset");
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert_eq!(sccp_asset_balance(&stx, &recipient_asset), Quantity::zero());
-            assert!(stx.world.sccp_inbound_messages.get(&replay_key).is_none());
+            assert!(stx.world.sccp_replay_forests.is_empty());
             assert!(stx.world.proofs.is_empty());
         });
         world_test!(submit_native_bridge_proof_records_durable_exact_lane_replay_evidence {
@@ -31018,38 +35570,23 @@ seiyaku GovernanceLifecycle {
                 NumericSpec::default(),
                 Quantity::from(100_u64),
             );
-            let proof_commitment = bridge_proof_hash_for_test(&proof);
             seed_sccp_test_tx_call_hash(&mut stx, 0x94);
-            SubmitBridgeProof::new(proof)
+            native_submit_bridge_proof_for_test(proof)
                 .expect_execute(&ALICE_ID, &mut stx, "valid native Ethereum proof must submit");
-            let key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native key");
-            let record = stx
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
+            let forest = stx
                 .world
-                .sccp_inbound_messages
-                .get(&key)
-                .expect("native submission must create a durable replay record");
-            assert_eq!(record.payload_hash, native.payload_hash);
-            assert_eq!(record.source_identity_hash, native.source_identity_hash);
-            assert_eq!(record.trust_anchor, native.trust_anchor);
-            assert_eq!(record.anchor_interval_height, native.anchor_interval_height);
-            assert_ne!(
-                record.anchor_interval_height, record.source_finality_height,
-                "Ethereum beacon-slot admission must remain distinct from the execution-block proof range"
-            );
-            assert_eq!(record.source_finality_height, native.source_finality.height);
-            assert_eq!(
-                record.source_finality_hash,
-                native.source_finality.block_hash
-            );
-            assert_eq!(record.source_proof_commitment, proof_commitment);
-            assert_eq!(record.admitted_at_height, stx._curr_block.height.get());
-            assert!(record.is_well_formed_for_lane(key.lane));
+                .sccp_replay_forests
+                .get(&replay_accumulator_id)
+                .expect("native submission must occupy its durable replay forest");
+            assert_eq!(forest.leaf_count, 1);
+            assert_eq!(forest.update_sequence, 1);
+            assert_eq!(forest.nonempty_shard_roots.len(), 1);
             let high_water_key = iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1::new(
-                key.lane,
+                native.lane,
                 native.trust_anchor.anchor_hash,
             )
             .expect("validated native anchor high-water key");
@@ -31062,7 +35599,7 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(submit_native_bridge_proof_rejects_replay_after_retention_prunes_artifact {
             blank_state_transaction!(state, block, state_block, stx);
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(195, 7),
             );
             let _ = configure_native_sccp_settlement_for_test(
@@ -31078,7 +35615,7 @@ seiyaku GovernanceLifecycle {
             stx.zk.sccp.max_proof_bytes_per_transaction = stx.zk.sccp.max_proof_bytes_per_block;
             let proof_commitment = bridge_proof_hash_for_test(&proof);
             seed_sccp_test_tx_call_hash(&mut stx, 0x95);
-            SubmitBridgeProof::new(proof.clone())
+            native_submit_bridge_proof_for_test(proof.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "first native proof must submit");
             let proof_id = iroha_data_model::proof::ProofId {
                 backend: proof.backend_label(),
@@ -31124,7 +35661,7 @@ seiyaku GovernanceLifecycle {
             stx.world.internal_event_buf.clear();
             let proof_count_before = stx.world.proofs.iter().count();
             let verifier_work_before = stx.sccp_verifier_work_for_testing();
-            let error = SubmitBridgeProof::new(proof)
+            let error = native_submit_bridge_proof_for_test(proof)
                 .expect_execute_err(&ALICE_ID, &mut stx, "durable replay index must outlive proof history");
             assert_err!(format!("{error:?}"), "already been admitted on this exact lane", "unexpected native replay rejection: {error:?}");
             assert_eq!(stx.world.proofs.iter().count(), proof_count_before);
@@ -31135,16 +35672,21 @@ seiyaku GovernanceLifecycle {
             );
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
             assert!(stx.world.internal_event_buf.is_empty());
-            let key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native key");
-            assert!(stx.world.sccp_inbound_messages.get(&key).is_some());
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
+            assert_eq!(
+                stx.world
+                    .sccp_replay_forests
+                    .get(&replay_accumulator_id)
+                    .map(|forest| forest.leaf_count),
+                Some(1)
+            );
         });
         world_test!(submit_native_bridge_proof_does_not_alias_same_message_id_on_another_exact_lane {
             blank_state_transaction!(state, block, state_block, stx);
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(196, 7),
             );
             let _ = configure_native_sccp_settlement_for_test(
@@ -31154,59 +35696,55 @@ seiyaku GovernanceLifecycle {
                 Quantity::from(100_u64),
             );
             seed_sccp_test_tx_call_hash(&mut stx, 0x96);
-            let other_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                iroha_data_model::bridge::SccpLaneIdV1 {
-                    source: iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
-                    target: native.message_key.lane.target,
-                },
-                native.message_key.message_id,
-            )
-            .expect("other exact inbound lane key");
-            let other_record = iroha_data_model::bridge::SccpInboundMessageRecordV1 {
-                payload_hash: [0xB1; 32],
-                route_configuration_hash: [0xB5; 32],
-                source_identity_hash: [0xB0; 32],
-                trust_anchor: iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
-                    backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::BscParlia,
-                    anchor_hash: [0xB4; 32],
-                    checkpoint_height: 18,
-                },
-                anchor_interval_height: 18,
-                source_finality_height: 19,
-                source_finality_hash: [0xB2; 32],
-                source_proof_commitment: [0xB3; 32],
-                admitted_at_height: 1,
-            };
-            stx.world
-                .sccp_inbound_messages
-                .insert(other_key, other_record);
-            SubmitBridgeProof::new(proof)
-                .expect_execute(&ALICE_ID, &mut stx, "same message id on a different exact lane must not collide");
-            let native_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native key");
-            assert_ne!(native_key, other_key);
-            assert_eq!(stx.world.sccp_inbound_messages.len(), 2);
-            assert_eq!(
-                stx.world.sccp_inbound_messages.get(&other_key),
-                Some(&other_record)
+            let native_route = stx.sccp_registry.lanes()[0].routes[0].clone();
+            let other_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
             );
-            assert!(stx.world.sccp_inbound_messages.get(&native_key).is_some());
+            let other_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &other_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
+            let mut other_forest = SccpReplayForestV1::default();
+            other_forest.nonempty_shard_roots.insert(0xB1, [0xB2; 32]);
+            other_forest.leaf_count = 1;
+            other_forest.update_sequence = 1;
+            stx.world
+                .sccp_replay_forests
+                .insert(other_accumulator_id.clone(), other_forest.clone());
+            native_submit_bridge_proof_for_test(proof)
+                .expect_execute(&ALICE_ID, &mut stx, "same message id on a different exact lane must not collide");
+            let native_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &native_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
+            assert_ne!(native_accumulator_id, other_accumulator_id);
+            assert_eq!(stx.world.sccp_replay_forests.len(), 2);
+            assert_eq!(
+                stx.world.sccp_replay_forests.get(&other_accumulator_id),
+                Some(&other_forest)
+            );
+            assert_eq!(
+                stx.world
+                    .sccp_replay_forests
+                    .get(&native_accumulator_id)
+                    .map(|forest| forest.leaf_count),
+                Some(1)
+            );
         });
         world_test!(dropped_native_bridge_transaction_rolls_back_proof_and_replay_record_atomically {
             let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(197, 7),
             );
-            let key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
-                native.message_key.lane,
-                native.message_key.message_id,
-            )
-            .expect("validated native key");
+            let route = &registry.lanes()[0].routes[0];
+            let route_key = route.key();
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             {
                 let mut abandoned = state_block.transaction();
                 let _ = configure_native_sccp_settlement_for_test(
@@ -31216,10 +35754,33 @@ seiyaku GovernanceLifecycle {
                     Quantity::from(100_u64),
                 );
                 seed_sccp_test_tx_call_hash(&mut abandoned, 0x97);
-                SubmitBridgeProof::new(proof.clone())
+                native_submit_bridge_proof_for_test(proof.clone())
                     .expect_execute(&ALICE_ID, &mut abandoned, "native proof must be valid inside abandoned overlay");
-                assert!(abandoned.world.sccp_inbound_messages.get(&key).is_some());
+                assert_eq!(
+                    abandoned
+                        .world
+                        .sccp_replay_forests
+                        .get(&replay_accumulator_id)
+                        .map(|forest| forest.leaf_count),
+                    Some(1)
+                );
+                assert_eq!(
+                    abandoned
+                        .world
+                        .sccp_route_liabilities
+                        .get(&route_key)
+                        .map(|record| record.outstanding_liability),
+                    Some(100_000_000_000_u128 - 7)
+                );
             }
+            assert!(
+                state_block
+                    .world
+                    .sccp_route_liabilities
+                    .get(&route_key)
+                    .is_none(),
+                "dropping the transaction must roll back its liability transition"
+            );
             let mut retry = state_block.transaction();
             let _ = configure_native_sccp_settlement_for_test(
                 &mut retry,
@@ -31228,16 +35789,29 @@ seiyaku GovernanceLifecycle {
                 Quantity::from(100_u64),
             );
             seed_sccp_test_tx_call_hash(&mut retry, 0x97);
-            assert!(retry.world.sccp_inbound_messages.get(&key).is_none());
+            assert!(
+                retry
+                    .world
+                    .sccp_replay_forests
+                    .get(&replay_accumulator_id)
+                    .is_none()
+            );
             assert!(retry.world.proofs.iter().all(|(_, record)| {
                 record
                     .bridge
                     .as_ref()
                     .is_none_or(|bridge| bridge.commitment != bridge_proof_hash_for_test(&proof))
             }));
-            SubmitBridgeProof::new(proof)
+            native_submit_bridge_proof_for_test(proof)
                 .expect_execute(&ALICE_ID, &mut retry, "retry after rollback must submit once");
-            assert!(retry.world.sccp_inbound_messages.get(&key).is_some());
+            assert_eq!(
+                retry
+                    .world
+                    .sccp_replay_forests
+                    .get(&replay_accumulator_id)
+                    .map(|forest| forest.leaf_count),
+                Some(1)
+            );
         });
         world_test!(record_bridge_receipt_requires_same_transaction_proof {
             let state = blank_state();
@@ -31580,148 +36154,51 @@ seiyaku GovernanceLifecycle {
                 assert_eq!(emitted, vec![&receipt]);
             }
         });
-        world_test!(sccp_outbound_proof_replay_index_detects_distinct_artifact_same_message {
+        world_test!(sccp_replay_forests_separate_exact_route_accumulators {
             blank_state_transaction!(state, block, state_block, stx);
-            let original_artifact = sccp_message_artifact_for_receipt_test(
-                sccp_transfer_payload_for_receipt_test(91),
-                41,
+            let ethereum_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
             );
-            let original_key = sccp_outbound_proof_key_for_test(&original_artifact);
-            let original_hash = [0xD1; 32];
-            let original_record =
-                sccp_outbound_proof_record_for_test(&original_artifact, original_hash);
+            let bsc_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+            );
+            let ethereum_id = sccp_replay_accumulator_id_for_test(
+                &ethereum_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            );
+            let bsc_id = sccp_replay_accumulator_id_for_test(
+                &bsc_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            );
+            let mut ethereum_forest = SccpReplayForestV1::default();
+            ethereum_forest
+                .nonempty_shard_roots
+                .insert(0x11, [0xA1; 32]);
+            ethereum_forest.leaf_count = 1;
+            ethereum_forest.update_sequence = 1;
+            let mut bsc_forest = SccpReplayForestV1::default();
+            bsc_forest
+                .nonempty_shard_roots
+                .insert(0x11, [0xB1; 32]);
+            bsc_forest.leaf_count = 1;
+            bsc_forest.update_sequence = 1;
             stx.world
-                .sccp_outbound_proofs
-                .insert(original_key, original_record);
-            // A malformed historical proof payload must be irrelevant to the
-            // fixed replay lookup. This record would be undecodable as a
-            // destination artifact if the removed historical scan touched it.
-            let poisoned_proof = BridgeProof {
-                range: BridgeProofRange {
-                    start_height: 1,
-                    end_height: 1,
-                },
-                payload: BridgeProofPayload::SccpDestination(
-                    iroha_data_model::bridge::BridgeSccpDestinationProofV1 {
-                        backend: iroha_data_model::bridge::BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
-                        route_configuration_hash: [0xE1; 32],
-                        encoded_artifact: vec![0xFF; 257],
-                    },
-                ),
-            };
-            insert_bridge_proof_record_for_receipt_test(&mut stx, poisoned_proof);
-            let replay_artifact = sccp_message_artifact_for_receipt_test(
-                sccp_transfer_payload_for_receipt_test(91),
-                42,
-            );
-            let replay_key = sccp_outbound_proof_key_for_test(&replay_artifact);
-            assert_eq!(
-                original_key, replay_key,
-                "fixture must preserve the replayed SCCP message identity"
-            );
-            assert_eq!(
-                stx.world.sccp_outbound_proofs.get(&replay_key),
-                Some(&original_record),
-                "one logarithmic map lookup must detect the replay without decoding proof history"
-            );
-            let distinct_artifact = sccp_message_artifact_for_receipt_test(
-                sccp_transfer_payload_for_receipt_test(92),
-                43,
-            );
-            assert!(
-                stx.world
-                    .sccp_outbound_proofs
-                    .get(&sccp_outbound_proof_key_for_test(&distinct_artifact))
-                    .is_none(),
-                "distinct SCCP message ids must not conflict"
-            );
-        });
-        world_test!(sccp_outbound_proof_record_binds_payload_destination_and_route {
-            let artifact = sccp_message_artifact_for_receipt_test(
-                sccp_transfer_payload_for_receipt_test(95),
-                45,
-            );
-            let record = sccp_outbound_proof_record_for_test(&artifact, [0xD2; 32]);
-            assert_eq!(record.payload_hash, artifact.bundle.commitment.payload_hash);
-            assert_eq!(
-                record.destination_binding_hash,
-                artifact.destination_binding_hash
-            );
-            assert_eq!(
-                record.route_configuration_hash,
-                artifact.route_configuration_hash
-            );
-            for drifted in [
-                iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                    payload_hash: [0xA1; 32],
-                    ..record
-                },
-                iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                    destination_binding_hash: [0xA2; 32],
-                    ..record
-                },
-                iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                    route_configuration_hash: [0xA3; 32],
-                    ..record
-                },
-            ] {
-                assert_ne!(drifted, record);
-            }
-        });
-        world_test!(sccp_outbound_proof_index_allows_distinct_messages_at_same_finality_height {
-            blank_state_transaction!(state, block, state_block, stx);
-            let first_artifact = sccp_message_artifact_for_receipt_test(
-                sccp_transfer_payload_for_receipt_test(101),
-                50,
-            );
-            let first_proof = sccp_bridge_proof_for_receipt_test(&first_artifact);
-            insert_bridge_proof_record_for_receipt_test(&mut stx, first_proof);
-            let first_key = sccp_outbound_proof_key_for_test(&first_artifact);
-            let first_record = sccp_outbound_proof_record_for_test(&first_artifact, [0xD3; 32]);
+                .sccp_replay_forests
+                .insert(ethereum_id.clone(), ethereum_forest.clone());
             stx.world
-                .sccp_outbound_proofs
-                .insert(first_key, first_record);
-            let second_artifact = sccp_message_artifact_for_receipt_test(
-                sccp_transfer_payload_for_receipt_test(102),
-                50,
+                .sccp_replay_forests
+                .insert(bsc_id.clone(), bsc_forest.clone());
+            assert_ne!(ethereum_id, bsc_id);
+            assert_eq!(stx.world.sccp_replay_forests.len(), 2);
+            assert_eq!(
+                stx.world.sccp_replay_forests.get(&ethereum_id),
+                Some(&ethereum_forest)
             );
-            let second_proof = sccp_bridge_proof_for_receipt_test(&second_artifact);
-            let second_key = sccp_outbound_proof_key_for_test(&second_artifact);
-            let second_record = sccp_outbound_proof_record_for_test(&second_artifact, [0xD4; 32]);
-            assert_ne!(first_key, second_key);
-            assert_eq!(first_record.finality_height, second_record.finality_height);
-            stx.world
-                .sccp_outbound_proofs
-                .insert(second_key, second_record);
-            assert_eq!(stx.world.sccp_outbound_proofs.len(), 2);
-            assert!(
-                find_overlapping_bridge_range(
-                    &stx,
-                    &second_proof.backend_label(),
-                    &second_proof.range,
-                )
-                .is_some(),
-                "fixture must share the same backend and finality range"
-            );
-            assert!(
-                find_bridge_range_overlap_conflict(
-                    &stx,
-                    &second_proof.backend_label(),
-                    &second_proof.range,
-                    true,
-                )
-                .is_none(),
-                "SCCP message proofs use message-id replay indexing, not range exclusion"
-            );
-            assert!(
-                find_bridge_range_overlap_conflict(
-                    &stx,
-                    &second_proof.backend_label(),
-                    &second_proof.range,
-                    false,
-                )
-                .is_some(),
-                "generic bridge proofs must still reject overlapping backend ranges"
+            assert_eq!(
+                stx.world.sccp_replay_forests.get(&bsc_id),
+                Some(&bsc_forest)
             );
         });
         world_test!(set_lane_relay_emergency_validators_requires_permission {
@@ -31980,6 +36457,73 @@ seiyaku GovernanceLifecycle {
                 "topology-mismatched emergency override must not be stored"
             );
         });
+        world_test!(set_participant_lane_relay_emergency_validators_accepts_committee_peer_outside_global_topology {
+            lane_relay_transaction!(state, block, state_block, stx, authority);
+            let participant_lane = LaneId::new(1);
+            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE, participant_lane]);
+            let topology_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            let committee_peer = seed_live_peer_with_role(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+                ConsensusKeyRole::Committee,
+            );
+            *stx.commit_topology.get_mut() = vec![topology_peer];
+
+            SetLaneRelayEmergencyValidators {
+                lane_id: participant_lane,
+                peers: vec![committee_peer.clone()],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .expect_execute(
+                &authority,
+                &mut stx,
+                "participant emergency committee need not join global topology",
+            );
+
+            let stored = stx
+                .world
+                .lane_relay_emergency_validators
+                .get(&participant_lane)
+                .expect("participant emergency override stored");
+            assert_eq!(stored.peers, vec![committee_peer]);
+        });
+        world_test!(set_global_lane_relay_emergency_validators_rejects_committee_only_peer {
+            lane_relay_transaction!(state, block, state_block, stx, authority);
+            let committee_peer = seed_live_peer_with_role(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+                ConsensusKeyRole::Committee,
+            );
+            *stx.commit_topology.get_mut() = vec![committee_peer.clone()];
+
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::SINGLE,
+                peers: vec![committee_peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .expect_execute_err(
+                &authority,
+                &mut stx,
+                "global emergency roster must require a Validator-role key",
+            );
+            let msg = smart_contract_instruction_error_message(err);
+            assert_contains!(
+                msg,
+                "does not have a live consensus key",
+                "unexpected error message: {msg}"
+            );
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&LaneId::SINGLE)
+                    .is_none()
+            );
+        });
         world_test!(set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster {
             lane_relay_transaction!(state, block, state_block, stx, authority);
             let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -32141,7 +36685,10 @@ seiyaku GovernanceLifecycle {
             ]
         }
         fn soracloud_fhe_stark_vk_id(profile: SoracloudFheVkTestProfile) -> VerifyingKeyId {
-            VerifyingKeyId::new("stark/fri/sha256-goldilocks", profile.circuit_id)
+            VerifyingKeyId::new(
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                profile.circuit_id,
+            )
         }
         fn soracloud_fhe_stark_vk_record(
             profile: SoracloudFheVkTestProfile,
@@ -32184,10 +36731,9 @@ seiyaku GovernanceLifecycle {
                 fold_arity: 2,
                 queries,
                 merkle_arity: 2,
-                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
             };
             VerifyingKeyBox::new(
-                "stark/fri/sha256-goldilocks".into(),
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
                 norito::encode_canonical(&payload)
                     .expect("encode canonical Soracloud STARK verifying key"),
             )
@@ -32726,6 +37272,192 @@ seiyaku GovernanceLifecycle {
             let res = isi_bad.execute(&ALICE_ID, &mut stx);
             assert!(res.is_err(), "invalid PoP must be rejected");
         });
+        world_test!(register_committee_peer_creates_only_live_unbounded_committee_key {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "register proof-bound committee peer during genesis",
+            );
+
+            assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
+            let ids = stx
+                .world
+                .consensus_keys_by_pk
+                .get(&peer_id.public_key().to_string())
+                .cloned()
+                .expect("committee key index");
+            assert_eq!(ids.len(), 1);
+            assert_eq!(ids[0].role, ConsensusKeyRole::Committee);
+            let record = stx
+                .world
+                .consensus_keys
+                .get(&ids[0])
+                .expect("committee key record");
+            assert_eq!(record.public_key, *peer_id.public_key());
+            assert_eq!(record.pop.as_deref(), Some(pop.as_slice()));
+            assert_eq!(record.status, ConsensusKeyStatus::Active);
+            assert_eq!(record.activation_height, stx.block_height());
+            assert_eq!(record.expiry_height, None);
+            assert!(crate::state::peer_has_live_consensus_key_for_role(
+                &stx.world,
+                &peer_id,
+                stx.block_height(),
+                ConsensusKeyRole::Committee,
+            ));
+            assert!(!crate::state::peer_has_live_consensus_key_for_role(
+                &stx.world,
+                &peer_id,
+                stx.block_height(),
+                ConsensusKeyRole::Validator,
+            ));
+        });
+        world_test!(register_committee_peer_genesis_duplicate_is_role_sensitive {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
+
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "register committee peer");
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "accept exact duplicate committee registration during genesis",
+            );
+
+            let error = iroha_data_model::isi::register::RegisterPeerWithPop::new(
+                peer_id.clone(),
+                pop,
+            )
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "reject a duplicate genesis peer under a different consensus role",
+            );
+            assert_contains!(
+                smart_contract_instruction_error_message(error),
+                "duplicate genesis peer registration must match"
+            );
+            let ids = stx
+                .world
+                .consensus_keys_by_pk
+                .get(&peer_id.public_key().to_string())
+                .expect("committee key index");
+            assert_eq!(ids.len(), 1);
+            assert_eq!(ids[0].role, ConsensusKeyRole::Committee);
+        });
+        world_test!(committee_peer_unregister_and_reregister_preserves_committee_role {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
+
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "register committee peer");
+            Unregister::<Peer>::peer(peer_id.clone()).expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "unregister committee peer",
+            );
+            let committee_id = derive_committee_key_id(peer_id.public_key());
+            assert_eq!(
+                stx.world
+                    .consensus_keys
+                    .get(&committee_id)
+                    .expect("disabled committee key")
+                    .status,
+                ConsensusKeyStatus::Disabled
+            );
+            assert!(
+                stx.world
+                    .consensus_keys
+                    .get(&derive_validator_key_id(peer_id.public_key()))
+                    .is_none(),
+                "unregistering a Committee-only peer must not synthesize Validator history"
+            );
+
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop,
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "re-register committee peer");
+            let ids = stx
+                .world
+                .consensus_keys_by_pk
+                .get(&peer_id.public_key().to_string())
+                .expect("committee key index");
+            assert_eq!(ids.as_slice(), std::slice::from_ref(&committee_id));
+            assert_eq!(
+                stx.world
+                    .consensus_keys
+                    .get(&committee_id)
+                    .expect("reactivated committee key")
+                    .status,
+                ConsensusKeyStatus::Active
+            );
+        });
+        world_test!(register_committee_peer_rejects_invalid_pop_without_mutation {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let other = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let wrong_pop =
+                iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("mismatched pop");
+            let error = iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                wrong_pop,
+            )
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "mismatched committee PoP must reject",
+            );
+            assert_contains!(
+                smart_contract_instruction_error_message(error),
+                "invalid BLS proof-of-possession"
+            );
+            assert!(stx.world.peers().iter().all(|peer| peer != &peer_id));
+            assert!(
+                stx.world
+                    .consensus_keys_by_pk
+                    .get(&peer_id.public_key().to_string())
+                    .is_none()
+            );
+        });
         world_test!(register_peer_applies_key_policy_defaults {
             let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
@@ -32735,26 +37467,12 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let params = stx.world.parameters.get().clone();
-            let require_hsm = params.sumeragi.key_require_hsm;
-            let allowed_hsm_providers = params.sumeragi.key_allowed_hsm_providers.clone();
             let activation_lead_blocks = params.sumeragi.key_activation_lead_blocks;
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
-            let mut isi =
+            let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
-            if require_hsm {
-                let provider = allowed_hsm_providers
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "softkey".to_string());
-                let binding = iroha_data_model::consensus::HsmBinding {
-                    provider,
-                    key_label: peer_id.public_key().to_string(),
-                    slot: Some(1),
-                };
-                isi = isi.with_hsm(binding);
-            }
             isi.expect_execute(&ALICE_ID, &mut stx, "register peer with policy enforcement");
             let pk_label = peer_id.public_key().to_string();
             let ids = stx
@@ -32779,17 +37497,6 @@ seiyaku GovernanceLifecycle {
                 ConsensusKeyStatus::Pending,
                 "lead-time activation should mark the key pending"
             );
-            if require_hsm {
-                assert!(
-                    record.hsm.is_some(),
-                    "HSM binding must be populated when key_require_hsm is enabled"
-                );
-            } else {
-                assert!(
-                    record.hsm.is_none(),
-                    "HSM binding must be empty when key_require_hsm is disabled"
-                );
-            }
         });
         world_test!(register_peer_rejects_id_collision {
             let mut state = blank_state();
@@ -32811,7 +37518,6 @@ seiyaku GovernanceLifecycle {
                 pop: Some(other_pop),
                 activation_height: stx.block_height(),
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             };
@@ -32889,60 +37595,6 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_instruction_error_message(err);
             assert_contains!(msg, "signature_batch_max_bls", "unexpected error message: {msg}");
         });
-        world_test!(register_peer_requires_hsm_binding_when_policy_enabled {
-            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
-            let mut state = blank_state();
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.signature_batch_max_bls = 4;
-            state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            {
-                let mut stx = state_block.transaction();
-                let params = stx.world.parameters.get_mut();
-                params.sumeragi.key_require_hsm = true;
-                params.sumeragi.key_allowed_hsm_providers = vec!["softkey".into()];
-                stx.apply();
-            }
-            crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
-            let bls_missing = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id_missing = crate::PeerId::new(bls_missing.public_key().clone());
-            {
-                let mut stx = state_block.transaction();
-                let pop_missing =
-                    iroha_crypto::bls_normal_pop_prove(bls_missing.private_key()).expect("pop");
-                let isi_missing = iroha_data_model::isi::register::RegisterPeerWithPop::new(
-                    peer_id_missing.clone(),
-                    pop_missing,
-                );
-                let err = isi_missing
-                    .expect_execute_err(&ALICE_ID, &mut stx, "missing HSM binding must be rejected");
-                let msg = smart_contract_instruction_error_message(err);
-                assert_contains!(msg, "HSM binding required", "unexpected error: {msg}");
-                assert!(stx.world.peers().iter().all(|p| p != &peer_id_missing));
-                assert_eq!(
-                    crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
-                    (1, Some("missing_hsm"))
-                );
-            }
-            let bls_bound = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id_bound = crate::PeerId::new(bls_bound.public_key().clone());
-            let mut stx = state_block.transaction();
-            let pop_bound =
-                iroha_crypto::bls_normal_pop_prove(bls_bound.private_key()).expect("pop");
-            let binding = iroha_data_model::consensus::HsmBinding {
-                provider: "softkey".into(),
-                key_label: peer_id_bound.public_key().to_string(),
-                slot: Some(1),
-            };
-            let isi = iroha_data_model::isi::register::RegisterPeerWithPop::new(
-                peer_id_bound.clone(),
-                pop_bound,
-            )
-            .with_hsm(binding);
-            isi.expect_execute(&ALICE_ID, &mut stx, "HSM-bound peer registration should succeed");
-            assert!(stx.world.peers().iter().any(|p| p == &peer_id_bound));
-        });
         world_test!(register_peer_rejects_activation_before_lead_time {
             let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
             let mut state = blank_state();
@@ -32996,7 +37648,6 @@ seiyaku GovernanceLifecycle {
                     pop: Some(pop.clone()),
                     activation_height: stx.block_height(),
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Active,
                 };
@@ -33019,134 +37670,6 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
                 (1, Some("identifier_collision"))
-            );
-        });
-        world_test!(generic_vk_management_rejects_kagemusha_release_owned_records {
-            alice_state_transaction!(state, block, state_block, stx);
-            grant_manage_verifying_keys(&mut stx);
-            stx.apply();
-            let mut stx = state_block.transaction();
-
-            let record = |circuit_id: &str, version: u32| {
-                VerifyingKeyRecord::new_with_owner(
-                    version,
-                    circuit_id,
-                    None,
-                    "test",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    [0x41; 32],
-                    [0x42; 32],
-                )
-            };
-            let ordinary_id = VerifyingKeyId::new(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                "ordinary-key",
-            );
-            let reserved_circuit_record = record(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                1,
-            );
-            let err = verifying_keys::RegisterVerifyingKey {
-                id: ordinary_id.clone(),
-                record: reserved_circuit_record,
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic registration must not occupy a Kagemusha release circuit",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert!(stx.world.verifying_keys.get(&ordinary_id).is_none());
-
-            let reserved_id =
-                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-                    iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-                    [0x43; 32],
-                );
-            let ordinary_record = record(TEST_HALO2_CIRCUIT_ID, 1);
-            let err = verifying_keys::RegisterVerifyingKey {
-                id: reserved_id.clone(),
-                record: ordinary_record,
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic registration must not occupy a release-qualified Kagemusha id",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert!(stx.world.verifying_keys.get(&reserved_id).is_none());
-
-            let lookalike_id = VerifyingKeyId::new(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                format!(
-                    "unrelated-{}-not-a-release-digest",
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
-                ),
-            );
-            let lookalike_record = record(TEST_HALO2_CIRCUIT_ID, 1);
-            ensure_generic_verifying_key_is_not_kagemusha_release_owned(
-                &lookalike_id,
-                &[&lookalike_record],
-            )
-            .expect("an unrelated lookalike id must not be classified as release-owned");
-
-            let legacy_release_record = record(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                1,
-            );
-            stx.world
-                .verifying_keys
-                .insert(ordinary_id.clone(), legacy_release_record.clone());
-            let replacement = record(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                2,
-            );
-            let err = verifying_keys::UpdateVerifyingKey {
-                id: ordinary_id.clone(),
-                record: replacement,
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic updates must not replace a Kagemusha release-circuit verifier",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert_eq!(
-                stx.world.verifying_keys.get(&ordinary_id),
-                Some(&legacy_release_record)
-            );
-
-            let legacy_reserved_id_record = record(TEST_HALO2_CIRCUIT_ID, 1);
-            stx.world.verifying_keys.insert(
-                reserved_id.clone(),
-                legacy_reserved_id_record.clone(),
-            );
-            let err = verifying_keys::UpdateVerifyingKey {
-                id: reserved_id.clone(),
-                record: record(TEST_HALO2_CIRCUIT_ID, 2),
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic updates must not replace a release-qualified Kagemusha id",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert_eq!(
-                stx.world.verifying_keys.get(&reserved_id),
-                Some(&legacy_reserved_id_record)
             );
         });
         world_test!(register_vk_accepts_canonical_soracloud_bootstrap_record {
@@ -33351,7 +37874,7 @@ seiyaku GovernanceLifecycle {
             norito::decode_from_bytes::<crate::zk_stark::StarkFriVerifyingKeyV1>(&alternate_bytes)
                 .expect("ordinary Norito accepts the advertised alternate layout");
             let alternate_vk =
-                VerifyingKeyBox::new("stark/fri/sha256-goldilocks".into(), alternate_bytes);
+                VerifyingKeyBox::new("stark/fri/poseidon-x7-goldilocks-6x64-v1".into(), alternate_bytes);
             let direct_error =
                 validate_soracloud_fhe_stark_verifying_key_payload(verifier_profile, &alternate_vk)
                     .expect_err("Soracloud validation must reject alternate-layout key bytes");
@@ -33574,7 +38097,7 @@ seiyaku GovernanceLifecycle {
             alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let backend = "stark/fri/sha256-goldilocks";
+            let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let circuit_id = format!("{backend}:bounded-registry-key");
             let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
                 version: 1,
@@ -33584,7 +38107,6 @@ seiyaku GovernanceLifecycle {
                 fold_arity: 2,
                 queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
-                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
             };
             let mut bytes = norito::encode_canonical(&payload).expect("encode canonical STARK key");
             let circuit_offset = bytes
@@ -33768,7 +38290,7 @@ seiyaku GovernanceLifecycle {
                 RejectedVerifierBackendFamily::ProtocolName,
             );
         });
-        world_test!(register_vk_reserves_every_active_and_retired_privacy_circuit_label {
+        world_test!(register_vk_reserves_every_exact12_privacy_circuit_label {
             fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
                 vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", [0x6D; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
@@ -33779,15 +38301,14 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let exec = Executor::default();
             for (label_index, label) in PrivacyProtocolIdV1::ALL
-                .into_iter()
                 .map(PrivacyProtocolIdV1::canonical_label)
-                .chain(PRIVACY_RETIRED_PROTOCOL_LABELS_V1)
+                .into_iter()
                 .enumerate()
             {
                 for (variant_index, circuit_id) in [
                     label.to_owned(),
                     format!("halo2/ipa::{label}"),
-                    format!("stark/fri/sha256-goldilocks:{label}"),
+                    format!("stark/fri/poseidon-x7-goldilocks-6x64-v1:{label}"),
                     format!("generic/namespace/{label}"),
                 ]
                 .into_iter()
@@ -33933,9 +38454,9 @@ seiyaku GovernanceLifecycle {
                     "halo2/unknown-native-v1",
                     "halo2/ipa:unknown-native-v1",
                     "stark/unknown-native-v1",
-                    " stark/fri/sha256-goldilocks",
-                    "stark/fri/sha256-goldilocks ",
-                    "stark/fri/sha256-goldilocks\0",
+                    " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                    "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
+                    "stark/fri/poseidon-x7-goldilocks-6x64-v1\0",
                     "../stark/fri",
                 ],
                 RejectedVerifierBackendFamily::Unsupported,
@@ -33972,10 +38493,10 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
-            let backend = "stark/fri/sha256-goldilocks";
+            let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let id = VerifyingKeyId::new(backend, "vk_stark_mixed_case_curve");
             let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, "stark/fri/sha256-goldilocks:curve-test", BackendTag::Stark, "GoLdIlOcKs", [0x42; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".into()));
+            vk_record!(rec, 1, "stark/fri/poseidon-x7-goldilocks-6x64-v1:curve-test", BackendTag::Stark, "GoLdIlOcKs", [0x42; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -34005,18 +38526,12 @@ seiyaku GovernanceLifecycle {
             let pk = kp.public_key().clone();
             let pop =
                 iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
-            let hsm = HsmBinding {
-                provider: "pkcs11".to_string(),
-                key_label: "validator/0".to_string(),
-                slot: Some(1),
-            };
             let make_record = |activation_height: u64| ConsensusKeyRecord {
                 id: id.clone(),
                 public_key: pk.clone(),
                 pop: Some(pop.clone()),
                 activation_height,
                 expiry_height: None,
-                hsm: Some(hsm.clone()),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -34064,40 +38579,6 @@ seiyaku GovernanceLifecycle {
                 );
             }
         });
-        world_test!(register_consensus_key_requires_hsm_when_configured {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let params = consensus_test_parameters!(require_hsm state_block);
-            let mut stx = state_block.transaction();
-            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop =
-                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
-            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm");
-            let record = ConsensusKeyRecord {
-                id: id.clone(),
-                public_key: kp.public_key().clone(),
-                pop: Some(pop),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks),
-                expiry_height: None,
-                hsm: None,
-                replaces: None,
-                status: ConsensusKeyStatus::Pending,
-            };
-            let exec = Executor::default();
-            let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                id: id.clone(),
-                record,
-            }
-            .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                .expect_err("HSM-required policy must reject missing binding");
-            let msg = smart_contract_error_message(err);
-            assert_contains!(msg, "HSM binding required", "unexpected msg: {msg}");
-        });
         world_test!(register_consensus_key_rejects_disallowed_algorithm {
             let state = blank_state();
             let block = new_dummy_block();
@@ -34114,11 +38595,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/ed25519".into(),
-                    slot: None,
-                }),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -34155,11 +38631,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/history".into(),
-                    slot: None,
-                }),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -34178,11 +38649,9 @@ seiyaku GovernanceLifecycle {
             );
         });
         #[test]
-        #[allow(clippy::too_many_lines)]
-        fn register_consensus_key_respects_config_allowlist_and_hsm_flag() {
+        fn register_consensus_key_respects_algorithm_allowlist() {
             let mut state = blank_state();
             let sumeragi_cfg = SumeragiPolicyConfig {
-                key_require_hsm: false,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -34190,14 +38659,13 @@ seiyaku GovernanceLifecycle {
                 key_expiry_grace_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
                 key_allowed_algorithms: [Algorithm::BlsNormal].into_iter().collect(),
-                key_allowed_hsm_providers: ["softkey".to_owned()].into_iter().collect(),
             };
             state.set_sumeragi_parameters(sumeragi_cfg.clone());
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = consensus_test_parameters!(state_block);
             let exec = Executor::default();
-            // BLS is allowed and does not require an HSM binding once the config is applied.
+            // BLS is admitted by the configured algorithm allowlist.
             {
                 let mut stx = state_block.transaction();
                 let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -34212,7 +38680,6 @@ seiyaku GovernanceLifecycle {
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Pending,
                 };
@@ -34222,7 +38689,7 @@ seiyaku GovernanceLifecycle {
                 }
                 .into();
                 exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect("bls consensus key should be accepted without HSM");
+                    .expect("BLS consensus key should be accepted");
             }
             // Ed25519 is filtered out by the config allowlist.
             {
@@ -34238,11 +38705,6 @@ seiyaku GovernanceLifecycle {
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
                     expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/bls".into(),
-                        slot: None,
-                    }),
                     replaces: None,
                     status: ConsensusKeyStatus::Pending,
                 };
@@ -34260,200 +38722,11 @@ seiyaku GovernanceLifecycle {
                     "consensus key algorithm ed25519 is not allowed; allowed: [bls_normal]"
                 );
             }
-            // Provider outside the allowlist is rejected even when the algorithm is permitted.
-            {
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-                let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
-                    .expect("pop for validator");
-                let id =
-                    ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-provider-reject");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: Some(pop),
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "pkcs11".into(),
-                        key_label: "validator/provider".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("provider not on allowlist must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "HSM provider pkcs11 is not allowed; allowed providers: [softkey]"
-                );
-            }
-        }
-        world_test!(rotate_consensus_key_requires_hsm_when_configured {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let params = consensus_test_parameters!(require_hsm state_block);
-            let mut stx = state_block.transaction();
-            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_a =
-                iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
-            let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-required");
-            let record_a = ConsensusKeyRecord {
-                id: id_a.clone(),
-                public_key: kp_a.public_key().clone(),
-                pop: Some(pop_a),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks),
-                expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/a".into(),
-                    slot: Some(0),
-                }),
-                replaces: None,
-                status: ConsensusKeyStatus::Pending,
-            };
-            let exec = Executor::default();
-            let instr_a: InstructionBox = consensus_keys::RegisterConsensusKey {
-                id: id_a.clone(),
-                record: record_a,
-            }
-            .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_a)
-                .expect("register initial consensus key");
-            stx.apply();
-            let mut stx = state_block.transaction();
-            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_b =
-                iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
-            let id_b = ConsensusKeyId::new(
-                ConsensusKeyRole::Validator,
-                "validator-hsm-missing-rotation",
-            );
-            let record_b = ConsensusKeyRecord {
-                id: id_b.clone(),
-                public_key: kp_b.public_key().clone(),
-                pop: Some(pop_b),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks + 1),
-                expiry_height: None,
-                hsm: None,
-                replaces: Some(id_a.clone()),
-                status: ConsensusKeyStatus::Pending,
-            };
-            let instr_b: InstructionBox = consensus_keys::RotateConsensusKey {
-                id: id_b.clone(),
-                record: record_b,
-            }
-            .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr_b)
-                .expect_err("rotation without HSM must be rejected when required");
-            let msg = smart_contract_error_message(err);
-            assert_contains!(msg, "HSM binding required", "unexpected error: {msg}");
-        });
-        #[test]
-        #[allow(clippy::too_many_lines)]
-        fn rotate_consensus_key_allows_missing_hsm_when_optional() {
-            let mut state = blank_state();
-            let sumeragi_cfg = SumeragiPolicyConfig {
-                key_require_hsm: false,
-                key_activation_lead_blocks:
-                    iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
-                key_overlap_grace_blocks:
-                    iroha_config::parameters::defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
-                key_expiry_grace_blocks:
-                    iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
-                key_allowed_algorithms: [Algorithm::BlsNormal].into_iter().collect(),
-                key_allowed_hsm_providers: ["pkcs11".to_owned()].into_iter().collect(),
-            };
-            state.set_sumeragi_parameters(sumeragi_cfg.clone());
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let params = consensus_test_parameters!(state_block);
-            let mut stx = state_block.transaction();
-            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_a =
-                iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
-            let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-a");
-            let record_a = ConsensusKeyRecord {
-                id: id_a.clone(),
-                public_key: kp_a.public_key().clone(),
-                pop: Some(pop_a),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks),
-                expiry_height: None,
-                hsm: None,
-                replaces: None,
-                status: ConsensusKeyStatus::Pending,
-            };
-            let exec = Executor::default();
-            let instr_a: InstructionBox = consensus_keys::RegisterConsensusKey {
-                id: id_a.clone(),
-                record: record_a.clone(),
-            }
-            .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_a)
-                .expect("register initial key without HSM when optional");
-            stx.apply();
-            let mut stx = state_block.transaction();
-            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_b =
-                iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
-            let id_b = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-b");
-            let record_b = ConsensusKeyRecord {
-                id: id_b.clone(),
-                public_key: kp_b.public_key().clone(),
-                pop: Some(pop_b),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks + 2),
-                expiry_height: None,
-                hsm: None,
-                replaces: Some(id_a.clone()),
-                status: ConsensusKeyStatus::Pending,
-            };
-            let instr_b: InstructionBox = consensus_keys::RotateConsensusKey {
-                id: id_b.clone(),
-                record: record_b.clone(),
-            }
-            .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_b)
-                .expect("rotation without HSM should succeed when optional");
-            let prev = stx
-                .world
-                .consensus_keys
-                .get(&id_a)
-                .expect("previous key stored");
-            let next = stx
-                .world
-                .consensus_keys
-                .get(&id_b)
-                .expect("rotated key stored");
-            assert_eq!(prev.status, ConsensusKeyStatus::Retiring);
-            assert_eq!(next.status, ConsensusKeyStatus::Pending);
-            assert!(next.hsm.is_none());
         }
         #[test]
-        #[allow(clippy::too_many_lines)]
-        fn register_consensus_key_rejects_empty_allowlists() {
+        fn register_consensus_key_rejects_empty_algorithm_allowlist() {
             let mut state = blank_state();
-            let mut sumeragi_cfg = SumeragiPolicyConfig {
-                key_require_hsm: true,
+            state.set_sumeragi_parameters(SumeragiPolicyConfig {
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -34461,165 +38734,44 @@ seiyaku GovernanceLifecycle {
                 key_expiry_grace_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
                 key_allowed_algorithms: BTreeSet::new(),
-                key_allowed_hsm_providers: BTreeSet::new(),
+            });
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let params = {
+                let mut stx = state_block.transaction();
+                grant_alice_typed_permission(
+                    &mut stx,
+                    CanManageConsensusKeys,
+                    "grant manage consensus keys",
+                );
+                let params = stx.world.parameters.get().sumeragi.clone();
+                stx.apply();
+                params
             };
-            state.set_sumeragi_parameters(sumeragi_cfg.clone());
-            let exec = Executor::default();
-            // Empty algorithm allowlist rejects any registration.
-            {
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let params = {
-                    let mut stx = state_block.transaction();
-                    grant_alice_typed_permission(
-                        &mut stx,
-                        CanManageConsensusKeys,
-                        "grant manage consensus keys",
-                    );
-                    let params = stx.world.parameters.get().sumeragi.clone();
-                    stx.apply();
-                    params
-                };
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-                let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
-                    .expect("pop for validator");
-                let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-algos");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: Some(pop),
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/empty".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("empty algorithm allowlist must reject");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "consensus key algorithm bls_normal is not allowed; allowed: []"
-                );
-            }
-            // Empty provider allowlist rejects bindings even when the algorithm is permitted.
-            {
-                sumeragi_cfg.key_allowed_algorithms =
-                    [Algorithm::Ed25519].into_iter().collect::<BTreeSet<_>>();
-                sumeragi_cfg.key_allowed_hsm_providers.clear();
-                state.set_sumeragi_parameters(sumeragi_cfg.clone());
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let params = {
-                    let mut stx = state_block.transaction();
-                    grant_alice_typed_permission(
-                        &mut stx,
-                        CanManageConsensusKeys,
-                        "grant manage consensus keys",
-                    );
-                    let params = stx.world.parameters.get().sumeragi.clone();
-                    stx.apply();
-                    params
-                };
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-                let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-hsm");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: None,
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/empty-hsm".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("empty provider allowlist must reject");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "HSM provider softkey is not allowed; allowed providers: []"
-                );
-            }
-            // Optional HSM policy still enforces the provider allowlist when a binding is supplied.
-            {
-                sumeragi_cfg.key_require_hsm = false;
-                sumeragi_cfg.key_allowed_algorithms =
-                    [Algorithm::Ed25519].into_iter().collect::<BTreeSet<_>>();
-                sumeragi_cfg.key_allowed_hsm_providers.clear();
-                state.set_sumeragi_parameters(sumeragi_cfg.clone());
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let params = {
-                    let mut stx = state_block.transaction();
-                    grant_alice_typed_permission(
-                        &mut stx,
-                        CanManageConsensusKeys,
-                        "grant manage consensus keys",
-                    );
-                    let params = stx.world.parameters.get().sumeragi.clone();
-                    stx.apply();
-                    params
-                };
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-                let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-optional-hsm");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: None,
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/optional".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("provided binding must honor allowlist even when optional");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "HSM provider softkey is not allowed; allowed providers: []"
-                );
-            }
+            let mut stx = state_block.transaction();
+            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let pop =
+                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
+            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-algos");
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: kp.public_key().clone(),
+                pop: Some(pop),
+                activation_height: stx
+                    .block_height()
+                    .saturating_add(params.key_activation_lead_blocks),
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Pending,
+            };
+            let instr: InstructionBox = consensus_keys::RegisterConsensusKey { id, record }.into();
+            let err = Executor::default()
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("empty algorithm allowlist must reject");
+            assert_eq!(
+                smart_contract_error_message(err),
+                "consensus key algorithm bls_normal is not allowed; allowed: []"
+            );
         }
         world_test!(rotate_consensus_key_marks_previous_retiring {
             let state = blank_state();
@@ -34639,11 +38791,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/0".into(),
-                    slot: None,
-                }),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -34669,11 +38816,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks + 1),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/1".into(),
-                    slot: Some(2),
-                }),
                 replaces: Some(id_a.clone()),
                 status: ConsensusKeyStatus::Pending,
             };
@@ -34697,12 +38839,236 @@ seiyaku GovernanceLifecycle {
             assert_eq!(prev.status, ConsensusKeyStatus::Retiring);
             assert_eq!(next.public_key, record_b.public_key);
         });
+        world_test!(validator_tenure_rejects_consensus_key_disable_and_rotation {
+            let state = blank_state();
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let params = consensus_test_parameters!(state_block);
+            let mut stx = state_block.transaction();
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let block_height = stx.block_height();
+            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "retained-validator");
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: keypair.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("validator proof of possession"),
+                ),
+                activation_height: block_height,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            upsert_consensus_key(&mut stx.world, &id, record);
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id,
+                    stake_account: validator,
+                    total_stake: Quantity::from(1_u32),
+                    self_stake: Quantity::from(1_u32),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                    activation_height: block_height,
+                    deactivation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+
+            let disable_error = consensus_keys::DisableConsensusKey { id: id.clone() }
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("retained validator key must not be disabled");
+            assert_contains!(disable_error.to_string(), "cannot disable consensus key");
+            assert_eq!(
+                stx.world.consensus_keys.get(&id).expect("key remains").status,
+                ConsensusKeyStatus::Active
+            );
+
+            let replacement = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let replacement_id =
+                ConsensusKeyId::new(ConsensusKeyRole::Validator, "retained-validator-next");
+            let replacement_record = ConsensusKeyRecord {
+                id: replacement_id.clone(),
+                public_key: replacement.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(replacement.private_key())
+                        .expect("replacement proof of possession"),
+                ),
+                activation_height: stx
+                    .block_height()
+                    .saturating_add(params.key_activation_lead_blocks),
+                expiry_height: None,
+                replaces: Some(id.clone()),
+                status: ConsensusKeyStatus::Pending,
+            };
+            let rotate_error = consensus_keys::RotateConsensusKey {
+                id: replacement_id.clone(),
+                record: replacement_record,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("retained validator key must not rotate");
+            assert_contains!(rotate_error.to_string(), "cannot rotate consensus key");
+            assert!(stx.world.consensus_keys.get(&replacement_id).is_none());
+        });
         world_test!(set_parameter_updates_mutable_max_clock_drift {
             blank_state_transaction!(state, block, state_block, stx);
             SetParameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
                 .expect_execute(&ALICE_ID, &mut stx, "max clock drift is the mutable first-release Sumeragi parameter");
             let params = stx.world.parameters.get().sumeragi().clone();
             assert_eq!(params.max_clock_drift_ms(), 333);
+        });
+        world_test!(set_parameter_alias_registry_routing_activation_is_future_and_immutable {
+            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let carrier_height = stx.block_height();
+            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
+            for invalid_height in [0, carrier_height] {
+                let invalid = AliasRegistryRoutingActivationV1::new(invalid_height)
+                    .into_custom_parameter();
+                SetParameter::new(Parameter::Custom(invalid))
+                    .expect_execute_err(&ALICE_ID, &mut stx, "activation cannot change its installation carrier");
+                assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
+            }
+            let activation = AliasRegistryRoutingActivationV1::new(carrier_height + 2);
+            let custom = activation.into_custom_parameter();
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "install future activation");
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "exact activation retry is idempotent");
+            for changed_height in [carrier_height + 1, carrier_height + 3] {
+                let changed = AliasRegistryRoutingActivationV1::new(changed_height)
+                    .into_custom_parameter();
+                let error = SetParameter::new(Parameter::Custom(changed))
+                    .expect_execute_err(&ALICE_ID, &mut stx, "installed activation cannot move in either direction");
+                assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "alias registry routing activation is immutable once installed".into(),
+                    ),
+                ));
+                assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
+            }
+        });
+        world_test!(set_parameter_alias_registry_routing_activation_rejects_malformed_installed_state {
+            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
+            let malformed = iroha_data_model::parameter::CustomParameter::new(
+                parameter_id.clone(),
+                Json::from(norito::json!({"version": 1, "activation_height": 0})),
+            );
+            stx.world.parameters.get_mut().set_parameter(Parameter::Custom(malformed.clone()));
+            let valid = AliasRegistryRoutingActivationV1::new(stx.block_height() + 1)
+                .into_custom_parameter();
+            let error = SetParameter::new(Parameter::Custom(valid))
+                .expect_execute_err(&ALICE_ID, &mut stx, "malformed installed state is not silently overwritten");
+            assert!(matches!(&error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
+                    if reason.starts_with("invalid installed alias registry routing activation:")
+            ), "unexpected malformed activation error: {error:?}");
+            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&malformed));
+        });
+        world_test!(set_parameter_alias_dataspace_bootstrap_grant_is_immutable_and_requires_existing_owner {
+            use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
+                .expect("canonical bootstrap grant");
+            let parameter_id = grant.parameter_id().expect("canonical grant key");
+            let custom = grant.clone().into_custom_parameter().expect("grant parameter");
+            let absent_owner = AccountId::new(
+                KeyPair::from_seed(vec![0xF3; 32], Algorithm::Ed25519).public_key().clone(),
+            );
+            let unknown_owner = AliasDataspaceBootstrapGrantV1::try_new("unowned", absent_owner.clone())
+                .expect("canonical grant with absent owner");
+            let error = SetParameter::new(Parameter::Custom(unknown_owner.into_custom_parameter().expect("grant parameter")))
+                .expect_execute_err(&ALICE_ID, &mut stx, "grant owner must exist before governance installation");
+            assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "alias dataspace bootstrap grant owner must already exist".into(),
+                ),
+            ));
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "install exact bootstrap grant");
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "identical governance retry is idempotent");
+            let changed = AliasDataspaceBootstrapGrantV1::try_new("bpng", absent_owner)
+                .expect("syntactically valid owner replacement");
+            let error = SetParameter::new(Parameter::Custom(changed.into_custom_parameter().expect("grant parameter")))
+                .expect_execute_err(&ALICE_ID, &mut stx, "grant owner cannot be replaced");
+            assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "alias dataspace bootstrap grant is immutable once installed".into(),
+                ),
+            ));
+            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
+        });
+        world_test!(set_parameter_alias_dataspace_bootstrap_grant_rejects_conflicting_static_catalog {
+            use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
+                .expect("canonical bootstrap grant");
+            let parameter_id = grant.parameter_id().expect("canonical grant key");
+            stx.nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: iroha_data_model::nexus::DataSpaceId::new(10),
+                    alias: "bpng".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ]).expect("conflicting catalog");
+            let error = SetParameter::new(Parameter::Custom(grant.into_custom_parameter().expect("grant parameter")))
+                .expect_execute_err(&ALICE_ID, &mut stx, "bootstrap grant cannot rename or reassign a static dataspace");
+            assert!(matches!(&error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
+                    if reason.starts_with("alias dataspace bootstrap grant mapping conflicts: alias.catalog.mapping_conflict:")
+            ), "unexpected catalog mapping error: {error:?}");
+            assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
+        });
+        world_test!(set_parameter_alias_dataspace_bootstrap_grant_must_precede_first_sns_record {
+            use iroha_data_model::alias_setup::{AliasDataspaceBootstrapGrantV1, AliasTargetV1};
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
+                .expect("canonical bootstrap grant");
+            let parameter_id = grant.parameter_id().expect("canonical grant key");
+            let target = AliasTargetV1::Dataspace(grant.dataspace.clone());
+            let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
+                .expect("dataspace selector");
+            let address = AccountAddress::from_account_id(&ALICE_ID).expect("owner controller");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                ALICE_ID.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                crate::alias_setup::alias_registration_metadata(&target).expect("dataspace metadata"),
+            );
+            stx.world.smart_contract_state.insert(crate::sns::record_storage_key(&selector), record.encode());
+            let custom = grant.into_custom_parameter().expect("grant parameter");
+            let error = SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute_err(&ALICE_ID, &mut stx, "even same-owner grants cannot retroactively authorize a prior lease");
+            assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "alias dataspace bootstrap grant must be installed before the first SNS record".into(),
+                ),
+            ));
+            assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
+            // An already committed exact grant remains retryable after its authorized creation.
+            stx.world.parameters.get_mut().set_parameter(Parameter::Custom(custom.clone()));
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "installed exact grant retry does not mutate SNS ownership");
+            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
         });
         world_test!(set_parameter_rejects_heap_limits_outside_the_abi_window {
             assert_eq!(
@@ -34984,6 +39350,220 @@ seiyaku GovernanceLifecycle {
                     other => panic!("unexpected error type: {other:?}"),
                 }
             }
+        });
+        world_test!(set_parameter_keeps_npos_evidence_horizon_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters {
+                evidence_horizon_blocks: 100,
+                ..Default::default()
+            };
+            SetParameter::new(Parameter::Custom(initial.into_custom_parameter())).expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("installed NPoS parameters decode")
+                    .evidence_horizon_blocks,
+                100
+            );
+
+            let decreased = SumeragiNposParameters {
+                evidence_horizon_blocks: 80,
+                ..Default::default()
+            };
+            let error = SetParameter::new(Parameter::Custom(decreased.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "an installed evidence horizon must not discard previously admissible proofs",
+                );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: 100 -> 80"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("rejected replacement must preserve installed parameters")
+                    .evidence_horizon_blocks,
+                100
+            );
+
+            let increased = SumeragiNposParameters {
+                evidence_horizon_blocks: 120,
+                ..Default::default()
+            };
+            let error = SetParameter::new(Parameter::Custom(increased.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "an installed evidence horizon must not expand retained-state geometry",
+                );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: 100 -> 120"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("rejected increase must preserve installed parameters")
+                    .evidence_horizon_blocks,
+                100
+            );
+        });
+        world_test!(set_parameter_keeps_npos_slashing_delay_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters {
+                evidence_horizon_blocks: 2,
+                slashing_delay_blocks: 2,
+                ..Default::default()
+            };
+            SetParameter::new(Parameter::Custom(
+                initial.clone().into_custom_parameter(),
+            ))
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+
+            let decreased = SumeragiNposParameters {
+                slashing_delay_blocks: 1,
+                ..initial
+            };
+            let error = SetParameter::new(Parameter::Custom(
+                decreased.clone().into_custom_parameter(),
+            ))
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "an installed slashing delay must preserve auditable liability deadlines",
+            );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: 2 -> 1"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            let installed = stx
+                .world
+                .sumeragi_npos_parameters()
+                .expect("rejected replacement must preserve installed parameters");
+            assert_eq!(installed.evidence_horizon_blocks, 2);
+            assert_eq!(installed.slashing_delay_blocks, 2);
+
+            let increased = SumeragiNposParameters {
+                slashing_delay_blocks: 3,
+                ..decreased
+            };
+            let error = SetParameter::new(Parameter::Custom(increased.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "an installed slashing delay must not expand retained-state geometry",
+                );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: 2 -> 3"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("rejected increase must preserve installed parameters")
+                    .slashing_delay_blocks,
+                2
+            );
+        });
+        world_test!(set_parameter_allows_idempotent_npos_reinstallation {
+            blank_state_transaction!(state, block, state_block, stx);
+            let parameters = SumeragiNposParameters {
+                evidence_horizon_blocks: 100,
+                slashing_delay_blocks: 50,
+                ..Default::default()
+            };
+            let update = || {
+                SetParameter::new(Parameter::Custom(
+                    parameters.clone().into_custom_parameter(),
+                ))
+            };
+
+            update().expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+            update().expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "an exact signed NPoS parameter replay should be idempotent",
+            );
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("idempotently reinstalled NPoS parameters decode"),
+                parameters
+            );
+        });
+        world_test!(set_parameter_keeps_npos_epoch_length_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters::default();
+            let installed_epoch_length = initial.epoch_length_blocks;
+            SetParameter::new(Parameter::Custom(
+                initial.clone().into_custom_parameter(),
+            ))
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+            let changed_epoch_length = NonZeroU64::new(
+                installed_epoch_length.get().saturating_add(1),
+            )
+            .expect("incremented epoch length remains non-zero");
+            let changed = SumeragiNposParameters {
+                epoch_length_blocks: changed_epoch_length,
+                ..initial
+            };
+
+            let error = SetParameter::new(Parameter::Custom(changed.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "epoch geometry must not change after installation",
+                );
+
+            assert_contains!(
+                error.to_string(),
+                "epoch_length_blocks is immutable after installation"
+            );
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("installed NPoS parameters decode")
+                    .epoch_length_blocks,
+                installed_epoch_length
+            );
         });
         world_test!(malformed_manage_verifying_keys_payload_does_not_authorize_registration {
             alice_state_transaction!(state, block, state_block, stx);
@@ -35310,9 +39890,9 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
-            let backend = "stark/fri/sha256-goldilocks";
+            let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let id = VerifyingKeyId::new(backend, "vk_stark_update_curve");
-            let circuit_id = "stark/fri/sha256-goldilocks:update-curve";
+            let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:update-curve";
             let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.into(),
@@ -35321,7 +39901,6 @@ seiyaku GovernanceLifecycle {
                 fold_arity: 2,
                 queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
-                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
             };
             let vk_box = VerifyingKeyBox::new(
                 backend.into(),
@@ -36012,7 +40591,6 @@ seiyaku GovernanceLifecycle {
                     pop: None,
                     activation_height: 0,
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Active,
                 };
@@ -36204,18 +40782,51 @@ seiyaku GovernanceLifecycle {
             )
             .expect("contract address");
             let contract_subject = contract_address.subject_id();
-            assert!(
-                stx.world.account(&contract_subject).is_err(),
-                "the activation fixture must begin without a subject account",
+            Register::account(Account::new(contract_subject.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed contract subject");
+            stx.world.contract_subject_bindings.insert(
+                contract_address.clone(),
+                crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                ),
             );
+            stx.world
+                .contract_subject_addresses
+                .insert(contract_subject.clone(), contract_address.clone());
             let activate = scode::ActivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 code_hash,
             };
+            let removed_subject = stx
+                .world
+                .accounts
+                .remove(contract_subject.clone())
+                .expect("remove contract subject for corruption regression");
+            let missing_subject_activation = activate
+                .clone()
+                .expect_execute_err(&ALICE_ID, &mut stx, "activation must reject a missing contract subject");
+            assert_contains!(
+                missing_subject_activation.to_string(),
+                &format!(
+                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
+                )
+            );
+            assert!(
+                stx.world
+                    .contract_instances
+                    .get(&contract_address)
+                    .is_none(),
+                "missing-subject activation rejection must not mutate the instance registry"
+            );
+            stx.world
+                .accounts
+                .insert(contract_subject.clone(), removed_subject);
             let error = activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not pre-bind another account's address");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             assert!(
                 stx.world
                     .contract_instances
@@ -36230,27 +40841,80 @@ seiyaku GovernanceLifecycle {
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash)
             );
+            assert_eq!(
+                stx.world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("active lifecycle")
+                    .lifecycle
+                    .active_code_hash,
+                Some(code_hash)
+            );
             assert!(
                 stx.world.account(&contract_subject).is_ok(),
-                "activation must atomically materialize its deterministic subject account",
+                "contract subject account remains available",
             );
             let deactivate = scode::DeactivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 2,
                 reason: Some("adversarial ABA attempt".to_owned()),
             };
+            let lifecycle_before_missing_subject = stx
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("active lifecycle")
+                .lifecycle
+                .clone();
+            let removed_subject = stx
+                .world
+                .accounts
+                .remove(contract_subject.clone())
+                .expect("remove active contract subject for corruption regression");
+            let missing_subject_deactivation = deactivate
+                .clone()
+                .expect_execute_err(&ALICE_ID, &mut stx, "deactivation must reject a missing contract subject");
+            assert_contains!(
+                missing_subject_deactivation.to_string(),
+                &format!(
+                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
+                )
+            );
+            assert_eq!(
+                stx.world.contract_instances.get(&contract_address),
+                Some(&code_hash),
+                "missing-subject deactivation rejection must preserve the active instance"
+            );
+            assert_eq!(
+                stx.world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("retained lifecycle")
+                    .lifecycle,
+                lifecycle_before_missing_subject,
+                "missing-subject deactivation rejection must preserve lifecycle state"
+            );
+            stx.world
+                .accounts
+                .insert(contract_subject.clone(), removed_subject);
             let error = deactivate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not begin an ABA rebind");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash),
                 "rejected deactivation must preserve the live binding"
             );
-            let error = activate
+            let active_activate = scode::ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 2,
+                code_hash,
+            };
+            let error = active_activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "even an idempotent binding request requires lifecycle authority");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             deactivate
                 .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may deactivate an instance");
             assert!(
@@ -36259,22 +40923,43 @@ seiyaku GovernanceLifecycle {
                     .get(&contract_address)
                     .is_none()
             );
-            let error = activate
+            let deactivated_lifecycle = &stx
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("retained inactive lifecycle")
+                .lifecycle;
+            assert!(deactivated_lifecycle.active_code_hash.is_none());
+            assert_eq!(deactivated_lifecycle.revision, 3);
+            let reactivate = scode::ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 3,
+                code_hash,
+            };
+            let error = reactivate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not complete an ABA rebind");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             assert!(
                 stx.world
                     .contract_instances
                     .get(&contract_address)
                     .is_none()
             );
-            activate
+            reactivate
                 .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may reactivate verified code");
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash)
             );
+            let reactivated_lifecycle = &stx
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("reactivated lifecycle")
+                .lifecycle;
+            assert_eq!(reactivated_lifecycle.active_code_hash, Some(code_hash));
+            assert_eq!(reactivated_lifecycle.revision, 4);
         });
         world_test!(native_upload_finalization_enforces_live_cycle_ceiling_and_retains_staging {
             blank_test_state_transaction!(state, block, stx);
@@ -36358,6 +41043,25 @@ seiyaku GovernanceLifecycle {
                 manifest: manifest.signed(&ALICE_KEYPAIR),
             }
             .expect_execute(&ALICE_ID, &mut stx, "register verified manifest");
+            let artifact_permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            assert!(
+                stx.world
+                    .remove_account_permission(&ALICE_ID, &artifact_permission),
+                "deployment fixture must revoke the artifact-only capability before address creation",
+            );
+            let unregistered_hash = Hash::new(b"artifact permission separation regression");
+            let error = scode::RegisterSmartContractBytes {
+                code_hash: unregistered_hash,
+                code: vec![0_u8],
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "revoked artifact capability must still deny bytecode registration",
+            );
+            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
             stx.apply();
             let mut stx = block.transaction();
             let network_id = *stx.network_id();
@@ -36456,7 +41160,11 @@ seiyaku GovernanceLifecycle {
                 lease_expiry_ms: None,
                 expected_previous_contract_address: None,
             }
-            .expect_execute(&ALICE_ID, &mut stx, "first atomic deployment");
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "first atomic deployment needs no artifact-registration capability",
+            );
             assert_eq!(
                 stx.world.contract_instances.get(&address_at_nonce_0),
                 Some(&code_hash)
@@ -36521,11 +41229,11 @@ seiyaku GovernanceLifecycle {
             };
             let error = rotation
                 .clone()
-                .expect_execute_err(&ALICE_ID, &mut stx, "protected rotation requires governance authority");
+                .expect_execute_err(&ALICE_ID, &mut stx, "protected rotation requires Parliament deployment");
             let message = smart_contract_error_message(
                 iroha_data_model::ValidationFail::InstructionFailed(error),
             );
-            assert_contains!(message, "CanEnactGovernance");
+            assert_contains!(message, "require Parliament deployment");
             assert_eq!(
                 stx.world.contract_address_by_alias_at(&alias, 0),
                 Some(address_at_nonce_0.clone())
@@ -36536,34 +41244,67 @@ seiyaku GovernanceLifecycle {
                     iroha_executor_data_model::permission::governance::CanEnactGovernance,
                 ),
             );
-            rotation
-                .clone()
-                .expect_execute(&ALICE_ID, &mut stx, "governance-authorized protected rotation");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&address_at_nonce_0)
-                    .is_none(),
-                "the exact prior alias target must be deactivated"
+            let error = rotation.expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "CanEnactGovernance must not bypass Parliament-only deployment",
             );
-            assert_eq!(
-                stx.world.contract_instances.get(&address_at_nonce_1),
-                Some(&code_hash)
-            );
-            assert_eq!(
-                stx.world.contract_address_by_alias_at(&alias, 0),
-                Some(address_at_nonce_1.clone())
-            );
-            let error = rotation
-                .expect_execute_err(&ALICE_ID, &mut stx, "a concurrent deployment using the consumed nonce must lose CAS");
             let message = smart_contract_error_message(
                 iroha_data_model::ValidationFail::InstructionFailed(error),
             );
-            assert_contains!(message, "stale contract deployment nonce", "unexpected stale deployment error: {message}");
+            assert_contains!(message, "require Parliament deployment");
             assert_eq!(
                 stx.world.contract_address_by_alias_at(&alias, 0),
-                Some(address_at_nonce_1)
+                Some(address_at_nonce_0)
             );
+            assert!(stx.world.contract_instances.get(&address_at_nonce_1).is_none());
+        });
+        world_test!(commit_contract_deployment_rejects_malformed_protected_namespace_policy {
+            blank_test_state_transaction!(state, block, stx);
+            Register::account(Account::new(ALICE_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed authority");
+            grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
+            let parameter = iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::custom::CustomParameterId(
+                    crate::smartcontracts::code::PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+                        .parse()
+                        .expect("parameter id"),
+                ),
+                Json::new("apps"),
+            );
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(parameter));
+            let contract_address = ContractAddress::derive(
+                stx.network_id(),
+                &ALICE_ID,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+            let error = scode::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: contract_address.clone(),
+                code_hash: Hash::new(b"malformed protected namespace policy"),
+                contract_alias: "apps::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "malformed policy must fail closed before deployment",
+            );
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert_contains!(
+                message,
+                "invalid protected-contract namespace policy",
+                "unexpected malformed-policy error: {message}"
+            );
+            assert!(stx.world.contract_instances.get(&contract_address).is_none());
         });
         world_test!(activate_contract_instance_requires_governance_for_protected_namespace {
             blank_test_state_transaction!(state, block, stx);
@@ -36604,15 +41345,109 @@ seiyaku GovernanceLifecycle {
                 DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
+            stx.world.contract_subject_bindings.insert(
+                contract_address.clone(),
+                crate::smartcontracts::code::ContractSubjectBinding::new_parliament(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                    [1; 32],
+                    [2; 32],
+                ),
+            );
             let err = scode::ActivateContractInstance {
                 contract_address,
+                expected_revision: 1,
                 code_hash,
             }
             .expect_execute_err(&ALICE_ID, &mut stx, "protected namespace must remain governance-gated");
             let msg = smart_contract_error_message(
                 iroha_data_model::ValidationFail::InstructionFailed(err),
             );
-            assert_contains!(msg, "CanEnactGovernance", "unexpected protected-namespace error: {msg}");
+            assert_contains!(msg, "current account owner", "unexpected protected-namespace error: {msg}");
+        });
+        world_test!(contract_lifecycle_ownership_is_two_step_revocable_and_revision_guarded {
+            blank_test_state_transaction!(state, block, stx);
+            Register::account(Account::new(ALICE_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed owner");
+            Register::account(Account::new(BOB_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed nominee");
+            let address = ContractAddress::derive(
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
+                &ALICE_ID,
+                44,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+            let subject = address.subject_id();
+            Register::account(Account::new(subject.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed contract subject");
+            stx.world.contract_subject_bindings.insert(
+                address.clone(),
+                crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &address,
+                    ALICE_ID.clone(),
+                ),
+            );
+            stx.world
+                .contract_subject_addresses
+                .insert(subject, address.clone());
+
+            scode::SetContractParliamentDelegation {
+                contract_address: address.clone(),
+                expected_revision: 1,
+                delegated: true,
+            }
+            .expect_execute(&ALICE_ID, &mut stx, "owner delegates lifecycle authority");
+            let stale = scode::OfferContractOwnership {
+                contract_address: address.clone(),
+                expected_revision: 1,
+                new_owner: iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    BOB_ID.clone(),
+                ),
+            }
+            .expect_execute_err(&ALICE_ID, &mut stx, "stale ownership offer must fail");
+            assert!(
+                matches!(
+                    &stale,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("stale contract lifecycle revision")
+                ),
+                "unexpected stale ownership-offer error: {stale:?}"
+            );
+            scode::OfferContractOwnership {
+                contract_address: address.clone(),
+                expected_revision: 2,
+                new_owner: iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    BOB_ID.clone(),
+                ),
+            }
+            .expect_execute(&ALICE_ID, &mut stx, "owner offers ownership");
+            scode::AcceptContractOwnership {
+                contract_address: address.clone(),
+                expected_revision: 3,
+            }
+            .expect_execute(&BOB_ID, &mut stx, "nominee accepts ownership");
+            let lifecycle = &stx
+                .world
+                .contract_subject_bindings
+                .get(&address)
+                .expect("binding retained")
+                .lifecycle;
+            assert_eq!(
+                lifecycle.owner,
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    BOB_ID.clone()
+                )
+            );
+            assert_eq!(lifecycle.revision, 4);
+            assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            assert!(lifecycle.pending_owner.is_none());
         });
         world_test!(register_domain_rejects_missing_endorsement_when_required {
             let mut state = blank_test_state();

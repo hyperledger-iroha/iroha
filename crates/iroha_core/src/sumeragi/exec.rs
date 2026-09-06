@@ -1,18 +1,12 @@
 //! Exec-vote helpers: compute `post_state_root` via SMT, build votes, and assemble QCs.
 //!
 //! This module is internal and side-effect free; consumed by the Sumeragi execution pipeline.
-use super::{
-    consensus::ExecWitness,
-    smt::{
-        KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
-        compute_post_state_root,
-    },
-};
+use super::smt::{KvPair, compute_consensus_post_state_root, compute_post_state_root};
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
         SignedBlock,
-        consensus::{LaneBlockCommitment, LaneBlockProposalV1, NativeAmxReceipt},
+        consensus::{ExecWitness, LaneBlockCommitment, LaneBlockProposalV1, NativeAmxReceipt},
         consensus_v2 as wire,
     },
     merge::MergeLedgerEntry,
@@ -673,42 +667,61 @@ fn execution_commitment_from_projection(
 ) -> Result<wire::ExecutionCommitment, &'static str> {
     let (reads, writes) = witness_pairs(witness);
     let parent_state_root = parent_state_from_witness(witness);
-    match build_kagemusha_topup_block_commitment(&writes)? {
-        Some(kagemusha) => wire::ExecutionCommitment::new_with_manifests(
-            parent_state_root,
-            kagemusha.post_state_root,
-            kagemusha.ordinary_writes_root,
-            Some(kagemusha.topup_anchor_root),
-            u32::try_from(kagemusha.leaves.len())
-                .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u32")?,
-            wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            native_amx_manifest.root(),
-            native_amx_manifest.count(),
-            lane_finality_manifest.commitment(),
-            merge_carrier,
-            executed_block_wire_len,
-            executed_block_wire_hash,
-        )
-        .map_err(|_| "Kagemusha V2 execution commitment is not canonical"),
-        None => {
-            let (post_state_root, ordinary_writes_root) = ordinary_execution_roots(&reads, &writes);
-            wire::ExecutionCommitment::new_with_manifests(
-                parent_state_root,
-                post_state_root,
-                ordinary_writes_root,
-                None,
-                0,
-                wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-                native_amx_manifest.root(),
-                native_amx_manifest.count(),
-                lane_finality_manifest.commitment(),
-                merge_carrier,
-                executed_block_wire_len,
-                executed_block_wire_hash,
-            )
-            .map_err(|_| "Sumeragi V2 execution commitment is not canonical")
-        }
+    let (ordinary_post_state_root, ordinary_writes_root) =
+        ordinary_execution_roots(&reads, &writes);
+    let (receipt_witnesses, receipt_writes_root) =
+        crate::receiver_snapshot::kagemusha_reserve_receipt_witnesses_v1(witness)
+            .map_err(|_| "Kagemusha V1 reserve receipts are not canonical")?;
+    if receipt_writes_root != ordinary_writes_root {
+        return Err("Kagemusha V1 reserve receipts bind another ordinary-write root");
     }
+    let top_up_leaves = receipt_witnesses
+        .iter()
+        .filter(|witness| {
+            witness.receipt.kind
+                == iroha_data_model::isi::kagemusha_v1::KagemushaOperationKindV1::TopUp
+        })
+        .map(|witness| {
+            crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
+                &witness.receipt,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Kagemusha V1 top-up commitment is not canonical")?;
+    let (post_state_root, kagemusha_top_up_root, kagemusha_top_up_count) =
+        if top_up_leaves.is_empty() {
+            (ordinary_post_state_root, None, 0)
+        } else {
+            let tree =
+                crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(top_up_leaves)
+                    .map_err(|_| "Kagemusha V1 top-up commitment is not canonical")?;
+            let root = tree.execution_root();
+            let count = tree.leaf_count();
+            (
+                wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+                    count,
+                    ordinary_writes_root,
+                    root,
+                ),
+                Some(root),
+                count,
+            )
+        };
+    wire::ExecutionCommitment::new_with_manifests(
+        parent_state_root,
+        post_state_root,
+        ordinary_writes_root,
+        kagemusha_top_up_root,
+        kagemusha_top_up_count,
+        wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        native_amx_manifest.root(),
+        native_amx_manifest.count(),
+        lane_finality_manifest.commitment(),
+        merge_carrier,
+        executed_block_wire_len,
+        executed_block_wire_hash,
+    )
+    .map_err(|_| "Sumeragi V2 execution commitment is not canonical")
 }
 fn ordinary_execution_roots(reads: &[KvPair], writes: &[KvPair]) -> (Hash, Hash) {
     let post_state_root = compute_post_state_root(reads, writes);
@@ -742,7 +755,6 @@ pub fn parent_state_from_witness(w: &ExecWitness) -> Hash {
 }
 #[cfg(test)]
 mod tests {
-    use super::super::consensus::{ExecKv, ExecWitness};
     use super::*;
     use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
@@ -751,14 +763,19 @@ mod tests {
         block::{
             BlockHeader, BlockSignature,
             consensus::{
-                LaneBlockDescriptorV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
-                NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+                ExecKv, ExecWitness, LaneBlockDescriptorV1, LaneSettlementReceipt,
+                NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2, NativeAmxLegRecordV2,
+                NativeAmxPhase, NativeAmxReceipt,
             },
             execution_context::{
                 BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteRole,
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1, KagemushaReserveReceiptV1,
+            KagemushaReserveReceiptWitnessV1,
+        },
         peer::PeerId,
         transaction::{
             FeePaymentIntent,
@@ -1273,6 +1290,83 @@ mod tests {
         assert_ne!(read_only_root, empty_writes_root);
     }
     #[test]
+    fn execution_commitment_binds_the_canonical_kagemusha_top_up_tree() {
+        let operation_id = [0x31; 32];
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"kagemusha-execution-commitment"),
+        ));
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+            iroha_crypto::Hash::new(b"kagemusha-execution-incarnation").into(),
+        )
+        .expect("asset incarnation");
+        let receipt = KagemushaReserveReceiptV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            operation_id,
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: [0x32; 32],
+            mint_statement_digest: [0x33; 32],
+            network_id,
+            asset: asset.clone(),
+            asset_incarnation,
+            scale: 0,
+            liability_pool_id: iroha_data_model::kagemusha::kagemusha_liability_pool_id_v1(
+                &network_id,
+                &asset,
+                asset_incarnation,
+            )
+            .expect("liability pool"),
+            amount: 7,
+            previous_pool_receipt_digest: [0; 32],
+            total_topups: 7,
+            total_redemptions: 0,
+            transaction_hash: [0x34; 32],
+            committed_at_ms: 1,
+        };
+        let witness = witness(
+            Vec::new(),
+            vec![
+                kv("ordinary", "value"),
+                ExecKv {
+                    key: KagemushaReserveReceiptWitnessV1::expected_key(operation_id),
+                    value: norito::encode_canonical(&receipt).expect("canonical receipt"),
+                },
+            ],
+        );
+        let manifest = NativeAmxApplicationManifestV1::empty(
+            1,
+            Hash::new(b"Kagemusha V1 executed block placeholder"),
+        );
+        let commitment = execution_commitment_from_witness_for_tests(&witness, &manifest)
+            .expect("canonical execution commitment");
+        let leaf =
+            crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(&receipt)
+                .expect("top-up leaf");
+        let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(vec![leaf])
+            .expect("top-up tree");
+        let ordinary_writes_root = compute_post_state_root(&[], &witness_pairs(&witness).1);
+
+        assert_eq!(commitment.ordinary_writes_root, ordinary_writes_root);
+        assert_eq!(
+            commitment.kagemusha_top_up_root,
+            Some(tree.execution_root())
+        );
+        assert_eq!(commitment.kagemusha_top_up_count, 1);
+        assert_eq!(
+            commitment.post_state_root,
+            wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+                1,
+                ordinary_writes_root,
+                tree.execution_root(),
+            )
+        );
+    }
+    #[test]
     fn parent_root_projection_matches_formal_empty_read_only_and_write_filter_cases() {
         let empty = witness(Vec::new(), Vec::new());
         assert_eq!(
@@ -1332,44 +1426,6 @@ mod tests {
         assert_eq!(
             post_state_from_witness(&duplicated_writes),
             post_state_from_witness(&single_write)
-        );
-    }
-    #[test]
-    fn v2_execution_commitment_exposes_exact_bounded_topup_projection() {
-        let mut operation_key = vec![super::super::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
-        operation_key.extend_from_slice(&[0xA1; 32]);
-        let witness = ExecWitness {
-            reads: vec![ExecKv {
-                key: operation_key.clone(),
-                value: Vec::new(),
-            }],
-            writes: vec![
-                ExecKv {
-                    key: b"ordinary".to_vec(),
-                    value: b"write".to_vec(),
-                },
-                ExecKv {
-                    key: operation_key,
-                    value: vec![0xB2; 32],
-                },
-            ],
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
-        };
-        let executed_block_wire_hash = Hash::new(b"executed block wire");
-        let native_manifest = NativeAmxApplicationManifestV1::empty(1, executed_block_wire_hash);
-        let commitment = execution_commitment_from_witness_for_tests(&witness, &native_manifest)
-            .expect("valid top-up commitment");
-        assert_eq!(commitment.topup_anchor_count, 1);
-        assert!(commitment.topup_anchor_root.is_some());
-        assert_eq!(commitment.validate(), Ok(()));
-        assert_eq!(
-            commitment.executed_block_wire_hash,
-            executed_block_wire_hash
-        );
-        assert_eq!(
-            commitment.post_state_root,
-            try_post_state_from_witness(&witness).expect("same consensus post root")
         );
     }
     #[test]

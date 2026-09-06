@@ -1,4 +1,4 @@
-//! Validation-fee proposals reject the legacy public PLAIN ballot path.
+//! Validation-fee proposals reject the standalone public PLAIN ballot path.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use core::num::NonZeroU64;
@@ -8,8 +8,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{
-        GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
-        GovernanceReferendumRecord, GovernanceReferendumStatus, State, World, WorldReadOnly,
+        GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumRecord,
+        GovernanceReferendumStatus, State, World, WorldReadOnly,
     },
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -117,23 +117,22 @@ fn validation_fee_proposal_rejects_plain_ballot_without_state_effects() {
             h_start: BALLOT_HEIGHT,
             h_end: BALLOT_HEIGHT + 100,
             status: GovernanceReferendumStatus::Open,
-            mode: GovernanceReferendumMode::Plain,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
 
     let error = CastPlainBallot {
         referendum_id: referendum_id.clone(),
         owner: proposer.clone(),
+        direction: 0,
         amount: Quantity::from(1_u32),
         duration_blocks: 100,
-        direction: 0,
     }
     .execute(&proposer, &mut state_transaction)
     .expect_err("validation-fee proposals must reject public PLAIN ballots");
     let message = error.to_string();
     assert!(
-        message.contains("validation-fee")
-            && (message.contains("PLAIN") || message.contains("private Parliament")),
+        message.contains("typed governance proposals") && message.contains("private Parliament"),
         "unexpected validation-fee PLAIN rejection: {message}"
     );
     assert!(

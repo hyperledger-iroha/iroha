@@ -3200,9 +3200,12 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::zk_x509::credential_pre_aux::{
-        ZkX509CredentialMainPreAuxV1, ZkX509CredentialPreAuxBindingV1,
-        derive_zk_x509_credential_pre_aux_binding_v1,
+    use crate::privacy_engines::zk_x509::{
+        credential_pre_aux::{
+            ZkX509CredentialMainPreAuxV1, ZkX509CredentialPreAuxBindingV1,
+            derive_zk_x509_credential_pre_aux_binding_v1,
+        },
+        stark::zk_x509_test_digest384_v1,
     };
     fn challenges() -> ZkX509ShaCallBusChallengesV1 {
         let mut next = 11_u64;
@@ -3266,14 +3269,16 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn(|index| {
-                [seed.wrapping_add(u8::try_from(index).expect("six roots")); 32]
+                zk_x509_test_digest384_v1(
+                    seed.wrapping_add(u8::try_from(index).expect("six roots")),
+                )
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
             main,
-            [seed.wrapping_add(0x20); 32],
-            [seed.wrapping_add(0x30); 32],
-            [seed.wrapping_add(0x40); 32],
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x20)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x30)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x40)),
         )
         .expect("credential X5B1 binding")
     }

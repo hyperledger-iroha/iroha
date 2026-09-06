@@ -40,7 +40,8 @@ const TEST_SIGNER_KEY: [u8; 32] = [
 const SERVER_TEST_SIGNER_HANDLE: &str = "software://sorafs/governance-dag/primary";
 const SERVER_TEST_IPFS_AUTH_HANDLE: &str = "auth://sorafs/governance-dag/ipfs-primary";
 const SERVER_TEST_CHECKPOINT_HANDLE: &str = "sealed://governance/runtime-broker-checkpoint-primary";
-const SERVER_TEST_MODERATION_HANDLE: &str = "kms://moderation/quarantine-wrapper-primary";
+const SERVER_TEST_MODERATION_HANDLE: &str =
+    "software://sorafs/moderation/quarantine-wrapper-primary";
 const SERVER_TEST_MODERATION_TRANSACTION_SIGNER_HANDLE: &str =
     "software://sorafs/moderation/primary";
 const SERVER_TEST_APPEAL_FINANCE_SIGNER_HANDLE: &str = "software://sorafs/appeal-finance/primary";
@@ -49,8 +50,7 @@ const SERVER_TEST_MODERATION_SETTLEMENT_HANDLE: &str =
 const SERVER_TEST_MODERATION_PUBLICATION_HANDLE: &str =
     "queue://moderation/publication-handoff-primary";
 const SERVER_TEST_MODERATION_PANEL_HANDLE: &str = "queue://moderation/panel-notification-primary";
-const SERVER_TEST_MODERATION_KEY_ID: &str =
-    "kms:projects/production/keys/moderation-quarantine/versions/7";
+const SERVER_TEST_MODERATION_KEY_ID: &str = "software://sorafs/moderation/quarantine-key-primary";
 const SERVER_TEST_SOURCE_HANDLE: &str = "network://sorafs/provider-ingest/source-primary";
 const SERVER_TEST_REPUTATION_RETENTION_HANDLE: &str =
     "sealed://sorafs/reputation/retention-primary";

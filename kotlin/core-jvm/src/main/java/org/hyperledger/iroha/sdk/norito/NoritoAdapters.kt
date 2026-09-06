@@ -43,6 +43,23 @@ object NoritoAdapters {
     @JvmStatic
     fun stringAdapter(): TypeAdapter<String> = StringAdapter
 
+    /**
+     * Encodes a wrapper exactly like its inner value, without an extra field frame.
+     * Size and delimiting metadata also come from the inner adapter, so containers
+     * preserve the same layout when their elements are transparent wrappers.
+     */
+    @JvmStatic
+    fun <T, U> transparent(
+        inner: TypeAdapter<U>,
+        unwrap: (T) -> U,
+        wrap: (U) -> T,
+    ): TypeAdapter<T> = object : TypeAdapter<T> {
+        override fun encode(encoder: NoritoEncoder, value: T) = inner.encode(encoder, unwrap(value))
+        override fun decode(decoder: NoritoDecoder): T = wrap(inner.decode(decoder))
+        override fun fixedSize(): Int = inner.fixedSize()
+        override fun isSelfDelimiting(): Boolean = inner.isSelfDelimiting()
+    }
+
     @JvmStatic
     fun <T> option(inner: TypeAdapter<T>): TypeAdapter<Optional<T>> = OptionAdapter(inner)
 

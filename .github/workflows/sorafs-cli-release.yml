@@ -18,6 +18,7 @@ on:
       - "scripts/telemetry/normalize_executed_notebook.py"
       - "notebooks/soranet_privacy_dp.ipynb"
       - "scripts/check_sorafs_release_automation.py"
+      - "scripts/check_sorafs_mobile_parity_reports.py"
       - "scripts/check_build_efficiency_provenance.py"
       - "scripts/check_source_file_budget.py"
       - "scripts/check_runtime_provider_broker_install.py"
@@ -72,8 +73,11 @@ on:
       - "scripts/run_sorafs_reference_sdk_release_evidence.py"
       - "scripts/check_workflow_action_pins.py"
       - "Dockerfile"
+      - "scripts/check_release_feature_graph.py"
       - "scripts/build_release_bundle.sh"
       - "scripts/build_release_image.sh"
+      - "scripts/verify_release_prebuilt_provenance.py"
+      - "scripts/run_isolated_release_tool.py"
       - "scripts/build_release_oci_archive.py"
       - "scripts/build_release_tar_gz.py"
       - "scripts/build_release_tar_zst.py"
@@ -103,6 +107,7 @@ on:
       - "scripts/release_sorafs_cli.sh"
       - "scripts/tests/check_sorafs_release_version_map_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
+      - "scripts/tests/check_sorafs_mobile_parity_reports_test.py"
       - "scripts/tests/check_build_efficiency_provenance_test.py"
       - "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py"
       - "IrohaSwift/IrohaSwift.podspec"
@@ -153,6 +158,8 @@ on:
       - "scripts/tests/package_sorafs_validate_release_test.py"
       - "scripts/tests/build_release_bundle_test.py"
       - "scripts/tests/build_release_image_test.py"
+      - "scripts/tests/release_feature_graph_test.py"
+      - "scripts/tests/release_prebuilt_provenance_test.py"
       - "scripts/tests/capture_release_command_test.py"
       - "scripts/tests/release_artifact_contract_test.py"
       - "scripts/tests/validate_release_image_bases_test.py"
@@ -261,6 +268,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: sorafs-cli-release
+      - name: Enforce reviewed shipping feature graphs
+        run: python3 -I -S scripts/check_release_feature_graph.py
       - name: Install script test dependencies
         run: python3 -m pip install -r scripts/requirements.txt
       - name: Validate runtime-provider broker deployment contract

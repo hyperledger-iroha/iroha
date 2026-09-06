@@ -169,13 +169,28 @@ fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
     prepare_queue_plan_test(&mut adapter, &keys);
     let (binding, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x46);
     adapter
-        .kura
-        .persist_pending_queue_plan_admission_certificate(&bytes)
-        .expect("persist exact-marker handoff");
-    adapter
         .state
         .install_queue_plan_pending_binding_for_test(&binding)
         .expect("install exact marker and pending transaction obligation");
+    let certificate_hash = Hash::new(&bytes);
+    assert!(
+        adapter
+            .kura
+            .pending_queue_plan_admission_certificate(certificate_hash)
+            .expect("inspect missing exact-marker handoff")
+            .is_none()
+    );
+    let sender = PeerId::new(KeyPair::random().public_key().clone());
+    assert_eq!(
+        queue_plan_relay(&mut adapter, &sender, bytes.clone(), 0),
+        V2LaneIngressOutcome::Inserted,
+        "an exact pending WSV marker must not be mistaken for an applied transaction"
+    );
+    assert_eq!(
+        queue_plan_relay(&mut adapter, &sender, bytes.clone(), 0),
+        V2LaneIngressOutcome::Duplicate,
+        "the recovered sidecar must remain idempotent"
+    );
 
     assert!(
         adapter
@@ -197,7 +212,7 @@ fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
 }
 
 #[test]
-fn queue_plan_handoff_rejects_nonleader_future_stale_conflict_and_corrupt() {
+fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     prepare_queue_plan_test(&mut adapter, &keys);
     let sender = adapter.local_peer.clone();
@@ -233,19 +248,51 @@ fn queue_plan_handoff_rejects_nonleader_future_stale_conflict_and_corrupt() {
         let hashes = adapter.state.block_hashes.block_and_revert();
         hashes.commit_for_tests();
     }
-    assert_queue_plan_rejected(&mut adapter, &sender, future.clone(), 0);
-    let future_certificate_hash = Hash::new(&future);
+    let mut self_declared =
+        norito::decode_from_bytes::<crate::torii_proxy::QueuePlanAdmissionCertificateV1>(&future)
+            .expect("decode future certificate for adversarial roster mutation");
+    let compromised_key = keys.first().expect("fixture current authority key");
+    let self_declared_peer = PeerId::from(compromised_key.public_key().clone());
+    let coordinator = self_declared
+        .binding
+        .admission_context
+        .route_incarnations
+        .first_mut()
+        .expect("single-route future certificate");
+    coordinator.validator_set = vec![self_declared_peer];
+    coordinator.validator_count = 1;
+    coordinator.durability_threshold = 1;
+    coordinator.validator_set_hash = HashOf::new(&coordinator.validator_set);
+    let self_declared_binding_hash = self_declared.binding.canonical_hash();
+    let signing_bytes = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
+        self_declared_binding_hash,
+        0,
+    )
+    .expect("encode self-declared future attestation preimage");
+    self_declared.attestations = vec![crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
+        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+        validator_index: 0,
+        signature: Signature::try_new(compromised_key.private_key(), &signing_bytes)
+            .expect("sign self-declared future certificate"),
+    }];
+    let self_declared =
+        norito::encode_canonical(&self_declared).expect("encode self-declared future certificate");
+    assert_queue_plan_rejected(&mut adapter, &sender, self_declared.clone(), 0);
     assert!(
         adapter
             .kura
-            .pending_queue_plan_admission_certificate(future_certificate_hash)
-            .unwrap()
-            .is_none()
+            .pending_queue_plan_admission_certificate(Hash::new(&self_declared))
+            .expect("inspect rejected self-declared Future")
+            .is_none(),
+        "a self-declared future roster must not consume durable Kura capacity"
     );
-    adapter
-        .kura
-        .persist_pending_queue_plan_admission_certificate(&future)
-        .expect("persist validated origin source");
+    assert_eq!(
+        queue_plan_relay(&mut adapter, &sender, future.clone(), 0),
+        V2LaneIngressOutcome::Inserted,
+        "the current leader must durably park an authenticated Future certificate"
+    );
+    let future_certificate_hash = Hash::new(&future);
+    assert_queue_plan_kura_source(&adapter, &future);
     adapter
         .refresh_merge_candidates(0)
         .expect("defer durable Future");
@@ -315,6 +362,58 @@ fn queue_plan_handoff_rejects_nonleader_future_stale_conflict_and_corrupt() {
             adapter.kura.pending_queue_plan_admission_capacity(),
         );
     assert!(pending.unwrap().is_empty());
+}
+
+#[test]
+fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let queue = Arc::new(Queue::test(
+        iroha_config::parameters::actual::Queue::default(),
+        &iroha_primitives::time::TimeSource::new_system(),
+    ));
+    adapter
+        .install_lane_drain_queue(queue)
+        .expect("install queue needed for exact stale-claim reconciliation");
+    let sender = adapter.local_peer.clone();
+    let future_authority_height = adapter
+        .context
+        .height
+        .checked_add(1)
+        .expect("two-step future authority height");
+    let (_, future) = queue_plan_test_certificate_at_height(
+        &adapter,
+        &keys,
+        0x49,
+        future_authority_height,
+        Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"two-step future predecessor",
+        ))),
+    );
+    assert_eq!(
+        queue_plan_relay(&mut adapter, &sender, future.clone(), 0),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert_queue_plan_kura_source(&adapter, &future);
+
+    let _ = adapter.state.set_lane_incarnation_for_test(
+        LaneId::SINGLE,
+        Hash::new(b"future source incarnation rotated before catch-up"),
+    );
+    assert!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(0)
+            .expect("source-authority drift must retire instead of wedging reconciliation")
+            .is_empty()
+    );
+    assert!(
+        adapter
+            .kura
+            .pending_queue_plan_admission_certificate(Hash::new(&future))
+            .expect("inspect retired future certificate")
+            .is_none(),
+        "a no-longer-authenticated Future must release its bounded Kura slot"
+    );
 }
 
 #[test]

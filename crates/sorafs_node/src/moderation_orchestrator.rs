@@ -321,7 +321,7 @@ impl ModerationNativeActionV1 {
             }
             Self::FinalizeSortition(value) => {
                 validate_scope(value.case_id(), value.round_id())?;
-                if *value.pop_snapshot_digest() == [0; 32]
+                if *value.citizen_snapshot_digest() == [0; 32]
                     || *value.randomness_anchor() == [0; 32]
                     || value.proposed_jurors().len()
                         > usize::from(MODERATION_LEDGER_MAX_PANEL_SIZE_V1)
@@ -685,7 +685,7 @@ pub struct ModerationOrchestratorConfigV1 {
     pub checkpoint_max_bytes: u64,
     /// Maximum canonical notification archive artifact bytes.
     pub panel_notification_archive_max_bytes: u64,
-    /// Governed identity of the injected HSM transaction signer.
+    /// Governed identity of the injected transaction signer.
     pub transaction_signer_handle: String,
     /// Independently governed signer adapter and public-policy qualification.
     pub expected_transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
@@ -872,7 +872,7 @@ impl ModerationOrchestratorConfigV1 {
         Ok(())
     }
 }
-/// Canonical request forwarded to the runtime-only HSM transaction service.
+/// Canonical request forwarded to the runtime-only transaction-signing service.
 #[derive(Debug, Clone)]
 pub struct ModerationTransactionRequestV1 {
     /// Exact genesis-derived network identity signed into the transaction.
@@ -1060,7 +1060,7 @@ pub struct ModerationTransactionReceiptV1 {
     /// Finalized height observed by the submitter while admitting the request.
     pub observed_finalized_height: u64,
 }
-/// Fixed failure classes; arbitrary HSM/provider diagnostics are never persisted.
+/// Fixed failure classes; arbitrary signing-provider diagnostics are never persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSubmissionFailureV1 {
     /// The submitter did not submit and may be retried safely.
@@ -1106,7 +1106,7 @@ pub enum ModerationSubmissionLookupV1 {
     /// Backend state is inconclusive; retrying would be unsafe.
     Unknown,
 }
-/// Runtime-only HSM and strict transaction-ingress interface.
+/// Runtime-only signing and strict transaction-ingress interface.
 pub trait ModerationTransactionSubmitterV1: Send + Sync {
     /// Return the exact external signer provider qualified by this submitter.
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1;
@@ -1932,7 +1932,7 @@ pub enum ModerationPanelNotificationFinalizeOutcomeV1 {
 pub struct ModerationOrchestratorDepsV1 {
     /// Deployment-owned sealed, predecessor-bound monotonic checkpoint authority.
     pub checkpoint_store: Arc<dyn ModerationCheckpointStoreV1>,
-    /// HSM transaction submitter.
+    /// Qualified runtime transaction submitter.
     pub submitter: Arc<dyn ModerationTransactionSubmitterV1>,
     /// Finalized ledger snapshot reader.
     pub snapshot_reader: Arc<dyn ModerationFinalizedSnapshotReaderV1>,
@@ -2984,7 +2984,7 @@ impl ModerationOrchestratorV1 {
                 }
             }
         };
-        // All HSM, ingress, lookup, and terminal-sink calls happen after the
+        // All signing-provider, ingress, lookup, and terminal-sink calls happen after the
         // snapshot/action mutation lock has been released.
         self.drive_external_work()?;
         let state = self.lock_state()?;
@@ -3035,10 +3035,16 @@ impl ModerationOrchestratorV1 {
                 ModerationAppealStatusV1::RegisteringJurors
                     if now_unix_ms > appeal.intake.registration_deadline_unix_ms =>
                 {
+                    let anchor = appeal.sortition_anchor.as_ref().ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "post-registration appeal has no consensus-pinned sortition anchor"
+                                .to_owned(),
+                        )
+                    })?;
                     let selection = sorafs_moderation_select_panel_v1(
                         appeal.intake_digest,
                         appeal.pop_snapshot_digest,
-                        cursor.block_hash,
+                        anchor.block_hash,
                         &appeal_view.eligibility,
                         appeal.intake.panel_size,
                         appeal.intake.waitlist_size,
@@ -3060,7 +3066,7 @@ impl ModerationOrchestratorV1 {
                             appeal.intake.case_id.clone(),
                             appeal.intake.round_id.clone(),
                             appeal.pop_snapshot_digest,
-                            cursor.block_hash,
+                            anchor.block_hash,
                             jurors,
                             waitlist,
                         ),
@@ -3596,9 +3602,11 @@ impl ModerationOrchestratorV1 {
     /// Prepare an exact current-checkpoint authorization statement for one
     /// unresolved durable dead letter.
     ///
-    /// The returned statement is unsigned. An independently administered HSM holding the configured
-    /// checkpoint-attestor key must sign [`ModerationDeadLetterResolutionV1::signing_message`]
-    /// before [`Self::apply_dead_letter_resolution`] accepts it.
+    /// The returned statement is unsigned. An independently administered qualified provider holding
+    /// the configured checkpoint-attestor key must sign
+    /// [`ModerationDeadLetterResolutionV1::signing_message`] before
+    /// [`Self::apply_dead_letter_resolution`] accepts it. The provider may be software, remote, or
+    /// hardware backed, but its private material must remain outside persisted state.
     ///
     /// # Errors
     ///
@@ -6448,6 +6456,31 @@ fn validate_finalized_snapshot(
         no_show_total = no_show_total.saturating_add(entry.no_shows.len() as u64);
     }
     for appeal in &snapshot.appeals {
+        match appeal.appeal.sortition_anchor.as_ref() {
+            None if snapshot.finalized_at_unix_ms
+                > appeal.appeal.intake.registration_deadline_unix_ms =>
+            {
+                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                    "post-registration finalized appeal is missing its sortition anchor".to_owned(),
+                ));
+            }
+            Some(anchor)
+                if anchor.block_height > snapshot.finalized_height
+                    || anchor.block_timestamp_unix_ms > snapshot.finalized_at_unix_ms
+                    || (anchor.block_height == snapshot.finalized_height
+                        && (anchor.block_hash != snapshot.finalized_block_hash
+                            || anchor.block_timestamp_unix_ms
+                                != snapshot.finalized_at_unix_ms))
+                    || (anchor.block_height == snapshot.finalized_height
+                        && appeal.appeal.status != ModerationAppealStatusV1::RegisteringJurors) =>
+            {
+                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                    "sortition anchor is outside the finalized snapshot or its lifecycle advanced in the anchor block"
+                        .to_owned(),
+                ));
+            }
+            None | Some(_) => {}
+        }
         let case = snapshot.case(
             &appeal.appeal.intake.case_id,
             &appeal.appeal.intake.round_id,
@@ -6737,6 +6770,15 @@ fn validate_appeal_lifecycle(
     entry: &ModerationFinalizedAppealViewV1,
 ) -> Result<(), ModerationOrchestratorError> {
     let appeal = &entry.appeal;
+    if appeal.sortition_anchor.as_ref().is_some_and(|anchor| {
+        anchor.block_height == 0
+            || anchor.block_hash == [0; 32]
+            || anchor.block_timestamp_unix_ms <= appeal.intake.registration_deadline_unix_ms
+    }) {
+        return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+            "appeal contains an invalid consensus-pinned sortition anchor".to_owned(),
+        ));
+    }
     let mut previous_accepted = None;
     for accepted in &appeal.accepted_jurors {
         let canonical = accepted.to_string();
@@ -6753,7 +6795,8 @@ fn validate_appeal_lifecycle(
                     | ModerationAppealStatusV1::InsufficientEligiblePool
             )
             || (appeal.status == ModerationAppealStatusV1::InsufficientEligiblePool
-                && entry.eligibility.len() >= usize::from(appeal.intake.panel_size))
+                && (appeal.sortition_anchor.is_none()
+                    || entry.eligibility.len() >= usize::from(appeal.intake.panel_size)))
         {
             return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
                 "appeal lifecycle is inconsistent without a panel selection".to_owned(),
@@ -6762,6 +6805,10 @@ fn validate_appeal_lifecycle(
         return Ok(());
     };
     if selection.randomness_anchor == [0; 32]
+        || appeal.sortition_anchor.as_ref().is_none_or(|anchor| {
+            anchor.block_hash != selection.randomness_anchor
+                || selection.selected_at_unix_ms < anchor.block_timestamp_unix_ms
+        })
         || selection.seed_digest == [0; 32]
         || selection.sortition_digest == [0; 32]
         || selection.selected_at_unix_ms == 0
@@ -6904,7 +6951,10 @@ fn validate_case_against_appeal(
         || spec.jurors != expected_jurors
         || spec.quorum != intake.quorum
         || spec.commit_deadline_unix_ms != intake.commit_deadline_unix_ms
-        || spec.challenge_deadline_unix_ms != intake.challenge_deadline_unix_ms
+        || spec.challenge_submission_deadline_unix_ms
+            != intake.challenge_submission_deadline_unix_ms
+        || spec.challenge_resolution_deadline_unix_ms
+            != intake.challenge_resolution_deadline_unix_ms
         || spec.reveal_deadline_unix_ms != intake.reveal_deadline_unix_ms
         || spec.policy_digest != intake.policy_digest
         || case.case.policy != appeal.appeal.policy
@@ -7041,11 +7091,16 @@ fn action_effect(
         ModerationNativeActionV1::FinalizeSortition(value) => Ok(snapshot
             .appeal(value.case_id(), value.round_id())
             .map_or(ActionEffect::Absent, |entry| {
-                if entry.appeal.pop_snapshot_digest != *value.pop_snapshot_digest() {
+                if entry.appeal.pop_snapshot_digest != *value.citizen_snapshot_digest() {
                     return ActionEffect::Conflict;
                 }
                 if entry.appeal.status == ModerationAppealStatusV1::InsufficientEligiblePool {
-                    return if value.proposed_jurors().is_empty()
+                    return if entry
+                        .appeal
+                        .sortition_anchor
+                        .as_ref()
+                        .is_some_and(|anchor| &anchor.block_hash == value.randomness_anchor())
+                        && value.proposed_jurors().is_empty()
                         && value.proposed_waitlist().is_empty()
                     {
                         ActionEffect::Exact

@@ -4,6 +4,11 @@
 //! flushed, and synchronised before its exact persistence identifier is acknowledged. No caller
 //! can observe a causally later signing, broadcast, view-change, or apply effect before that point.
 use super::v2_core as reducer;
+#[path = "v2_leader_wire_consumer.rs"]
+mod leader_wire_consumer;
+pub(crate) use leader_wire_consumer::{
+    LeaderWireRecoveryAuthority, vote_statement_hash as leader_wire_vote_statement_hash,
+};
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
 pub(crate) use pending_kura_recovery::{
@@ -40,12 +45,12 @@ use super::{
         SafetyWalLeaderWireStoreAuthority,
     },
     serviced_candidate_store::{
-        LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate, LeaderWireRecoveryAuthority,
-        ProducerContinuationAddress, ProducerContinuationHandoffToken,
-        ProducerContinuationIdentity, ProducerContinuationRecord, ProducerContinuationReservation,
-        ProducerContinuationSourceClass, ProducerContinuationStatus,
-        ProducerContinuationTerminalToken, SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE,
-        ServicedCandidateKey, ServicedCandidateStore, serviced_candidate_stage_for_kind_code,
+        LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate, ProducerContinuationAddress,
+        ProducerContinuationHandoffToken, ProducerContinuationIdentity, ProducerContinuationRecord,
+        ProducerContinuationReservation, ProducerContinuationSourceClass,
+        ProducerContinuationStatus, ProducerContinuationTerminalToken,
+        SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, ServicedCandidateKey, ServicedCandidateStore,
+        serviced_candidate_stage_for_kind_code,
     },
     v2_body_store::{
         DurableBodyReceipt, RecoveredDecisionApplyAdapterPreviewPermit,
@@ -670,10 +675,11 @@ pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
     context_id: wire::HeightContextId,
     height: wire::Height,
     wal_path: PathBuf,
-    chunk_root: PathBuf,
     lifecycle_root: PathBuf,
     body_store_root: PathBuf,
     signature_policy: super::v2_body_store::BlockSignaturePolicy,
+    serve_payload_directory_authority:
+        Option<crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority>,
     successor_floor: Option<AuthenticatedRecoveredLifecycleSuccessorFloorV1>,
 }
 /// Exact predecessor address retained by one recovered successor storage seal.
@@ -727,28 +733,17 @@ pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryInputsV1 {
 pub(crate) struct RecoveredLifecycleOwnerKuraBindingV1 {
     kura_identity: KuraInstanceIdentity,
     wal_path: PathBuf,
-    chunk_root: PathBuf,
     local_signer: Option<PublicKey>,
 }
 /// Canonical launch paths projected only after the live Kura rejoins recovery.
 #[must_use = "recovered launch storage paths must enter the sealed launch"]
 pub(in crate::sumeragi) struct RecoveredLifecycleLaunchStoragePathsV1 {
     wal_path: PathBuf,
-    chunk_root: PathBuf,
 }
 impl RecoveredLifecycleLaunchStoragePathsV1 {
     /// Borrow the exact recovery-derived safety-WAL path for adapter binding.
     pub(in crate::sumeragi) fn wal_path(&self) -> &std::path::Path {
         &self.wal_path
-    }
-    /// Borrow the exact recovery-derived chunk root for durable Serve restore.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn chunk_root(&self) -> &std::path::Path {
-        &self.chunk_root
-    }
-    /// Consume the path seal into the exact worker-owned chunk root.
-    pub(in crate::sumeragi) fn into_chunk_root(self) -> PathBuf {
-        self.chunk_root
     }
 }
 impl RecoveredLifecycleOwnerKuraBindingV1 {
@@ -780,7 +775,6 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
         self.matches_kura(kura)
             .then(|| RecoveredLifecycleLaunchStoragePathsV1 {
                 wal_path: self.wal_path.clone(),
-                chunk_root: self.chunk_root.clone(),
             })
     }
     /// Join the just-retired LedgerV1 floor to this exact live Kura instance.
@@ -802,7 +796,6 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
                 .sumeragi_v2_storage_root()
                 .join("wal")
                 .join(format!("{:020}.wal", 1_u64)),
-            chunk_root: kura.sumeragi_v2_storage_root().join("chunks"),
             local_signer: local_signer.map(|key_pair| key_pair.public_key().clone()),
         }
     }
@@ -853,11 +846,16 @@ impl RecoveredLifecycleStorageAuthorityV1 {
         signature_policy: &super::v2_body_store::BlockSignaturePolicy,
         genesis_account: &AccountId,
         permit: super::v2_recovery::RecoveredLifecycleStorageMintPermitV1,
-    ) -> Self {
+    ) -> Result<Self, crate::kura::Error> {
         assert!(permit.authorizes(kura, verified, signature_policy, genesis_account));
         let storage_root = kura.sumeragi_v2_storage_root();
         let context = verified.context();
-        Self {
+        let serve_payload_directory_authority = if kura.emergency_fast_startup_enabled() {
+            None
+        } else {
+            Some(kura.mint_v2_certified_serve_payload_directory_authority(context)?)
+        };
+        Ok(Self {
             kura_identity: kura.instance_identity(),
             genesis_account: genesis_account.clone(),
             predecessor: Self::predecessor_storage_identity(&storage_root, verified),
@@ -866,14 +864,14 @@ impl RecoveredLifecycleStorageAuthorityV1 {
             wal_path: storage_root
                 .join("wal")
                 .join(format!("{:020}.wal", context.height)),
-            chunk_root: storage_root.join("chunks"),
             lifecycle_root: storage_root
                 .join("lifecycle-v1")
                 .join(hex::encode(context.id().0.as_ref())),
             body_store_root: storage_root.join("bodies"),
             signature_policy: signature_policy.clone(),
+            serve_payload_directory_authority,
             successor_floor: None,
-        }
+        })
     }
     /// Bind the exact finalized H floor, initialize/authenticate H+1, and
     /// retain that frame proof until the production coordinator opens it.
@@ -915,25 +913,20 @@ impl RecoveredLifecycleStorageAuthorityV1 {
         signature_policy: super::v2_body_store::BlockSignaturePolicy,
         genesis_account: AccountId,
     ) -> Self {
-        let storage_root = kura.sumeragi_v2_storage_root();
-        let context = verified.context();
-        Self {
-            kura_identity: kura.instance_identity(),
-            genesis_account,
-            predecessor: Self::predecessor_storage_identity(&storage_root, verified),
-            context_id: context.id(),
-            height: context.height,
-            wal_path: storage_root
-                .join("wal")
-                .join(format!("{:020}.wal", context.height)),
-            chunk_root: storage_root.join("chunks"),
-            lifecycle_root: storage_root
-                .join("lifecycle-v1")
-                .join(hex::encode(context.id().0.as_ref())),
-            body_store_root: storage_root.join("bodies"),
-            signature_policy,
-            successor_floor: None,
-        }
+        let permit = super::v2_recovery::RecoveredLifecycleStorageMintPermitV1::for_test(
+            kura,
+            verified,
+            &signature_policy,
+            &genesis_account,
+        );
+        Self::mint_from_recovered_height(
+            kura,
+            verified,
+            &signature_policy,
+            &genesis_account,
+            permit,
+        )
+        .expect("mint fixture Certified-Serve payload directory authority")
     }
 }
 #[allow(variant_size_differences)]
@@ -2720,6 +2713,10 @@ impl VerifiedHeightContext {
                 || context.roster != snapshot.roster
                 || context.quorum != snapshot.quorum
                 || context.leader_seed != snapshot.leader_seed
+                || context.kagemusha_mint_finality_epoch_id
+                    != snapshot.kagemusha_mint_finality_epoch_id
+                || context.kagemusha_mint_finality_epoch_roster
+                    != snapshot.kagemusha_mint_finality_epoch_roster
                 || proofs_of_possession.as_slice() != snapshot.validator_set_pops.as_slice()
             {
                 return Err(AdapterError::EpochTransitionMismatch);
@@ -2729,6 +2726,14 @@ impl VerifiedHeightContext {
             || context.roster != parent_artifact.height_context.roster
             || context.quorum != parent_artifact.height_context.quorum
             || context.leader_seed != parent_artifact.height_context.leader_seed
+            || context.kagemusha_mint_finality_epoch_id
+                != parent_artifact
+                    .height_context
+                    .kagemusha_mint_finality_epoch_id
+            || context.kagemusha_mint_finality_epoch_roster
+                != parent_artifact
+                    .height_context
+                    .kagemusha_mint_finality_epoch_roster
             || proofs_of_possession.as_slice() != parent_artifact.validator_set_pops.as_slice()
         {
             return Err(AdapterError::EpochTransitionMismatch);
@@ -3056,6 +3061,14 @@ pub(in crate::sumeragi) struct LifecycleReducerFenceObservationV1 {
     generation: u64,
 }
 impl LifecycleReducerFenceObservationV1 {
+    /// Construct an exact reducer-fence observation for lifecycle unit tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn for_test(
+        source: super::v2_lifecycle_coordinator::WaitSource,
+        generation: u64,
+    ) -> Self {
+        Self { source, generation }
+    }
     /// Return the context-scoped external wait source.
     pub(in crate::sumeragi) const fn source(self) -> super::v2_lifecycle_coordinator::WaitSource {
         self.source
@@ -4450,7 +4463,6 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -8958,7 +8970,6 @@ fn ingress_equivocation_identity(
         )),
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)
         | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -8985,7 +8996,6 @@ impl IngressEquivocationArtifact {
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -9074,14 +9084,90 @@ pub(crate) trait SignatureAggregator: Send + Sync {
     /// Aggregate the canonical signer-ordered BLS signature shares.
     fn aggregate(&self, signatures: &[&[u8]]) -> Result<Vec<u8>, String>;
 }
+/// Encode the canonical auxiliary payload placed beside one Commit vote's BLS signature.
+pub(in crate::sumeragi) fn encode_kagemusha_commit_vote_seal_share_v1(
+    message: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealMessageV1,
+    seal: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityValidatorSealV1,
+) -> Vec<u8> {
+    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealShareV1 {
+        version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+        message,
+        seal,
+    }
+    .encode()
+}
+
 #[derive(Debug, Default)]
 struct BlsNormalSignatureAggregator;
 impl SignatureAggregator for BlsNormalSignatureAggregator {
     fn aggregate(&self, signatures: &[&[u8]]) -> Result<Vec<u8>, String> {
         #[cfg(feature = "bls")]
         {
-            iroha_crypto::bls_normal_aggregate_signatures(signatures)
-                .map_err(|error| error.to_string())
+            let mut bls_signatures = Vec::with_capacity(signatures.len());
+            let mut kagemusha_shares = Vec::with_capacity(signatures.len());
+            let mut saw_raw = false;
+            let mut saw_kagemusha = false;
+            for signature in signatures {
+                match wire::decode_kagemusha_consensus_signature_envelope_v1(signature)
+                    .map_err(|error| error.to_string())?
+                {
+                    Some(parts) => {
+                        if parts.kind != wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1 {
+                            return Err(
+                                "cannot aggregate an Kagemusha CommitQC envelope as a vote share"
+                                    .to_owned(),
+                            );
+                        }
+                        saw_kagemusha = true;
+                        bls_signatures.push(parts.bls_signature);
+                        kagemusha_shares.push(
+                            crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_share_v1(
+                                parts.auxiliary_payload,
+                            )
+                            .map_err(|error| error.to_string())?,
+                        );
+                    }
+                    None => {
+                        saw_raw = true;
+                        bls_signatures.push(*signature);
+                    }
+                }
+            }
+            if saw_raw && saw_kagemusha {
+                return Err(
+                    "cannot aggregate mixed raw and Kagemusha V1 Commit-vote signatures".to_owned(),
+                );
+            }
+            let aggregate = iroha_crypto::bls_normal_aggregate_signatures(&bls_signatures)
+                .map_err(|error| error.to_string())?;
+            if !saw_kagemusha {
+                return Ok(aggregate);
+            }
+            let first = kagemusha_shares
+                .first()
+                .ok_or_else(|| "Kagemusha V1 seal aggregation received no shares".to_owned())?;
+            if kagemusha_shares
+                .iter()
+                .any(|share| share.message != first.message)
+            {
+                return Err(
+                    "Kagemusha V1 Commit-vote seal shares bind different messages".to_owned(),
+                );
+            }
+            let bundle = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealBundleV1 {
+                message: first.message,
+                seals: kagemusha_shares
+                    .into_iter()
+                    .map(|share| share.seal)
+                    .collect(),
+            };
+            bundle.validate().map_err(|error| error.to_string())?;
+            wire::encode_kagemusha_consensus_signature_envelope_v1(
+                wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+                &aggregate,
+                &bundle.encode(),
+            )
+            .map_err(|error| error.to_string())
         }
         #[cfg(not(feature = "bls"))]
         {
@@ -9742,6 +9828,13 @@ impl SumeragiV2Adapter {
             .map(|index| registry.validator_id(index))
             .transpose()?;
         let network_id = *wire_context.network_id.as_bytes();
+        let wal_identity = reducer::WalFileIdentity::new(
+            wire::PROTOCOL_VERSION,
+            network_id,
+            context.id(),
+            context.height(),
+            consensus_key_hash,
+        );
         let serviced_candidate_owner: [u8; 32] = fingerprints.node.into();
         let candidate_lifecycle_capacity =
             candidate_lifecycle_capacity(wire_context.roster.len(), capacity_geometry);
@@ -9762,24 +9855,13 @@ impl SumeragiV2Adapter {
             SafetyWalOpenTarget::Kura { kura, authority } => {
                 let wal_name = format!("{:020}.wal", wire_context.height);
                 let wal_path = kura.sumeragi_v2_storage_root().join("wal").join(&wal_name);
-                let wal = SafetyWal::open_with_kura_authority(
-                    kura,
-                    authority,
-                    wal_name,
-                    wire::PROTOCOL_VERSION,
-                    network_id,
-                    consensus_key_hash,
-                )?;
+                let wal =
+                    SafetyWal::open_with_kura_authority(kura, authority, wal_name, wal_identity)?;
                 (wal_path, wal)
             }
             #[cfg(test)]
             SafetyWalOpenTarget::FixturePath(wal_path) => {
-                let wal = SafetyWal::open(
-                    wal_path.clone(),
-                    wire::PROTOCOL_VERSION,
-                    network_id,
-                    consensus_key_hash,
-                )?;
+                let wal = SafetyWal::open(wal_path.clone(), wal_identity)?;
                 (wal_path, wal)
             }
         };
@@ -11356,8 +11438,7 @@ impl SumeragiV2Adapter {
                     &mut observed,
                 )?;
             }
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {}
@@ -11478,7 +11559,9 @@ impl SumeragiV2Adapter {
         let Some(locked) = durable.locked() else {
             return false;
         };
-        vote.proposal_round.height == locked.round().height()
+        (locked.round().view() == self.reducer.current_tag().view()
+            || durable.commit_intent_for_lock(locked).is_some())
+            && vote.proposal_round.height == locked.round().height()
             && vote.proposal_round.view == locked.round().view()
             && vote.round == vote.proposal_round
             && self
@@ -11764,15 +11847,6 @@ impl SumeragiV2Adapter {
         let current_tag = self.reducer.current_tag();
         let current_view = current_tag.view();
         self.prune_ingress_records();
-        let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
-        let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
-        // Retain arbitrary individual Commit/Prepare vote keys for one complete
-        // leader rotation. Older CommitQCs remain admissible without
-        // restriction. Exact durable locked-round CommitVotes are the sole old
-        // individual-vote exception while the height is undecided: timeout
-        // installation clears their volatile reducer pool, while replay keeps
-        // retransmitting the durable Commit intent. Their single round/subject
-        // cannot exhaust this table.
         let locked_commit_progress = match payload {
             wire::ConsensusMessageV2Payload::Vote(vote) => self.is_exact_locked_commit_vote(vote),
             _ => false,
@@ -11792,80 +11866,44 @@ impl SumeragiV2Adapter {
         } else {
             false
         };
-        match payload {
-            wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                if proposal.round.view > current_view {
-                    // A proposal can outrun the TimeoutCertificate which
-                    // installs its view. Keep the already-authenticated
-                    // runtime carrier at its exact FIFO position so certified
-                    // progress can install that view and the proposal can be
-                    // retried once. Treating it as terminally irrelevant lets
-                    // the generic leader-wire tombstone suppress every later
-                    // byte-identical retransmission after the view advances.
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
-                        None,
-                    ));
+        if !self
+            .leader_wire_recovery_authority()?
+            .admits_payload(payload)
+        {
+            // Already-owned future work remains retryable. Fresh ingress uses
+            // the same policy before it can reserve a token or FIFO position.
+            let future = match payload {
+                wire::ConsensusMessageV2Payload::Proposal(p) => p.round.view > current_view,
+                wire::ConsensusMessageV2Payload::Vote(v) => v.round.view > current_view,
+                wire::ConsensusMessageV2Payload::TimeoutVote(v) => v.round.view > current_view,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(qc) => {
+                    qc.round.view > current_view
                 }
-                if proposal.round.view < current_view {
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
-                        None,
-                    ));
-                }
-            }
-            wire::ConsensusMessageV2Payload::Vote(vote) => {
-                if vote.round.view > current_view
-                    || (vote.round.view < oldest_retained_view && !locked_commit_progress)
-                {
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
-                        None,
-                    ));
-                }
-            }
-            wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
-                        None,
-                    ));
-                }
-            }
-            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
-                if certificate.phase == wire::GlobalPhase::Prepare
-                    && certificate.round.view > current_view
-                {
-                    // A PrepareQC can outrun the TimeoutCertificate which
-                    // installs its view. Keep the authenticated runtime
-                    // carrier at its exact FIFO position, just like a future
-                    // Proposal above. Terminally classifying it as irrelevant
-                    // would leave the durable leader-wire gate coalescing the
-                    // exact retransmission after that view becomes current,
-                    // preventing this validator from supplying a Commit vote.
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
-                        None,
-                    ));
-                }
-                return Ok((None, None));
-            }
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
-                return Ok((None, None));
-            }
+                _ => false,
+            };
+            return Ok((
+                Some(Self::ignored_outcome(if future {
+                    reducer::IgnoreReason::Busy
+                } else {
+                    reducer::IgnoreReason::IrrelevantView
+                })),
+                None,
+            ));
+        }
+        if !matches!(
+            payload,
+            wire::ConsensusMessageV2Payload::Proposal(_)
+                | wire::ConsensusMessageV2Payload::Vote(_)
+                | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) {
+            return Ok((None, None));
         }
         let (key, fingerprint) = ingress_equivocation_identity(payload)
             .ok_or(AdapterError::EquivocationArtifactMismatch)?;
         let artifact = IngressEquivocationArtifact::from_payload(payload)
             .ok_or(AdapterError::EquivocationArtifactMismatch)?;
         let deferred_owner = self.deferred_owns_ingress(key, fingerprint);
+        let height_decided = self.reducer.durable_state().decision().is_some();
         if let Some(record) = self.ingress_equivocations.get_mut(&key) {
             if record.fingerprint == fingerprint {
                 if deferred_owner
@@ -11877,7 +11915,14 @@ impl SumeragiV2Adapter {
                         } else if locked_reproposal_prepare_progress {
                             !delivered.locked_commit_progress
                                 && delivered.locked_reproposal_prepare_progress
-                        } else if matches!(key, IngressSemanticKey::Proposal { .. }) {
+                        } else if matches!(
+                            key,
+                            IngressSemanticKey::Proposal { .. }
+                                | IngressSemanticKey::Vote {
+                                    phase: wire::GlobalPhase::Prepare,
+                                    ..
+                                }
+                        ) {
                             // A strict same-round TC upgrade can change the
                             // lock without changing the view, so re-evaluate
                             // one exact proposal in the new consumer epoch.
@@ -11913,6 +11958,18 @@ impl SumeragiV2Adapter {
             if record.equivocation_reported {
                 return Ok((
                     Some(Self::ignored_outcome(reducer::IgnoreReason::Duplicate)),
+                    None,
+                ));
+            }
+            if height_decided {
+                // Once this height has a durable Decision, a newly observed
+                // conflict cannot affect consensus safety. Emitting diagnostic
+                // work here would put that non-critical output ahead of the
+                // decided Apply and can deadlock a minimally sized executor.
+                // Preserve the original semantic record and terminally absorb
+                // the conflicting authenticated carrier instead.
+                return Ok((
+                    Some(Self::ignored_outcome(reducer::IgnoreReason::AlreadyDecided)),
                     None,
                 ));
             }
@@ -12173,8 +12230,7 @@ impl SumeragiV2Adapter {
                     authenticated_wire_identity,
                 );
             }
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -15195,8 +15251,6 @@ impl SumeragiV2Adapter {
             reducer::ConsensusMessageV2::TimeoutCertificate(certificate) => {
                 self.intent_for_timeout_certificate(certificate, stage)
             }
-            reducer::ConsensusMessageV2::BodyRequest(_)
-            | reducer::ConsensusMessageV2::BodyChunk(_) => return Ok(None),
         };
         Ok(Some(intent))
     }
@@ -16341,28 +16395,7 @@ impl SumeragiV2Adapter {
     pub(crate) fn leader_wire_recovery_authority(
         &self,
     ) -> Result<LeaderWireRecoveryAuthority, AdapterError> {
-        self.ensure_ingress()?;
-        let owner: [u8; 32] = self.fingerprints.node.into();
-        let protected_lock = self
-            .reducer
-            .durable_state()
-            .locked()
-            .map(|certificate| -> Result<_, AdapterError> {
-                Ok((
-                    self.registry.round_to_wire(certificate.proposal_round()),
-                    self.registry.subject(certificate.subject())?,
-                ))
-            })
-            .transpose()?;
-        LeaderWireRecoveryAuthority::from_replayed_adapter(
-            self.wire_context.id(),
-            self.wire_context.height,
-            owner,
-            self.reducer.current_tag().view(),
-            self.reducer.durable_state().decision().is_some(),
-        )
-        .with_protected_lock(protected_lock)
-        .map_err(AdapterError::ServicedCandidateStore)
+        LeaderWireRecoveryAuthority::from_adapter(self)
     }
     /// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
     pub(crate) fn mint_leader_wire_store_authority(
@@ -17494,8 +17527,7 @@ impl SumeragiV2Adapter {
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => None,
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -17551,8 +17583,7 @@ impl SumeragiV2Adapter {
                         },
                     )
                 }),
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -18683,6 +18714,7 @@ fn aggregate_core_shares(
 }
 #[cfg(test)]
 mod tests {
+    include!("tests/v2_adapter_leader_wire_consumer.rs");
     include!("tests/v2_adapter_main_00.rs");
     include!("tests/v2_adapter_main_01.rs");
     include!("tests/v2_adapter_main_02.rs");

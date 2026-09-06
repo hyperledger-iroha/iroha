@@ -313,7 +313,12 @@ export function createNoritoGovernanceInstructionBoundary({
         ABI_VERSION_FIELD,
         "manifest_provenance",
       ],
-      [CONTRACT_ADDRESS_FIELD, CODE_HASH_FIELD, ABI_HASH_FIELD, ABI_VERSION_FIELD],
+      [
+        CONTRACT_ADDRESS_FIELD,
+        CODE_HASH_FIELD,
+        ABI_HASH_FIELD,
+        ABI_VERSION_FIELD,
+      ],
       context,
     );
     const contractAddress = assertExactNonEmptyString(

@@ -17,9 +17,10 @@ use iroha_data_model::{
     asset::id::AssetDefinitionId,
     block::{BlockHeader, consensus::ExecWitness},
     fastpq::{
-        FastpqOperationKind, FastpqPublicInputs, FastpqStateTransition, FastpqTransitionBatch,
-        TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript,
-        TransferTranscriptBundle, normalized_numeric_to_u64, transfer_asset_scales,
+        FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
+        FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
+        TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
+        transfer_asset_scales,
     },
     role::{Role, RoleId},
 };
@@ -40,7 +41,7 @@ pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// Metadata key storing the transcript count embedded in a batch.
 pub const TRANSCRIPT_COUNT_METADATA_KEY: &str = "transcript_count";
 /// Canonical FASTPQ parameter name used across the host and CLI helpers.
-pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = "fastpq-lane-balanced";
+pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = fastpq_prover::fastpq_isi_v1::FASTPQ_FINAL_V1_ID;
 const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;
 const DIGEST_FINALIZE_GPU_THRESHOLD: usize = 64;
 const POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT: usize = 24;
@@ -1077,12 +1078,44 @@ fn state_transition_to_dto(transition: &StateTransition) -> FastpqStateTransitio
 fn operation_to_dto(operation: &OperationKind) -> FastpqOperationKind {
     match operation {
         OperationKind::Transfer => FastpqOperationKind::Transfer,
+        OperationKind::Mint => FastpqOperationKind::Mint,
+        OperationKind::Burn => FastpqOperationKind::Burn,
+        OperationKind::RoleGrant {
+            role_id,
+            permission_id,
+            epoch,
+        } => FastpqOperationKind::RoleGrant(FastpqRolePermissionDelta {
+            role_id: *role_id,
+            permission_id: *permission_id,
+            epoch: *epoch,
+        }),
+        OperationKind::RoleRevoke {
+            role_id,
+            permission_id,
+            epoch,
+        } => FastpqOperationKind::RoleRevoke(FastpqRolePermissionDelta {
+            role_id: *role_id,
+            permission_id: *permission_id,
+            epoch: *epoch,
+        }),
         OperationKind::MetaSet => FastpqOperationKind::MetaSet,
     }
 }
 fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
+        FastpqOperationKind::Mint => OperationKind::Mint,
+        FastpqOperationKind::Burn => OperationKind::Burn,
+        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
+        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
@@ -1500,7 +1533,7 @@ mod tests {
     fn batch_from_transcripts_builds_transfer_rows() {
         let transcript = sample_transcript();
         let batch = batch_from_transcripts(
-            "fastpq-lane-balanced",
+            FASTPQ_CANONICAL_PARAMETER_SET,
             sample_public_inputs(),
             [&transcript],
         )
@@ -1741,7 +1774,7 @@ mod tests {
         transcript.deltas[0].to_balance_after =
             "0.5".parse().expect("non-negative FASTPQ quantity");
         let batch = batch_from_transcripts(
-            "fastpq-lane-balanced",
+            FASTPQ_CANONICAL_PARAMETER_SET,
             sample_public_inputs(),
             [&transcript],
         )
@@ -1984,7 +2017,7 @@ mod tests {
         );
     }
     #[test]
-    fn transition_batch_dto_roundtrip_preserves_metadata() {
+    fn transition_batch_dto_roundtrip_preserves_all_operation_payloads_and_metadata() {
         let transcript = sample_transcript();
         let mut batch = batch_from_transcripts(
             FASTPQ_CANONICAL_PARAMETER_SET,
@@ -2000,6 +2033,35 @@ mod tests {
             perm_root: [0x44; 32],
             tx_set_hash: [0x55; 32],
         };
+        for (index, operation) in [
+            OperationKind::Mint,
+            OperationKind::Burn,
+            OperationKind::RoleGrant {
+                role_id: [0x11; 32],
+                permission_id: [0x22; 32],
+                epoch: 7,
+            },
+            OperationKind::RoleRevoke {
+                role_id: [0x33; 32],
+                permission_id: [0x44; 32],
+                epoch: 8,
+            },
+            OperationKind::MetaSet,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // This is deliberately a codec/conversion fixture. Semantic tests
+            // construct canonical tree keys and membership leaves in the
+            // prover crate before attempting to build a trace.
+            let value = u8::try_from(index).expect("operation fixture index fits u8");
+            batch.push(StateTransition::new(
+                format!("roundtrip/{index}").into_bytes(),
+                vec![value],
+                vec![value + 1],
+                operation,
+            ));
+        }
         batch.metadata.insert("test".into(), vec![0xAA, 0xBB, 0xCC]);
         let dto = transition_batch_to_dto(&batch);
         let restored = transition_batch_from_dto(&dto);

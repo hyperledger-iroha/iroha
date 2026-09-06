@@ -739,9 +739,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             cors: A::ToriiCors::default(),
             ram_lfe: None,
             faucet: None,
-            kagemusha_commands: None,
+            kagemusha_v1_commands: None,
             tx_history: None,
             recipient_lookup: Default::default(),
+            public_dataspace_upstreams: Vec::new(),
             webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
             zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
@@ -805,7 +806,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ),
             },
             require_api_token: false,
-            api_tokens: Vec::new(),
+            api_tokens: Vec::new().into(),
             api_fee_asset_id: None,
             api_fee_amount: None,
             api_fee_receiver: None,
@@ -816,6 +817,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             peer_geo: A::ToriiPeerGeo::default(),
             soranet_privacy_ingest: A::SoranetPrivacyIngest::default(),
             privacy_bootle_lantern_issuer: None,
+            sccp_replay_archive: None,
             debug_match_filters: false,
             operator_auth: A::ToriiOperatorAuth::default(),
             operator_signatures: A::ToriiOperatorSignatures::default(),
@@ -949,6 +951,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 audit_export_dir: None,
                 embedded_signature_policy: None,
                 signer: None,
+                participants: Vec::new(),
+                audit_admin_keys: Vec::new(),
                 account_aliases: Vec::new(),
                 currency_assets: Vec::new(),
                 reference_data: Default::default(),
@@ -1285,18 +1289,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             slash_double_vote_bps: 0,
             slash_invalid_proof_bps: 0,
             slash_ineligible_proof_bps: 0,
-            parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
-            citizen_service: A::CitizenServiceDiscipline {
-                seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
-                max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
-                free_declines_per_epoch:
-                    defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH,
-                decline_slash_bps: defaults::governance::citizen_service::DECLINE_SLASH_BPS,
-                no_show_slash_bps: defaults::governance::citizen_service::NO_SHOW_SLASH_BPS,
-                misconduct_slash_bps: defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS,
-                role_bond_multipliers: defaults::governance::citizen_service::role_bond_multipliers(
-                ),
-            },
             sorafs_pin_policy: A::SorafsPinPolicyConstraints::default(),
             sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
                 .parse()
@@ -1324,17 +1316,13 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             max_conviction: 4,
             min_enactment_delay: 0,
             window_span: 10,
+            max_active_referenda: defaults::governance::MAX_ACTIVE_REFERENDA,
+            max_lock_owners_per_referendum:
+                defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM,
             plain_voting_enabled: false,
             approval_threshold_q_num: 1,
             approval_threshold_q_den: 2,
             min_turnout: 0,
-            parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-            parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::parliament_min_stake(),
-            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
-            )
-            .parse()
-            .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_sortition_pulse_delay_blocks:
                 defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
@@ -1343,6 +1331,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             parliament_public_finding_phase_blocks:
                 defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
             parliament_timed_ovn: A::ParliamentTimedOvn::default(),
+            parliament_tle_key_lifecycle: A::ParliamentTleKeyLifecycle::default(),
             parliament_tle_partial_release_signer_provider_handle: None,
             parliament_tle_partial_release_signer_provider_revision: None,
             parliament_tle_partial_release_signer_provider_policy_digest: None,

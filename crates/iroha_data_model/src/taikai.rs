@@ -64,6 +64,8 @@ fn fixed_hex(value: &str, width: usize) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiAnchorReceiptBodyV1")]
 pub struct TaikaiAnchorReceiptBodyV1 {
     /// Exact schema domain separating this receipt from other signed objects.
     pub schema: String,
@@ -108,6 +110,8 @@ impl TaikaiAnchorReceiptBodyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiAnchorReceiptV1")]
 pub struct TaikaiAnchorReceiptV1 {
     /// Complete content-bound acknowledgement statement.
     pub body: TaikaiAnchorReceiptBodyV1,
@@ -372,6 +376,8 @@ fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> 
     feature = "json",
     norito(tag = "kind", content = "value", no_fast_from_json)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiTrackKind")]
 pub enum TaikaiTrackKind {
     /// Video track carrying CMAF fragments.
     #[default]
@@ -401,6 +407,8 @@ impl FromStr for TaikaiTrackKind {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiResolution")]
 pub struct TaikaiResolution {
     /// Horizontal pixel count.
     pub width: u16,
@@ -444,6 +452,8 @@ impl FromStr for TaikaiResolution {
     feature = "json",
     norito(tag = "layout", content = "channels", no_fast_from_json)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiAudioLayout")]
 pub enum TaikaiAudioLayout {
     /// Mono (1.0) layout.
     Mono,
@@ -499,6 +509,8 @@ impl FromStr for TaikaiAudioLayout {
     feature = "json",
     norito(tag = "codec", content = "profile", no_fast_from_json)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiCodec")]
 pub enum TaikaiCodec {
     /// H.264 High profile.
     #[default]
@@ -542,6 +554,8 @@ impl FromStr for TaikaiCodec {
 /// Metadata associated with a Taikai track.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiTrackMetadata")]
 pub struct TaikaiTrackMetadata {
     /// Track kind (video/audio/data).
     pub kind: TaikaiTrackKind,
@@ -594,6 +608,8 @@ impl TaikaiTrackMetadata {
 /// CAR commitment pointer linking a segment to its deterministic archive.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiCarPointer")]
 pub struct TaikaiCarPointer {
     /// Multibase-encoded DAG-CBOR CID of the CAR payload.
     pub cid_multibase: String,
@@ -620,6 +636,8 @@ impl TaikaiCarPointer {
 /// Pointer to the canonical DA manifest generated during ingest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiIngestPointer")]
 pub struct TaikaiIngestPointer {
     /// Manifest hash committed during ingest.
     pub manifest_hash: BlobDigest,
@@ -655,6 +673,8 @@ impl TaikaiIngestPointer {
 /// Optional instrumentation hints recorded at ingest time.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiInstrumentation")]
 pub struct TaikaiInstrumentation {
     /// Milliseconds between encoder output and DA ingest.
     #[norito(default)]
@@ -669,6 +689,8 @@ pub struct TaikaiInstrumentation {
 /// Versioned Taikai Segment Envelope binding a broadcast segment to its DA artefacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiSegmentEnvelopeV1")]
 pub struct TaikaiSegmentEnvelopeV1 {
     /// Envelope format version (currently `1`).
     pub version: u16,
@@ -700,6 +722,8 @@ pub struct TaikaiSegmentEnvelopeV1 {
 /// Time-ordered index key for Taikai envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiTimeIndexKey")]
 pub struct TaikaiTimeIndexKey {
     /// Event identifier that scopes the stream.
     pub event_id: TaikaiEventId,
@@ -713,6 +737,8 @@ pub struct TaikaiTimeIndexKey {
 /// CAR lookup index key for Taikai envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiCidIndexKey")]
 pub struct TaikaiCidIndexKey {
     /// Event identifier that scopes the stream.
     pub event_id: TaikaiEventId,
@@ -726,6 +752,8 @@ pub struct TaikaiCidIndexKey {
 /// Bundle containing both deterministic index keys for a Taikai envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiEnvelopeIndexes")]
 pub struct TaikaiEnvelopeIndexes {
     /// Time-ordered key derived from the envelope.
     pub time_key: TaikaiTimeIndexKey,
@@ -788,6 +816,8 @@ pub const CEK_ROTATION_RECEIPT_VERSION_V1: u16 = 1;
 /// Receipt proving that a Content Encryption Key rotation completed for a stream.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::CekRotationReceiptV1")]
 pub struct CekRotationReceiptV1 {
     /// Schema version; must equal [`CEK_ROTATION_RECEIPT_VERSION_V1`].
     pub schema_version: u16,
@@ -795,9 +825,12 @@ pub struct CekRotationReceiptV1 {
     pub event_id: TaikaiEventId,
     /// Stream associated with the rotation.
     pub stream_id: TaikaiStreamId,
-    /// Named KMS profile that issued the wrap key.
+    /// Named custody-provider profile that issued the wrap key.
+    ///
+    /// The field name is compatibility vocabulary and does not require a
+    /// managed KMS; software providers are valid.
     pub kms_profile: String,
-    /// Label of the new wrap key provided by the KMS.
+    /// Label of the new wrap key provided by the selected custody provider.
     pub new_wrap_key_label: String,
     /// Optional label of the previously active wrap key.
     #[norito(default)]
@@ -814,7 +847,7 @@ pub struct CekRotationReceiptV1 {
     pub notes: Option<String>,
 }
 impl CekRotationReceiptV1 {
-    /// Validate the schema version and canonical KMS/key labels.
+    /// Validate the schema version and canonical provider/key labels.
     ///
     /// # Errors
     /// Returns [`CekRotationReceiptValidationError`] when the receipt version is unsupported or
@@ -890,6 +923,8 @@ pub const REPLICATION_PROOF_TOKEN_VERSION_V1: u16 = 1;
 /// Norito envelope linking GAR, CEK receipts, and rollout evidence.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::ReplicationProofTokenV1")]
 pub struct ReplicationProofTokenV1 {
     /// Schema version; must equal [`REPLICATION_PROOF_TOKEN_VERSION_V1`].
     pub schema_version: u16,
@@ -1021,6 +1056,8 @@ pub enum ReplicationProofTokenValidationError {
 /// Inclusive sequence window used for Taikai routing manifests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiSegmentWindow")]
 pub struct TaikaiSegmentWindow {
     /// First sequence value covered by the window (inclusive).
     pub start_sequence: u64,
@@ -1104,6 +1141,8 @@ pub enum TaikaiSegmentWindowError {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "class", content = "value")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiAvailabilityClass")]
 pub enum TaikaiAvailabilityClass {
     /// Hot storage tier.
     #[default]
@@ -1134,6 +1173,8 @@ impl From<StorageClass> for TaikaiAvailabilityClass {
 /// Per-rendition routing record describing CAR commitments and availability.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiRenditionRouteV1")]
 pub struct TaikaiRenditionRouteV1 {
     /// Rendition identifier (`1080p`, `sign-language`, etc.).
     pub rendition_id: TaikaiRenditionId,
@@ -1160,6 +1201,8 @@ impl TaikaiRenditionRouteV1 {
 /// so `SoraNS` anchors can ship routing windows with every batch.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiRoutingManifestV1")]
 pub struct TaikaiRoutingManifestV1 {
     /// Manifest format version (`1`).
     pub version: u16,
@@ -1259,6 +1302,8 @@ pub enum TaikaiRoutingManifestValidationError {
 /// Payload describing the data signed by publishers for every Taikai segment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiSegmentSigningBodyV1")]
 pub struct TaikaiSegmentSigningBodyV1 {
     /// Payload format version (`1`).
     pub version: u16,
@@ -1312,6 +1357,8 @@ impl TaikaiSegmentSigningBodyV1 {
 /// Signed manifest tying a Taikai segment envelope to its publisher attestation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::taikai::TaikaiSegmentSigningManifestV1")]
 pub struct TaikaiSegmentSigningManifestV1 {
     /// Signed body payload.
     pub body: TaikaiSegmentSigningBodyV1,
@@ -1832,3 +1879,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_taikai_schema_tests;

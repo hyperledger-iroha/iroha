@@ -56,9 +56,9 @@ the same deterministic framing.
   paths. Loopback remains valid only for the separately authenticated local
   developer proxy; it is not a relay-certificate endpoint.
   The shipping helper currently rejects before parsing the connect payload or
-  creating a QUIC endpoint while the lockfile resolves vulnerable quinn-proto
-  0.11.15. Re-enable this dormant path only after locking 0.11.17 or later and
-  rerunning its transport qualification.
+  creating a QUIC endpoint while the lockfile resolves `quinn 0.11.9` /
+  vulnerable `quinn-proto 0.11.15`. Re-enable this dormant path only after
+  locking 0.11.17 or later and rerunning its transport qualification.
 - **Cover scheduling:** `xtask/src/soranet_vpn.rs` builds deterministic cover/data
   plans from the config using a BLAKE3 XOF seeded by all 32 seed bytes, clamps
   bursts, frames payloads with the configured padding budget, and emits billing

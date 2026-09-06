@@ -17,6 +17,7 @@ use iroha_data_model::{
     prelude::HashOf,
     transaction::TransactionEntrypoint,
 };
+use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use std::{
@@ -547,8 +548,7 @@ impl Session {
 impl Bus {
     #[cfg(test)]
     pub fn new() -> Self {
-        #[allow(dead_code)]
-        let bus = Self {
+        Self {
             network_id: test_network_id(),
             inner: Arc::new(RwLock::new(HashMap::new())),
             p2p: Arc::new(RwLock::new(None)),
@@ -557,15 +557,17 @@ impl Bus {
             shared: Arc::new(BusShared::default()),
             per_ip_counts: Arc::new(Mutex::new(HashMap::new())),
             handshake_buckets: Arc::new(Mutex::new(HashMap::new())),
-        };
-        bus.start_cleaner();
-        bus
+        }
     }
+    /// Build an inert Connect bus from validated runtime configuration.
+    ///
+    /// Background services are started explicitly by Torii after the HTTP
+    /// listener and router have both been prepared successfully.
     pub fn from_config(
         cfg: &iroha_config::parameters::actual::Connect,
         network_id: NetworkId,
     ) -> Self {
-        let bus = Self {
+        Self {
             network_id,
             inner: Arc::new(RwLock::new(HashMap::new())),
             p2p: Arc::new(RwLock::new(None)),
@@ -594,23 +596,30 @@ impl Bus {
             shared: Arc::new(BusShared::default()),
             per_ip_counts: Arc::new(Mutex::new(HashMap::new())),
             handshake_buckets: Arc::new(Mutex::new(HashMap::new())),
-        };
-        if cfg.enabled {
-            bus.start_cleaner();
         }
-        bus
     }
-    fn start_cleaner(&self) {
+    pub(crate) fn start_cleaner(
+        &self,
+        shutdown_signal: ShutdownSignal,
+    ) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
         let me = self.clone();
-        spawn_background_task(async move {
+        tokio::spawn(async move {
             let interval = Duration::from_secs(30);
             loop {
-                tokio::time::sleep(interval).await;
-                let now = Instant::now();
-                let _ = me.prune_expired_sessions(now).await;
-                let _ = me.prune_handshake_buckets(now).await;
+                tokio::select! {
+                    biased;
+                    () = shutdown_signal.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
+                    () = async {
+                        tokio::time::sleep(interval).await;
+                        let now = Instant::now();
+                        let _ = me.prune_expired_sessions(now).await;
+                        let _ = me.prune_handshake_buckets(now).await;
+                    } => {}
+                }
             }
-        });
+        })
     }
     fn handshake_bucket_ttl(&self) -> Duration {
         // Cap idle retention so per-IP buckets don't grow without bound.
@@ -2226,15 +2235,45 @@ fn diff(req: &Vec<String>, acc: &Vec<String>) -> (Vec<String>, Vec<String>) {
 /// WS handler: receives frames from the client and forwards via Bus; delivers frames from Bus to WS.
 pub(crate) async fn handle_ws(
     bus: Bus,
+    reservation: RoleTokenReservation,
+    ws: WebSocket,
+    send_timeout: Duration,
+) -> Result<(), String> {
+    recover_ws_session(handle_ws_inner(bus, reservation, ws, send_timeout)).await
+}
+
+async fn recover_ws_session<F>(session: F) -> Result<(), String>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    match crate::panic_recovery::catch_async_recoverable(session).await {
+        Ok(result) => result,
+        Err(_) => Err("connect websocket session panicked".to_owned()),
+    }
+}
+
+async fn drive_ws_halves<R, W>(reader: R, writer: W) -> Result<(), String>
+where
+    R: Future<Output = Result<(), String>>,
+    W: Future<Output = Result<(), String>>,
+{
+    tokio::pin!(reader);
+    tokio::pin!(writer);
+    tokio::select! {
+        result = &mut reader => result,
+        result = &mut writer => result,
+    }
+}
+
+async fn handle_ws_inner(
+    bus: Bus,
     mut reservation: RoleTokenReservation,
     ws: WebSocket,
     send_timeout: Duration,
 ) -> Result<(), String> {
-    use tokio::task::JoinSet;
     let (sid, role) = reservation.identity();
     let (mut inbox, mut endpoint_lease) = reservation.commit_and_attach().await?;
     let bound_session = endpoint_lease.session.clone();
-    let mut tasks = JoinSet::new();
     // Split WS into sender and receiver halves
     let (mut ws_sender, mut ws_receiver) = ws.split();
     // Writer: forward frames from Bus to WS
@@ -2361,9 +2400,9 @@ pub(crate) async fn handle_ws(
         }
         Ok::<(), String>(())
     };
-    tasks.spawn(writer);
-    // Reader: parse binary frames and forward. Run it in the current task so it can be
-    // cancelled immediately when the writer exits on TTL, heartbeat failure, or send error.
+    // Keep both request-owned halves in this task. The first completion drops the
+    // other future immediately, without a nested Tokio task that could escape the
+    // session panic boundary.
     let reader = async {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
@@ -2412,19 +2451,8 @@ pub(crate) async fn handle_ws(
         }
         Ok(())
     };
-    tokio::pin!(reader);
-    let result = tokio::select! {
-        result = &mut reader => result,
-        writer = tasks.join_next() => match writer {
-            Some(Ok(result)) => result,
-            Some(Err(error)) => Err(format!("connect writer task failed: {error}")),
-            None => Err("connect writer task ended without a result".to_owned()),
-        },
-    };
+    let result = drive_ws_halves(reader, writer).await;
     endpoint_lease.release().await;
-    // Dropping a reader must also stop a writer blocked on its inbox, and vice versa.
-    tasks.abort_all();
-    while let Some(_r) = tasks.join_next().await {}
     result
 }
 fn expected_direction_for_role(role: proto::Role) -> proto::Dir {
@@ -2468,6 +2496,108 @@ mod tests {
         let sid = connect_sdk::derive_session_id(&test_network_id(), &app_pk, &nonce);
         (sid, app_pk, nonce)
     }
+    fn enabled_test_config() -> iroha_config::parameters::actual::Connect {
+        iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 16,
+            ws_per_ip_max_sessions: 8,
+            ws_rate_per_ip_per_min: 60,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 256_000,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
+            p2p_ttl_hops: 1,
+        }
+    }
+
+    #[test]
+    fn configured_bus_is_inert_until_torii_starts_it() {
+        let bus = Bus::from_config(&enabled_test_config(), test_network_id());
+        assert_eq!(
+            std::sync::Arc::strong_count(&bus.inner),
+            1,
+            "construction must not detach a self-retaining cleaner"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleaner_stops_and_releases_its_bus_on_shutdown() {
+        let bus = Bus::from_config(&enabled_test_config(), test_network_id());
+        let shutdown = ShutdownSignal::new();
+        let cleaner = bus.start_cleaner(shutdown.clone());
+        assert_eq!(std::sync::Arc::strong_count(&bus.inner), 2);
+        shutdown.send();
+        let exit = timeout(Duration::from_secs(1), cleaner)
+            .await
+            .expect("Connect cleaner must observe shutdown")
+            .expect("Connect cleaner must not panic");
+        assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
+        assert_eq!(std::sync::Arc::strong_count(&bus.inner), 1);
+    }
+
+    #[tokio::test]
+    async fn websocket_writer_panic_is_contained_and_disconnects_session() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x6d);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+        let mut reservation = bus
+            .reserve_token(sid, proto::Role::App, "app-token")
+            .await
+            .expect("reserve app endpoint");
+        let session = reservation.session.clone();
+        let (_inbox, endpoint_lease) = reservation
+            .commit_and_attach()
+            .await
+            .expect("attach app endpoint");
+
+        let outcome = recover_ws_session(async move {
+            let _endpoint_lease = endpoint_lease;
+            drive_ws_halves(std::future::pending::<Result<(), String>>(), async {
+                assert!(
+                    iroha_core::panic_hook::is_suppressed(),
+                    "the physical writer future must run inside the session recovery boundary"
+                );
+                panic!("injected Connect websocket writer panic");
+                #[allow(unreachable_code)]
+                Ok(())
+            })
+            .await
+        })
+        .await;
+
+        assert_eq!(
+            outcome,
+            Err("connect websocket session panicked".to_owned())
+        );
+        assert!(
+            !iroha_core::panic_hook::is_suppressed(),
+            "panic-hook suppression must not leak into the caller"
+        );
+        timeout(Duration::from_secs(1), async {
+            while bus.session_is_current(&sid, &session).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("panicked writer releases and disconnects its endpoint");
+    }
+
     fn test_claim(
         seed: u8,
         app_token: &str,
@@ -3403,6 +3533,47 @@ mod tests {
             .pre_ws_handshake(ip)
             .await
             .expect("capacity is reusable after cancelled upgrade");
+        retry.release().await;
+    }
+    #[tokio::test]
+    async fn panicking_upgrade_callback_releases_ws_permit_capacity() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1,
+            ws_per_ip_max_sessions: 1,
+            ws_rate_per_ip_per_min: 0,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg, test_network_id());
+        let ip: IpAddr = "192.0.2.45".parse().expect("test IP");
+        let permit = bus.pre_ws_handshake(ip).await.expect("reserve slot");
+        let result = crate::panic_recovery::catch_async_recoverable(async move {
+            let _permit = permit;
+            panic!("injected upgrade callback panic");
+        })
+        .await;
+        assert!(result.is_err());
+        timeout(Duration::from_millis(100), async {
+            while bus.status().await.sessions_total != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("panic cleanup releases the slot");
+        let mut retry = bus
+            .pre_ws_handshake(ip)
+            .await
+            .expect("capacity is reusable after a callback panic");
         retry.release().await;
     }
     #[tokio::test]
@@ -5139,40 +5310,69 @@ mod tests {
     }
 }
 impl Bus {
-    /// Attach a P2P network handle and spawn an inbound subscriber task to deliver
-    /// incoming Connect frames to local WS endpoints.
-    pub fn attach_network(&self, network: corelib::IrohaNetwork) {
+    /// Attach a P2P network handle and start the supervised inbound subscriber.
+    pub(crate) async fn attach_network(
+        &self,
+        network: corelib::IrohaNetwork,
+        shutdown_signal: ShutdownSignal,
+    ) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
         use iroha_p2p::network::{
             SubscriberFilter,
             message::{SubscriberRoute, Topic},
         };
+        *self.p2p.write().await = Some(network.clone());
         let me = self.clone();
-        spawn_background_task(async move {
-            {
-                let mut w = me.p2p.write().await;
-                *w = Some(network.clone());
-            }
+        tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::channel(network.subscriber_queue_cap().get());
             let filter =
                 SubscriberFilter::topics_for_route([Topic::Health], SubscriberRoute::Connect);
             let mut tx = tx;
             loop {
+                if shutdown_signal.is_sent() {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
                 match network.subscribe_to_peers_messages_with_filter(tx, filter.clone()) {
                     Ok(()) => break,
                     Err(returned) => {
                         iroha_logger::warn!("retrying Torii Connect relay subscription to P2P bus");
                         tx = returned;
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        tokio::select! {
+                            biased;
+                            () = shutdown_signal.receive() => {
+                                return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                            }
+                            () = tokio::time::sleep(Duration::from_millis(50)) => {}
+                        }
                     }
                 }
             }
-            while let Some(msg) = rx.recv().await {
+            loop {
+                let msg = tokio::select! {
+                    biased;
+                    () = shutdown_signal.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
+                    msg = rx.recv() => msg,
+                };
+                let Some(msg) = msg else {
+                    return if shutdown_signal.is_sent() {
+                        crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                    } else {
+                        crate::ToriiCriticalWorkerExit::UnexpectedExit
+                    };
+                };
                 let payload = msg.payload;
                 if let corelib::NetworkMessage::Connect(message) = payload {
-                    me.handle_p2p_message(*message).await;
+                    tokio::select! {
+                        biased;
+                        () = shutdown_signal.receive() => {
+                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
+                        () = me.handle_p2p_message(*message) => {}
+                    }
                 }
             }
-        });
+        })
     }
     /// Snapshot current metrics for ops.
     pub async fn status(&self) -> ConnectStatus {

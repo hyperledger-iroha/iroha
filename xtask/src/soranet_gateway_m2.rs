@@ -81,7 +81,7 @@ struct GatewayM2Hardening {
     #[norito(default)]
     vuln_report: Option<PathBuf>,
     #[norito(default)]
-    hsm_policy: Option<PathBuf>,
+    signing_policy: Option<PathBuf>,
     #[norito(default)]
     sandbox_profile: Option<PathBuf>,
     #[norito(default = "default_data_retention")]
@@ -220,8 +220,8 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
                         .vuln_report
                         .as_ref()
                         .map(|path| resolve_path(config_dir, path)),
-                    hsm_policy: harden_cfg
-                        .hsm_policy
+                    signing_policy: harden_cfg
+                        .signing_policy
                         .as_ref()
                         .map(|path| resolve_path(config_dir, path)),
                     sandbox_profile: harden_cfg

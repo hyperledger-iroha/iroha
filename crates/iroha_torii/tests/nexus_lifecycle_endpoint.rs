@@ -2,7 +2,6 @@
 //! Router-level regressions for the read-only Nexus lifecycle status surface.
 #![cfg(feature = "app_api")]
 use axum::{
-    Router,
     body::Body,
     http::{Request, StatusCode},
     response::Response,
@@ -22,9 +21,14 @@ use std::{collections::BTreeSet, sync::Arc};
 #[path = "fixtures.rs"]
 mod fixtures;
 struct NexusHarness {
-    app: Router,
+    app: iroha_torii::TestApiRouterRuntime,
     queue: Arc<Queue>,
     state: Arc<State>,
+}
+impl NexusHarness {
+    async fn shutdown(self) {
+        self.app.shutdown().await;
+    }
 }
 fn build_app() -> NexusHarness {
     build_app_with_api_token(None)
@@ -33,7 +37,7 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     if let Some(api_token) = api_token {
         cfg.torii.require_api_token = true;
-        cfg.torii.api_tokens = vec![api_token.to_owned()];
+        cfg.torii.api_tokens = vec![api_token.to_owned()].into();
     }
     let kura = Kura::blank_kura_for_testing();
     let world = iroha_core::prelude::World::with(
@@ -141,6 +145,7 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
         status.validate().expect("validate status"),
         harness.state.nexus_snapshot().lane_catalog
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn lifecycle_get_returns_valid_exact_norito_status() {
@@ -163,10 +168,12 @@ async fn lifecycle_get_returns_valid_exact_norito_status() {
         status.validate().expect("validate status"),
         harness.state.nexus_snapshot().lane_catalog
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn lifecycle_get_honors_api_token_access_policy() {
-    let harness = build_app_with_api_token(Some("lifecycle-status-token"));
+    const API_TOKEN: &str = "lifecycle-status-token-00000000000";
+    let harness = build_app_with_api_token(Some(API_TOKEN));
     for supplied_token in [None, Some("wrong-token")] {
         let mut request = Request::builder()
             .uri(NEXUS_LANE_LIFECYCLE)
@@ -185,13 +192,14 @@ async fn lifecycle_get_honors_api_token_access_policy() {
         Request::builder()
             .uri(NEXUS_LANE_LIFECYCLE)
             .header("accept", "application/json")
-            .header("x-api-token", "lifecycle-status-token")
+            .header("x-api-token", API_TOKEN)
             .body(Body::empty())
             .expect("request"),
     )
     .await
     .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn lifecycle_post_and_normalization_variants_are_unregistered_without_mutation() {
@@ -233,4 +241,5 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
         assert_eq!(harness.state.nexus_snapshot().lane_catalog, before_catalog);
         assert_eq!(harness.queue.queue_limits().for_lane(lane), before_limits);
     }
+    harness.shutdown().await;
 }

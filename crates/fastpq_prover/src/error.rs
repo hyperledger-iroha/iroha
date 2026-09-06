@@ -42,6 +42,22 @@ pub enum Error {
     /// Low-degree extension Merkle root mismatch detected during verification.
     #[error("LDE root mismatch")]
     LdeRootMismatch,
+    /// Lookup Fiat–Shamir challenge does not match the reconstructed transcript.
+    #[error("lookup challenge mismatch")]
+    LookupChallengeMismatch,
+    /// Lookup grand product does not match the reconstructed accumulator.
+    #[error("lookup grand product mismatch")]
+    LookupGrandProductMismatch,
+    /// Lookup selector and witness columns have different lengths.
+    #[error(
+        "lookup selector/witness column length mismatch: selector has {selector_len} values, witness has {witness_len}"
+    )]
+    LookupColumnLengthMismatch {
+        /// Number of selector evaluations supplied by the caller.
+        selector_len: usize,
+        /// Number of witness evaluations supplied by the caller.
+        witness_len: usize,
+    },
     /// AIR trace Merkle root mismatch detected during verification.
     #[error("AIR trace root mismatch")]
     AirTraceRootMismatch,
@@ -63,6 +79,12 @@ pub enum Error {
         expected: usize,
         /// Actual number advertised by the proof.
         actual: usize,
+    },
+    /// A proof-carried AIR composition challenge differs from transcript replay.
+    #[error("AIR challenge mismatch at index {index}")]
+    AirChallengeMismatch {
+        /// Index of the mismatched AIR composition challenge.
+        index: usize,
     },
     /// AIR row or composition opening did not match the sampled statement.
     #[error("AIR opening mismatch at position {index}")]
@@ -89,12 +111,6 @@ pub enum Error {
         expected: usize,
         /// Actual number advertised by the proof.
         actual: usize,
-    },
-    /// Specific FRI layer root mismatch.
-    #[error("FRI layer mismatch at round {round}")]
-    FriLayerMismatch {
-        /// Round exhibiting the mismatch.
-        round: usize,
     },
     /// FRI challenge vector length mismatch.
     #[error("FRI challenge length mismatch: expected {expected}, got {actual}")]
@@ -224,7 +240,7 @@ pub enum Error {
     #[error("trace column `{0}` missing from layout")]
     MissingColumn(String),
     /// Unsupported FRI arity advertised by the parameter set.
-    #[error("unsupported FRI arity {0}; expected 8")]
+    #[error("unsupported FRI arity {0}; first-release FASTPQ requires binary arity 2")]
     FriArity(u32),
     /// A FRI layer cannot be partitioned into complete multiplicative cosets.
     #[error("FRI layer length {length} is not compatible with effective arity {arity}")]
@@ -249,6 +265,12 @@ pub enum Error {
     /// A numeric asset operation did not use the canonical state-key shape.
     #[error("invalid asset operation key; expected `asset/<asset-id>/<account>`")]
     InvalidAssetKey,
+    /// A mint or burn did not change the balance in its required direction.
+    #[error("{operation} must change the asset value in the required direction")]
+    InvalidAssetValueChange {
+        /// Stable operation name (`mint` or `burn`).
+        operation: &'static str,
+    },
     /// Metadata field has an unexpected length.
     #[error("metadata field `{key}` has length {actual}, expected {expected}")]
     MetadataLength {

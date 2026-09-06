@@ -1,0 +1,985 @@
+{
+  "BuildStatus": {
+    "deserialize_schema_hash": "5e9e80de13d383d61bbbc6abd75fcbe0",
+    "json": {
+      "cargo_features": "cargo_features-sample",
+      "dpn_validator_release_commit": "dpn_validator_release_commit-sample",
+      "git_commit_sha": "git_commit_sha-sample",
+      "target_triple": "target_triple-sample",
+      "version": "version-sample"
+    },
+    "schema_name": "iroha_telemetry::metrics::BuildStatus",
+    "serialize_schema_hash": "5e9e80de13d383d61bbbc6abd75fcbe0",
+    "wire_hex": "4e52543000005e9e80de13d383d61bbbc6abd75fcbe00079000000000000000d769b1098c38d3a020f0e76657273696f6e2d73616d706c6516156769745f636f6d6d69745f7368612d73616d706c65242364706e5f76616c696461746f725f72656c656173655f636f6d6d69742d73616d706c651615636172676f5f66656174757265732d73616d706c6515147461726765745f747269706c652d73616d706c65"
+  },
+  "CryptoStatus": {
+    "deserialize_schema_hash": "cb639ff662b783d84bee1140ca93f41f",
+    "json": {
+      "halo2": {
+        "backend": "backend-sample",
+        "curve": "curve-sample",
+        "enabled": true,
+        "max_k": 4,
+        "verifier_budget_ms": 5,
+        "verifier_max_batch": 6
+      },
+      "sm_helpers_available": true,
+      "sm_openssl_preview_enabled": false
+    },
+    "schema_name": "iroha_telemetry::metrics::CryptoStatus",
+    "serialize_schema_hash": "cb639ff662b783d84bee1140ca93f41f",
+    "wire_hex": "4e5254300000cb639ff662b783d84bee1140ca93f41f0038000000000000005c44874b663d693702010101003301010d0c63757276652d73616d706c650f0e6261636b656e642d73616d706c6504040000000805000000000000000406000000"
+  },
+  "DaReceiptCursorStatus": {
+    "deserialize_schema_hash": "918abb2850cfa1a548059a3e5e45ca9d",
+    "json": {
+      "epoch": 2,
+      "highest_sequence": 3,
+      "lane_id": 1
+    },
+    "schema_name": "iroha_telemetry::metrics::DaReceiptCursorStatus",
+    "serialize_schema_hash": "918abb2850cfa1a548059a3e5e45ca9d",
+    "wire_hex": "4e5254300000918abb2850cfa1a548059a3e5e45ca9d001700000000000000bde85d7900a7c0db020401000000080200000000000000080300000000000000"
+  },
+  "GovernanceManifestActivation": {
+    "deserialize_schema_hash": "3182fa1d5161b0e9d3249e369772f35f",
+    "json": {
+      "abi_hash_hex": "abi_hash_hex-sample",
+      "activated_at_ms": 5,
+      "code_hash_hex": "code_hash_hex-sample",
+      "contract_address": "contract_address-sample",
+      "height": 4
+    },
+    "schema_name": "iroha_telemetry::metrics::GovernanceManifestActivation",
+    "serialize_schema_hash": "3182fa1d5161b0e9d3249e369772f35f",
+    "wire_hex": "4e52543000003182fa1d5161b0e9d3249e369772f35f0058000000000000007e30c40842f6626c021817636f6e74726163745f616464726573732d73616d706c651514636f64655f686173685f6865782d73616d706c65160114136162695f686173685f6865782d73616d706c65080400000000000000080500000000000000"
+  },
+  "GovernanceManifestAdmissionCounters": {
+    "deserialize_schema_hash": "4f2bc76003a5ee212d4e466706f111eb",
+    "json": {
+      "allowed": 2,
+      "missing_manifest": 3,
+      "non_validator_authority": 4,
+      "protected_namespace_rejected": 6,
+      "quorum_rejected": 5,
+      "runtime_hook_rejected": 7,
+      "total_checks": 1
+    },
+    "schema_name": "iroha_telemetry::metrics::GovernanceManifestAdmissionCounters",
+    "serialize_schema_hash": "4f2bc76003a5ee212d4e466706f111eb",
+    "wire_hex": "4e52543000004f2bc76003a5ee212d4e466706f111eb003f00000000000000a4a2ece1174a409302080100000000000000080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000"
+  },
+  "GovernanceManifestQuorumCounters": {
+    "deserialize_schema_hash": "46fb85344b23a2aa33deaa082f7d31a2",
+    "json": {
+      "rejected": 3,
+      "satisfied": 2,
+      "total_checks": 1
+    },
+    "schema_name": "iroha_telemetry::metrics::GovernanceManifestQuorumCounters",
+    "serialize_schema_hash": "46fb85344b23a2aa33deaa082f7d31a2",
+    "wire_hex": "4e525430000046fb85344b23a2aa33deaa082f7d31a2001b000000000000008a4f4282a056fa5402080100000000000000080200000000000000080300000000000000"
+  },
+  "GovernanceProposalCounters": {
+    "deserialize_schema_hash": "1843d88150d2204e2f2bf4205119d6ff",
+    "json": {
+      "enacted": 3,
+      "execution_failed": 5,
+      "proposed": 1,
+      "rejected": 2,
+      "superseded": 4
+    },
+    "schema_name": "iroha_telemetry::metrics::GovernanceProposalCounters",
+    "serialize_schema_hash": "1843d88150d2204e2f2bf4205119d6ff",
+    "wire_hex": "4e52543000001843d88150d2204e2f2bf4205119d6ff002d000000000000008f74feef6c54299102080100000000000000080200000000000000080300000000000000080400000000000000080500000000000000"
+  },
+  "GovernanceProtectedNamespaceCounters": {
+    "deserialize_schema_hash": "7f59e0f402a373829530c46dce6818db",
+    "json": {
+      "allowed": 2,
+      "rejected": 3,
+      "total_checks": 1
+    },
+    "schema_name": "iroha_telemetry::metrics::GovernanceProtectedNamespaceCounters",
+    "serialize_schema_hash": "7f59e0f402a373829530c46dce6818db",
+    "wire_hex": "4e52543000007f59e0f402a373829530c46dce6818db001b000000000000008a4f4282a056fa5402080100000000000000080200000000000000080300000000000000"
+  },
+  "GovernanceStatus": {
+    "deserialize_schema_hash": "83d729a602094c9fea8a77f49e564f1b",
+    "json": {
+      "citizens_total": 8,
+      "manifest_admission": {
+        "allowed": 2,
+        "missing_manifest": 3,
+        "non_validator_authority": 4,
+        "protected_namespace_rejected": 6,
+        "quorum_rejected": 5,
+        "runtime_hook_rejected": 7,
+        "total_checks": 1
+      },
+      "manifest_quorum": {
+        "rejected": 3,
+        "satisfied": 2,
+        "total_checks": 1
+      },
+      "proposals": {
+        "enacted": 3,
+        "execution_failed": 5,
+        "proposed": 1,
+        "rejected": 2,
+        "superseded": 4
+      },
+      "protected_namespace": {
+        "allowed": 2,
+        "rejected": 3,
+        "total_checks": 1
+      },
+      "recent_manifest_activations": [
+        {
+          "abi_hash_hex": "abi_hash_hex-sample",
+          "activated_at_ms": 5,
+          "code_hash_hex": "code_hash_hex-sample",
+          "contract_address": "contract_address-sample",
+          "height": 4
+        }
+      ],
+      "sealed_lane_aliases": [
+        "sealed_lane_aliases-sample"
+      ],
+      "sealed_lanes_total": 6
+    },
+    "schema_name": "iroha_telemetry::metrics::GovernanceStatus",
+    "serialize_schema_hash": "83d729a602094c9fea8a77f49e564f1b",
+    "wire_hex": "4e525430000083d729a602094c9fea8a77f49e564f1b003b0100000000000083f1dfbe24dc98b1022d0801000000000000000802000000000000000803000000000000000804000000000000000805000000000000001b0801000000000000000802000000000000000803000000000000003f0801000000000000000802000000000000000803000000000000000804000000000000000805000000000000000806000000000000000807000000000000001b080100000000000000080200000000000000080300000000000000610100000000000000581817636f6e74726163745f616464726573732d73616d706c651514636f64655f686173685f6865782d73616d706c65160114136162695f686173685f6865782d73616d706c6508040000000000000008050000000000000004060000002401000000000000001b1a7365616c65645f6c616e655f616c69617365732d73616d706c65080800000000000000"
+  },
+  "Halo2Status": {
+    "deserialize_schema_hash": "66918794eeb3ec94f242e94f41254c2b",
+    "json": {
+      "backend": "backend-sample",
+      "curve": "curve-sample",
+      "enabled": true,
+      "max_k": 4,
+      "verifier_budget_ms": 5,
+      "verifier_max_batch": 6
+    },
+    "schema_name": "iroha_telemetry::metrics::Halo2Status",
+    "serialize_schema_hash": "66918794eeb3ec94f242e94f41254c2b",
+    "wire_hex": "4e525430000066918794eeb3ec94f242e94f41254c2b003300000000000000ae86479971f1a9990201010d0c63757276652d73616d706c650f0e6261636b656e642d73616d706c6504040000000805000000000000000406000000"
+  },
+  "NexusDataspaceCatalogStatus": {
+    "deserialize_schema_hash": "c00ae1e0b65a5000ac4aa9a003756d15",
+    "json": {
+      "alias": "alias-sample",
+      "dataspace_id": 3,
+      "lane_alias": "lane_alias-sample",
+      "lane_id": 1,
+      "manifest_path": "manifest_path-sample",
+      "manifest_ready": false,
+      "manifest_required": true,
+      "protected_namespaces": [
+        "protected_namespaces-sample"
+      ],
+      "sealed": true,
+      "storage_profile": "storage_profile-sample",
+      "visibility": "visibility-sample"
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusDataspaceCatalogStatus",
+    "serialize_schema_hash": "c00ae1e0b65a5000ac4aa9a003756d15",
+    "wire_hex": "4e5254300000c00ae1e0b65a5000ac4aa9a003756d15009e000000000000002ea50b027cba469002040100000012116c616e655f616c6961732d73616d706c650803000000000000000d0c616c6961732d73616d706c6512117669736962696c6974792d73616d706c65171673746f726167655f70726f66696c652d73616d706c65010101000101170115146d616e69666573745f706174682d73616d706c652501000000000000001c1b70726f7465637465645f6e616d657370616365732d73616d706c65"
+  },
+  "NexusDataspaceTeuStatus": {
+    "deserialize_schema_hash": "fbd5b0aceeaf4b3e4ec9f0606452932e",
+    "json": {
+      "age_slots": 5,
+      "alias": "alias-sample",
+      "backlog": 4,
+      "dataspace_id": 2,
+      "description": "description-sample",
+      "fault_tolerance": 3,
+      "lane_id": 1,
+      "tx_served": 7,
+      "virtual_finish": 6
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusDataspaceTeuStatus",
+    "serialize_schema_hash": "fbd5b0aceeaf4b3e4ec9f0606452932e",
+    "wire_hex": "4e5254300000fbd5b0aceeaf4b3e4ec9f0606452932e005b0000000000000050707f37d066341902040100000008020000000000000004030000000804000000000000000805000000000000000806000000000000000807000000000000000d0c616c6961732d73616d706c65150113126465736372697074696f6e2d73616d706c65"
+  },
+  "NexusLaneManifestValidatorBindingStatus": {
+    "deserialize_schema_hash": "035a85445670d7aec94b428f10b99c33",
+    "json": {
+      "peer_id": "peer_id-sample",
+      "torii_url": "torii_url-sample",
+      "validator": "validator-sample"
+    },
+    "schema_name": "iroha_telemetry::metrics::manifest_status::NexusLaneManifestValidatorBindingStatus",
+    "serialize_schema_hash": "035a85445670d7aec94b428f10b99c33",
+    "wire_hex": "4e5254300000035a85445670d7aec94b428f10b99c33003600000000000000472a332a0485e1ff02111076616c696461746f722d73616d706c650f0e706565725f69642d73616d706c6513011110746f7269695f75726c2d73616d706c65"
+  },
+  "NexusLaneRuntimeUpgradeHookStatus": {
+    "deserialize_schema_hash": "70dc2d72af2b1c7616f4915c08a0630f",
+    "json": {
+      "allow": true,
+      "allowed_ids": [
+        "allowed_ids-sample"
+      ],
+      "metadata_key": "metadata_key-sample",
+      "require_metadata": false
+    },
+    "schema_name": "iroha_telemetry::metrics::manifest_status::NexusLaneRuntimeUpgradeHookStatus",
+    "serialize_schema_hash": "70dc2d72af2b1c7616f4915c08a0630f",
+    "wire_hex": "4e525430000070dc2d72af2b1c7616f4915c08a0630f00380000000000000072749145f70daa5c0201010100160114136d657461646174615f6b65792d73616d706c651c01000000000000001312616c6c6f7765645f6964732d73616d706c65"
+  },
+  "NexusLaneTeuBuckets": {
+    "deserialize_schema_hash": "8778996460b3092fe557c28a8048b832",
+    "json": {
+      "circuit_breaker": 4,
+      "floor": 1,
+      "headroom": 2,
+      "must_serve": 3
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusLaneTeuBuckets",
+    "serialize_schema_hash": "8778996460b3092fe557c28a8048b832",
+    "wire_hex": "4e52543000008778996460b3092fe557c28a8048b83200240000000000000064ab58821b59316802080100000000000000080200000000000000080300000000000000080400000000000000"
+  },
+  "NexusLaneTeuDeferrals": {
+    "deserialize_schema_hash": "434f2b72126841ae50d35ed9868af475",
+    "json": {
+      "cap_exceeded": 1,
+      "circuit_breaker": 4,
+      "envelope_limit": 2,
+      "quota": 3
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusLaneTeuDeferrals",
+    "serialize_schema_hash": "434f2b72126841ae50d35ed9868af475",
+    "wire_hex": "4e5254300000434f2b72126841ae50d35ed9868af47500240000000000000064ab58821b59316802080100000000000000080200000000000000080300000000000000080400000000000000"
+  },
+  "NexusLaneTeuStatus": {
+    "deserialize_schema_hash": "5e83632a175dedd7bfa3bd592c849df9",
+    "json": {
+      "alias": "alias-sample",
+      "avg_layer_width": 21,
+      "block_height": 9,
+      "buckets": {
+        "circuit_breaker": 4,
+        "floor": 1,
+        "headroom": 2,
+        "must_serve": 3
+      },
+      "capacity": 2,
+      "committed": 3,
+      "dataspace_alias": "dataspace_alias-sample",
+      "dataspace_id": 32,
+      "deferrals": {
+        "cap_exceeded": 1,
+        "circuit_breaker": 4,
+        "envelope_limit": 2,
+        "quota": 3
+      },
+      "detached_fallback": 27,
+      "detached_merged": 26,
+      "detached_prepared": 25,
+      "finality_lag_slots": 10,
+      "governance": "governance-sample",
+      "lane_id": 1,
+      "lane_type": "lane_type-sample",
+      "layer_count": 20,
+      "layer_width_buckets": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "manifest_path": "manifest_path-sample",
+      "manifest_protected_namespaces": [
+        "manifest_protected_namespaces-sample"
+      ],
+      "manifest_quorum": 44,
+      "manifest_ready": false,
+      "manifest_required": true,
+      "manifest_runtime_upgrade": {
+        "allow": true,
+        "allowed_ids": [
+          "allowed_ids-sample"
+        ],
+        "metadata_key": "metadata_key-sample",
+        "require_metadata": false
+      },
+      "manifest_validator_bindings": [
+        {
+          "peer_id": "peer_id-sample",
+          "torii_url": "torii_url-sample",
+          "validator": "validator-sample"
+        }
+      ],
+      "manifest_validators": [
+        "manifest_validators-sample"
+      ],
+      "median_layer_width": 22,
+      "must_serve_truncations": 6,
+      "overlay_bytes_total": 16,
+      "overlay_count": 14,
+      "overlay_instr_total": 15,
+      "peak_layer_width": 19,
+      "quarantine_executed": 28,
+      "rbc_bytes_total": 18,
+      "rbc_chunks": 17,
+      "scheduler_starvation_bound_override": 40,
+      "scheduler_teu_capacity_override": 39,
+      "scheduler_utilization_pct": 23,
+      "settlement": "settlement-sample",
+      "settlement_backlog_xor_micro": 11,
+      "starvation_bound_slots": 8,
+      "storage_profile": "storage_profile-sample",
+      "trigger_level": 7,
+      "tx_edges": 13,
+      "tx_vertices": 12,
+      "visibility": "visibility-sample"
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusLaneTeuStatus",
+    "serialize_schema_hash": "5e83632a175dedd7bfa3bd592c849df9",
+    "wire_hex": "4e52543000005e83632a175dedd7bfa3bd592c849df9001c030000000000002d5d92bbc0a4c45702000000000000000004010000000802000000000000000803000000000000002408010000000000000008020000000000000008030000000000000008040000000000000024080100000000000000080200000000000000080300000000000000080400000000000000080600000000000000080700000000000000080800000000000000080900000000000000080a00000000000000100b000000000000000000000000000000080c00000000000000080d00000000000000080e00000000000000080f0000000000000008100000000000000008110000000000000008120000000000000008130000000000000008140000000000000008150000000000000008160000000000000008170000000000000048080100000000000000080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000080800000000000000081900000000000000081a00000000000000081b00000000000000081c00000000000000010101000d0c616c6961732d73616d706c65082000000000000000190117166461746173706163655f616c6961732d73616d706c65140112117669736962696c6974792d73616d706c65171673746f726167655f70726f66696c652d73616d706c65130111106c616e655f747970652d73616d706c6514011211676f7665726e616e63652d73616d706c6514011211736574746c656d656e742d73616d706c650a010827000000000000000a01082800000000000000170115146d616e69666573745f706174682d73616d706c652401000000000000001b1a6d616e69666573745f76616c696461746f72732d73616d706c653f010000000000000036111076616c696461746f722d73616d706c650f0e706565725f69642d73616d706c6513011110746f7269695f75726c2d73616d706c650601042c0000002e010000000000000025246d616e69666573745f70726f7465637465645f6e616d657370616365732d73616d706c653a013801010100160114136d657461646174615f6b65792d73616d706c651c01000000000000001312616c6c6f7765645f6964732d73616d706c65"
+  },
+  "NexusRoutingMatcherStatus": {
+    "deserialize_schema_hash": "ef83fcce185218de8792bdfc5cc1e163",
+    "json": {
+      "account": "account-sample",
+      "description": "description-sample",
+      "instruction": "instruction-sample"
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusRoutingMatcherStatus",
+    "serialize_schema_hash": "ef83fcce185218de8792bdfc5cc1e163",
+    "wire_hex": "4e5254300000ef83fcce185218de8792bdfc5cc1e163003e00000000000000e872fc73b914796f0211010f0e6163636f756e742d73616d706c6515011312696e737472756374696f6e2d73616d706c65150113126465736372697074696f6e2d73616d706c65"
+  },
+  "NexusRoutingPolicyStatus": {
+    "deserialize_schema_hash": "b9c8d24f2c1c83a8c08f4abb417edd33",
+    "json": {
+      "default_dataspace": 2,
+      "default_lane": 1,
+      "rules": [
+        {
+          "dataspace_id": 2,
+          "lane": 1,
+          "matcher": {
+            "account": "account-sample",
+            "description": "description-sample",
+            "instruction": "instruction-sample"
+          }
+        }
+      ]
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusRoutingPolicyStatus",
+    "serialize_schema_hash": "b9c8d24f2c1c83a8c08f4abb417edd33",
+    "wire_hex": "4e5254300000b9c8d24f2c1c83a8c08f4abb417edd3300670000000000000092dc5241f67f4f2a0204010000000802000000000000005801000000000000004f04010000000a010802000000000000003e11010f0e6163636f756e742d73616d706c6515011312696e737472756374696f6e2d73616d706c65150113126465736372697074696f6e2d73616d706c65"
+  },
+  "NexusRoutingRuleStatus": {
+    "deserialize_schema_hash": "a1262a6b37adaadac4e5bbcb38bfd83f",
+    "json": {
+      "dataspace_id": 2,
+      "lane": 1,
+      "matcher": {
+        "account": "account-sample",
+        "description": "description-sample",
+        "instruction": "instruction-sample"
+      }
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusRoutingRuleStatus",
+    "serialize_schema_hash": "a1262a6b37adaadac4e5bbcb38bfd83f",
+    "wire_hex": "4e5254300000a1262a6b37adaadac4e5bbcb38bfd83f004f0000000000000069cc35eb8f417b550204010000000a010802000000000000003e11010f0e6163636f756e742d73616d706c6515011312696e737472756374696f6e2d73616d706c65150113126465736372697074696f6e2d73616d706c65"
+  },
+  "NexusStatus": {
+    "deserialize_schema_hash": "d327d54066a164d3633e88631df37b77",
+    "json": {
+      "routing_policy": {
+        "default_dataspace": 2,
+        "default_lane": 1,
+        "rules": [
+          {
+            "dataspace_id": 2,
+            "lane": 1,
+            "matcher": {
+              "account": "account-sample",
+              "description": "description-sample",
+              "instruction": "instruction-sample"
+            }
+          }
+        ]
+      }
+    },
+    "schema_name": "iroha_telemetry::metrics::NexusStatus",
+    "serialize_schema_hash": "d327d54066a164d3633e88631df37b77",
+    "wire_hex": "4e5254300000d327d54066a164d3633e88631df37b7700680000000000000007c73a5a730d85eb026704010000000802000000000000005801000000000000004f04010000000a010802000000000000003e11010f0e6163636f756e742d73616d706c6515011312696e737472756374696f6e2d73616d706c65150113126465736372697074696f6e2d73616d706c65"
+  },
+  "SchedulerLayerWidthBuckets": {
+    "deserialize_schema_hash": "918816b18cf85fd2deb67a7c0a9e2c65",
+    "json": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "schema_name": "iroha_telemetry::metrics::SchedulerLayerWidthBuckets",
+    "serialize_schema_hash": "918816b18cf85fd2deb67a7c0a9e2c65",
+    "wire_hex": "4e5254300000918816b18cf85fd2deb67a7c0a9e2c65004800000000000000abec6f5a4164373d02080100000000000000080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000080800000000000000"
+  },
+  "StackStatus": {
+    "deserialize_schema_hash": "8d9b767b8820b4967c2925f89d9d01a4",
+    "json": {
+      "budget_hit_total": 12,
+      "gas_to_stack_multiplier": 7,
+      "guest_bytes": 6,
+      "guest_clamped": false,
+      "pool_fallback_total": 11,
+      "prover_bytes": 5,
+      "prover_clamped": true,
+      "requested_guest_bytes": 3,
+      "requested_prover_bytes": 2,
+      "requested_scheduler_bytes": 1,
+      "scheduler_bytes": 4,
+      "scheduler_clamped": false
+    },
+    "schema_name": "iroha_telemetry::metrics::StackStatus",
+    "serialize_schema_hash": "8d9b767b8820b4967c2925f89d9d01a4",
+    "wire_hex": "4e52543000008d9b767b8820b4967c2925f89d9d01a4005700000000000000b973c941e60eee3602080100000000000000080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000010001010100080b00000000000000080c00000000000000"
+  },
+  "Status": {
+    "deserialize_schema_hash": "029152c7bd57348cdef4a17847d93313",
+    "json": {
+      "blocks": 4,
+      "blocks_non_empty": 5,
+      "build": {
+        "cargo_features": "cargo_features-sample",
+        "dpn_validator_release_commit": "dpn_validator_release_commit-sample",
+        "git_commit_sha": "git_commit_sha-sample",
+        "target_triple": "target_triple-sample",
+        "version": "version-sample"
+      },
+      "commit_time_ms": 6,
+      "crypto": {
+        "halo2": {
+          "backend": "backend-sample",
+          "curve": "curve-sample",
+          "enabled": true,
+          "max_k": 4,
+          "verifier_budget_ms": 5,
+          "verifier_max_batch": 6
+        },
+        "sm_helpers_available": true,
+        "sm_openssl_preview_enabled": false
+      },
+      "da_receipt_cursors": [
+        {
+          "epoch": 2,
+          "highest_sequence": 3,
+          "lane_id": 1
+        }
+      ],
+      "dataspace_catalog": [
+        {
+          "alias": "alias-sample",
+          "dataspace_id": 3,
+          "lane_alias": "lane_alias-sample",
+          "lane_id": 1,
+          "manifest_path": "manifest_path-sample",
+          "manifest_ready": false,
+          "manifest_required": true,
+          "protected_namespaces": [
+            "protected_namespaces-sample"
+          ],
+          "sealed": true,
+          "storage_profile": "storage_profile-sample",
+          "visibility": "visibility-sample"
+        }
+      ],
+      "governance": {
+        "citizens_total": 8,
+        "manifest_admission": {
+          "allowed": 2,
+          "missing_manifest": 3,
+          "non_validator_authority": 4,
+          "protected_namespace_rejected": 6,
+          "quorum_rejected": 5,
+          "runtime_hook_rejected": 7,
+          "total_checks": 1
+        },
+        "manifest_quorum": {
+          "rejected": 3,
+          "satisfied": 2,
+          "total_checks": 1
+        },
+        "proposals": {
+          "enacted": 3,
+          "execution_failed": 5,
+          "proposed": 1,
+          "rejected": 2,
+          "superseded": 4
+        },
+        "protected_namespace": {
+          "allowed": 2,
+          "rejected": 3,
+          "total_checks": 1
+        },
+        "recent_manifest_activations": [
+          {
+            "abi_hash_hex": "abi_hash_hex-sample",
+            "activated_at_ms": 5,
+            "code_hash_hex": "code_hash_hex-sample",
+            "contract_address": "contract_address-sample",
+            "height": 4
+          }
+        ],
+        "sealed_lane_aliases": [
+          "sealed_lane_aliases-sample"
+        ],
+        "sealed_lanes_total": 6
+      },
+      "last_block_committed_at_ms": 16,
+      "last_non_empty_block_committed_at_ms": 17,
+      "last_rejection_at_ms": 9,
+      "nexus": {
+        "routing_policy": {
+          "default_dataspace": 2,
+          "default_lane": 1,
+          "rules": [
+            {
+              "dataspace_id": 2,
+              "lane": 1,
+              "matcher": {
+                "account": "account-sample",
+                "description": "description-sample",
+                "instruction": "instruction-sample"
+              }
+            }
+          ]
+        }
+      },
+      "observed_at_ms": 2,
+      "peers": 3,
+      "queue_inflight": 15,
+      "queue_queued": 14,
+      "queue_size": 13,
+      "stack": {
+        "budget_hit_total": 12,
+        "gas_to_stack_multiplier": 7,
+        "guest_bytes": 6,
+        "guest_clamped": false,
+        "pool_fallback_total": 11,
+        "prover_bytes": 5,
+        "prover_clamped": true,
+        "requested_guest_bytes": 3,
+        "requested_prover_bytes": 2,
+        "requested_scheduler_bytes": 1,
+        "scheduler_bytes": 4,
+        "scheduler_clamped": false
+      },
+      "sumeragi": {
+        "block_created_dropped_by_lock_total": 15,
+        "block_created_hint_mismatch_total": 16,
+        "block_created_proposal_mismatch_total": 17,
+        "commit_qc_epoch": 12,
+        "commit_qc_height": 10,
+        "commit_qc_signatures_total": 13,
+        "commit_qc_validator_set_len": 14,
+        "commit_qc_view": 11,
+        "commit_signatures_counted": 7,
+        "commit_signatures_present": 6,
+        "commit_signatures_required": 9,
+        "commit_signatures_set_b": 8,
+        "epoch_commit_deadline_offset": 28,
+        "epoch_length_blocks": 27,
+        "epoch_reveal_deadline_offset": 29,
+        "highest_qc_height": 3,
+        "lane_governance_sealed_aliases": [
+          "lane_governance_sealed_aliases-sample"
+        ],
+        "lane_governance_sealed_total": 38,
+        "leader_index": 2,
+        "locked_qc_height": 4,
+        "locked_qc_view": 5,
+        "mode_tag": "mode_tag-sample",
+        "prf_epoch_seed": "prf_epoch_seed-sample",
+        "prf_height": 31,
+        "prf_view": 32,
+        "tx_queue_capacity": 19,
+        "tx_queue_depth": 18,
+        "tx_queue_max_retained_bytes": 21,
+        "tx_queue_oldest_queued_age_ms": 26,
+        "tx_queue_retained_bytes": 20,
+        "tx_queue_saturated": false,
+        "tx_queue_saturated_by_age": true,
+        "tx_queue_saturated_by_bytes": false,
+        "tx_queue_saturated_by_count": true,
+        "view_change_install_total": 37,
+        "view_change_proof_accepted_total": 33,
+        "view_change_proof_rejected_total": 35,
+        "view_change_proof_stale_total": 34,
+        "view_change_suggest_total": 36
+      },
+      "taikai_alias_rotations": [
+        {
+          "alias_name": "alias_name-sample",
+          "alias_namespace": "alias_namespace-sample",
+          "cluster": "cluster-sample",
+          "event": "event-sample",
+          "last_updated_unix": 10,
+          "manifest_digest_hex": "manifest_digest_hex-sample",
+          "rotations_total": 9,
+          "stream": "stream-sample",
+          "window_end_sequence": 7,
+          "window_start_sequence": 6
+        }
+      ],
+      "taikai_ingest": [
+        {
+          "cluster": "cluster-sample",
+          "error_counts": [
+            {
+              "reason": "reason-sample",
+              "total": 2
+            }
+          ],
+          "last_latency_ms": 3,
+          "last_live_edge_drift_ms": 4,
+          "stream": "stream-sample"
+        }
+      ],
+      "teu_dataspace_backlog": [
+        {
+          "age_slots": 5,
+          "alias": "alias-sample",
+          "backlog": 4,
+          "dataspace_id": 2,
+          "description": "description-sample",
+          "fault_tolerance": 3,
+          "lane_id": 1,
+          "tx_served": 7,
+          "virtual_finish": 6
+        }
+      ],
+      "teu_lane_commit": [
+        {
+          "alias": "alias-sample",
+          "avg_layer_width": 21,
+          "block_height": 9,
+          "buckets": {
+            "circuit_breaker": 4,
+            "floor": 1,
+            "headroom": 2,
+            "must_serve": 3
+          },
+          "capacity": 2,
+          "committed": 3,
+          "dataspace_alias": "dataspace_alias-sample",
+          "dataspace_id": 32,
+          "deferrals": {
+            "cap_exceeded": 1,
+            "circuit_breaker": 4,
+            "envelope_limit": 2,
+            "quota": 3
+          },
+          "detached_fallback": 27,
+          "detached_merged": 26,
+          "detached_prepared": 25,
+          "finality_lag_slots": 10,
+          "governance": "governance-sample",
+          "lane_id": 1,
+          "lane_type": "lane_type-sample",
+          "layer_count": 20,
+          "layer_width_buckets": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          "manifest_path": "manifest_path-sample",
+          "manifest_protected_namespaces": [
+            "manifest_protected_namespaces-sample"
+          ],
+          "manifest_quorum": 44,
+          "manifest_ready": false,
+          "manifest_required": true,
+          "manifest_runtime_upgrade": {
+            "allow": true,
+            "allowed_ids": [
+              "allowed_ids-sample"
+            ],
+            "metadata_key": "metadata_key-sample",
+            "require_metadata": false
+          },
+          "manifest_validator_bindings": [
+            {
+              "peer_id": "peer_id-sample",
+              "torii_url": "torii_url-sample",
+              "validator": "validator-sample"
+            }
+          ],
+          "manifest_validators": [
+            "manifest_validators-sample"
+          ],
+          "median_layer_width": 22,
+          "must_serve_truncations": 6,
+          "overlay_bytes_total": 16,
+          "overlay_count": 14,
+          "overlay_instr_total": 15,
+          "peak_layer_width": 19,
+          "quarantine_executed": 28,
+          "rbc_bytes_total": 18,
+          "rbc_chunks": 17,
+          "scheduler_starvation_bound_override": 40,
+          "scheduler_teu_capacity_override": 39,
+          "scheduler_utilization_pct": 23,
+          "settlement": "settlement-sample",
+          "settlement_backlog_xor_micro": 11,
+          "starvation_bound_slots": 8,
+          "storage_profile": "storage_profile-sample",
+          "trigger_level": 7,
+          "tx_edges": 13,
+          "tx_vertices": 12,
+          "visibility": "visibility-sample"
+        }
+      ],
+      "time_since_last_block_ms": 18,
+      "time_since_last_non_empty_block_ms": 19,
+      "tx_gossip": {
+        "caps": {
+          "drop_unknown_dataspace": false,
+          "frame_cap_bytes": 1,
+          "public_target_cap": 2,
+          "public_target_reshuffle_ms": 4,
+          "restricted_fallback": "restricted_fallback-sample",
+          "restricted_public_policy": "restricted_public_policy-sample",
+          "restricted_target_cap": 3,
+          "restricted_target_reshuffle_ms": 5
+        },
+        "targets": [
+          {
+            "batch_txs": 12,
+            "dataspace_alias": "dataspace_alias-sample",
+            "dataspace_id": 2,
+            "fallback_surface": "fallback_surface-sample",
+            "fallback_used": false,
+            "frame_bytes": 13,
+            "lane_ids": [
+              4
+            ],
+            "outcome": "outcome-sample",
+            "plane": "plane-sample",
+            "reason": "reason-sample",
+            "target_cap": 11,
+            "target_peers": [
+              "target_peers-sample"
+            ],
+            "targets": 5
+          }
+        ]
+      },
+      "txs_approved": 7,
+      "txs_rejected": 8,
+      "txs_rejected_recent_5m": 10,
+      "uptime": {
+        "nanos": 456000000,
+        "secs": 123
+      },
+      "view_changes": 12
+    },
+    "schema_name": "iroha_telemetry::metrics::Status",
+    "serialize_schema_hash": "029152c7bd57348cdef4a17847d93313",
+    "wire_hex": "4e5254300000029152c7bd57348cdef4a17847d9331300730b000000000000b7d6ce603aa1753602790f0e76657273696f6e2d73616d706c6516156769745f636f6d6d69745f7368612d73616d706c65242364706e5f76616c696461746f725f72656c656173655f636f6d6d69742d73616d706c651615636172676f5f66656174757265732d73616d706c6515147461726765745f747269706c652d73616d706c650802000000000000000803000000000000000804000000000000000805000000000000000806000000000000000807000000000000000808000000000000000a01080900000000000000080a000000000000000e087b000000000000000400022e1b040c000000080d00000000000000080e00000000000000080f0000000000000008100000000000000008110000000000000008120000000000000008130000000000000038010101003301010d0c63757276652d73616d706c650f0e6261636b656e642d73616d706c650404000000080500000000000000040600000057080100000000000000080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000010001010100080b00000000000000080c00000000000000810301fe02100f6d6f64655f7461672d73616d706c65080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000080800000000000000080900000000000000080a00000000000000080b00000000000000080c00000000000000080d00000000000000080e00000000000000080f000000000000000810000000000000000811000000000000000812000000000000000813000000000000000814000000000000000815000000000000000100010101000101081a00000000000000081b00000000000000081c00000000000000081d00000000000000180116157072665f65706f63685f736565642d73616d706c65081f0000000000000008200000000000000008210000000000000008220000000000000008230000000000000008240000000000000008250000000000000004260000002f010000000000000026256c616e655f676f7665726e616e63655f7365616c65645f616c69617365732d73616d706c65bb022d0801000000000000000802000000000000000803000000000000000804000000000000000805000000000000001b0801000000000000000802000000000000000803000000000000003f0801000000000000000802000000000000000803000000000000000804000000000000000805000000000000000806000000000000000807000000000000001b080100000000000000080200000000000000080300000000000000610100000000000000581817636f6e74726163745f616464726573732d73616d706c651514636f64655f686173685f6865782d73616d706c65160114136162695f686173685f6865782d73616d706c6508040000000000000008050000000000000004060000002401000000000000001b1a7365616c65645f6c616e655f616c69617365732d73616d706c65080800000000000000a60601000000000000009c0604010000000802000000000000000803000000000000002408010000000000000008020000000000000008030000000000000008040000000000000024080100000000000000080200000000000000080300000000000000080400000000000000080600000000000000080700000000000000080800000000000000080900000000000000080a00000000000000100b000000000000000000000000000000080c00000000000000080d00000000000000080e00000000000000080f0000000000000008100000000000000008110000000000000008120000000000000008130000000000000008140000000000000008150000000000000008160000000000000008170000000000000048080100000000000000080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000080800000000000000081900000000000000081a00000000000000081b00000000000000081c00000000000000010101000d0c616c6961732d73616d706c65082000000000000000190117166461746173706163655f616c6961732d73616d706c65140112117669736962696c6974792d73616d706c65171673746f726167655f70726f66696c652d73616d706c65130111106c616e655f747970652d73616d706c6514011211676f7665726e616e63652d73616d706c6514011211736574746c656d656e742d73616d706c650a010827000000000000000a01082800000000000000170115146d616e69666573745f706174682d73616d706c652401000000000000001b1a6d616e69666573745f76616c696461746f72732d73616d706c653f010000000000000036111076616c696461746f722d73616d706c650f0e706565725f69642d73616d706c6513011110746f7269695f75726c2d73616d706c650601042c0000002e010000000000000025246d616e69666573745f70726f7465637465645f6e616d657370616365732d73616d706c653a013801010100160114136d657461646174615f6b65792d73616d706c651c01000000000000001312616c6c6f7765645f6964732d73616d706c656401000000000000005b040100000008020000000000000004030000000804000000000000000805000000000000000806000000000000000807000000000000000d0c616c6961732d73616d706c65150113126465736372697074696f6e2d73616d706c65a80101000000000000009e01040100000012116c616e655f616c6961732d73616d706c650803000000000000000d0c616c6961732d73616d706c6512117669736962696c6974792d73616d706c65171673746f726167655f70726f66696c652d73616d706c65010101000101170115146d616e69666573745f706174682d73616d706c652501000000000000001c1b70726f7465637465645f6e616d657370616365732d73616d706c656a01686704010000000802000000000000005801000000000000004f04010000000a010802000000000000003e11010f0e6163636f756e742d73616d706c6515011312696e737472756374696f6e2d73616d706c65150113126465736372697074696f6e2d73616d706c65c002740801000000000000000a010802000000000000000a010803000000000000000a010804000000000000000a0108050000000000000001001b1a726573747269637465645f66616c6c6261636b2d73616d706c65201f726573747269637465645f7075626c69635f706f6c6963792d73616d706c65c9010100000000000000bf010d0c706c616e652d73616d706c65080200000000000000190117166461746173706163655f616c6961732d73616d706c650d010000000000000004040000000805000000000000001d010000000000000014137461726765745f70656572732d73616d706c650f0e6f7574636f6d652d73616d706c6501001a01181766616c6c6261636b5f737572666163652d73616d706c6510010e0d726561736f6e2d73616d706c65080b00000000000000080c00000000000000080d00000000000000a201010000000000000098010f0e636c75737465722d73616d706c650d0c6576656e742d73616d706c650e0d73747265616d2d73616d706c651716616c6961735f6e616d6573706163652d73616d706c651211616c6961735f6e616d652d73616d706c650806000000000000000807000000000000001b1a6d616e69666573745f6469676573745f6865782d73616d706c65080900000000000000080a000000000000005801000000000000004f0f0e636c75737465722d73616d706c650e0d73747265616d2d73616d706c650601040300000006010404000000210100000000000000180e0d726561736f6e2d73616d706c65080200000000000000200100000000000000170401000000080200000000000000080300000000000000"
+  },
+  "SumeragiConsensusStatus": {
+    "deserialize_schema_hash": "bd2865cf79ab861464ba45fed6120f8d",
+    "json": {
+      "block_created_dropped_by_lock_total": 15,
+      "block_created_hint_mismatch_total": 16,
+      "block_created_proposal_mismatch_total": 17,
+      "commit_qc_epoch": 12,
+      "commit_qc_height": 10,
+      "commit_qc_signatures_total": 13,
+      "commit_qc_validator_set_len": 14,
+      "commit_qc_view": 11,
+      "commit_signatures_counted": 7,
+      "commit_signatures_present": 6,
+      "commit_signatures_required": 9,
+      "commit_signatures_set_b": 8,
+      "epoch_commit_deadline_offset": 28,
+      "epoch_length_blocks": 27,
+      "epoch_reveal_deadline_offset": 29,
+      "highest_qc_height": 3,
+      "lane_governance_sealed_aliases": [
+        "lane_governance_sealed_aliases-sample"
+      ],
+      "lane_governance_sealed_total": 38,
+      "leader_index": 2,
+      "locked_qc_height": 4,
+      "locked_qc_view": 5,
+      "mode_tag": "mode_tag-sample",
+      "prf_epoch_seed": "prf_epoch_seed-sample",
+      "prf_height": 31,
+      "prf_view": 32,
+      "tx_queue_capacity": 19,
+      "tx_queue_depth": 18,
+      "tx_queue_max_retained_bytes": 21,
+      "tx_queue_oldest_queued_age_ms": 26,
+      "tx_queue_retained_bytes": 20,
+      "tx_queue_saturated": false,
+      "tx_queue_saturated_by_age": true,
+      "tx_queue_saturated_by_bytes": false,
+      "tx_queue_saturated_by_count": true,
+      "view_change_install_total": 37,
+      "view_change_proof_accepted_total": 33,
+      "view_change_proof_rejected_total": 35,
+      "view_change_proof_stale_total": 34,
+      "view_change_suggest_total": 36
+    },
+    "schema_name": "iroha_telemetry::metrics::SumeragiConsensusStatus",
+    "serialize_schema_hash": "bd2865cf79ab861464ba45fed6120f8d",
+    "wire_hex": "4e5254300000bd2865cf79ab861464ba45fed6120f8d007e01000000000000cc1b01849850da3702100f6d6f64655f7461672d73616d706c65080200000000000000080300000000000000080400000000000000080500000000000000080600000000000000080700000000000000080800000000000000080900000000000000080a00000000000000080b00000000000000080c00000000000000080d00000000000000080e00000000000000080f000000000000000810000000000000000811000000000000000812000000000000000813000000000000000814000000000000000815000000000000000100010101000101081a00000000000000081b00000000000000081c00000000000000081d00000000000000180116157072665f65706f63685f736565642d73616d706c65081f0000000000000008200000000000000008210000000000000008220000000000000008230000000000000008240000000000000008250000000000000004260000002f010000000000000026256c616e655f676f7665726e616e63655f7365616c65645f616c69617365732d73616d706c65"
+  },
+  "TaikaiAliasRotationStatus": {
+    "deserialize_schema_hash": "707f3d443b7267ecc5080296f56c24ad",
+    "json": {
+      "alias_name": "alias_name-sample",
+      "alias_namespace": "alias_namespace-sample",
+      "cluster": "cluster-sample",
+      "event": "event-sample",
+      "last_updated_unix": 10,
+      "manifest_digest_hex": "manifest_digest_hex-sample",
+      "rotations_total": 9,
+      "stream": "stream-sample",
+      "window_end_sequence": 7,
+      "window_start_sequence": 6
+    },
+    "schema_name": "iroha_telemetry::metrics::TaikaiAliasRotationStatus",
+    "serialize_schema_hash": "707f3d443b7267ecc5080296f56c24ad",
+    "wire_hex": "4e5254300000707f3d443b7267ecc5080296f56c24ad0098000000000000000252c38943813d00020f0e636c75737465722d73616d706c650d0c6576656e742d73616d706c650e0d73747265616d2d73616d706c651716616c6961735f6e616d6573706163652d73616d706c651211616c6961735f6e616d652d73616d706c650806000000000000000807000000000000001b1a6d616e69666573745f6469676573745f6865782d73616d706c65080900000000000000080a00000000000000"
+  },
+  "TaikaiIngestErrorCounter": {
+    "deserialize_schema_hash": "e83caeba5593957d0c2816b0c110a0db",
+    "json": {
+      "reason": "reason-sample",
+      "total": 2
+    },
+    "schema_name": "iroha_telemetry::metrics::TaikaiIngestErrorCounter",
+    "serialize_schema_hash": "e83caeba5593957d0c2816b0c110a0db",
+    "wire_hex": "4e5254300000e83caeba5593957d0c2816b0c110a0db001800000000000000713420a3a6414655020e0d726561736f6e2d73616d706c65080200000000000000"
+  },
+  "TaikaiIngestStatus": {
+    "deserialize_schema_hash": "c8d86c777997ce5aa61be2a4a53757dc",
+    "json": {
+      "cluster": "cluster-sample",
+      "error_counts": [
+        {
+          "reason": "reason-sample",
+          "total": 2
+        }
+      ],
+      "last_latency_ms": 3,
+      "last_live_edge_drift_ms": 4,
+      "stream": "stream-sample"
+    },
+    "schema_name": "iroha_telemetry::metrics::TaikaiIngestStatus",
+    "serialize_schema_hash": "c8d86c777997ce5aa61be2a4a53757dc",
+    "wire_hex": "4e5254300000c8d86c777997ce5aa61be2a4a53757dc004f00000000000000feb240a7a81d3910020f0e636c75737465722d73616d706c650e0d73747265616d2d73616d706c650601040300000006010404000000210100000000000000180e0d726561736f6e2d73616d706c65080200000000000000"
+  },
+  "TxGossipCaps": {
+    "deserialize_schema_hash": "ed114d1576d4be8b10065e28973b9911",
+    "json": {
+      "drop_unknown_dataspace": false,
+      "frame_cap_bytes": 1,
+      "public_target_cap": 2,
+      "public_target_reshuffle_ms": 4,
+      "restricted_fallback": "restricted_fallback-sample",
+      "restricted_public_policy": "restricted_public_policy-sample",
+      "restricted_target_cap": 3,
+      "restricted_target_reshuffle_ms": 5
+    },
+    "schema_name": "iroha_telemetry::metrics::TxGossipCaps",
+    "serialize_schema_hash": "ed114d1576d4be8b10065e28973b9911",
+    "wire_hex": "4e5254300000ed114d1576d4be8b10065e28973b9911007400000000000000f0af27c07631d8ad020801000000000000000a010802000000000000000a010803000000000000000a010804000000000000000a0108050000000000000001001b1a726573747269637465645f66616c6c6261636b2d73616d706c65201f726573747269637465645f7075626c69635f706f6c6963792d73616d706c65"
+  },
+  "TxGossipSnapshot": {
+    "deserialize_schema_hash": "858097807d0a6dfc04ae85d2d41c1694",
+    "json": {
+      "caps": {
+        "drop_unknown_dataspace": false,
+        "frame_cap_bytes": 1,
+        "public_target_cap": 2,
+        "public_target_reshuffle_ms": 4,
+        "restricted_fallback": "restricted_fallback-sample",
+        "restricted_public_policy": "restricted_public_policy-sample",
+        "restricted_target_cap": 3,
+        "restricted_target_reshuffle_ms": 5
+      },
+      "targets": [
+        {
+          "batch_txs": 12,
+          "dataspace_alias": "dataspace_alias-sample",
+          "dataspace_id": 2,
+          "fallback_surface": "fallback_surface-sample",
+          "fallback_used": false,
+          "frame_bytes": 13,
+          "lane_ids": [
+            4
+          ],
+          "outcome": "outcome-sample",
+          "plane": "plane-sample",
+          "reason": "reason-sample",
+          "target_cap": 11,
+          "target_peers": [
+            "target_peers-sample"
+          ],
+          "targets": 5
+        }
+      ]
+    },
+    "schema_name": "iroha_telemetry::metrics::TxGossipSnapshot",
+    "serialize_schema_hash": "858097807d0a6dfc04ae85d2d41c1694",
+    "wire_hex": "4e5254300000858097807d0a6dfc04ae85d2d41c1694004001000000000000db24373174b8495f02740801000000000000000a010802000000000000000a010803000000000000000a010804000000000000000a0108050000000000000001001b1a726573747269637465645f66616c6c6261636b2d73616d706c65201f726573747269637465645f7075626c69635f706f6c6963792d73616d706c65c9010100000000000000bf010d0c706c616e652d73616d706c65080200000000000000190117166461746173706163655f616c6961732d73616d706c650d010000000000000004040000000805000000000000001d010000000000000014137461726765745f70656572732d73616d706c650f0e6f7574636f6d652d73616d706c6501001a01181766616c6c6261636b5f737572666163652d73616d706c6510010e0d726561736f6e2d73616d706c65080b00000000000000080c00000000000000080d00000000000000"
+  },
+  "TxGossipStatus": {
+    "deserialize_schema_hash": "a3a4705633df69ecbbb282a70e2f4f5c",
+    "json": {
+      "batch_txs": 12,
+      "dataspace_alias": "dataspace_alias-sample",
+      "dataspace_id": 2,
+      "fallback_surface": "fallback_surface-sample",
+      "fallback_used": false,
+      "frame_bytes": 13,
+      "lane_ids": [
+        4
+      ],
+      "outcome": "outcome-sample",
+      "plane": "plane-sample",
+      "reason": "reason-sample",
+      "target_cap": 11,
+      "target_peers": [
+        "target_peers-sample"
+      ],
+      "targets": 5
+    },
+    "schema_name": "iroha_telemetry::metrics::TxGossipStatus",
+    "serialize_schema_hash": "a3a4705633df69ecbbb282a70e2f4f5c",
+    "wire_hex": "4e5254300000a3a4705633df69ecbbb282a70e2f4f5c00bf0000000000000057758054a3113838020d0c706c616e652d73616d706c65080200000000000000190117166461746173706163655f616c6961732d73616d706c650d010000000000000004040000000805000000000000001d010000000000000014137461726765745f70656572732d73616d706c650f0e6f7574636f6d652d73616d706c6501001a01181766616c6c6261636b5f737572666163652d73616d706c6510010e0d726561736f6e2d73616d706c65080b00000000000000080c00000000000000080d00000000000000"
+  },
+  "Uptime": {
+    "deserialize_schema_hash": "e16cde49dd859ef9584616aff3e854c4",
+    "json": {
+      "nanos": 456000000,
+      "secs": 123
+    },
+    "schema_name": "iroha_telemetry::metrics::Uptime",
+    "serialize_schema_hash": "e16cde49dd859ef9584616aff3e854c4",
+    "wire_hex": "4e5254300000e16cde49dd859ef9584616aff3e854c4000e00000000000000d3b2ce425ecb4bae02087b000000000000000400022e1b"
+  }
+}

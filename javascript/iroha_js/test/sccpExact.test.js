@@ -7,26 +7,17 @@ import { keccak_256 } from "@noble/hashes/sha3";
 
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
-import { stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
+import * as sccpExports from "../src/sccp.js";
 import {
   SCCP_CODEC_CANONICAL_TEXT,
   SCCP_CODEC_EVM_ADDRESS20,
   SCCP_CODEC_KEYS,
-  SCCP_CODEC_SOLANA_PUBKEY32,
   SCCP_CODEC_TON_ACCOUNT36,
   SCCP_CODEC_TRON_ADDRESS21,
-  SCCP_DOMAIN_SOLANA,
   SCCP_DOMAIN_TON,
   SCCP_NETWORK_PROFILES,
   SCCP_PAYLOAD_KINDS,
-  SCCP_SOLANA_TESTNET_GENESIS_HASH,
-  deriveSccpSolanaDestinationHashesV1,
-  deriveSccpSolanaNativeVerifierConfigHashV1,
-  deriveSccpSolanaSourceIdentityHashesV1,
   deriveSccpTonDestinationHashesV1,
-  normalizeBridgeMessageSubmitPayload,
-  normalizeBridgeProofSubmitPayload,
-  normalizeSccpBridgeSubmitResponse,
   normalizeSccpCapabilities,
   normalizeSccpCodecValue,
   normalizeSccpMessageBundle,
@@ -35,7 +26,6 @@ import {
   normalizeSccpRegistry,
   normalizeSccpRouteGovernanceAction,
   normalizeSccpSoraOutboundMaterial,
-  parseSccpBridgeSubmitResponseJson,
   parseSccpJsonObject,
   sccpSourceEventDigest,
 } from "../src/sccp.js";
@@ -52,33 +42,15 @@ const PUBLIC_KEY = Uint8Array.from([
 ]);
 const ACCOUNT = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY });
 const AUTHORITY = ACCOUNT.toI105(369);
-const TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000;
-const TEST_EVM_MAX_WRAPPED_SUPPLY =
-  BigInt(TEST_MAX_OUTSTANDING_LIABILITY) * 1_000_000_000n;
 const MESSAGE_ID = HASH(0x11);
 const MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1";
 const PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
 const TON_PROOF_REQUEST_NORITO_TYPE =
   "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1";
-const DESTINATION_PROOF_NORITO_TYPE =
-  "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
-const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
-  "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
 const PUBLIC_SIGNAL_SCHEMA_HASH =
   "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB";
 const SORA_TAIRA_CHAIN_ID_HASH =
   "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7";
-
-function feePayment(gasLimit = null) {
-  return {
-    payer: "authority",
-    value: { charge_limits: [], gas_limit: gasLimit },
-  };
-}
-
-function b64(bytes) {
-  return Buffer.from(bytes).toString("base64");
-}
 
 function network(profile) {
   return { network: profile.replaceAll("-", "_"), profile: null };
@@ -105,30 +77,6 @@ function verifyingKey() {
   const ic = { constant: g1() };
   for (let index = 0; index < 11; index += 1) ic[`signal_${index}`] = g1();
   return { version: 1, alpha1: g1(), beta2: g2(), gamma2: g2(), delta2: g2(), ic };
-}
-
-// Solana's native verifier material uses actual BN254 generator points. The
-// older repeated-byte key above remains a structural parser fixture for the
-// EVM/TVM tests, but must never stand in for deployable verifier material.
-function solanaVerifyingKey() {
-  const scalarWord = (value) => value.toString(16).padStart(64, "0").toUpperCase();
-  const generatorG1 = { x: scalarWord(1), y: scalarWord(2) };
-  const generatorG2 = {
-    x_c0: "1800DEEF121F1E76426A00665E5C4479674322D4F75EDADD46DEBD5CD992F6ED",
-    x_c1: "198E9393920D483A7260BFB731FB5D25F1AA493335A9E71297E485B7AEF312C2",
-    y_c0: "12C85EA5DB8C6DEB4AAB71808DCB408FE3D1E7690C43D37B4CE6CC0166FA7DAA",
-    y_c1: "090689D0585FF075EC9E99AD690C3395BC4B313370B38EF355ACDADCD122975B",
-  };
-  const ic = { constant: generatorG1 };
-  for (let index = 0; index < 11; index += 1) ic[`signal_${index}`] = generatorG1;
-  return {
-    version: 1,
-    alpha1: generatorG1,
-    beta2: generatorG2,
-    gamma2: generatorG2,
-    delta2: generatorG2,
-    ic,
-  };
 }
 
 function verifyingKeyBytes(key) {
@@ -205,6 +153,9 @@ function finalityAnchor(protocolVersion = 4) {
     source_network: network("sora-taira"),
     protocol_version: protocolVersion,
     chain_id_hash: SORA_TAIRA_CHAIN_ID_HASH,
+    epoch: 7,
+    epoch_end_height: 150,
+    roster_commitment: UPPER(0xa4, 32),
     checkpoint_height: 7,
     checkpoint_block_hash: UPPER(0xa1, 32),
     checkpoint_context_id: UPPER(0xa2, 32),
@@ -266,15 +217,22 @@ function policyHashes(policy = outboundPolicy()) {
   );
   const height = Buffer.alloc(8);
   height.writeBigUInt64LE(BigInt(anchorPolicy.checkpoint_height));
+  const epoch = Buffer.alloc(8);
+  epoch.writeBigUInt64LE(BigInt(anchorPolicy.epoch));
+  const epochEndHeight = Buffer.alloc(8);
+  epochEndHeight.writeBigUInt64LE(BigInt(anchorPolicy.epoch_end_height));
   const protocolVersion = Buffer.alloc(2);
   protocolVersion.writeUInt16LE(anchorPolicy.protocol_version);
   const anchor = Buffer.from(
     keccak_256(
       Buffer.concat([
         Buffer.from("sccp:sora-finality-anchor:v1"),
-        Buffer.from([1, 1]),
+        Buffer.from([1, 0x40]),
         protocolVersion,
         Buffer.from(anchorPolicy.chain_id_hash, "hex"),
+        epoch,
+        epochEndHeight,
+        Buffer.from(anchorPolicy.roster_commitment, "hex"),
         height,
         Buffer.from(anchorPolicy.checkpoint_block_hash, "hex"),
         Buffer.from(anchorPolicy.checkpoint_context_id, "hex"),
@@ -396,14 +354,6 @@ function sccpNoritoFrame(typeName, { payload = Buffer.from([1, 2, 3, 4]), paddin
   ]);
 }
 
-function destinationProofB64(options) {
-  return b64(sccpNoritoFrame(DESTINATION_PROOF_NORITO_TYPE, options));
-}
-
-function nativeProofB64(options) {
-  return b64(sccpNoritoFrame(NATIVE_MESSAGE_PROOF_NORITO_TYPE, options));
-}
-
 function abiWord(value) {
   let remaining = BigInt(value);
   const result = Buffer.alloc(32);
@@ -423,23 +373,12 @@ function addressWord(value, tron = false) {
 }
 
 const TEST_NETWORK_IDENTITIES = Object.freeze({
-  "sora-taira": Object.freeze({ tag: 1, domain: 0, bytes: Buffer.from("fc56984b2be7431d840e21514d1883f0", "hex") }),
-  "ethereum-mainnet": Object.freeze({ tag: 2, domain: 1, bytes: littleEndian(1, 8), routeId: "taira_eth_xor", id: 1 }),
-  "ethereum-sepolia": Object.freeze({ tag: 3, domain: 1, bytes: littleEndian(11_155_111, 8), routeId: "taira_eth_xor", id: 11_155_111 }),
-  "bsc-mainnet": Object.freeze({ tag: 4, domain: 2, bytes: littleEndian(56, 8), routeId: "taira_bsc_xor", id: 56 }),
-  "bsc-testnet": Object.freeze({ tag: 5, domain: 2, bytes: littleEndian(97, 8), routeId: "taira_bsc_xor", id: 97 }),
-  "tron-mainnet": Object.freeze({ tag: 10, domain: 5, bytes: littleEndian(0x2b66_53dc, 4), routeId: "taira_tron_xor", id: 0x2b66_53dc }),
-  "tron-nile": Object.freeze({ tag: 11, domain: 5, bytes: littleEndian(0xcd86_90dc, 4), routeId: "taira_tron_xor", id: 0xcd86_90dc }),
-  "tron-shasta": Object.freeze({ tag: 12, domain: 5, bytes: littleEndian(0x94a9_059e, 4), routeId: "taira_tron_xor", id: 0x94a9_059e }),
-  "solana-testnet": Object.freeze({
-    tag: 13,
-    domain: 3,
-    bytes: Buffer.from("3a132ece10305ec1830725502fa2b7e7eb8157e9123d4c1f654a71787161dc21", "hex"),
-    routeId: "taira_sol_xor",
-    id: null,
-  }),
+  "sora-taira": Object.freeze({ tag: 0x40, domain: 0, bytes: Buffer.from("fc56984b2be7431d840e21514d1883f0", "hex") }),
+  "ethereum-mainnet": Object.freeze({ tag: 0x41, domain: 1, bytes: littleEndian(1, 8), routeId: "taira_eth_xor", id: 1 }),
+  "bsc-mainnet": Object.freeze({ tag: 0x42, domain: 2, bytes: littleEndian(56, 8), routeId: "taira_bsc_xor", id: 56 }),
+  "tron-mainnet": Object.freeze({ tag: 0x43, domain: 5, bytes: littleEndian(0x2b66_53dc, 4), routeId: "taira_tron_xor", id: 0x2b66_53dc }),
   "ton-mainnet": Object.freeze({
-    tag: 14,
+    tag: 0x44,
     domain: 4,
     routeId: "taira_ton_xor",
     id: -239,
@@ -450,20 +389,6 @@ const TEST_NETWORK_IDENTITIES = Object.freeze({
       Buffer.alloc(4),
       Buffer.from("17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569", "hex"),
       Buffer.from("5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e", "hex"),
-    ),
-  }),
-  "ton-testnet": Object.freeze({
-    tag: 15,
-    domain: 4,
-    routeId: "taira_ton_xor",
-    id: -3,
-    bytes: concatenate(
-      signedLittleEndian32(-3),
-      signedLittleEndian32(-1),
-      littleEndian(0x8000_0000_0000_0000n, 8),
-      Buffer.alloc(4),
-      Buffer.from("823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128", "hex"),
-      Buffer.from("67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8", "hex"),
     ),
   }),
 });
@@ -516,6 +441,10 @@ function testDestinationHashes(route) {
         Buffer.from(deployment.verifier_key_hash, "hex"),
         semanticHash,
         anchorHash,
+        addressWord(deployment.replay_verifier_address, tron),
+        Buffer.from(deployment.replay_verifier_code_hash, "hex"),
+        addressWord(deployment.mint_breaker_address, tron),
+        Buffer.from(deployment.mint_breaker_code_hash, "hex"),
       ),
     ),
   );
@@ -529,6 +458,12 @@ function testDestinationHashes(route) {
     anchorHash,
   ];
   if (tron) deploymentWords.push(destinationBindingHash);
+  deploymentWords.push(
+    addressWord(deployment.replay_verifier_address),
+    Buffer.from(deployment.replay_verifier_code_hash, "hex"),
+    addressWord(deployment.mint_breaker_address),
+    Buffer.from(deployment.mint_breaker_code_hash, "hex"),
+  );
   const deploymentConfigHash = Buffer.from(keccak_256(concatenate(...deploymentWords)));
   const assetRouteConfigHash = Buffer.from(
     keccak_256(
@@ -623,8 +558,8 @@ function soraOutboundMaterial() {
     version: 1,
     registry_revision: PREFIX_HASH(0x10),
     route_key: {
-      lane_id: lane("solana-testnet"),
-      route_id: "taira_sol_xor",
+      lane_id: lane("bsc-mainnet"),
+      route_id: "taira_bsc_xor",
       asset_key: "xor",
       revision: 1,
     },
@@ -689,84 +624,24 @@ function governedRoute({
         outbound_proof_policy: outboundPolicy(),
         route_address: routeAddress,
         route_code_hash: routeCodeHash,
+        replay_verifier_address: UPPER(0x13, 20),
+        replay_verifier_code_hash: UPPER(0x23, 32),
+        mint_breaker_address: UPPER(0x14, 20),
+        mint_breaker_code_hash: UPPER(0x24, 32),
         taira_to_token_multiplier: 1_000_000_000,
-        max_wrapped_supply: TEST_EVM_MAX_WRAPPED_SUPPLY,
+        max_wrapped_supply: "1000000000000000000000",
       },
     },
     sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
     settlement: {
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-      custody_owner: AUTHORITY,
       payload_amount_scale: 9,
-      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
+      max_outstanding_liability: "1000000000000",
     },
   };
   route.source_identity.emitter.identity.route_config_hash =
     testDestinationHashes(route).routeConfigurationHash;
   return route;
-}
-
-function solanaDeployment() {
-  const key = solanaVerifyingKey();
-  const deployment = {
-    token_mint_address: UPPER(0x11, 32),
-    route_program_id: UPPER(0x12, 32),
-    route_program_data_address: UPPER(0x13, 32),
-    route_program_data_slot: 17,
-    route_state_account: UPPER(0x14, 32),
-    route_program_code_hash: UPPER(0x15, 32),
-    native_verifier_program_id: UPPER(0x16, 32),
-    native_verifier_program_data_address: UPPER(0x17, 32),
-    native_verifier_program_data_slot: 18,
-    native_verifier_material_account: UPPER(0x18, 32),
-    native_verifier_program_code_hash: UPPER(0x19, 32),
-    native_verifier_config_hash: UPPER(0x1a, 32),
-    verifying_key: key,
-    verifier_key_hash: keyHash(key).toUpperCase(),
-    outbound_proof_policy: outboundPolicy(),
-    taira_to_token_multiplier: 1,
-    max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY,
-  };
-  deployment.native_verifier_config_hash =
-    deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 1)
-      .slice(2)
-      .toUpperCase();
-  return deployment;
-}
-
-function solanaGovernedRoute({ activation = "staged" } = {}) {
-  const deployment = solanaDeployment();
-  const routeHashes = deriveSccpSolanaDestinationHashesV1(deployment, UPPER(0x31, 32), 1);
-  return {
-    lane_id: lane("solana-testnet"),
-    route_id: "taira_sol_xor",
-    asset_key: "xor",
-    revision: 1,
-    activation: { activation, direction: null },
-    inbound_finality_cutoff: null,
-    source_identity: {
-      lane: lane("solana-testnet"),
-      emitter: {
-        emitter: "solana",
-        identity: {
-          program_id: UPPER(0x31, 32),
-          program_data_address: UPPER(0x32, 32),
-          program_data_slot: 19,
-          state_account: UPPER(0x33, 32),
-          program_code_hash: UPPER(0x34, 32),
-          route_config_hash: routeHashes.route_configuration_hash.slice(2).toUpperCase(),
-        },
-      },
-    },
-    destination: { family: "solana", deployment },
-    sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
-    settlement: {
-      asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-      custody_owner: AUTHORITY,
-      payload_amount_scale: 9,
-      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
-    },
-  };
 }
 
 function tonDeployment() {
@@ -784,9 +659,16 @@ function tonDeployment() {
     verifying_key: key,
     verifier_key_hash: bls12381KeyHash(key).toUpperCase(),
     proof_profile_commitment: tonProofProfileCommitment().toString("hex").toUpperCase(),
+    mint_breaker_guardian_keys: {
+      guardian_0: UPPER(0xa1, 32),
+      guardian_1: UPPER(0xa2, 32),
+      guardian_2: UPPER(0xa3, 32),
+      guardian_3: UPPER(0xa4, 32),
+      guardian_4: UPPER(0xa5, 32),
+    },
     outbound_proof_policy: tonOutboundPolicy(),
     taira_to_token_multiplier: 1,
-    max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY,
+    max_wrapped_supply: "1000000000000",
   };
 }
 
@@ -815,9 +697,8 @@ function tonGovernedRoute({ source = "ton-mainnet", activation = "staged" } = {}
     sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
     settlement: {
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-      custody_owner: AUTHORITY,
       payload_amount_scale: 9,
-      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
+      max_outstanding_liability: "1000000000000",
     },
   };
 }
@@ -825,8 +706,6 @@ function tonGovernedRoute({ source = "ton-mainnet", activation = "staged" } = {}
 function nativeTrustAnchor(source = "bsc-mainnet") {
   const backend = source.startsWith("tron-")
     ? "tron_dpos_v1"
-    : source.startsWith("solana-")
-      ? "solana_agave_v1"
     : source.startsWith("ton-")
       ? "ton_masterchain_v1"
     : source.startsWith("bsc-")
@@ -1029,70 +908,66 @@ function recentItem(height = 9, id = MESSAGE_ID, commitmentIndex = 0) {
   };
 }
 
-function preparedResponse(overrides = {}) {
-  const payload = Uint8Array.of(1, 2, 3, 4);
-  const digest = Uint8Array.from(blake2b256(payload));
-  digest[31] |= 1;
-  return {
-    submitted: false,
-    payload_kind: "transfer",
-    message_id_hex: MESSAGE_ID,
-    backend: "bridge/sccp/native/bsc-parlia-v1",
-    counterparty_domain: 2,
-    counterparty_chain: "bsc-mainnet",
-    route_configuration_hash_hex: HASH(0x31),
-    range_start_height: 7,
-    range_end_height: 9,
-    creation_time_ms: 10,
-    tx_hash_hex: null,
-    transaction_payload_b64: b64(payload),
-    signing_message_b64: b64(digest),
-    ...overrides,
-  };
-}
-
-test("closed SCCP inventory exposes exact ETH, BSC, Solana, TRON, and TON profiles", async () => {
+test("closed SCCP inventory exposes only the four external mainnets and Sora Taira", async () => {
   assert.deepEqual(Object.keys(SCCP_NETWORK_PROFILES), [
     "sora-taira",
     "ethereum-mainnet",
-    "ethereum-sepolia",
     "bsc-mainnet",
-    "bsc-testnet",
     "tron-mainnet",
-    "tron-nile",
-    "tron-shasta",
-    "solana-testnet",
     "ton-mainnet",
-    "ton-testnet",
   ]);
   assert.equal(Object.values(SCCP_NETWORK_PROFILES).some(({ tag }) => tag === 0), false);
-  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["1", "2", "5", "6", "7"]);
-  assert.deepEqual(SCCP_NETWORK_PROFILES["solana-testnet"], {
-    profile: "solana-testnet",
-    tag: 13,
-    domain: SCCP_DOMAIN_SOLANA,
-    sora: false,
-    genesisHash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
-  });
+  assert.deepEqual(
+    Object.values(SCCP_NETWORK_PROFILES).map(({ tag }) => tag),
+    [0x40, 0x41, 0x42, 0x43, 0x44],
+  );
+  const declarations = fs.readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  assert.match(
+    declarations,
+    /export type SccpNetworkTag = 0x40 \| 0x41 \| 0x42 \| 0x43 \| 0x44;/u,
+  );
+  assert.match(
+    declarations,
+    /Tag extends SccpNetworkTag = SccpNetworkTag,[^}]*readonly tag: Tag;/u,
+  );
+  for (const [profile, tag, domain, sora] of [
+    ["sora-taira", "0x40", 0, true],
+    ["ethereum-mainnet", "0x41", 1, false],
+    ["bsc-mainnet", "0x42", 2, false],
+    ["tron-mainnet", "0x43", 5, false],
+    ["ton-mainnet", "0x44", 4, false],
+  ]) {
+    assert.match(
+      declarations,
+      new RegExp(
+        `readonly "${profile}": SccpNetworkDescriptor<"${profile}", ${tag}, ${domain}, ${sora}>`,
+        "u",
+      ),
+    );
+  }
+  assert.doesNotMatch(declarations, /SccpNetworkDescriptor \{[^}]*readonly tag: number;/u);
+  for (const descriptor of Object.values(SCCP_NETWORK_PROFILES)) {
+    assert.equal("genesisHash" in descriptor, false);
+  }
+  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["1", "2", "5", "7"]);
   assert.deepEqual(SCCP_PAYLOAD_KINDS, ["transfer"]);
   assert.deepEqual(SCCP_NETWORK_PROFILES["ton-mainnet"], {
     profile: "ton-mainnet",
-    tag: 14,
+    tag: 0x44,
     domain: SCCP_DOMAIN_TON,
     sora: false,
     globalId: -239,
   });
-  assert.deepEqual(SCCP_NETWORK_PROFILES["ton-testnet"], {
-    profile: "ton-testnet",
-    tag: 15,
-    domain: SCCP_DOMAIN_TON,
-    sora: false,
-    globalId: -3,
-  });
   const exports = await import("../src/sccp.js");
   for (const retired of [
     "SCCP_DOMAIN_SOL",
+    "SCCP_DOMAIN_SOLANA",
+    "SCCP_CODEC_SOLANA_PUBKEY32",
     "SCCP_CODEC_SOLANA_BASE58",
+    "SCCP_SOLANA_TESTNET_GENESIS_HASH",
+    "deriveSccpSolanaDestinationHashesV1",
+    "deriveSccpSolanaNativeVerifierConfigHashV1",
+    "deriveSccpSolanaSourceIdentityHashesV1",
     "SCCP_CODEC_SORA_ASSET_ID",
     "normalizeSccpProofManifests",
     "normalizeSccpSourceAdapterEngineDeployment",
@@ -1110,8 +985,6 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
     normalizeSccpCodecValue(5, Uint8Array.from([0x41, ...new Uint8Array(20).fill(2)])).length,
     21,
   );
-  assert.equal(normalizeSccpCodecValue(6, new Uint8Array(32).fill(3)).length, 32);
-  assert.equal(SCCP_CODEC_SOLANA_PUBKEY32, 6);
   assert.equal(
     normalizeSccpCodecValue(
       SCCP_CODEC_TON_ACCOUNT36,
@@ -1120,6 +993,7 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
     36,
   );
   for (const [tag, value] of [
+    [0, new Uint8Array(32).fill(1)],
     [3, new Uint8Array(32).fill(1)],
     [4, new Uint8Array(36).fill(1)],
     [6, Uint8Array.of(1)],
@@ -1141,9 +1015,13 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
   ]) assert.throws(() => normalizeSccpCodecValue(tag, value));
 });
 
-test("source-event digest matches all shared ETH/BSC/TRON vectors", () => {
+test("source-event digest matches all shared ETH/BSC/TRON/TON mainnet vectors", () => {
   const fixture = JSON.parse(
     fs.readFileSync(new URL("../../../fixtures/sccp/native_transfer_event_v1.json", import.meta.url), "utf8"),
+  );
+  assert.deepEqual(
+    fixture.vectors.map(({ source_profile }) => source_profile),
+    ["ethereum-mainnet", "bsc-mainnet", "tron-mainnet", "ton-mainnet"],
   );
   for (const vector of fixture.vectors) {
     assert.equal(
@@ -1217,8 +1095,8 @@ test("capabilities require exact immutable paths and reject all retired discover
 test("route-scoped SORA outbound material binds exact route, policy, and artifact digest", () => {
   const material = soraOutboundMaterial();
   const parsed = normalizeSccpSoraOutboundMaterial(material, {
-    sourceProfile: "solana-testnet",
-    routeId: "taira_sol_xor",
+    sourceProfile: "bsc-mainnet",
+    routeId: "taira_bsc_xor",
     assetKey: "xor",
     revision: 1,
     registryRevision: PREFIX_HASH(0x10),
@@ -1229,14 +1107,16 @@ test("route-scoped SORA outbound material binds exact route, policy, and artifac
   const mutations = [
     (value) => { value.contract_artifact_b64 = Buffer.from("caller-selected").toString("base64"); },
     (value) => { value.policy.gas_limit = 0; },
+    (value) => { value.policy.semantics = "ivm_contract_record_sccp_message_v1"; },
+    (value) => { value.policy.execution_semantics = value.policy.semantics; },
     (value) => { value.policy.vk_ref.backend = "stark//fri"; },
     (value) => { value.policy.vk_ref.version = 0; },
     (value) => { value.policy.vk_ref.version += 1; },
     (value) => { value.policy.vk_ref.commitment = UPPER(0, 32); },
     (value) => { value.verifying_key_version += 1; },
     (value) => { value.policy.bytecode = value.contract_artifact_b64; },
-    (value) => { value.route_key.route_id = "legacy_sol_xor"; },
-    (value) => { value.route_key.legacy_route = "taira_sol_xor"; },
+    (value) => { value.route_key.route_id = "legacy_bsc_xor"; },
+    (value) => { value.route_key.legacy_route = "taira_bsc_xor"; },
     (value) => { value.settlement_asset_definition_id = "xor#universal"; },
     (value) => { value.destination_binding_hash = value.route_configuration_hash; },
     (value) => { value.contract_artifact = value.contract_artifact_b64; },
@@ -1247,15 +1127,15 @@ test("route-scoped SORA outbound material binds exact route, policy, and artifac
     assert.throws(
       () =>
         normalizeSccpSoraOutboundMaterial(hostile, {
-          sourceProfile: "solana-testnet",
-          routeId: "taira_sol_xor",
+          sourceProfile: "bsc-mainnet",
+          routeId: "taira_bsc_xor",
           assetKey: "xor",
           revision: 1,
         }),
     );
   }
   assert.throws(
-    () => normalizeSccpSoraOutboundMaterial(material, { routeId: "alias_sol_xor" }),
+    () => normalizeSccpSoraOutboundMaterial(material, { routeId: "alias_bsc_xor" }),
     /requested route context/u,
   );
 });
@@ -1368,10 +1248,20 @@ test("registry validates complete typed route identity and immutable key hash", 
     () => normalizeSccpRegistry(missingExecutionPolicy),
     /sora_outbound_execution_policy/u,
   );
-  for (const field of ["version", "commitment"]) {
+  for (const field of ["version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"]) {
+    const missingPin = registry();
+    delete missingPin.lanes[0].routes[0].sora_outbound_execution_policy[field];
+    assert.throws(() => normalizeSccpRegistry(missingPin), new RegExp(field, "u"));
+  }
+  for (const field of ["backend", "name", "version", "commitment"]) {
     const missingPin = registry();
     delete missingPin.lanes[0].routes[0].sora_outbound_execution_policy.vk_ref[field];
     assert.throws(() => normalizeSccpRegistry(missingPin), new RegExp(field, "u"));
+  }
+  for (const retiredField of ["execution_semantics"]) {
+    const retiredPolicy = registry();
+    retiredPolicy.lanes[0].routes[0].sora_outbound_execution_policy[retiredField] = {};
+    assert.throws(() => normalizeSccpRegistry(retiredPolicy), new RegExp(retiredField, "u"));
   }
   const aliasedVkCommitment = registry();
   aliasedVkCommitment.lanes[0].routes[0].sora_outbound_execution_policy.vk_ref.commitment =
@@ -1386,71 +1276,19 @@ test("registry validates complete typed route identity and immutable key hash", 
   );
 });
 
-test("registry requires exact lossless supply and liability caps for every destination", () => {
-  const routes = [
-    governedRoute(),
-    governedRoute({ source: "tron-mainnet" }),
-    solanaGovernedRoute(),
-    tonGovernedRoute(),
-  ];
-  for (const route of routes) {
-    const missingSupply = structuredClone(route);
-    delete missingSupply.destination.deployment.max_wrapped_supply;
-    assert.throws(
-      () => normalizeSccpRegistry(registry([missingSupply])),
-      /max_wrapped_supply/u,
-    );
-  }
-
-  const missingLiability = governedRoute();
-  delete missingLiability.settlement.max_outstanding_liability;
-  assert.throws(
-    () => normalizeSccpRegistry(registry([missingLiability])),
-    /max_outstanding_liability/u,
-  );
-
-  const mismatched = governedRoute();
-  mismatched.destination.deployment.max_wrapped_supply += 1n;
-  assert.throws(
-    () => normalizeSccpRegistry(registry([mismatched])),
-    /must equal settlement\.max_outstanding_liability/u,
-  );
-
-  const unsafeLiability = BigInt(Number.MAX_SAFE_INTEGER) + 2n;
-  const lossless = governedRoute();
-  lossless.settlement.max_outstanding_liability = unsafeLiability;
-  lossless.destination.deployment.max_wrapped_supply =
-    unsafeLiability * BigInt(lossless.destination.deployment.taira_to_token_multiplier);
-  lossless.source_identity.emitter.identity.route_config_hash =
-    testDestinationHashes(lossless).routeConfigurationHash;
-  const parsed = parseSccpJsonObject(
-    stringifyStrictLosslessIntegerJson(registry([lossless]), "SCCP registry"),
-    "SCCP registry",
-  );
-  assert.equal(
-    typeof parsed.lanes[0].routes[0].settlement.max_outstanding_liability,
-    "bigint",
-  );
-  assert.equal(
-    typeof parsed.lanes[0].routes[0].destination.deployment.max_wrapped_supply,
-    "bigint",
-  );
-  assert.equal(normalizeSccpRegistry(parsed).lanes.length, 1);
-});
-
 test("registry destination hashes match the canonical Rust EVM and TRON layouts", () => {
   const vectors = [
     {
       source: "bsc-mainnet",
-      destinationBindingHash: "0D3F2789F19AF900584D24BAB4148AC32AC1532E85748845646CA032E43C0757",
-      deploymentConfigHash: "C96A33A74F1E4134A7D6D63CB2EE4EAFFE7D2007D4189BDDCE6D39F5AA97BC5C",
-      routeConfigurationHash: "3DBB23C4F6659308B48114E68049674E5CFC0F1AA2A517FF6B64BF448834DC28",
+      destinationBindingHash: "C790285EE14EE4AC1C7781F7DAD12917357A62ED0FB1B15D49769A9D75750D2E",
+      deploymentConfigHash: "D22880DA3B0CEC64BC21810A943447A47440B70D381785DB59DEBE8AC16AFD66",
+      routeConfigurationHash: "F1FCB7FAD816B9F995CC4765B170EDCC7A8CF0BA886B47E1EBAF8552538CAEDD",
     },
     {
       source: "tron-mainnet",
-      destinationBindingHash: "F0D778ECB625C27DEAE6ADCFCD14167DF0E4934EB167F34BA6ADFCD9750A797F",
-      deploymentConfigHash: "CF8C2A47D3F54928B688A118E49AA066577DB2A5DCAD73D1BDEE9D25A365C13C",
-      routeConfigurationHash: "05EC19470E64BB89F6B5E359B553E6D83878100A590033947F1676CCF39DA383",
+      destinationBindingHash: "CA9CDC7922DF282343B99CC768D862D39DC00E0B95540F6B95811FC23C1409F5",
+      deploymentConfigHash: "4BA2D6A2BD80F43D68CBB79ADAED1B318D0BD1AD0E3F6FCA8D7FB51F1AE4E0A5",
+      routeConfigurationHash: "2B21AD16AFA8BCE6851CF683AFB872DDDA9FD8E9F007B3FA86661493FA54835F",
     },
   ];
   for (const vector of vectors) {
@@ -1465,143 +1303,6 @@ test("registry destination hashes match the canonical Rust EVM and TRON layouts"
       vector.routeConfigurationHash,
     );
     assert.equal(normalizeSccpRegistry(registry([route])).lanes.length, 1);
-  }
-});
-
-test("Solana registry hashes match Rust and bind every Loader-v3 role", () => {
-  const deployment = solanaDeployment();
-  assert.equal(
-    deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 1),
-    "0x136f783ad2f6b8d5018627d1147fc79f61cd8c0cbcddaf12a79f8ccb8df509fb",
-  );
-  const hashes = deriveSccpSolanaDestinationHashesV1(deployment, UPPER(0x31, 32), 1);
-  assert.deepEqual(hashes, {
-    destination_binding_hash:
-      "0x43a30d059f46f955884bba0dd1481e8b6a6ccd678449861454593f818bb9a8b1",
-    deployment_config_hash:
-      "0xa1f2fb40ffc4e150b09af9c60decd8ec5d1776371f5b6e17bdfd334a3bdef9b3",
-    route_configuration_hash:
-      "0x56604615dee63e1b55fa43cf4cd6f22cc0a0f6e7d9a1357b7b787beae05daccf",
-  });
-  const route = solanaGovernedRoute();
-  assert.deepEqual(deriveSccpSolanaSourceIdentityHashesV1(route.source_identity), {
-    source_emitter_identity_hash:
-      "0x4310310f34ed710f75e5df59842317edb60bd0671fa7c4666162acb2d7c09c6c",
-    source_identity_hash:
-      "0x98d75aead76ba724a38b35e50e970915e28956d87c9722e940169ec71abf6120",
-  });
-  assert.equal(normalizeSccpRegistry(registry([route])).lanes.length, 1);
-
-  const mutations = [
-    ["token_mint_address", "route_program_id"],
-    ["route_program_data_address", "route_state_account"],
-    ["route_program_code_hash", "native_verifier_config_hash"],
-    ["native_verifier_program_id", "native_verifier_program_data_address"],
-    ["native_verifier_material_account", "verifier_key_hash"],
-  ];
-  for (const [left, right] of mutations) {
-    const hostile = structuredClone(deployment);
-    hostile[left] = hostile[right];
-    assert.throws(
-      () => deriveSccpSolanaDestinationHashesV1(hostile, UPPER(0x31, 32), 1),
-      /reuses/u,
-      `${left} must not alias ${right}`,
-    );
-  }
-  for (const slot of ["route_program_data_slot", "native_verifier_program_data_slot"]) {
-    const hostile = structuredClone(deployment);
-    hostile[slot] = 0;
-    assert.throws(
-      () => deriveSccpSolanaDestinationHashesV1(hostile, UPPER(0x31, 32), 1),
-      /integer/u,
-    );
-  }
-  const configExcludedMutations = [
-    ["route_program_data_address", UPPER(0x41, 32)],
-    ["route_program_data_slot", 41],
-    ["route_program_code_hash", UPPER(0x42, 32)],
-    ["native_verifier_program_data_address", UPPER(0x43, 32)],
-    ["native_verifier_program_data_slot", 43],
-    ["native_verifier_material_account", UPPER(0x44, 32)],
-    ["native_verifier_program_code_hash", UPPER(0x45, 32)],
-    ["native_verifier_config_hash", UPPER(0x46, 32)],
-  ];
-  const exactConfig = deriveSccpSolanaNativeVerifierConfigHashV1(
-    deployment,
-    UPPER(0x31, 32),
-    1,
-  );
-  for (const [field, value] of configExcludedMutations) {
-    const changed = structuredClone(deployment);
-    changed[field] = value;
-    assert.equal(
-      deriveSccpSolanaNativeVerifierConfigHashV1(changed, UPPER(0x31, 32), 1),
-      exactConfig,
-      `${field} must remain outside the one-way material config preimage`,
-    );
-  }
-  for (const [field, value] of [
-    ["token_mint_address", UPPER(0x47, 32)],
-    ["route_program_id", UPPER(0x48, 32)],
-    ["route_state_account", UPPER(0x49, 32)],
-    ["native_verifier_program_id", UPPER(0x4a, 32)],
-    ["max_wrapped_supply", TEST_MAX_OUTSTANDING_LIABILITY + 1],
-  ]) {
-    const changed = structuredClone(deployment);
-    changed[field] = value;
-    assert.notEqual(
-      deriveSccpSolanaNativeVerifierConfigHashV1(changed, UPPER(0x31, 32), 1),
-      exactConfig,
-      `${field} must be committed by the material config`,
-    );
-  }
-  assert.throws(
-    () => deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 2),
-    /integer/u,
-    "the exact first-release Solana deployment must reject revision two",
-  );
-  assert.throws(
-    () =>
-      deriveSccpSolanaDestinationHashesV1(deployment, UPPER(0x31, 32), 0xffff_ffff),
-    /integer/u,
-  );
-  const staleConfig = structuredClone(deployment);
-  staleConfig.route_state_account = UPPER(0x4b, 32);
-  assert.throws(
-    () => deriveSccpSolanaDestinationHashesV1(staleConfig, UPPER(0x31, 32), 1),
-    /native_verifier_config_hash/u,
-  );
-  const stale = solanaGovernedRoute();
-  stale.destination.deployment.route_state_account = UPPER(0x44, 32);
-  stale.destination.deployment.native_verifier_config_hash =
-    deriveSccpSolanaNativeVerifierConfigHashV1(
-      stale.destination.deployment,
-      stale.source_identity.emitter.identity.program_id,
-      1,
-    )
-      .slice(2)
-      .toUpperCase();
-  assert.throws(() => normalizeSccpRegistry(registry([stale])), /route_config_hash/u);
-  const independentlyGoverned = solanaGovernedRoute();
-  assert.notEqual(
-    independentlyGoverned.source_identity.emitter.identity.program_id,
-    independentlyGoverned.destination.deployment.route_program_id,
-  );
-  assert.equal(normalizeSccpRegistry(registry([independentlyGoverned])).lanes.length, 1);
-  for (const [sourceField, destinationField] of [
-    ["program_id", "route_program_id"],
-    ["program_data_address", "route_program_data_address"],
-    ["state_account", "route_state_account"],
-    ["program_code_hash", "route_program_code_hash"],
-  ]) {
-    const aliased = solanaGovernedRoute();
-    aliased.source_identity.emitter.identity[sourceField] =
-      aliased.destination.deployment[destinationField];
-    assert.throws(
-      () => normalizeSccpRegistry(registry([aliased])),
-      /(?:reuses a destination program role|aliases a Solana source role)/u,
-      `${sourceField} must remain distinct from destination ${destinationField}`,
-    );
   }
 });
 
@@ -1635,12 +1336,6 @@ test("TON registry enforces account, storage, BLS12-381, and fixed-point-safe ha
     deriveSccpTonDestinationHashesV1(changedCode, "ton-mainnet", 1),
     hashes,
   );
-  const changedSupply = structuredClone(deployment);
-  changedSupply.max_wrapped_supply += 1;
-  assert.notDeepEqual(
-    deriveSccpTonDestinationHashesV1(changedSupply, "ton-mainnet", 1),
-    hashes,
-  );
   const aliasedStorage = structuredClone(deployment);
   aliasedStorage.route_initial_data_hash = aliasedStorage.jetton_master_initial_data_hash;
   assert.throws(
@@ -1660,6 +1355,44 @@ test("TON registry enforces account, storage, BLS12-381, and fixed-point-safe ha
   assert.throws(
     () => normalizeSccpRegistry(registry([sourceAlias])),
     /source emitter does not identify/u,
+  );
+  const zeroGuardian = structuredClone(deployment);
+  zeroGuardian.mint_breaker_guardian_keys.guardian_2 = UPPER(0, 32);
+  assert.throws(
+    () => deriveSccpTonDestinationHashesV1(zeroGuardian, "ton-mainnet", 1),
+    /nonzero/u,
+  );
+  const unsortedGuardians = structuredClone(deployment);
+  unsortedGuardians.mint_breaker_guardian_keys.guardian_3 =
+    unsortedGuardians.mint_breaker_guardian_keys.guardian_2;
+  assert.throws(
+    () => deriveSccpTonDestinationHashesV1(unsortedGuardians, "ton-mainnet", 1),
+    /strictly increasing/u,
+  );
+  const zeroCap = structuredClone(deployment);
+  zeroCap.max_wrapped_supply = "0";
+  assert.throws(
+    () => deriveSccpTonDestinationHashesV1(zeroCap, "ton-mainnet", 1),
+    /canonical positive/u,
+  );
+  const oversizedCap = structuredClone(deployment);
+  oversizedCap.max_wrapped_supply = (1n << 120n).toString();
+  assert.throws(
+    () => deriveSccpTonDestinationHashesV1(oversizedCap, "ton-mainnet", 1),
+    /positive u128/u,
+  );
+  const aliasedExecutionArtifact = tonGovernedRoute();
+  aliasedExecutionArtifact.sora_outbound_execution_policy.contract_artifact_sha256 =
+    aliasedExecutionArtifact.destination.deployment.route_initial_data_hash;
+  assert.throws(
+    () => normalizeSccpRegistry(registry([aliasedExecutionArtifact])),
+    /reuses/u,
+  );
+  const mismatchedCircuit = structuredClone(deployment);
+  mismatchedCircuit.verifier_circuit_hash = UPPER(0x96, 32);
+  assert.throws(
+    () => deriveSccpTonDestinationHashesV1(mismatchedCircuit, "ton-mainnet", 1),
+    /circuit/u,
   );
 });
 
@@ -1702,10 +1435,18 @@ test("registry rejects stale emitter hashes after either typed proof policy chan
 });
 
 test("registry rejects legacy and ambiguous Sumeragi v2 finality anchors", () => {
+  assert.equal(
+    policyHashes().anchor,
+    "9e9d4e602028b7ba99af5e47be644fbb3524e6240c284867faf9dfb85d873ba5",
+  );
   const mutations = [
     ["wrong protocol", (anchor) => { anchor.protocol_version = 1; }, /protocol_version/u],
     ["future protocol", (anchor) => { anchor.protocol_version = 5; }, /protocol_version/u],
     ["protocol type confusion", (anchor) => { anchor.protocol_version = true; }, /integer/u],
+    ["zero epoch", (anchor) => { anchor.epoch = 0; }, /epoch/u],
+    ["checkpoint beyond epoch", (anchor) => { anchor.epoch_end_height = 6; }, /epoch end/u],
+    ["aliased roster", (anchor) => { anchor.roster_commitment = anchor.chain_id_hash; }, /consensus hash role/u],
+    ["missing epoch", (anchor) => { delete anchor.epoch; }, /field/u],
     ["zero context", (anchor) => { anchor.checkpoint_context_id = UPPER(0, 32); }, /nonzero/u],
     ["aliased artifact", (anchor) => {
       anchor.checkpoint_finality_artifact_hash = anchor.checkpoint_context_id;
@@ -1726,10 +1467,14 @@ test("registry rejects legacy and ambiguous Sumeragi v2 finality anchors", () =>
 
 test("registry rejects every stale route-configuration intermediary", () => {
   const mutations = [
-    ["token address", (route) => { route.destination.deployment.token_address = UPPER(0x13, 20); }],
-    ["token code", (route) => { route.destination.deployment.token_code_hash = UPPER(0x23, 32); }],
-    ["verifier address", (route) => { route.destination.deployment.verifier_address = UPPER(0x14, 20); }],
-    ["verifier code", (route) => { route.destination.deployment.verifier_code_hash = UPPER(0x24, 32); }],
+    ["token address", (route) => { route.destination.deployment.token_address = UPPER(0x15, 20); }],
+    ["token code", (route) => { route.destination.deployment.token_code_hash = UPPER(0x25, 32); }],
+    ["verifier address", (route) => { route.destination.deployment.verifier_address = UPPER(0x16, 20); }],
+    ["verifier code", (route) => { route.destination.deployment.verifier_code_hash = UPPER(0x26, 32); }],
+    ["replay verifier address", (route) => { route.destination.deployment.replay_verifier_address = UPPER(0x17, 20); }],
+    ["replay verifier code", (route) => { route.destination.deployment.replay_verifier_code_hash = UPPER(0x27, 32); }],
+    ["mint breaker address", (route) => { route.destination.deployment.mint_breaker_address = UPPER(0x18, 20); }],
+    ["mint breaker code", (route) => { route.destination.deployment.mint_breaker_code_hash = UPPER(0x28, 32); }],
     ["verifying key", (route) => {
       route.destination.deployment.verifying_key.alpha1 = g1(7, 8);
       route.destination.deployment.verifier_key_hash =
@@ -1772,6 +1517,32 @@ test("registry rejects every stale route-configuration intermediary", () => {
   );
 });
 
+test("EVM and TRON destination bindings commit replay-verifier and mint-breaker roles", () => {
+  const mutations = [
+    ["replay verifier address", (route) => { route.destination.deployment.replay_verifier_address = UPPER(0x17, 20); }],
+    ["replay verifier code", (route) => { route.destination.deployment.replay_verifier_code_hash = UPPER(0x27, 32); }],
+    ["mint breaker address", (route) => { route.destination.deployment.mint_breaker_address = UPPER(0x18, 20); }],
+    ["mint breaker code", (route) => { route.destination.deployment.mint_breaker_code_hash = UPPER(0x28, 32); }],
+  ];
+  for (const source of ["bsc-mainnet", "tron-mainnet"]) {
+    const baseline = testDestinationHashes(governedRoute({ source }));
+    for (const [label, mutate] of mutations) {
+      const route = governedRoute({ source });
+      mutate(route);
+      const changed = testDestinationHashes(route);
+      assert.notEqual(changed.destinationBindingHash, baseline.destinationBindingHash, label);
+      route.source_identity.emitter.identity.route_config_hash = changed.routeConfigurationHash;
+      route.sora_outbound_execution_policy.contract_artifact_sha256 =
+        changed.destinationBindingHash;
+      assert.throws(
+        () => normalizeSccpRegistry(registry([route])),
+        /sora_outbound_execution_policy.*reuses/u,
+        `${source} ${label}`,
+      );
+    }
+  }
+});
+
 test("registry requires a native trust anchor for every inbound-enabled route", () => {
   for (const activation of ["bidirectional", "inbound_only"]) {
     for (const source of ["bsc-mainnet", "tron-mainnet"]) {
@@ -1786,36 +1557,25 @@ test("registry requires a native trust anchor for every inbound-enabled route", 
       );
     }
   }
-  for (const activation of ["bidirectional", "inbound_only"]) {
-    const route = solanaGovernedRoute({ activation });
-    assert.throws(
-      () => normalizeSccpRegistry(registry([route])),
-      /without a trust anchor/u,
-    );
-    assert.equal(
-      normalizeSccpRegistry(
-        registry([route], nativeTrustAnchor("solana-testnet")),
-      ).lanes.length,
-      1,
-    );
-  }
 });
 
-test("registry keeps old staging profiles fail-closed while allowing exact Solana testnet", () => {
-  for (const source of ["ethereum-sepolia", "bsc-testnet", "tron-nile", "tron-shasta"]) {
-    const route = governedRoute({ activation: "bidirectional", source });
-    assert.throws(
-      () => normalizeSccpRegistry(registry([route], nativeTrustAnchor(source))),
-      /unapproved staging profile/u,
-    );
+test("registry rejects every removed external profile", () => {
+  for (const source of [
+    "ethereum-sepolia",
+    "bsc-testnet",
+    "tron-nile",
+    "tron-shasta",
+    "solana-mainnet-beta",
+    "solana-testnet",
+    "ton-testnet",
+  ]) {
+    const value = registry();
+    value.lanes[0].lane_id.source = {
+      network: source.replaceAll("-", "_"),
+      profile: null,
+    };
+    assert.throws(() => normalizeSccpRegistry(value), /retired network|unsupported/u);
   }
-  const solana = solanaGovernedRoute({ activation: "bidirectional" });
-  assert.equal(
-    normalizeSccpRegistry(
-      registry([solana], nativeTrustAnchor("solana-testnet")),
-    ).lanes.length,
-    1,
-  );
 });
 
 test("registry requires one append-only native trust-anchor history and exact current pointer", () => {
@@ -1974,7 +1734,7 @@ test("regenerated SCCP distribution enforces the canonical route commitments", a
           .checkpoint_height += 1;
       },
       (route) => {
-        route.destination.deployment.token_code_hash = UPPER(0x23, 32);
+        route.destination.deployment.token_code_hash = UPPER(0x7e, 32);
       },
     ]) {
       const route = governedRoute({ source });
@@ -1996,6 +1756,9 @@ test("registry rejects retired families, browser metadata, duplicate lanes, and 
   const retired = registry();
   retired.lanes[0].lane_id.source = { network: "solana_mainnet_beta", profile: null };
   assert.throws(() => normalizeSccpRegistry(retired), /retired/u);
+  const retiredCustody = registry();
+  retiredCustody.lanes[0].routes[0].settlement.custody_owner = AUTHORITY;
+  assert.throws(() => normalizeSccpRegistry(retiredCustody), /unknown or retired/u);
   const browser = registry();
   browser.lanes[0].routes[0].destination_browser_prover = { module_url: "https://invalid" };
   assert.throws(() => normalizeSccpRegistry(browser), /unknown or retired/u);
@@ -2166,7 +1929,7 @@ test("recent discovery validates compound commitment order, continuation, and ex
       value.payload_projection = null;
     },
     (value) => {
-      value.payload_projection.Transfer.dest_domain = 5;
+      value.payload_projection.Transfer.dest_domain = 3;
     },
     (value) => {
       value.payload_projection.Transfer.recipient = {
@@ -2225,28 +1988,6 @@ test("recent discovery validates compound commitment order, continuation, and ex
       /continuation|after_index|unknown|plain object|safe integer/u,
     );
   }
-});
-
-test("recent discovery admits only the exact Solana projection shape", () => {
-  const item = recentItem();
-  item.target_profile = "solana-testnet";
-  item.target_domain = SCCP_DOMAIN_SOLANA;
-  item.route_id = "taira_sol_xor";
-  item.payload_projection.Transfer.dest_domain = SCCP_DOMAIN_SOLANA;
-  item.payload_projection.Transfer.recipient = {
-    SolanaPubkey32: { bytes: `0x${"93".repeat(32)}` },
-  };
-  item.payload_projection.Transfer.route_id.CanonicalText.value = "taira_sol_xor";
-
-  const parsed = normalizeSccpRecentMessages({ items: [item] });
-  assert.equal(parsed.items[0].target_profile, "solana-testnet");
-  assert.equal(
-    parsed.items[0].payload_projection.Transfer.recipient.SolanaPubkey32.bytes,
-    `0x${"93".repeat(32)}`,
-  );
-
-  item.payload_projection.Transfer.recipient.SolanaPubkey32.bytes = `0x${"00".repeat(32)}`;
-  assert.throws(() => normalizeSccpRecentMessages({ items: [item] }), /nonzero/u);
 });
 
 test("recent discovery admits only canonical TON basechain projections", () => {
@@ -2352,199 +2093,6 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   assert.throws(() => normalizeSccpProofRequest(archivedIdentity), /Taira chain commitment/u);
 });
 
-test("submit DTOs preserve the exact prepared transaction for detached signing", () => {
-  const transactionPayload = b64(Uint8Array.of(1, 2, 3, 4));
-  const destinationProof = destinationProofB64();
-  const nativeProof = nativeProofB64();
-  const proof = normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    signature_b64: b64(new Uint8Array(64).fill(1)),
-    transaction_payload_b64: transactionPayload,
-    destination_proof_b64: destinationProof,
-    creation_time_ms: 10,
-  });
-  assert.deepEqual(Object.keys(proof), [
-    "authority",
-    "fee_payment",
-    "signature_b64",
-    "transaction_payload_b64",
-    "destination_proof_b64",
-    "creation_time_ms",
-  ]);
-  assert.equal(proof.transaction_payload_b64, transactionPayload);
-  assert.deepEqual(Object.keys(normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    native_proof_b64: nativeProof,
-  })), ["authority", "fee_payment", "native_proof_b64"]);
-  const native = normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    signature_b64: "AQ==",
-    transaction_payload_b64: transactionPayload,
-    native_proof_b64: nativeProof,
-    creation_time_ms: 10,
-  });
-  assert.equal(native.transaction_payload_b64, transactionPayload);
-});
-
-test("submit DTOs reject mixed signing state, malformed encodings, and retired fields", () => {
-  const proof = {
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-  };
-  for (const [field, value] of [
-    ["public_key_hex", HASH(1)],
-    ["message_bundle_b64", "AQ=="],
-    ["proof_bytes_hex", "01"],
-    ["network_id_hex", HASH(2)],
-    ["manifest_hash", HASH(3)],
-    ["deployment", {}],
-    ["allow_unready", true],
-    ["signature", "AQ=="],
-    ["client_signature_b64", "AQ=="],
-  ]) assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, [field]: value }));
-  for (const artifact of ["AQ", " AQ==", "AQ==\n", "", "====", "A==="]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, destination_proof_b64: artifact }));
-  }
-  for (const signingState of [
-    { signature_b64: "AQ==", creation_time_ms: 1 },
-    { transaction_payload_b64: "AQ==", creation_time_ms: 1 },
-    { signature_b64: "AQ==", transaction_payload_b64: "Ag==" },
-    { signature_b64: "AQ", transaction_payload_b64: "Ag==", creation_time_ms: 1 },
-    { signature_b64: "AQ==", transaction_payload_b64: "Ag", creation_time_ms: 1 },
-  ]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, ...signingState }));
-  }
-  for (const creation_time_ms of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1"]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, creation_time_ms }));
-  }
-  const { fee_payment: _feePayment, ...withoutFeePayment } = proof;
-  assert.throws(
-    () => normalizeBridgeProofSubmitPayload(withoutFeePayment),
-    /fee_payment/u,
-  );
-  for (const fee_payment of [
-    null,
-    { payer: "authority", value: { charge_limits: [], gas_limit: 0 } },
-    { payer: "authority", value: { charge_limits: [], gas_limit: null, legacy: true } },
-    {
-      payer: "sponsor",
-      value: {
-        program_id: { sponsor: AUTHORITY, name: "wallet_fx" },
-        program_revision: 0,
-        charge_limits: [],
-        gas_limit: null,
-      },
-    },
-  ]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, fee_payment }));
-  }
-});
-
-test("submit DTOs bind the exact proof schema and require zero header padding", () => {
-  assert.doesNotThrow(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-  }));
-  assert.doesNotThrow(() => normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    native_proof_b64: nativeProofB64(),
-  }));
-  assert.throws(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: nativeProofB64(),
-  }), /schema hash/u);
-  assert.throws(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: b64(
-      sccpNoritoFrame("iroha_sccp::SccpGroth16Bn254ProofArtifactV1"),
-    ),
-  }), /schema hash/u);
-  assert.throws(() => normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    native_proof_b64: destinationProofB64(),
-  }), /schema hash/u);
-  for (const padding of [1, 8, 64]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64({ padding }),
-    }), /exactly 0 bytes/u);
-    assert.throws(() => normalizeBridgeMessageSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      native_proof_b64: nativeProofB64({ padding }),
-    }), /exactly 0 bytes/u);
-  }
-  assert.throws(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64({ payload: Buffer.alloc(0) }),
-  }), /non-empty/u);
-  for (const authority of [ACCOUNT.toI105(753), ACCOUNT.toI105(0), ACCOUNT.toI105(370)]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({
-      authority,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64(),
-    }), /discriminant|prefix/u);
-    assert.throws(() => normalizeBridgeMessageSubmitPayload({
-      authority,
-      fee_payment: feePayment(),
-      native_proof_b64: nativeProofB64(),
-    }), /discriminant|prefix/u);
-  }
-});
-
-test("bridge response and JSON parser reject contradictions, aliases, and duplicate fields", () => {
-  assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse()).submitted, false);
-  assert.equal(normalizeSccpBridgeSubmitResponse({
-    ...preparedResponse(),
-    submitted: true,
-    tx_hash_hex: HASH(0x55),
-    transaction_payload_b64: null,
-    signing_message_b64: null,
-  }).submitted, true);
-  for (const value of [
-    { ...preparedResponse(), payload_kind: "burn" },
-    { ...preparedResponse(), counterparty_chain: "solana-mainnet-beta" },
-    { ...preparedResponse(), proof_artifact_hash: HASH(3) },
-    { ...preparedResponse(), manifest_hash_hex: HASH(3) },
-    { ...preparedResponse(), route_configuration_hash_hex: HASH(0xab).toUpperCase() },
-    { ...preparedResponse(), creation_time_ms: 0 },
-    { ...preparedResponse(), tx_hash_hex: HASH(4) },
-    { ...preparedResponse(), transaction_payload_b64: b64(Uint8Array.of(1, 2, 3, 5)) },
-    { ...preparedResponse(), signing_message_b64: b64(new Uint8Array(32).fill(9)) },
-  ]) assert.throws(() => normalizeSccpBridgeSubmitResponse(value));
-  const missingRouteHash = preparedResponse();
-  delete missingRouteHash.route_configuration_hash_hex;
-  assert.throws(() => normalizeSccpBridgeSubmitResponse(missingRouteHash), /missing required/u);
-  assert.throws(
-    () => normalizeSccpBridgeSubmitResponse(preparedResponse(), { submitted: true }),
-    /signing state/u,
-  );
-  const json = JSON.stringify(preparedResponse());
-  assert.equal(parseSccpBridgeSubmitResponseJson(json).submitted, false);
-  assert.throws(() => parseSccpBridgeSubmitResponseJson(json.replace("{", '{"submitted":false,')), /duplicate/u);
-  assert.throws(
-    () => parseSccpBridgeSubmitResponseJson(
-      json.replace(
-        `"route_configuration_hash_hex":"${HASH(0x31)}"`,
-        `"route_configuration_hash_hex":"${HASH(0x31)}","route_configuration_hash_hex":"${HASH(0x32)}"`,
-      ),
-    ),
-    /duplicate/u,
-  );
-  assert.throws(() => parseSccpJsonObject(`${json}{}`), /trailing/u);
-});
-
 function response(
   value,
   {
@@ -2634,8 +2182,8 @@ test("Torii exact client constructs fixed query-free endpoints and content negot
   assert.equal(
     (
       await client.getSccpSoraOutboundMaterial({
-        sourceProfile: "solana-testnet",
-        routeId: "taira_sol_xor",
+        sourceProfile: "bsc-mainnet",
+        routeId: "taira_bsc_xor",
         assetKey: "xor",
         revision: 1,
       })
@@ -2654,7 +2202,7 @@ test("Torii exact client constructs fixed query-free endpoints and content negot
   assert.deepEqual(observed.map(({ url }) => url), [
     "https://example.invalid/v1/sccp/capabilities",
     "https://example.invalid/v1/sccp/registry",
-    "https://example.invalid/v1/sccp/routes/solana-testnet/taira_sol_xor/xor/1/sora-outbound-material",
+    "https://example.invalid/v1/sccp/routes/bsc-mainnet/taira_bsc_xor/xor/1/sora-outbound-material",
     `https://example.invalid/v1/sccp/proofs/message/${MESSAGE_ID}`,
     `https://example.invalid/v1/sccp/proof-requests/${MESSAGE_ID}`,
     "https://example.invalid/v1/sccp/messages/recent?from=9&after_index=3&limit=1",
@@ -2677,28 +2225,6 @@ test("Torii SCCP Norito preflight accepts both concrete request types with zero 
     );
     assert.equal(streamed.streamState.released, true);
   }
-});
-
-test("destination submit admits the 128 KiB outer allowance and rejects its base64 overflow", () => {
-  const legacyMaximum = 16 * 1024 * 1024 + 64 * 1024;
-  const outerMaximum = 16 * 1024 * 1024 + 128 * 1024;
-  assert.equal(4 * Math.ceil(outerMaximum / 3), 22_544_384);
-  assert.throws(
-    () => normalizeBridgeProofSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: Buffer.alloc(legacyMaximum + 1).toString("base64"),
-    }),
-    /not an NRT0 frame/u,
-  );
-  assert.throws(
-    () => normalizeBridgeProofSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: Buffer.alloc(outerMaximum + 1).toString("base64"),
-    }),
-    /byte-size bound/u,
-  );
 });
 
 test("Torii SCCP Norito preflight rejects malformed and cross-type frames", async () => {
@@ -2855,16 +2381,6 @@ test("Torii SCCP routes apply their endpoint-specific declared response limits",
       invoke: (client) => client.getSccpProofRequest(MESSAGE_ID, { format: "norito" }),
       contentType: "application/x-norito",
     },
-    {
-      name: "submit JSON",
-      maximumBytes: 64 * 1024 * 1024,
-      invoke: (client) => client.submitBridgeProof({
-        authority: AUTHORITY,
-        fee_payment: feePayment(),
-        destination_proof_b64: destinationProofB64(),
-      }),
-      contentType: "application/json",
-    },
   ];
   for (const entry of cases) {
     const declaredOverflow = response({}, {
@@ -2918,112 +2434,37 @@ test("Torii exact client rejects path/query injection and retired option aliases
     { limit: 51 },
   ]) await assert.rejects(() => client.getSccpRecentMessages(options));
   for (const route of [
-    { sourceProfile: "sora-taira", routeId: "taira_sol_xor", assetKey: "xor", revision: 1 },
-    { sourceProfile: "solana-testnet", routeId: "taira_sol_xor/../registry", assetKey: "xor", revision: 1 },
-    { sourceProfile: "solana-testnet", routeId: "taira_sol_xor", assetKey: "xor#universal", revision: 1 },
-    { sourceProfile: "solana-testnet", routeId: "taira_sol_xor", assetKey: "xor", revision: 0 },
-    { sourceProfile: "solana-testnet", routeId: "taira_sol_xor", assetKey: "xor", revision: 1, bytecode: "caller" },
+    { sourceProfile: "sora-taira", routeId: "taira_bsc_xor", assetKey: "xor", revision: 1 },
+    { sourceProfile: "bsc-mainnet", routeId: "taira_bsc_xor/../registry", assetKey: "xor", revision: 1 },
+    { sourceProfile: "bsc-mainnet", routeId: "taira_bsc_xor", assetKey: "xor#universal", revision: 1 },
+    { sourceProfile: "bsc-mainnet", routeId: "taira_bsc_xor", assetKey: "xor", revision: 0 },
+    { sourceProfile: "bsc-mainnet", routeId: "taira_bsc_xor", assetKey: "xor", revision: 1, bytecode: "caller" },
   ]) await assert.rejects(() => client.getSccpSoraOutboundMaterial(route));
   assert.equal(calls, 0);
   assert.equal(typeof client.getSccpProofManifests, "undefined");
 });
 
-test("Torii proof submit sends only the closed destination artifact DTO", async () => {
-  let observed;
-  const client = new ToriiClient("https://example.invalid", {
-    fetchImpl: async (url, init) => {
-      observed = { url: String(url), body: JSON.parse(init.body) };
-      return response(preparedResponse({ creation_time_ms: 42 }));
-    },
-  });
-  await client.submitBridgeProof({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-    creation_time_ms: 42,
-  });
-  assert.deepEqual(observed, {
-    url: "https://example.invalid/v1/bridge/proofs/submit",
-    body: {
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64(),
-      creation_time_ms: 42,
-    },
-  });
-});
+test("first-release JS SCCP exports no unauthenticated write surface", () => {
+  for (const retired of [
+    "normalizeBridgeProofSubmitPayload",
+    "normalizeBridgeMessageSubmitPayload",
+    "normalizeSccpBridgeSubmitResponse",
+    "parseSccpBridgeSubmitResponseJson",
+  ]) {
+    assert.equal(retired in sccpExports, false, retired);
+  }
+  assert.equal(typeof ToriiClient.prototype.submitBridgeProof, "undefined");
+  assert.equal(typeof ToriiClient.prototype.submitBridgeMessage, "undefined");
 
-test("Torii prepare then submit resends the byte-identical transaction payload", async () => {
-  const calls = [];
-  const prepared = preparedResponse({ creation_time_ms: 42 });
-  const client = new ToriiClient("https://example.invalid", {
-    fetchImpl: async (url, init) => {
-      const body = JSON.parse(init.body);
-      calls.push({ url: String(url), body });
-      if (calls.length === 1) return response(prepared);
-      return response({
-        ...prepared,
-        submitted: true,
-        tx_hash_hex: HASH(0x55),
-        transaction_payload_b64: null,
-        signing_message_b64: null,
-      });
-    },
-  });
-  const preparation = await client.submitBridgeProof({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-    creation_time_ms: 42,
-  });
-  const submission = await client.submitBridgeProof({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    signature_b64: b64(new Uint8Array(64).fill(7)),
-    transaction_payload_b64: preparation.transaction_payload_b64,
-    destination_proof_b64: destinationProofB64(),
-    creation_time_ms: preparation.creation_time_ms,
-  });
-  assert.equal(submission.submitted, true);
-  assert.equal(calls[1].body.transaction_payload_b64, prepared.transaction_payload_b64);
-  assert.deepEqual(calls[1].body.fee_payment, feePayment());
-  assert.deepEqual(
-    [...Buffer.from(calls[1].body.transaction_payload_b64, "base64")],
-    [1, 2, 3, 4],
-  );
-});
-
-test("Torii rejects response state that contradicts prepare or signed submit", async () => {
-  const submitted = {
-    ...preparedResponse(),
-    submitted: true,
-    tx_hash_hex: HASH(0x55),
-    transaction_payload_b64: null,
-    signing_message_b64: null,
-  };
-  const prepareClient = new ToriiClient("https://example.invalid", {
-    fetchImpl: async () => response(submitted),
-  });
-  await assert.rejects(
-    () => prepareClient.submitBridgeProof({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64(),
-    }),
-    /signing state/u,
-  );
-  const submitClient = new ToriiClient("https://example.invalid", {
-    fetchImpl: async () => response(preparedResponse({ creation_time_ms: 42 })),
-  });
-  await assert.rejects(
-    () => submitClient.submitBridgeProof({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      signature_b64: "AQ==",
-      transaction_payload_b64: "Ag==",
-      destination_proof_b64: destinationProofB64(),
-      creation_time_ms: 42,
-    }),
-    /signing state/u,
-  );
+  const declarations = fs.readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  for (const retired of [
+    "SccpDetachedSigningState",
+    "SccpBridgeProofSubmitPayload",
+    "SccpBridgeMessageSubmitPayload",
+    "SccpBridgeSubmitResponse",
+    "submitBridgeProof",
+    "submitBridgeMessage",
+  ]) {
+    assert.doesNotMatch(declarations, new RegExp(`\\b${retired}\\b`, "u"));
+  }
 });

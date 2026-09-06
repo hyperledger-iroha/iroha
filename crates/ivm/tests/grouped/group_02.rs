@@ -1,7 +1,5 @@
 //! Grouped IVM integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#[path = "../control_flow_circuit.rs"]
-mod control_flow_circuit;
 #[path = "../control_flows.rs"]
 mod control_flows;
 #[path = "../core_host_build_path_map_key_syscall.rs"]
@@ -60,8 +58,6 @@ mod decoder_mixed;
 mod decoder_roundtrip;
 #[path = "../default_host_input_publish_tlv.rs"]
 mod default_host_input_publish_tlv;
-#[path = "../dilithium_circuit.rs"]
-mod dilithium_circuit;
 #[path = "../docs_consistency.rs"]
 mod docs_consistency;
 #[path = "../drop_order.rs"]

@@ -19,8 +19,8 @@ fn byte_tree_parallel_cross_crate_equivalence() {
         MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(&data, chunk).expect("valid chunk");
     assert_eq!(canonical_seq.root(), canonical_par.root());
     // Cross-crate: IVM helpers (seq and par) must match canonical
-    let ivm_seq = ByteMerkleTree::from_bytes(&data, chunk);
-    let ivm_par = ByteMerkleTree::from_bytes_parallel(&data, chunk);
+    let ivm_seq = ByteMerkleTree::from_bytes(&data, chunk).unwrap();
+    let ivm_par = ByteMerkleTree::from_bytes_parallel(&data, chunk).unwrap();
     let root_seq = canonical_seq.root().expect("root");
     assert_eq!(root_seq.as_ref(), &ivm_seq.root());
     assert_eq!(root_seq.as_ref(), &ivm_par.root());
@@ -35,7 +35,7 @@ fn byte_tree_root_and_proof_equivalence() {
     let canonical_root = canonical.root().expect("root");
     let canonical_commitment = canonical.commitment().expect("non-empty commitment");
     // IVM byte-chunk helper
-    let ivm_tree = ByteMerkleTree::from_bytes(&data, chunk);
+    let ivm_tree = ByteMerkleTree::from_bytes(&data, chunk).unwrap();
     let ivm_root = ivm_tree.root();
     // Roots must match exactly
     assert_eq!(canonical_root.as_ref(), &ivm_root);
@@ -43,7 +43,7 @@ fn byte_tree_root_and_proof_equivalence() {
     let indices = [0usize, 1, 2, (data.len() / chunk).max(1) - 1];
     for &idx in &indices {
         // IVM path as raw sibling bytes
-        let ivm_path = ivm_tree.path(idx);
+        let ivm_path = ivm_tree.path(idx).unwrap();
         // Wrap into a canonical proof and verify it
         let proof = MerkleProof::from_audit_path_bytes(idx as u32, ivm_path.clone());
         let leaf = canonical

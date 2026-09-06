@@ -799,23 +799,29 @@ pub fn enforce_amx_budget(
 ) -> Result<AmxCost, AmxBudgetError> {
     let per_ds_limit = limits.per_dataspace_budget_ms.saturating_mul(1_000_000);
     let group_limit = limits.group_budget_ms.saturating_mul(1_000_000);
-    let memory_accesses = analysis.memory.load64
-        + analysis.memory.store64
-        + analysis.memory.load128
-        + analysis.memory.store128;
-    let syscall_calls: u64 = analysis.syscalls.iter().map(|entry| entry.count).sum();
-    let estimated_ns = analysis
-        .instruction_count
-        .saturating_mul(limits.per_instruction_ns as usize) as u64
-        + memory_accesses.saturating_mul(limits.per_memory_access_ns)
-        + syscall_calls.saturating_mul(limits.per_syscall_ns);
+    let instruction_count = u64::try_from(analysis.instruction_count).unwrap_or(u64::MAX);
+    let memory_accesses = analysis
+        .memory
+        .load64
+        .saturating_add(analysis.memory.store64)
+        .saturating_add(analysis.memory.load128)
+        .saturating_add(analysis.memory.store128);
+    let syscall_calls = analysis
+        .syscalls
+        .iter()
+        .fold(0_u64, |total, entry| total.saturating_add(entry.count));
+    let estimated_ns = instruction_count
+        .saturating_mul(limits.per_instruction_ns)
+        .saturating_add(memory_accesses.saturating_mul(limits.per_memory_access_ns))
+        .saturating_add(syscall_calls.saturating_mul(limits.per_syscall_ns));
     if estimated_ns > per_ds_limit {
         return Err(AmxBudgetError::PerDataspaceBudgetExceeded {
             estimated_ns,
             limit_ns: per_ds_limit,
         });
     }
-    let group_estimated_ns = estimated_ns.saturating_mul(dataspace_count.get() as u64);
+    let dataspace_count = u64::try_from(dataspace_count.get()).unwrap_or(u64::MAX);
+    let group_estimated_ns = estimated_ns.saturating_mul(dataspace_count);
     if group_estimated_ns > group_limit {
         return Err(AmxBudgetError::GroupBudgetExceeded {
             estimated_ns: group_estimated_ns,
@@ -1403,5 +1409,27 @@ seiyaku IndirectStateAnalysis {
         let err =
             enforce_amx_budget(&analysis, NonZeroUsize::new(6).unwrap(), &limits).unwrap_err();
         assert!(matches!(err, AmxBudgetError::GroupBudgetExceeded { .. }));
+    }
+    #[test]
+    fn amx_budget_cost_overflow_fails_closed() {
+        let mut analysis = base_analysis(1);
+        analysis.memory.load64 = 1;
+        let limits = AmxLimits {
+            per_dataspace_budget_ms: 1,
+            group_budget_ms: 1,
+            per_instruction_ns: u64::MAX,
+            per_memory_access_ns: 1,
+            per_syscall_ns: 0,
+        };
+
+        let err = enforce_amx_budget(&analysis, NonZeroUsize::new(1).unwrap(), &limits)
+            .expect_err("overflowing aggregate work must exceed the budget");
+        assert_eq!(
+            err,
+            AmxBudgetError::PerDataspaceBudgetExceeded {
+                estimated_ns: u64::MAX,
+                limit_ns: 1_000_000,
+            }
+        );
     }
 }

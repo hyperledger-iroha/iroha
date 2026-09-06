@@ -25,17 +25,14 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    str::FromStr,
-    string::String,
-    vec::Vec,
-};
+use std::{collections::BTreeSet, fmt, str::FromStr, string::String, vec::Vec};
+
 /// Voting mode for a referendum.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::VotingMode")]
 pub enum VotingMode {
     /// Zero-knowledge voting flow (default ballot type).
     Zk,
@@ -79,60 +76,6 @@ impl norito::json::JsonDeserialize for VotingMode {
         }
     }
 }
-/// Council derivation method.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Default,
-    Encode,
-    Decode,
-    iroha_schema::IntoSchema,
-)]
-pub enum CouncilDerivationKind {
-    /// Derived automatically from deterministic bonded-citizen sortition.
-    Sortition,
-    /// Supplied explicitly by an authorized parliament administrator.
-    #[default]
-    Manual,
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for CouncilDerivationKind {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string(label, out);
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string_to(label, out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for CouncilDerivationKind {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Sortition" => Ok(CouncilDerivationKind::Sortition),
-            "Manual" => Ok(CouncilDerivationKind::Manual),
-            other => Err(norito::json::Error::unknown_field(other.to_owned())),
-        }
-    }
-}
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashParseError {
@@ -162,6 +105,8 @@ impl fmt::Display for HashParseError {
 impl std::error::Error for HashParseError {}
 const HASH_WIRE_VERSION_V1: u16 = 1;
 #[derive(Clone, Copy, Debug, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::HashWire32")]
 struct HashWire32 {
     version: u16,
     declared_len: u16,
@@ -411,6 +356,8 @@ define_hash32_newtype!(
 
 /// ABI version targeted by the contract manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::AbiVersion")]
 pub struct AbiVersion(u16);
 impl AbiVersion {
     /// Create a new ABI version wrapper.
@@ -477,6 +424,8 @@ pub const FIRST_RELEASE_MAX_EXACT_JSON_U64: u64 = (1_u64 << 53) - 1;
     norito(tag = "kind", content = "payload", deny_unknown_fields),
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ProposalKind")]
 pub enum ProposalKind {
     /// Deploy an IVM contract identified by its canonical public address and content hashes.
     #[codec(index = 0)]
@@ -499,6 +448,15 @@ pub enum ProposalKind {
     /// Establish, replace, or remove one `SoraFS` provider owner through governance.
     #[codec(index = 6)]
     SorafsProviderGovernance(SorafsProviderGovernanceProposal),
+    /// Apply one owner-consented contract lifecycle transition.
+    #[codec(index = 7)]
+    ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1),
+    /// Impose one narrow, time-bounded emergency execution hold.
+    #[codec(index = 8)]
+    ContractEmergencyHold(ContractEmergencyHoldProposalV1),
+    /// Grant or revoke one exact account's global data-trigger capability.
+    #[codec(index = 9)]
+    GlobalDataTriggerPermissionGovernance(GlobalDataTriggerPermissionGovernanceProposalV1),
 }
 /// Proposal payload for deploying an IVM contract via governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -507,7 +465,14 @@ pub enum ProposalKind {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::DeployContractProposal")]
 pub struct DeployContractProposal {
+    /// Canonical transaction authority that created this proposal.
+    ///
+    /// The operator is part of the exact proposal and effect preimages so
+    /// transaction ordering cannot change deployment provenance.
+    pub proposal_operator: AccountId,
     /// Canonical public contract address governed by the proposal.
     pub contract_address: ContractAddress,
     /// Blake2b-32 hash of the compiled `.to` bytecode.
@@ -520,6 +485,196 @@ pub struct DeployContractProposal {
     #[norito(required)]
     pub manifest_provenance: Option<ManifestProvenance>,
 }
+/// Owner-consented lifecycle action available to Parliament.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ActivateContractGovernanceActionV1")]
+pub struct ActivateContractGovernanceActionV1 {
+    /// Exact compiled artifact hash.
+    pub code_hash: ContractCodeHash,
+    /// Exact ABI surface hash.
+    pub abi_hash: ContractAbiHash,
+    /// ABI version (currently `1`).
+    pub abi_version: AbiVersion,
+    /// Optional provenance used when the manifest is absent on-chain.
+    #[norito(required)]
+    pub manifest_provenance: Option<ManifestProvenance>,
+}
+/// Payload for a governed contract deactivation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::DeactivateContractGovernanceActionV1")]
+pub struct DeactivateContractGovernanceActionV1 {
+    /// Exact active code hash expected by the proposal.
+    pub expected_code_hash: ContractCodeHash,
+    /// Optional audit reason.
+    pub reason: Option<String>,
+}
+/// Payload for a Parliament-owned contract's ownership offer.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::OfferContractOwnershipGovernanceActionV1")]
+pub struct OfferContractOwnershipGovernanceActionV1 {
+    /// Proposed account owner.
+    pub new_owner: AccountId,
+}
+/// Payload completing the mandatory retrospective for one expired emergency hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1")]
+pub struct CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+    /// Exact proposal content identifier retained by the hold being reviewed.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hold_proposal_content_id: [u8; 32],
+    /// Exact governance-attempt identifier retained by the hold being reviewed.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hold_governance_attempt_id: [u8; 32],
+    /// Exact incident digest retained by the hold being reviewed.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub incident_digest: [u8; 32],
+    /// Non-zero root of Parliament's certified retrospective finding.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub retrospective_finding_root: [u8; 32],
+}
+/// Certificate-enacted lifecycle action available to Parliament.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(tag = "action", content = "payload", deny_unknown_fields)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ContractLifecycleGovernanceActionV1")]
+pub enum ContractLifecycleGovernanceActionV1 {
+    /// Activate or replace the contract's code.
+    #[codec(index = 0)]
+    Activate(ActivateContractGovernanceActionV1),
+    /// Deactivate the currently active code.
+    #[codec(index = 1)]
+    Deactivate(DeactivateContractGovernanceActionV1),
+    /// Offer Parliament-owned lifecycle authority to an account.
+    #[codec(index = 2)]
+    OfferOwnership(OfferContractOwnershipGovernanceActionV1),
+    /// Cancel Parliament's outstanding ownership offer.
+    #[codec(index = 3)]
+    CancelOwnershipOffer,
+    /// Accept an account owner's outstanding offer to Parliament.
+    #[codec(index = 4)]
+    AcceptParliamentOwnership,
+    /// Complete the certified retrospective for one expired emergency hold.
+    #[codec(index = 5)]
+    CompleteEmergencyHoldRetrospective(
+        CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
+    ),
+}
+
+/// Complete compare-and-swap proposal for a certificate-enacted lifecycle transition.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ContractLifecycleGovernanceProposalV1")]
+pub struct ContractLifecycleGovernanceProposalV1 {
+    /// Canonical transaction authority that created this proposal.
+    ///
+    /// The operator is part of the exact proposal and effect preimages because
+    /// activation and deactivation consume its lifecycle authority.
+    pub proposal_operator: AccountId,
+    /// Contract whose lifecycle changes.
+    pub contract_address: ContractAddress,
+    /// Exact lifecycle revision required at enactment.
+    pub expected_revision: u64,
+    /// Closed lifecycle action; any variant is applied only by exact-due certificate execution.
+    pub action: ContractLifecycleGovernanceActionV1,
+}
+
+/// Complete emergency-containment proposal for one active contract.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ContractEmergencyHoldProposalV1")]
+pub struct ContractEmergencyHoldProposalV1 {
+    /// Contract whose execution is contained.
+    pub contract_address: ContractAddress,
+    /// Exact lifecycle revision required at enactment.
+    pub expected_revision: u64,
+    /// Exact active code hash required at enactment.
+    pub expected_code_hash: ContractCodeHash,
+    /// Non-zero digest of the incident evidence.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub incident_digest: [u8; 32],
+    /// Human-readable containment reason.
+    pub reason: String,
+    /// Hold duration, bounded by `MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1`.
+    pub duration_blocks: u64,
+}
+/// Closed Parliament action for the global data-trigger capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(
+        tag = "action",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceActionV1")]
+pub enum GlobalDataTriggerPermissionGovernanceActionV1 {
+    /// Grant the capability to the exact account.
+    #[codec(index = 0)]
+    Grant,
+    /// Revoke the capability from the exact account.
+    #[codec(index = 1)]
+    Revoke,
+}
+/// Complete Parliament proposal for one exact account's global data-trigger capability.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceProposalV1")]
+pub struct GlobalDataTriggerPermissionGovernanceProposalV1 {
+    /// Exact account whose capability is granted or revoked.
+    pub authority: AccountId,
+    /// Closed grant-or-revoke effect.
+    pub action: GlobalDataTriggerPermissionGovernanceActionV1,
+}
 /// Proposal payload for scheduling a runtime upgrade through governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -527,7 +682,14 @@ pub struct DeployContractProposal {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::RuntimeUpgradeProposal")]
 pub struct RuntimeUpgradeProposal {
+    /// Canonical transaction authority that created this proposal.
+    ///
+    /// The operator is part of the exact proposal and effect preimages so the
+    /// retained runtime-upgrade attribution cannot depend on transaction order.
+    pub proposal_operator: AccountId,
     /// Canonical runtime-upgrade manifest payload.
     pub manifest: RuntimeUpgradeManifest,
 }
@@ -538,6 +700,8 @@ pub struct RuntimeUpgradeProposal {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::SccpRouteGovernanceProposal")]
 pub struct SccpRouteGovernanceProposal {
     /// Complete network- and action-bound SCCP Parliament effect preimage.
     pub anchor: Box<crate::isi::bridge::SccpRouteGovernanceAnchorV1>,
@@ -549,6 +713,8 @@ pub struct SccpRouteGovernanceProposal {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::SorafsProviderGovernanceProposal")]
 pub struct SorafsProviderGovernanceProposal {
     /// Exact compare-and-set provider-owner action to execute on enactment.
     pub action: Box<SorafsProviderGovernanceActionV1>,
@@ -560,6 +726,8 @@ pub struct SorafsProviderGovernanceProposal {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ValidationFeePolicyProposal")]
 pub struct ValidationFeePolicyProposal {
     /// Canonical transaction authority that created this proposal.
     ///
@@ -579,6 +747,8 @@ pub struct ValidationFeePolicyProposal {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ValidationFeePayoutLifecycleProposal")]
 pub struct ValidationFeePayoutLifecycleProposal {
     /// Canonical transaction authority that created this proposal.
     ///
@@ -598,6 +768,8 @@ pub struct ValidationFeePayoutLifecycleProposal {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::AtWindow")]
 pub struct AtWindow {
     /// First block in the enactment window (inclusive).
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
@@ -608,6 +780,8 @@ pub struct AtWindow {
 }
 /// Governance parameters (subset) — see gov.md for full spec.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceParameters")]
 pub struct GovernanceParameters {
     /// Asset used to denominate voting power.
     pub voting_asset: AssetId,
@@ -678,6 +852,8 @@ impl JsonDeserialize for ProposalId {
 }
 /// Minimal referendum status enumeration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ReferendumStatus")]
 pub enum ReferendumStatus {
     /// Referendum has been submitted but not yet opened for voting.
     Proposed,
@@ -696,6 +872,8 @@ pub enum ReferendumStatus {
 }
 /// Referendum shell (subset of fields).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::Referendum")]
 pub struct Referendum {
     /// Deterministic identifier derived from the referendum preimage.
     pub id: ProposalId,
@@ -716,6 +894,8 @@ pub struct Referendum {
 }
 /// Voter choice variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::VoteChoice")]
 pub enum VoteChoice {
     /// Support the referendum (Aye).
     Aye,
@@ -726,6 +906,8 @@ pub enum VoteChoice {
 }
 /// Vote shell (conviction index is abstract for now).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::Vote")]
 pub struct Vote {
     /// Referendum being voted on.
     pub referendum_id: ProposalId,
@@ -740,6 +922,8 @@ pub struct Vote {
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBody")]
 pub enum ParliamentBody {
     /// Rules Committee — intake and rulebook gate.
     #[codec(index = 0)]
@@ -852,6 +1036,8 @@ impl json::JsonDeserialize for ParliamentBody {
     norito(tag = "tier", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::RiskTierV1")]
 pub enum RiskTierV1 {
     /// Deterministic execution already authorized by an active mandate.
     #[codec(index = 0)]
@@ -893,6 +1079,8 @@ impl RiskTierV1 {
     norito(tag = "stage", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceStageV1")]
 pub enum GovernanceStageV1 {
     /// Qualification and proposal-content admission.
     #[default]
@@ -945,6 +1133,8 @@ pub enum GovernanceStageV1 {
     norito(tag = "status", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceAttemptStatusV1")]
 pub enum GovernanceAttemptStatusV1 {
     /// The attempt is processing its current stage.
     #[default]
@@ -970,6 +1160,8 @@ pub enum GovernanceAttemptStatusV1 {
 /// Canonical snapshot of one retryable end-to-end governance attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceAttemptV1")]
 pub struct GovernanceAttemptV1 {
     /// Identifier unique to this retry attempt.
     pub id: GovernanceAttemptId,
@@ -986,6 +1178,8 @@ pub struct GovernanceAttemptV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceAttemptIdPreimageV1")]
 struct GovernanceAttemptIdPreimageV1 {
     proposal_content_id: ProposalContentId,
     sequence: u32,
@@ -1018,6 +1212,14 @@ impl GovernanceAttemptV1 {
 /// The bound accommodates the largest permitted Confirmation Jury while
 /// keeping ballot and certificate resource limits finite.
 pub const MAX_PARLIAMENT_BODY_TARGET_SEATS_V1: u32 = 1_000;
+/// Minimum frozen survivor and accepted-ballot count for a hidden Parliament ballot.
+///
+/// V1 publishes an exact aggregate tally. Requiring at least three participants
+/// prevents the reachable two-person corpus from disclosing both choices when
+/// unanimous, or one choice when the other participant's choice is known.
+pub const MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1: u32 = 3;
+/// The sole consensus policy version implemented by first-release Parliament.
+pub const PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1: u64 = 1;
 /// Hard protocol ceiling for end-to-end governance retries after sequence zero.
 pub const MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1: u32 = 16;
 /// Hard protocol ceiling for future-pulse body-election retries after sequence zero.
@@ -1026,6 +1228,10 @@ pub const MAX_PARLIAMENT_SORTITION_RETRIES_V1: u32 = 16;
 pub const MAX_PARLIAMENT_BALLOT_RETRIES_V1: u32 = 16;
 /// Hard protocol ceiling for registration, survivor, and ballot corpora.
 pub const MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000;
+/// Exact canonical width of one timed-OVN participant-registration record.
+pub const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
+/// Exact canonical width of one timed-OVN masked-ballot record.
+pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
 /// Maximum number of contiguous timed-OVN ballot records accepted by one lifecycle transition.
 ///
 /// The complete survivor corpus may contain up to the protocol-wide participant cap. Core derives
@@ -1034,6 +1240,20 @@ pub const MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000;
 pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
 /// Hard protocol ceiling for one canonical framed Parliament attempt state.
 pub const MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Hard protocol ceiling for registered citizens eligible to enter a Parliament snapshot.
+///
+/// Core rejects a new citizenship before it would exceed this bound. This keeps
+/// complete-electorate sortition finite without truncating or otherwise biasing
+/// the canonically ordered citizen set.
+pub const MAX_PARLIAMENT_CITIZENS_V1: u32 = 65_536;
+/// Hard protocol ceiling for the canonical Norito payload of one candidate snapshot.
+///
+/// A snapshot receives half of the complete attempt-state budget so candidate
+/// derivation cannot consume the whole reducer allowance before lifecycle state
+/// is added. Core enforces this while streaming the citizen registry, before it
+/// clones an account identifier into the snapshot.
+pub const MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1: usize =
+    MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 / 2;
 
 /// Return the minimum number of blocks needed to admit a configured ballot corpus.
 ///
@@ -1048,6 +1268,8 @@ pub fn parliament_timed_ovn_required_chunk_blocks_v1(max_corpus_entries: u32) ->
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentCandidateRootPreimageV1")]
 struct ParliamentCandidateRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
     body: ParliamentBody,
@@ -1080,6 +1302,13 @@ pub enum SortitionRequestErrorV1 {
     NonCanonicalIdentifier,
     /// The frozen candidate snapshot contained no eligible candidates.
     EmptyCandidateSnapshot,
+    /// The frozen candidate snapshot exceeded the V1 citizen-registry ceiling.
+    CandidateCountExceedsMaximum {
+        /// Candidate count committed by the request.
+        candidate_count: u32,
+        /// V1 protocol maximum.
+        maximum: u32,
+    },
     /// The requested body target had zero seats.
     ZeroTargetSeats,
     /// The requested body target exceeded the V1 protocol maximum.
@@ -1089,6 +1318,8 @@ pub enum SortitionRequestErrorV1 {
         /// V1 protocol maximum.
         maximum: u32,
     },
+    /// Height zero cannot identify the block committing the request.
+    ZeroRequestHeight,
     /// Height zero cannot identify a threshold-beacon pulse.
     ZeroPulseHeight,
     /// The pulse was not strictly later than request commitment.
@@ -1116,6 +1347,13 @@ impl fmt::Display for SortitionRequestErrorV1 {
                 f.write_str("sortition request identifier is not canonical")
             }
             Self::EmptyCandidateSnapshot => f.write_str("sortition candidate snapshot is empty"),
+            Self::CandidateCountExceedsMaximum {
+                candidate_count,
+                maximum,
+            } => write!(
+                f,
+                "sortition candidate count {candidate_count} exceeds V1 maximum {maximum}"
+            ),
             Self::ZeroTargetSeats => f.write_str("sortition target seats must be non-zero"),
             Self::TargetSeatsExceedMaximum {
                 target_seats,
@@ -1124,6 +1362,7 @@ impl fmt::Display for SortitionRequestErrorV1 {
                 f,
                 "sortition target seats {target_seats} exceed V1 maximum {maximum}"
             ),
+            Self::ZeroRequestHeight => f.write_str("sortition request height must be non-zero"),
             Self::ZeroPulseHeight => f.write_str("sortition pulse height must be non-zero"),
             Self::PulseNotStrictlyFuture {
                 request_height,
@@ -1147,6 +1386,8 @@ impl std::error::Error for SortitionRequestErrorV1 {}
 /// Immutable candidate-snapshot request committed before a future beacon pulse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::SortitionRequestV1")]
 pub struct SortitionRequestV1 {
     /// Unique immutable request identifier.
     pub id: SortitionRequestId,
@@ -1172,6 +1413,8 @@ pub struct SortitionRequestV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::SortitionRequestIdPreimageV1")]
 struct SortitionRequestIdPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
     body_election_attempt_id: BodyElectionAttemptId,
@@ -1244,12 +1487,12 @@ impl SortitionRequestV1 {
     /// Construct and validate an immutable sortition request.
     ///
     /// `last_consumed_pulse_height` must describe only the supplied beacon
-    /// session. An undersubscribed but nonempty candidate snapshot is valid and
-    /// is reported later through [`ParliamentConcentrationWarningV1`].
+    /// session. An undersubscribed but nonempty candidate snapshot remains valid;
+    /// the sealed roster retains the exact resulting seat count.
     ///
     /// # Errors
     /// Returns [`SortitionRequestErrorV1`] for an empty pool, an invalid target,
-    /// or a pulse that is zero, non-future, or already consumed.
+    /// a zero request height, or a pulse that is zero, non-future, or already consumed.
     #[expect(
         clippy::too_many_arguments,
         reason = "the constructor makes every consensus-bound request field explicit"
@@ -1291,6 +1534,30 @@ impl SortitionRequestV1 {
         &self,
         last_consumed_pulse_height: Option<u64>,
     ) -> Result<(), SortitionRequestErrorV1> {
+        self.validate_with_candidate_policy(last_consumed_pulse_height, false)
+    }
+
+    /// Validate a pre-request capacity intent while permitting an empty candidate snapshot.
+    ///
+    /// Core uses this only before it authenticates the live candidate corpus and
+    /// hidden-body decision mode. Every other identifier, target, height, and
+    /// pulse-reuse invariant remains identical to [`Self::validate`].
+    ///
+    /// # Errors
+    /// Returns [`SortitionRequestErrorV1`] for every malformed binding other
+    /// than an empty candidate snapshot.
+    pub(crate) fn validate_capacity_intent(
+        &self,
+        last_consumed_pulse_height: Option<u64>,
+    ) -> Result<(), SortitionRequestErrorV1> {
+        self.validate_with_candidate_policy(last_consumed_pulse_height, true)
+    }
+
+    fn validate_with_candidate_policy(
+        &self,
+        last_consumed_pulse_height: Option<u64>,
+        allow_empty_candidate_snapshot: bool,
+    ) -> Result<(), SortitionRequestErrorV1> {
         if self.id.as_bytes() == &[0; 32]
             || self.governance_attempt_id.as_bytes() == &[0; 32]
             || self.body_election_attempt_id.as_bytes() == &[0; 32]
@@ -1302,8 +1569,14 @@ impl SortitionRequestV1 {
         if self.id != self.canonical_id() {
             return Err(SortitionRequestErrorV1::NonCanonicalIdentifier);
         }
-        if self.candidate_count == 0 {
+        if self.candidate_count == 0 && !allow_empty_candidate_snapshot {
             return Err(SortitionRequestErrorV1::EmptyCandidateSnapshot);
+        }
+        if self.candidate_count > MAX_PARLIAMENT_CITIZENS_V1 {
+            return Err(SortitionRequestErrorV1::CandidateCountExceedsMaximum {
+                candidate_count: self.candidate_count,
+                maximum: MAX_PARLIAMENT_CITIZENS_V1,
+            });
         }
         if self.target_seats == 0 {
             return Err(SortitionRequestErrorV1::ZeroTargetSeats);
@@ -1313,6 +1586,9 @@ impl SortitionRequestV1 {
                 target_seats: self.target_seats,
                 maximum: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
             });
+        }
+        if self.request_height == 0 {
+            return Err(SortitionRequestErrorV1::ZeroRequestHeight);
         }
         if self.pulse_height == 0 {
             return Err(SortitionRequestErrorV1::ZeroPulseHeight);
@@ -1344,6 +1620,8 @@ impl SortitionRequestV1 {
     norito(tag = "status", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::BodyElectionAttemptStatusV1")]
 pub enum BodyElectionAttemptStatusV1 {
     /// The immutable request awaits its committed future pulse.
     #[default]
@@ -1369,16 +1647,28 @@ pub enum BodyElectionAttemptStatusV1 {
 /// Binding error for a body-election attempt and its immutable request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyElectionAttemptErrorV1 {
+    /// The immutable sortition request was itself malformed.
+    InvalidSortitionRequest(SortitionRequestErrorV1),
     /// The request names a different governance attempt.
     GovernanceAttemptMismatch,
     /// The request names a different body-election attempt.
     ElectionAttemptMismatch,
     /// The attempt identifier did not bind its attempt, body, and retry sequence.
     NonCanonicalIdentifier,
+    /// The zero-based retry sequence exceeded the V1 protocol maximum.
+    RetryLimitExceeded {
+        /// Supplied retry sequence.
+        sequence: u32,
+        /// V1 protocol maximum.
+        maximum: u32,
+    },
 }
 impl fmt::Display for BodyElectionAttemptErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidSortitionRequest(error) => {
+                write!(f, "invalid body-election sortition request: {error}")
+            }
             Self::GovernanceAttemptMismatch => {
                 f.write_str("sortition request governance attempt does not match election attempt")
             }
@@ -1388,6 +1678,10 @@ impl fmt::Display for BodyElectionAttemptErrorV1 {
             Self::NonCanonicalIdentifier => {
                 f.write_str("body-election attempt identifier is not canonical")
             }
+            Self::RetryLimitExceeded { sequence, maximum } => write!(
+                f,
+                "body-election retry sequence {sequence} exceeds V1 maximum {maximum}"
+            ),
         }
     }
 }
@@ -1396,6 +1690,8 @@ impl std::error::Error for BodyElectionAttemptErrorV1 {}
 /// Canonical snapshot of one retryable Parliament body-election attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::BodyElectionAttemptV1")]
 pub struct BodyElectionAttemptV1 {
     /// Unique body-election attempt identifier.
     pub id: BodyElectionAttemptId,
@@ -1410,6 +1706,8 @@ pub struct BodyElectionAttemptV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::BodyElectionAttemptIdPreimageV1")]
 struct BodyElectionAttemptIdPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
     body: ParliamentBody,
@@ -1447,6 +1745,9 @@ impl BodyElectionAttemptV1 {
         request: SortitionRequestV1,
         status: BodyElectionAttemptStatusV1,
     ) -> Result<Self, BodyElectionAttemptErrorV1> {
+        request
+            .validate(None)
+            .map_err(BodyElectionAttemptErrorV1::InvalidSortitionRequest)?;
         if request.governance_attempt_id != governance_attempt_id {
             return Err(BodyElectionAttemptErrorV1::GovernanceAttemptMismatch);
         }
@@ -1455,6 +1756,12 @@ impl BodyElectionAttemptV1 {
         }
         if id != BodyElectionAttemptId::derive_v1(governance_attempt_id, request.body, sequence) {
             return Err(BodyElectionAttemptErrorV1::NonCanonicalIdentifier);
+        }
+        if sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+            return Err(BodyElectionAttemptErrorV1::RetryLimitExceeded {
+                sequence,
+                maximum: MAX_PARLIAMENT_SORTITION_RETRIES_V1,
+            });
         }
         Ok(Self {
             id,
@@ -1475,6 +1782,8 @@ impl BodyElectionAttemptV1 {
     norito(tag = "phase", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::DeliberationPhaseV1")]
 pub enum DeliberationPhaseV1 {
     /// Member orientation and protocol briefing.
     #[default]
@@ -1507,6 +1816,8 @@ pub enum DeliberationPhaseV1 {
     norito(tag = "status", content = "phase", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::BodyInstanceStatusV1")]
 pub enum BodyInstanceStatusV1 {
     /// Candidate snapshot is frozen and awaiting a future beacon pulse.
     #[codec(index = 0)]
@@ -1543,6 +1854,8 @@ pub enum BodyInstanceStatusV1 {
 /// Canonical snapshot of one sealed Parliament body instance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBodyInstanceV1")]
 pub struct ParliamentBodyInstanceV1 {
     /// Unique body-instance identifier.
     pub id: BodyInstanceId,
@@ -1561,6 +1874,8 @@ pub struct ParliamentBodyInstanceV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::BodyInstanceIdPreimageV1")]
 struct BodyInstanceIdPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
     roster_root: [u8; 32],
@@ -1581,6 +1896,8 @@ impl BodyInstanceId {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::AssignmentIdPreimageV1")]
 struct AssignmentIdPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
     member: AccountId,
@@ -1603,6 +1920,8 @@ impl AssignmentId {
 /// Canonical assignment of one citizen to one sealed Parliament seat.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentSeatAssignmentV1")]
 pub struct ParliamentSeatAssignmentV1 {
     /// Identifier derived from the election attempt and member identity.
     pub assignment_id: AssignmentId,
@@ -1611,6 +1930,8 @@ pub struct ParliamentSeatAssignmentV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentAssignmentPlanRootPreimageV1")]
 struct ParliamentAssignmentPlanRootPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
     primary: Vec<ParliamentSeatAssignmentV1>,
@@ -1643,6 +1964,8 @@ pub fn parliament_assignment_plan_root_v1(
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentRosterRootPreimageV1")]
 struct ParliamentRosterRootPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
     assignments: Vec<ParliamentSeatAssignmentV1>,
@@ -1672,6 +1995,8 @@ pub fn parliament_roster_root_v1(
     norito(tag = "status", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::BallotAttemptStatusV1")]
 pub enum BallotAttemptStatusV1 {
     /// OVN registration keys and proofs are being accepted.
     #[default]
@@ -1705,13 +2030,16 @@ pub enum BallotAttemptStatusV1 {
 /// Invalid caller-supplied proofs are rejected and never become lifecycle
 /// state. These reasons are reserved for objective terminal conditions derived
 /// from persisted state: phase expiry, an unavailable finalized release pulse,
-/// or insufficient fresh Confirmation Jury capacity after a narrow opening.
+/// insufficient fresh Confirmation Jury capacity after a narrow opening, or
+/// exhaustion of the proposal-wide randomness-redraw budget needed to draw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     norito(tag = "reason", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotFailureKindV1")]
 pub enum ParliamentBallotFailureKindV1 {
     /// The proof-validated registration corpus was not frozen by its deadline.
     #[codec(index = 0)]
@@ -1728,9 +2056,13 @@ pub enum ParliamentBallotFailureKindV1 {
     /// The aggregate was not validly opened before its immutable deadline.
     #[codec(index = 4)]
     OpeningDeadlineExpired,
-    /// Fewer than two eligible citizens remained outside the sealed Policy Jury.
+    /// Fewer than the hidden-ballot anonymity floor remained outside the sealed Policy Jury.
     #[codec(index = 5)]
     ConfirmationJuryCapacityUnavailable,
+    /// A narrow Policy approval required a fresh Confirmation Jury after the
+    /// proposal-wide randomness-redraw budget was exhausted.
+    #[codec(index = 6)]
+    RandomnessRedrawBudgetExhausted,
 }
 
 /// Closed audit classification for every Parliament body that ends without a result.
@@ -1744,6 +2076,8 @@ pub enum ParliamentBallotFailureKindV1 {
     norito(tag = "reason", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentNoResultKindV1")]
 pub enum ParliamentNoResultKindV1 {
     /// Authenticated absences or immutable split endorsements made quorum unreachable.
     #[codec(index = 0)]
@@ -1769,9 +2103,12 @@ pub enum ParliamentNoResultKindV1 {
     /// The current body exhausted its bounded future-pulse sortition retries.
     #[codec(index = 7)]
     SortitionRetriesExhausted,
-    /// A narrow Policy Jury result had fewer than two eligible fresh confirmers.
+    /// A narrow Policy Jury result lacked the hidden-ballot anonymity floor of fresh confirmers.
     #[codec(index = 8)]
     ConfirmationJuryCapacityUnavailable,
+    /// A required fresh Confirmation draw exceeded the proposal-wide redraw budget.
+    #[codec(index = 9)]
+    RandomnessRedrawBudgetExhausted,
 }
 
 impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
@@ -1795,11 +2132,16 @@ impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
             ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable => {
                 Self::ConfirmationJuryCapacityUnavailable
             }
+            ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted => {
+                Self::RandomnessRedrawBudgetExhausted
+            }
         }
     }
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotFailureRootPreimageV1")]
 struct ParliamentBallotFailureRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
     ballot_attempt_id: BallotAttemptId,
@@ -1833,6 +2175,8 @@ pub fn parliament_ballot_failure_root_v1(
 /// Canonical snapshot of one retryable hidden Parliament ballot attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotAttemptV1")]
 pub struct ParliamentBallotAttemptV1 {
     /// Unique ballot-attempt identifier.
     pub id: BallotAttemptId,
@@ -1847,6 +2191,8 @@ pub struct ParliamentBallotAttemptV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::BallotAttemptIdPreimageV1")]
 struct BallotAttemptIdPreimageV1 {
     body_instance_id: BodyInstanceId,
     sequence: u32,
@@ -1867,6 +2213,8 @@ impl BallotAttemptId {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotParticipantHashPreimageV1")]
 struct ParliamentBallotParticipantHashPreimageV1 {
     ballot_attempt_id: BallotAttemptId,
     member: AccountId,
@@ -1893,6 +2241,8 @@ pub fn parliament_ballot_participant_hash_v1(
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::TleSessionIdPreimageV1")]
 struct TleSessionIdPreimageV1 {
     ballot_attempt_id: BallotAttemptId,
     tle_key_session_id: TleKeySessionId,
@@ -1921,24 +2271,6 @@ impl TleSessionId {
     }
 }
 
-/// Warning emitted when a sealed body is smaller or more concentrated than requested.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentConcentrationWarningV1 {
-    /// Body instance affected by concentration.
-    pub body_instance_id: BodyInstanceId,
-    /// Parliament body affected by concentration.
-    pub body: ParliamentBody,
-    /// Requested seat count.
-    pub target_seats: u32,
-    /// Nonempty feasible seat count that was sealed.
-    pub sealed_seats: u32,
-    /// Eligible candidates in the frozen sortition snapshot.
-    pub eligible_candidates: u32,
-    /// Smallest feasible simultaneous cross-body assignment cap.
-    pub cross_body_assignment_cap: u32,
-}
-
 /// Return the immutable-seat quorum `ceil(2 × original_seats / 3)`.
 #[must_use]
 pub const fn parliament_quorum_seats_v1(original_seats: u32) -> u32 {
@@ -1960,6 +2292,8 @@ pub const fn parliament_quorum_seats_v1(original_seats: u32) -> u32 {
     norito(tag = "outcome", content = "details", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentAggregateOutcomeV1")]
 pub enum ParliamentAggregateOutcomeV1 {
     /// Quorum was met and Aye strictly exceeded Nay.
     #[codec(index = 0)]
@@ -1992,6 +2326,13 @@ pub enum ParliamentTallyErrorV1 {
         /// Immutable original-seat count.
         original_seats: u32,
     },
+    /// The exact public tally would describe fewer than the V1 anonymity floor.
+    CorpusBelowAnonymityFloor {
+        /// Accepted corpus size committed by the attempt.
+        accepted_ballots: u32,
+        /// Canonical minimum accepted corpus size.
+        minimum: u32,
+    },
 }
 impl fmt::Display for ParliamentTallyErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2010,6 +2351,13 @@ impl fmt::Display for ParliamentTallyErrorV1 {
                 f,
                 "accepted ballot corpus {accepted_ballots} exceeds original seat count {original_seats}"
             ),
+            Self::CorpusBelowAnonymityFloor {
+                accepted_ballots,
+                minimum,
+            } => write!(
+                f,
+                "accepted ballot corpus {accepted_ballots} is below the hidden-ballot anonymity floor {minimum}"
+            ),
         }
     }
 }
@@ -2020,6 +2368,8 @@ impl std::error::Error for ParliamentTallyErrorV1 {}
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentAggregateTallyV1")]
 pub struct ParliamentAggregateTallyV1 {
     /// Immutable actual seats selected before absence or dropout.
     pub original_seats: u32,
@@ -2033,11 +2383,12 @@ pub struct ParliamentAggregateTallyV1 {
     pub abstain: u32,
 }
 impl ParliamentAggregateTallyV1 {
-    /// Validate count conservation and the immutable-seat upper bound.
+    /// Validate count conservation, the immutable-seat upper bound, and the anonymity floor.
     ///
     /// # Errors
     /// Returns [`ParliamentTallyErrorV1`] when counts do not describe the
-    /// accepted corpus or the corpus exceeds the original seats.
+    /// accepted corpus, the corpus exceeds the original seats, or it falls
+    /// below the canonical hidden-ballot anonymity floor.
     pub fn validate(&self) -> Result<(), ParliamentTallyErrorV1> {
         let counted_ballots = u64::from(self.aye) + u64::from(self.nay) + u64::from(self.abstain);
         if counted_ballots != u64::from(self.accepted_ballots) {
@@ -2052,13 +2403,19 @@ impl ParliamentAggregateTallyV1 {
                 original_seats: self.original_seats,
             });
         }
+        if self.accepted_ballots < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1 {
+            return Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: self.accepted_ballots,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            });
+        }
         Ok(())
     }
 
     /// Evaluate quorum and the strict `Aye > Nay` approval rule.
     ///
-    /// A zero-seat denominator deterministically returns
-    /// [`ParliamentAggregateOutcomeV1::NoQuorum`].
+    /// A corpus below the canonical anonymity floor is malformed and cannot
+    /// produce a public decision.
     ///
     /// # Errors
     /// Returns [`ParliamentTallyErrorV1`] for malformed aggregate counts.
@@ -2097,6 +2454,8 @@ impl ParliamentAggregateTallyV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotResultRootPreimageV1")]
 struct ParliamentBallotResultRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
     body_instance_id: BodyInstanceId,
@@ -2137,6 +2496,8 @@ pub fn parliament_ballot_result_root_v1(
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentPublicFindingEndorsementRootPreimageV1")]
 struct ParliamentPublicFindingEndorsementRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
     body_instance_id: BodyInstanceId,
@@ -2171,6 +2532,8 @@ pub fn parliament_public_finding_endorsement_root_v1(
 /// Absent compare-and-set head required by a governed effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceExpectedHeadAbsentV1")]
 pub struct GovernanceExpectedHeadAbsentV1 {
     /// Stable hash identifying the governed registry subject.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2180,6 +2543,8 @@ pub struct GovernanceExpectedHeadAbsentV1 {
 /// Present compare-and-set head required by a governed effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceExpectedHeadPresentV1")]
 pub struct GovernanceExpectedHeadPresentV1 {
     /// Stable hash identifying the governed registry subject.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2198,6 +2563,8 @@ pub struct GovernanceExpectedHeadPresentV1 {
     norito(tag = "state", content = "head", deny_unknown_fields)
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceExpectedHeadV1")]
 pub enum GovernanceExpectedHeadV1 {
     /// The governed subject must not exist when the certificate executes.
     #[codec(index = 0)]
@@ -2210,6 +2577,8 @@ pub enum GovernanceExpectedHeadV1 {
 /// Final ballot transcript bound into a body result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotCertificateBindingV1")]
 pub struct ParliamentBallotCertificateBindingV1 {
     /// Ballot attempt whose accepted corpus was opened.
     pub ballot_attempt_id: BallotAttemptId,
@@ -2278,6 +2647,8 @@ pub struct ParliamentBallotCertificateBindingV1 {
 /// Quorum evidence binding one public, nonbinding Parliament body finding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentPublicFindingCertificateBindingV1")]
 pub struct ParliamentPublicFindingCertificateBindingV1 {
     /// Root of the strict assignment-id sequence endorsing the accepted result root.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2293,6 +2664,8 @@ pub struct ParliamentPublicFindingCertificateBindingV1 {
 /// Sortition, roster, deliberation, and optional ballot result bound for one body.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBodyCertificateBindingV1")]
 pub struct ParliamentBodyCertificateBindingV1 {
     /// Body instance contributing this result.
     pub body_instance_id: BodyInstanceId,
@@ -2335,6 +2708,8 @@ pub struct ParliamentBodyCertificateBindingV1 {
 /// Complete automatic V1 governance certificate payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceCertificateV1")]
 pub struct GovernanceCertificateV1 {
     /// Immutable proposal content authorized by the certificate.
     pub proposal_content_id: ProposalContentId,
@@ -2353,7 +2728,8 @@ pub struct GovernanceCertificateV1 {
     pub effect_preimage_hash: [u8; 32],
     /// Compare-and-set head required when the effect executes.
     pub expected_head: GovernanceExpectedHeadV1,
-    /// Height at which the complete certificate was finalized.
+    /// Height of the final body result, at which the complete certificate was
+    /// atomically finalized.
     pub certified_at_height: u64,
     /// Exact height at which deterministic enactment is due.
     pub enact_at_height: u64,
@@ -2366,12 +2742,16 @@ pub enum GovernanceCertificateErrorV1 {
     ZeroBinding,
     /// A typed identifier did not match its complete domain-separated V1 preimage.
     NonCanonicalIdentifier,
+    /// An attempt sequence exceeded its first-release retry ceiling.
+    RetryLimitExceeded,
     /// A successful certificate contained no Parliament body results.
     EmptyBodyBindings,
     /// Body results were not in strict canonical V1 body order.
     NonCanonicalBodyOrder,
     /// A body index disagreed with its complete immutable future-pulse request.
     SortitionRequestMismatch,
+    /// A sealed body claimed more seats than its target or eligible candidate snapshot.
+    InvalidSeatCount,
     /// Two body results reused an attempt, instance, request, ballot, or TLE identifier.
     DuplicateBinding,
     /// The certificate did not contain exactly one Policy Jury result.
@@ -2384,6 +2764,8 @@ pub enum GovernanceCertificateErrorV1 {
     InvalidPublicFinding,
     /// A successful certificate carried a rejected, no-quorum, or no-result ballot.
     NonApprovingBallot,
+    /// An emergency Policy Jury lacked affirmative votes from two thirds of original seats.
+    EmergencyPolicyJuryThreshold,
     /// The stored tally was malformed.
     InvalidTally(ParliamentTallyErrorV1),
     /// The stored outcome disagreed with the deterministic tally decision.
@@ -2393,7 +2775,7 @@ pub enum GovernanceCertificateErrorV1 {
     /// A narrow Policy Jury approval did not have exactly one fresh Confirmation Jury result,
     /// or a non-narrow result carried one.
     ConfirmationJuryMismatch,
-    /// The policy version or certification/enactment height ordering was invalid.
+    /// The policy version or certification/enactment chronology was invalid.
     InvalidLifecycle,
     /// The compare-and-set head contained an inert subject or head commitment.
     InvalidExpectedHead,
@@ -2405,6 +2787,9 @@ impl fmt::Display for GovernanceCertificateErrorV1 {
             Self::NonCanonicalIdentifier => {
                 f.write_str("governance certificate contains a noncanonical identifier")
             }
+            Self::RetryLimitExceeded => {
+                f.write_str("governance certificate contains an over-limit retry sequence")
+            }
             Self::EmptyBodyBindings => {
                 f.write_str("governance certificate has no Parliament body bindings")
             }
@@ -2413,6 +2798,9 @@ impl fmt::Display for GovernanceCertificateErrorV1 {
             }
             Self::SortitionRequestMismatch => {
                 f.write_str("governance certificate sortition request binding is inconsistent")
+            }
+            Self::InvalidSeatCount => {
+                f.write_str("governance certificate contains an impossible sealed-seat count")
             }
             Self::DuplicateBinding => {
                 f.write_str("governance certificate reuses an attempt-local binding")
@@ -2432,6 +2820,9 @@ impl fmt::Display for GovernanceCertificateErrorV1 {
             Self::NonApprovingBallot => {
                 f.write_str("successful governance certificate contains a non-approving ballot")
             }
+            Self::EmergencyPolicyJuryThreshold => f.write_str(
+                "emergency Policy Jury requires affirmative votes from two thirds of original seats",
+            ),
             Self::InvalidTally(error) => write!(f, "invalid governance tally: {error}"),
             Self::TallyOutcomeMismatch => {
                 f.write_str("governance ballot outcome does not match its aggregate tally")
@@ -2484,11 +2875,18 @@ impl GovernanceCertificateV1 {
         {
             return Err(GovernanceCertificateErrorV1::NonCanonicalIdentifier);
         }
-        if self.body_bindings.is_empty() {
-            return Err(GovernanceCertificateErrorV1::EmptyBodyBindings);
+        if self.governance_attempt_sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
+            return Err(GovernanceCertificateErrorV1::RetryLimitExceeded);
         }
-        if self.policy_version == 0
+        let final_result_height = self
+            .body_bindings
+            .iter()
+            .map(|binding| binding.result_height)
+            .max()
+            .ok_or(GovernanceCertificateErrorV1::EmptyBodyBindings)?;
+        if self.policy_version != PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1
             || self.certified_at_height == 0
+            || self.certified_at_height != final_result_height
             || self.enact_at_height <= self.certified_at_height
         {
             return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
@@ -2500,7 +2898,7 @@ impl GovernanceCertificateV1 {
                 }
             }
             GovernanceExpectedHeadV1::Present(head) => {
-                if head.subject_id == [0; 32] || head.head_root == [0; 32] {
+                if head.subject_id == [0; 32] || head.version == 0 || head.head_root == [0; 32] {
                     return Err(GovernanceCertificateErrorV1::InvalidExpectedHead);
                 }
             }
@@ -2544,6 +2942,14 @@ impl GovernanceCertificateV1 {
                 || request.beacon_session_id != binding.beacon_session_id
             {
                 return Err(GovernanceCertificateErrorV1::SortitionRequestMismatch);
+            }
+            if binding.original_seats > request.target_seats
+                || binding.original_seats > request.candidate_count
+            {
+                return Err(GovernanceCertificateErrorV1::InvalidSeatCount);
+            }
+            if binding.election_attempt_sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+                return Err(GovernanceCertificateErrorV1::RetryLimitExceeded);
             }
             if binding.election_attempt_id
                 != BodyElectionAttemptId::derive_v1(
@@ -2646,6 +3052,7 @@ impl GovernanceCertificateV1 {
                     return Err(GovernanceCertificateErrorV1::DuplicateBinding);
                 }
                 if ballot.registered_at_height == 0
+                    || ballot.registered_at_height <= request.pulse_height
                     || ballot.registration_close_height <= ballot.registered_at_height
                     || ballot.survivor_freeze_height <= ballot.registration_close_height
                     || ballot.commitment_close_height <= ballot.survivor_freeze_height
@@ -2701,6 +3108,12 @@ impl GovernanceCertificateV1 {
                 if decision != ParliamentAggregateOutcomeV1::Approved {
                     return Err(GovernanceCertificateErrorV1::NonApprovingBallot);
                 }
+                if self.risk_tier == RiskTierV1::Emergency
+                    && binding.body == ParliamentBody::PolicyJury
+                    && ballot.tally.aye < parliament_quorum_seats_v1(binding.original_seats)
+                {
+                    return Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold);
+                }
             }
 
             match binding.body {
@@ -2722,9 +3135,11 @@ impl GovernanceCertificateV1 {
         match (requires_confirmation, confirmation) {
             (false, None) => {}
             (true, Some(confirmation))
-                if confirmation.sortition_request.request_height > policy.result_height
-                    && (confirmation.beacon_session_id != policy.beacon_session_id
-                        || confirmation.beacon_pulse_id != policy.beacon_pulse_id) => {}
+                if (if confirmation.election_attempt_sequence == 0 {
+                    confirmation.sortition_request.request_height == policy.result_height
+                } else {
+                    confirmation.sortition_request.request_height > policy.result_height
+                }) && confirmation.beacon_pulse_id != policy.beacon_pulse_id => {}
             _ => return Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
         }
         Ok(())
@@ -2743,6 +3158,8 @@ impl GovernanceCertificateId {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentExecutionFailureRootPreimageV1")]
 struct ParliamentExecutionFailureRootPreimageV1 {
     certificate: GovernanceCertificateV1,
     enactment_height: u64,
@@ -2769,37 +3186,28 @@ pub fn parliament_execution_failure_root_v1(
     )
 }
 
-/// Parliament roster for a single body.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentRoster {
-    /// Body this roster applies to.
-    pub body: ParliamentBody,
-    /// Epoch/term index for the roster.
-    pub epoch: u64,
-    /// Ordered members assigned to the body.
-    pub members: Vec<AccountId>,
-    /// Alternates that may replace missing members (ordered).
-    #[norito(default)]
-    pub alternates: Vec<AccountId>,
-    /// Total eligible candidates considered by sortition, or roster entries for a manual roster.
-    #[norito(default)]
-    pub candidate_count: u32,
-    /// Derivation method used to compute the roster.
-    #[norito(default)]
-    pub derived_by: CouncilDerivationKind,
-}
-/// Parliament configuration and rosters for all bodies selected in an epoch.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentBodies {
-    /// Epoch index used to derive the bodies.
-    pub selection_epoch: u64,
-    /// Rosters keyed by body.
-    #[norito(default)]
-    pub rosters: BTreeMap<ParliamentBody, ParliamentRoster>,
-}
 impl ProposalKind {
+    /// Return the transaction operator committed by effect-sensitive proposal kinds.
+    ///
+    /// These proposal effects either consume the operator as execution authority or
+    /// persist it as immutable provenance. The retained governance proposer must
+    /// therefore agree with this payload-bound identity.
+    #[must_use]
+    pub const fn proposal_operator_v1(&self) -> Option<&AccountId> {
+        match self {
+            Self::DeployContract(payload) => Some(&payload.proposal_operator),
+            Self::RuntimeUpgrade(payload) => Some(&payload.proposal_operator),
+            Self::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
+            Self::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
+            Self::ContractLifecycleGovernance(payload) => Some(&payload.proposal_operator),
+            Self::SccpRouteGovernance(_)
+            | Self::MusubiRegistryGovernance(_)
+            | Self::SorafsProviderGovernance(_)
+            | Self::ContractEmergencyHold(_)
+            | Self::GlobalDataTriggerPermissionGovernance(_) => None,
+        }
+    }
+
     /// Return the first proposal-owned `u64` that cannot be represented exactly by every SDK.
     ///
     /// This is an exhaustive traversal of the closed first-release proposal enum, including
@@ -2811,7 +3219,23 @@ impl ProposalKind {
         match self {
             Self::DeployContract(_)
             | Self::ValidationFeePolicy(_)
-            | Self::ValidationFeePayoutLifecycle(_) => None,
+            | Self::ValidationFeePayoutLifecycle(_)
+            | Self::GlobalDataTriggerPermissionGovernance(_) => None,
+            Self::ContractLifecycleGovernance(proposal) => (proposal.expected_revision > maximum)
+                .then_some(
+                    "contract lifecycle expected revision exceeds the exact JSON integer maximum",
+                ),
+            Self::ContractEmergencyHold(proposal) => {
+                if proposal.expected_revision > maximum {
+                    Some(
+                        "contract emergency-hold expected revision exceeds the exact JSON integer maximum",
+                    )
+                } else if proposal.duration_blocks > maximum {
+                    Some("contract emergency-hold duration exceeds the exact JSON integer maximum")
+                } else {
+                    None
+                }
+            }
             Self::RuntimeUpgrade(proposal) => {
                 if proposal.manifest.start_height > maximum {
                     Some(
@@ -2853,6 +3277,15 @@ impl ProposalKind {
             Self::SorafsProviderGovernance(_) => {
                 crate::governance_fingerprint::SORAFS_PROVIDER_GOVERNANCE_V1
             }
+            Self::ContractLifecycleGovernance(_) => {
+                crate::governance_fingerprint::CONTRACT_LIFECYCLE_GOVERNANCE_V1
+            }
+            Self::ContractEmergencyHold(_) => {
+                crate::governance_fingerprint::CONTRACT_EMERGENCY_HOLD_V1
+            }
+            Self::GlobalDataTriggerPermissionGovernance(_) => {
+                crate::governance_fingerprint::GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1
+            }
         };
         crate::governance_fingerprint::fingerprint(domain, self)
     }
@@ -2886,6 +3319,12 @@ impl ProposalKind {
             Self::DeployContract(proposal) => {
                 GovernanceSubjectPreimageV1::Contract(proposal.contract_address.clone())
             }
+            Self::ContractLifecycleGovernance(proposal) => {
+                GovernanceSubjectPreimageV1::Contract(proposal.contract_address.clone())
+            }
+            Self::ContractEmergencyHold(proposal) => {
+                GovernanceSubjectPreimageV1::Contract(proposal.contract_address.clone())
+            }
             Self::RuntimeUpgrade(proposal) => {
                 GovernanceSubjectPreimageV1::RuntimeUpgrade(proposal.manifest.id())
             }
@@ -2915,6 +3354,9 @@ impl ProposalKind {
             Self::SorafsProviderGovernance(proposal) => {
                 GovernanceSubjectPreimageV1::SorafsProvider(proposal.action.provider_id())
             }
+            Self::GlobalDataTriggerPermissionGovernance(proposal) => {
+                GovernanceSubjectPreimageV1::GlobalDataTriggerPermission(proposal.authority.clone())
+            }
         };
         Ok(crate::governance_fingerprint::fingerprint(
             crate::governance_fingerprint::GOVERNANCE_SUBJECT_ID_V1,
@@ -2924,6 +3366,8 @@ impl ProposalKind {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_types::GovernanceSubjectPreimageV1")]
 enum GovernanceSubjectPreimageV1 {
     #[codec(index = 0)]
     Contract(ContractAddress),
@@ -2945,6 +3389,8 @@ enum GovernanceSubjectPreimageV1 {
     MusubiRegistryPolicy,
     #[codec(index = 9)]
     SorafsProvider(crate::sorafs::capacity::ProviderId),
+    #[codec(index = 10)]
+    GlobalDataTriggerPermission(AccountId),
 }
 
 impl ProposalContentId {
@@ -2957,7 +3403,7 @@ impl ProposalContentId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AccountId, DomainId};
+    use crate::AccountId;
     use iroha_crypto::KeyPair;
     use iroha_crypto::blake2::{
         Blake2bVar,
@@ -2985,6 +3431,114 @@ mod tests {
         let encoded = hash.to_hex();
         let parsed = ContractCodeHash::from_hex_str(&encoded).expect("parse hex");
         assert_eq!(parsed, hash);
+    }
+    #[test]
+    fn contract_lifecycle_and_emergency_fingerprints_are_kind_separated() {
+        let owner = checked_account_id();
+        let network: NetworkId =
+            "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("network id");
+        let address =
+            ContractAddress::derive(&network, &owner, 9, crate::nexus::DataSpaceId::UNIVERSAL)
+                .expect("contract address");
+        let lifecycle =
+            ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+                proposal_operator: owner,
+                contract_address: address.clone(),
+                expected_revision: 1,
+                action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+            });
+        let emergency = ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+            contract_address: address,
+            expected_revision: 1,
+            expected_code_hash: ContractCodeHash::new([7; 32]),
+            incident_digest: [8; 32],
+            reason: "containment".to_owned(),
+            duration_blocks: 10,
+        });
+        assert_ne!(lifecycle.fingerprint(), emergency.fingerprint());
+        assert_eq!(
+            lifecycle.governed_subject_id_v1().expect("subject"),
+            emergency.governed_subject_id_v1().expect("subject")
+        );
+    }
+    #[test]
+    fn global_data_trigger_permission_proposals_are_account_scoped_and_append_only() {
+        assert_eq!(
+            GlobalDataTriggerPermissionGovernanceActionV1::Grant.encode(),
+            0_u32.to_le_bytes()
+        );
+        assert_eq!(
+            GlobalDataTriggerPermissionGovernanceActionV1::Revoke.encode(),
+            1_u32.to_le_bytes()
+        );
+        let authority = checked_account_id();
+        let authority_literal = authority.to_string();
+        let grant = ProposalKind::GlobalDataTriggerPermissionGovernance(
+            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority: authority.clone(),
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Grant,
+            },
+        );
+        let revoke = ProposalKind::GlobalDataTriggerPermissionGovernance(
+            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority,
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Revoke,
+            },
+        );
+
+        assert_ne!(grant.fingerprint(), revoke.fingerprint());
+        assert_eq!(
+            grant.governed_subject_id_v1().expect("grant subject"),
+            revoke.governed_subject_id_v1().expect("revoke subject")
+        );
+        assert_eq!(
+            grant.encode().get(..4),
+            Some(9_u32.to_le_bytes().as_slice()),
+            "the proposal kind must retain its append-only Norito index"
+        );
+        let framed = norito::to_bytes(&grant).expect("encode permission proposal");
+        assert_eq!(
+            norito::decode_from_bytes::<ProposalKind>(&framed).expect("decode permission proposal"),
+            grant
+        );
+        for (proposal, action) in [(&grant, "grant"), (&revoke, "revoke")] {
+            let expected = format!(
+                "{{\"kind\":\"GlobalDataTriggerPermissionGovernance\",\"payload\":{{\"authority\":\"{authority_literal}\",\"action\":{{\"action\":\"{action}\",\"value\":null}}}}}}"
+            );
+            let json = norito::json::to_json(proposal)
+                .expect("encode canonical global data-trigger permission proposal JSON");
+            assert_eq!(json, expected);
+            assert_eq!(
+                norito::json::from_json::<ProposalKind>(&json)
+                    .expect("decode canonical global data-trigger permission proposal JSON"),
+                *proposal
+            );
+        }
+    }
+    #[test]
+    fn emergency_hold_retrospective_action_is_append_only_and_binding_complete() {
+        let action = ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(
+            CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                hold_proposal_content_id: [0x11; 32],
+                hold_governance_attempt_id: [0x22; 32],
+                incident_digest: [0x33; 32],
+                retrospective_finding_root: [0x44; 32],
+            },
+        );
+        let encoded = action.encode();
+        assert_eq!(
+            encoded.get(..4),
+            Some(5_u32.to_le_bytes().as_slice()),
+            "the retrospective action must retain its append-only Norito index"
+        );
+        let framed = norito::to_bytes(&action).expect("encode retrospective action");
+        assert_eq!(
+            norito::decode_from_bytes::<ContractLifecycleGovernanceActionV1>(&framed)
+                .expect("decode retrospective action"),
+            action
+        );
     }
     #[test]
     fn hash_parse_rejects_wrong_length() {
@@ -3088,6 +3642,10 @@ mod tests {
                 ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable,
                 ParliamentNoResultKindV1::ConfirmationJuryCapacityUnavailable,
             ),
+            (
+                ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted,
+                ParliamentNoResultKindV1::RandomnessRedrawBudgetExhausted,
+            ),
         ];
         for (index, (ballot, audit)) in cases.into_iter().enumerate() {
             assert_eq!(ParliamentNoResultKindV1::from(ballot), audit);
@@ -3097,7 +3655,7 @@ mod tests {
                     .expect("ballot failure index fits u32")
                     .to_le_bytes()
             );
-            let expected_audit_index = if index == 5 { 8 } else { index + 2 };
+            let expected_audit_index = if index >= 5 { index + 3 } else { index + 2 };
             assert_eq!(
                 audit.encode(),
                 u32::try_from(expected_audit_index)
@@ -3111,6 +3669,7 @@ mod tests {
         let code_hash = ContractCodeHash::from_hex_str(&"aa".repeat(32)).expect("code hash");
         let abi_hash = ContractAbiHash::from_hex_str(&"bb".repeat(32)).expect("abi hash");
         let proposal = DeployContractProposal {
+            proposal_operator: checked_account_id(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
@@ -3151,16 +3710,109 @@ mod tests {
             ProposalKind::SorafsProviderGovernance(_) => {
                 panic!("unexpected SoraFS provider-governance proposal")
             }
+            ProposalKind::ContractLifecycleGovernance(_) => {
+                panic!("unexpected contract-lifecycle proposal")
+            }
+            ProposalKind::ContractEmergencyHold(_) => {
+                panic!("unexpected contract emergency-hold proposal")
+            }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(_) => {
+                panic!("unexpected global data-trigger permission proposal")
+            }
+        }
+    }
+
+    #[test]
+    fn effect_sensitive_proposals_bind_the_operator_into_both_hashes() {
+        let first_operator = checked_account_id();
+        let second_operator = checked_account_id();
+        assert_ne!(first_operator, second_operator);
+        let contract_address: ContractAddress =
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("contract address");
+        let manifest = RuntimeUpgradeManifest {
+            name: "operator-bound runtime upgrade".to_owned(),
+            description: "operator binding fixture".to_owned(),
+            abi_version: 1,
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
+            start_height: 42,
+            end_height: 99,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let pairs = [
+            (
+                ProposalKind::DeployContract(DeployContractProposal {
+                    proposal_operator: first_operator.clone(),
+                    contract_address: contract_address.clone(),
+                    code_hash: ContractCodeHash::new([0x11; 32]),
+                    abi_hash: ContractAbiHash::new([0x22; 32]),
+                    abi_version: AbiVersion::new(1),
+                    manifest_provenance: None,
+                }),
+                ProposalKind::DeployContract(DeployContractProposal {
+                    proposal_operator: second_operator.clone(),
+                    contract_address: contract_address.clone(),
+                    code_hash: ContractCodeHash::new([0x11; 32]),
+                    abi_hash: ContractAbiHash::new([0x22; 32]),
+                    abi_version: AbiVersion::new(1),
+                    manifest_provenance: None,
+                }),
+            ),
+            (
+                ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+                    proposal_operator: first_operator.clone(),
+                    contract_address: contract_address.clone(),
+                    expected_revision: 1,
+                    action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+                }),
+                ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+                    proposal_operator: second_operator.clone(),
+                    contract_address,
+                    expected_revision: 1,
+                    action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+                }),
+            ),
+            (
+                ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                    proposal_operator: first_operator.clone(),
+                    manifest: manifest.clone(),
+                }),
+                ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                    proposal_operator: second_operator.clone(),
+                    manifest,
+                }),
+            ),
+        ];
+
+        for (first, second) in pairs {
+            assert_eq!(first.proposal_operator_v1(), Some(&first_operator));
+            assert_eq!(second.proposal_operator_v1(), Some(&second_operator));
+            assert_ne!(first.fingerprint(), second.fingerprint());
+            assert_ne!(
+                first.effect_preimage_hash_v1(),
+                second.effect_preimage_hash_v1()
+            );
+            assert_eq!(
+                first.governed_subject_id_v1().expect("first subject"),
+                second.governed_subject_id_v1().expect("second subject")
+            );
         }
     }
 
     #[test]
     fn competing_contract_effects_share_one_governed_subject() {
+        let proposal_operator = checked_account_id();
         let contract_address: ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let first = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: proposal_operator.clone(),
             contract_address: contract_address.clone(),
             code_hash: ContractCodeHash::new([0x11; 32]),
             abi_hash: ContractAbiHash::new([0x22; 32]),
@@ -3168,6 +3820,7 @@ mod tests {
             manifest_provenance: None,
         });
         let second = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator,
             contract_address,
             code_hash: ContractCodeHash::new([0x33; 32]),
             abi_hash: ContractAbiHash::new([0x44; 32]),
@@ -3189,6 +3842,7 @@ mod tests {
     #[test]
     fn deploy_proposal_json_rejects_unknown_payload_fields() {
         let proposal = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: checked_account_id(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
@@ -3265,7 +3919,10 @@ mod tests {
             slsa_attestation: Vec::new(),
             provenance: Vec::new(),
         };
-        let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal { manifest });
+        let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+            proposal_operator: checked_account_id(),
+            manifest,
+        });
         let framed = norito::to_bytes(&payload).expect("encode runtime-upgrade proposal");
         let decoded = norito::decode_from_bytes::<ProposalKind>(&framed)
             .expect("decode runtime-upgrade proposal");
@@ -3290,12 +3947,22 @@ mod tests {
             ProposalKind::SorafsProviderGovernance(_) => {
                 panic!("unexpected SoraFS provider-governance proposal")
             }
+            ProposalKind::ContractLifecycleGovernance(_) => {
+                panic!("unexpected contract-lifecycle proposal")
+            }
+            ProposalKind::ContractEmergencyHold(_) => {
+                panic!("unexpected contract emergency-hold proposal")
+            }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(_) => {
+                panic!("unexpected global data-trigger permission proposal")
+            }
         }
     }
     #[test]
     fn runtime_upgrade_proposal_bounds_number_encoded_heights() {
         let proposal = |start_height, end_height| {
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                proposal_operator: checked_account_id(),
                 manifest: RuntimeUpgradeManifest {
                     name: "bounded runtime upgrade".to_owned(),
                     description: "exact JSON height fixture".to_owned(),
@@ -3342,6 +4009,7 @@ mod tests {
     #[test]
     fn proposal_fingerprint_matches_manual_derivation() {
         let proposal = DeployContractProposal {
+            proposal_operator: checked_account_id(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
@@ -3391,37 +4059,6 @@ mod tests {
         let json = norito::json::to_json(&id).expect("serialize proposal id");
         let decoded: ProposalId = norito::json::from_json(&json).expect("deserialize proposal id");
         assert_eq!(decoded, id);
-    }
-    #[test]
-    fn parliament_bodies_roundtrip() {
-        use std::collections::BTreeMap;
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let members = vec![checked_account_id(), checked_account_id()];
-        let alternates = vec![checked_account_id()];
-        let roster = ParliamentRoster {
-            body: ParliamentBody::RulesCommittee,
-            epoch: 3,
-            members: members.clone(),
-            alternates: alternates.clone(),
-            candidate_count: 3,
-            derived_by: CouncilDerivationKind::Sortition,
-        };
-        let mut rosters = BTreeMap::new();
-        rosters.insert(ParliamentBody::RulesCommittee, roster.clone());
-        let bodies = ParliamentBodies {
-            selection_epoch: 3,
-            rosters,
-        };
-        let framed = norito::to_bytes(&bodies).expect("encode bodies");
-        let decoded =
-            norito::decode_from_bytes::<ParliamentBodies>(&framed).expect("decode bodies");
-        assert_eq!(decoded.selection_epoch, bodies.selection_epoch);
-        let back = decoded
-            .rosters
-            .get(&ParliamentBody::RulesCommittee)
-            .expect("rules roster");
-        assert_eq!(back.members, roster.members);
-        assert_eq!(back.derived_by, roster.derived_by);
     }
     #[test]
     fn canonical_governance_ids_roundtrip_and_reject_legacy_vec_wire() {
@@ -3480,9 +4117,13 @@ mod tests {
         )
     }
     #[test]
-    fn sortition_request_rejects_zero_current_and_reused_pulses() {
+    fn sortition_request_rejects_zero_and_reused_heights() {
         assert_eq!(
             checked_sortition_request(500, 500, 0, 0, None),
+            Err(SortitionRequestErrorV1::ZeroRequestHeight)
+        );
+        assert_eq!(
+            checked_sortition_request(500, 500, 1, 0, None),
             Err(SortitionRequestErrorV1::ZeroPulseHeight)
         );
         assert_eq!(
@@ -3507,6 +4148,13 @@ mod tests {
             Err(SortitionRequestErrorV1::EmptyCandidateSnapshot)
         );
         assert_eq!(
+            checked_sortition_request(MAX_PARLIAMENT_CITIZENS_V1 + 1, 500, 40, 50, None),
+            Err(SortitionRequestErrorV1::CandidateCountExceedsMaximum {
+                candidate_count: MAX_PARLIAMENT_CITIZENS_V1 + 1,
+                maximum: MAX_PARLIAMENT_CITIZENS_V1,
+            })
+        );
+        assert_eq!(
             checked_sortition_request(500, 0, 40, 50, None),
             Err(SortitionRequestErrorV1::ZeroTargetSeats)
         );
@@ -3523,6 +4171,75 @@ mod tests {
         undersubscribed
             .validate(Some(49))
             .expect("valid sortition request revalidates");
+    }
+    #[test]
+    fn empty_sortition_capacity_intent_preserves_every_other_invariant() {
+        let governance_attempt_id = GovernanceAttemptId::new([0x73; 32]);
+        let body = ParliamentBody::PolicyJury;
+        let mut request = SortitionRequestV1 {
+            id: SortitionRequestId::new([0; 32]),
+            governance_attempt_id,
+            body_election_attempt_id: BodyElectionAttemptId::derive_v1(
+                governance_attempt_id,
+                body,
+                0,
+            ),
+            body,
+            candidate_root: [0x74; 32],
+            candidate_count: 0,
+            target_seats: 3,
+            request_height: 40,
+            pulse_height: 50,
+            beacon_session_id: BeaconSessionId::new([0x75; 32]),
+        };
+        request.id = request.canonical_id();
+        assert_eq!(
+            request.validate(None),
+            Err(SortitionRequestErrorV1::EmptyCandidateSnapshot)
+        );
+        request
+            .validate_capacity_intent(None)
+            .expect("canonical empty snapshot remains a valid capacity intent");
+
+        for (mut invalid, expected) in [
+            (
+                SortitionRequestV1 {
+                    target_seats: 0,
+                    ..request
+                },
+                SortitionRequestErrorV1::ZeroTargetSeats,
+            ),
+            (
+                SortitionRequestV1 {
+                    target_seats: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1 + 1,
+                    ..request
+                },
+                SortitionRequestErrorV1::TargetSeatsExceedMaximum {
+                    target_seats: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1 + 1,
+                    maximum: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
+                },
+            ),
+            (
+                SortitionRequestV1 {
+                    request_height: 0,
+                    ..request
+                },
+                SortitionRequestErrorV1::ZeroRequestHeight,
+            ),
+            (
+                SortitionRequestV1 {
+                    pulse_height: request.request_height,
+                    ..request
+                },
+                SortitionRequestErrorV1::PulseNotStrictlyFuture {
+                    request_height: request.request_height,
+                    pulse_height: request.request_height,
+                },
+            ),
+        ] {
+            invalid.id = invalid.canonical_id();
+            assert_eq!(invalid.validate_capacity_intent(None), Err(expected));
+        }
     }
     #[test]
     fn sortition_request_rejects_zero_digest_bindings() {
@@ -3594,6 +4311,55 @@ mod tests {
                 .expect("decode body-election attempt"),
             attempt
         );
+
+        let mut invalid_request = request;
+        invalid_request.candidate_count += 1;
+        assert!(matches!(
+            BodyElectionAttemptV1::try_new(
+                request.body_election_attempt_id,
+                request.governance_attempt_id,
+                2,
+                invalid_request,
+                BodyElectionAttemptStatusV1::AwaitingPulse,
+            ),
+            Err(BodyElectionAttemptErrorV1::InvalidSortitionRequest(
+                SortitionRequestErrorV1::NonCanonicalIdentifier
+            ))
+        ));
+
+        let sequence = MAX_PARLIAMENT_SORTITION_RETRIES_V1 + 1;
+        let governance_attempt_id = request.governance_attempt_id;
+        let body_election_attempt_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::PolicyJury,
+            sequence,
+        );
+        let request = SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            body_election_attempt_id,
+            ParliamentBody::PolicyJury,
+            [0x36; 32],
+            500,
+            500,
+            40,
+            50,
+            BeaconSessionId::new([0x35; 32]),
+            None,
+        )
+        .expect("structurally valid over-limit request");
+        assert_eq!(
+            BodyElectionAttemptV1::try_new(
+                body_election_attempt_id,
+                governance_attempt_id,
+                sequence,
+                request,
+                BodyElectionAttemptStatusV1::AwaitingPulse,
+            ),
+            Err(BodyElectionAttemptErrorV1::RetryLimitExceeded {
+                sequence,
+                maximum: MAX_PARLIAMENT_SORTITION_RETRIES_V1,
+            })
+        );
     }
     #[test]
     fn parliament_body_v1_includes_every_separate_body() {
@@ -3646,6 +4412,20 @@ mod tests {
                 original_seats: 2
             })
         ));
+        let privacy_unsafe = ParliamentAggregateTallyV1 {
+            original_seats: 3,
+            accepted_ballots: 2,
+            aye: 1,
+            nay: 1,
+            abstain: 0,
+        };
+        assert_eq!(
+            privacy_unsafe.validate(),
+            Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: 2,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            })
+        );
     }
     #[test]
     fn parliament_decision_counts_abstain_for_quorum_and_requires_aye_majority() {
@@ -3682,14 +4462,22 @@ mod tests {
             ParliamentAggregateOutcomeV1::NoQuorum
         );
         assert_eq!(
-            ParliamentAggregateTallyV1::default()
-                .decision()
-                .expect("zero-seat tally is defined"),
-            ParliamentAggregateOutcomeV1::NoQuorum
+            ParliamentAggregateTallyV1::default().decision(),
+            Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: 0,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            })
         );
     }
     #[test]
     fn confirmation_margin_is_strictly_below_five_percent() {
+        assert_eq!(
+            ParliamentAggregateTallyV1::default().requires_confirmation(),
+            Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: 0,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            })
+        );
         let below_five = ParliamentAggregateTallyV1 {
             original_seats: 41,
             accepted_ballots: 41,
@@ -3713,11 +4501,6 @@ mod tests {
             !exactly_five
                 .requires_confirmation()
                 .expect("well-formed exact-boundary tally")
-        );
-        assert!(
-            !ParliamentAggregateTallyV1::default()
-                .requires_confirmation()
-                .expect("zero denominator is defined")
         );
     }
     #[test]
@@ -3949,15 +4732,15 @@ mod tests {
                     outcome,
                 }),
             }],
-            policy_version: 7,
+            policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
             effect_preimage_hash: [0x6F; 32],
             expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
                 subject_id: [0x70; 32],
                 version: 3,
                 head_root: [0x71; 32],
             }),
-            certified_at_height: 10_000,
-            enact_at_height: 10_001,
+            certified_at_height: result_height,
+            enact_at_height: result_height + 1,
         };
         let bytes = norito::to_bytes(&certificate).expect("encode GovernanceCertificateV1");
         assert_eq!(
@@ -3968,6 +4751,128 @@ mod tests {
         certificate
             .validate()
             .expect("wide Policy Jury approval is a complete structural certificate");
+
+        let mut delayed_certificate = certificate.clone();
+        delayed_certificate.certified_at_height += 1;
+        delayed_certificate.enact_at_height += 1;
+        assert_eq!(
+            delayed_certificate.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle),
+            "certification must be atomic with the final body result"
+        );
+
+        let mut unsupported_policy = certificate.clone();
+        unsupported_policy.policy_version = PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 + 1;
+        assert_eq!(
+            unsupported_policy.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        );
+
+        let mut zero_version_head = certificate.clone();
+        let GovernanceExpectedHeadV1::Present(ref mut head) = zero_version_head.expected_head
+        else {
+            unreachable!("fixture uses a present compare-and-set head")
+        };
+        head.version = 0;
+        assert_eq!(
+            zero_version_head.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidExpectedHead)
+        );
+
+        let mut over_limit_attempt = certificate.clone();
+        over_limit_attempt.governance_attempt_sequence =
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1;
+        over_limit_attempt.governance_attempt_id = GovernanceAttemptId::derive_v1(
+            over_limit_attempt.proposal_content_id,
+            over_limit_attempt.governance_attempt_sequence,
+        );
+        assert_eq!(
+            over_limit_attempt.validate(),
+            Err(GovernanceCertificateErrorV1::RetryLimitExceeded)
+        );
+
+        let mut impossible_seat_count = certificate.clone();
+        impossible_seat_count.body_bindings[0].original_seats = impossible_seat_count.body_bindings
+            [0]
+        .sortition_request
+        .target_seats
+            + 1;
+        assert_eq!(
+            impossible_seat_count.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidSeatCount)
+        );
+
+        let mut ballot_predates_sortition = certificate.clone();
+        let request_pulse_height = ballot_predates_sortition.body_bindings[0]
+            .sortition_request
+            .pulse_height;
+        ballot_predates_sortition.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .registered_at_height = request_pulse_height;
+        assert_eq!(
+            ballot_predates_sortition.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        );
+
+        let mut emergency = certificate.clone();
+        emergency.risk_tier = RiskTierV1::Emergency;
+        assert_eq!(
+            emergency.validate(),
+            Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold)
+        );
+        let below_emergency_threshold_tally = ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 334,
+            aye: 333,
+            nay: 1,
+            abstain: 0,
+        };
+        emergency.body_bindings[0].result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            below_emergency_threshold_tally,
+            outcome,
+            result_height,
+        );
+        emergency.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .tally = below_emergency_threshold_tally;
+        assert_eq!(
+            emergency.validate(),
+            Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold),
+            "one aye below two-thirds of original seats must reject an emergency hold"
+        );
+        let emergency_tally = ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 334,
+            aye: 334,
+            nay: 0,
+            abstain: 0,
+        };
+        let emergency_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            emergency_tally,
+            outcome,
+            result_height,
+        );
+        emergency.body_bindings[0].result_root = emergency_root;
+        emergency.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .tally = emergency_tally;
+        emergency
+            .validate()
+            .expect("exact two-thirds original-seat aye threshold must approve emergency hold");
 
         let mut underprovisioned_commitment_window = certificate.clone();
         underprovisioned_commitment_window.body_bindings[0]
@@ -4166,7 +5071,7 @@ mod tests {
             [0x86; 32],
             500,
             500,
-            1_801,
+            1_800,
             1_802,
             BeaconSessionId::new([0x66; 32]),
             None,
@@ -4238,16 +5143,61 @@ mod tests {
             confirmation_ballot.outcome,
             confirmation.result_height,
         );
+        let confirmation_result_height = confirmation.result_height;
         narrow.body_bindings.push(confirmation);
+        narrow.certified_at_height = confirmation_result_height;
+        narrow.enact_at_height = confirmation_result_height + 1;
         narrow
             .validate()
             .expect("narrow Policy Jury approval has a fresh Confirmation Jury result");
 
+        let mut delayed_initial_confirmation = narrow.clone();
+        let confirmation = &mut delayed_initial_confirmation.body_bindings[1];
+        let request = confirmation.sortition_request;
+        confirmation.sortition_request = SortitionRequestV1::try_new_canonical(
+            request.governance_attempt_id,
+            request.body_election_attempt_id,
+            request.body,
+            request.candidate_root,
+            request.candidate_count,
+            request.target_seats,
+            request.request_height + 1,
+            request.pulse_height,
+            request.beacon_session_id,
+            None,
+        )
+        .expect("one-block-delayed initial Confirmation request is structurally valid");
+        confirmation.sortition_request_id = confirmation.sortition_request.id;
+        assert_eq!(
+            delayed_initial_confirmation.validate(),
+            Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
+            "sequence-zero Confirmation sortition must be atomic with the Policy result"
+        );
+
         let policy_pulse_id = narrow.body_bindings[0].beacon_pulse_id;
-        narrow.body_bindings[1].beacon_pulse_id = policy_pulse_id;
+        let confirmation = &mut narrow.body_bindings[1];
+        let request = confirmation.sortition_request;
+        let different_session_id = BeaconSessionId::new([0x97; 32]);
+        confirmation.sortition_request = SortitionRequestV1::try_new_canonical(
+            request.governance_attempt_id,
+            request.body_election_attempt_id,
+            request.body,
+            request.candidate_root,
+            request.candidate_count,
+            request.target_seats,
+            request.request_height,
+            request.pulse_height,
+            different_session_id,
+            None,
+        )
+        .expect("different-session Confirmation request is structurally valid");
+        confirmation.sortition_request_id = confirmation.sortition_request.id;
+        confirmation.beacon_session_id = different_session_id;
+        confirmation.beacon_pulse_id = policy_pulse_id;
         assert_eq!(
             narrow.validate(),
-            Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch)
+            Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
+            "Confirmation must use a fresh pulse id even when the session id differs"
         );
     }
 
@@ -4439,3 +5389,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_types_schema_tests;

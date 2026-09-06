@@ -1,6 +1,6 @@
 # Security Baseline & PQ Readiness (soranet-pop-m0, SN15-M0-12)
 
-- **TLS/ECH:** Store cert/ECH material in HSM-backed vault entries
+- **TLS/ECH:** Store cert/ECH material in access-controlled vault entries
   `vault://soranet/soranet-pop-m0/tls` and `.../ech`; rotate quarterly with
   SRCv2 dual-sig (Ed25519 + ML-DSA) and record attestation hashes in
   `ops_summary.json`.

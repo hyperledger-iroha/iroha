@@ -207,6 +207,93 @@ def test_connect_uri_rejects_duplicate_and_substituted_identity() -> None:
         connect.parse_connect_uri(f"{preview.wallet_uri}&chain_id=legacy")
 
 
+def test_connect_uri_accepts_only_the_exact_v1_preview_schema() -> None:
+    preview = connect.create_connect_session_preview(
+        network_id=_network(),
+        nonce=bytes(range(0xA0, 0xB0)),
+        app_key_pair=_key_pair(),
+    )
+
+    with pytest.raises(ValueError, match="exactly 1"):
+        connect.parse_connect_uri(preview.wallet_uri.replace("v=1", "v=2"))
+    with pytest.raises(ValueError, match="unsupported"):
+        connect.parse_connect_uri(f"{preview.wallet_uri}&token=discarded")
+    with pytest.raises(ValueError, match="fragment"):
+        connect.parse_connect_uri(f"{preview.wallet_uri}#ignored")
+    with pytest.raises(ValueError, match="exactly 1"):
+        connect.build_connect_uri(
+            connect.ConnectUri(
+                sid=preview.sid_base64url,
+                network_id=preview.network_id,
+                app_public_key=preview.app_key_pair.public_key,
+                nonce=preview.nonce,
+                version=2,
+            )
+        )
+
+
+def test_connect_secret_containers_redact_and_validate_at_construction() -> None:
+    key_pair = _key_pair()
+    assert key_pair.private_key.hex() not in repr(key_pair)
+    assert key_pair.public_key.hex() in repr(key_pair)
+    with pytest.raises(ValueError, match="does not match"):
+        connect.ConnectKeyPair(
+            private_key=key_pair.private_key,
+            public_key=bytes([0x99]) * 32,
+        )
+    with pytest.raises(TypeError, match="bytes-like"):
+        connect.ConnectKeyPair(  # type: ignore[arg-type]
+            private_key=32,
+            public_key=key_pair.public_key,
+        )
+    with pytest.raises(TypeError, match="ConnectKeyPair"):
+        connect.create_connect_session_preview(
+            network_id=_network(),
+            app_key_pair=object(),  # type: ignore[arg-type]
+        )
+
+    keys = connect.ConnectSessionKeys(
+        app_to_wallet=bytes([0x81]) * 32,
+        wallet_to_app=bytes([0x91]) * 32,
+    )
+    assert "81" * 32 not in repr(keys)
+    assert "91" * 32 not in repr(keys)
+    with pytest.raises(ValueError, match="distinct"):
+        connect.ConnectSessionKeys(
+            app_to_wallet=bytes([0x81]) * 32,
+            wallet_to_app=bytes([0x81]) * 32,
+        )
+
+    tokens = connect.ConnectPreviewTokens(
+        wallet=_connect_token(0x62),
+        app=_connect_token(0x61),
+        management=_connect_token(0x63),
+        relay=_connect_token(0x64),
+    )
+    for token in (tokens.wallet, tokens.app, tokens.management, tokens.relay):
+        assert token not in repr(tokens)
+
+
+def test_native_connect_key_generation_does_not_derive_the_public_key_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountingCodec:
+        generated = 0
+
+        def generate_connect_keypair(self):
+            self.generated += 1
+            return bytes([0x41]) * 32, bytes([0x51]) * 32
+
+    codec = CountingCodec()
+    monkeypatch.setattr(connect, "_require_codec_module", lambda: codec)
+
+    pair = connect.generate_connect_keypair()
+
+    assert pair.private_key == bytes([0x41]) * 32
+    assert pair.public_key == bytes([0x51]) * 32
+    assert codec.generated == 1
+
+
 def test_bootstrap_connect_preview_session_registers_and_extracts_tokens() -> None:
     client = FakeToriiConnectClient()
 
@@ -229,12 +316,11 @@ def test_bootstrap_connect_preview_session_registers_and_extracts_tokens() -> No
     ]
     assert result.session is not None
     assert result.session.sid == result.preview.sid_base64url
-    assert result.tokens == connect.ConnectPreviewTokens(
-        wallet=_connect_token(0x62),
-        app=_connect_token(0x61),
-        management=_connect_token(0x63),
-        relay=_connect_token(0x64),
-    )
+    assert result.tokens is not None
+    assert result.tokens.wallet == _connect_token(0x62)
+    assert result.tokens.app == _connect_token(0x61)
+    assert result.tokens.management == _connect_token(0x63)
+    assert result.tokens.relay == _connect_token(0x64)
 
 
 def test_bootstrap_connect_preview_session_can_skip_registration() -> None:
@@ -309,6 +395,16 @@ def test_connect_session_response_rejects_extensions_and_wallet_substitution() -
     }
     info = FakeToriiConnectClient().create_connect_session(payload)
     assert isinstance(info, connect.ConnectSessionInfo)
+    rendered = repr(info)
+    for secret in (
+        info.wallet_uri,
+        info.app_uri,
+        info.app_token,
+        info.wallet_token,
+        info.management_token,
+        info.relay_token,
+    ):
+        assert secret not in rendered
     response = info.as_dict()
     response["ttl"] = "30"
     with pytest.raises(ValueError, match="inexact field set"):
@@ -382,6 +478,95 @@ def test_connect_frame_rejects_direction_substitution_and_zero_sequence() -> Non
             direction=connect.ConnectDirection.APP_TO_WALLET,
             sequence=0,
             control=connect.ConnectControlPing(nonce=1),
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1", 0, 1 << 64])
+def test_connect_replay_counters_reject_coercion_and_out_of_range_values(
+    value: object,
+) -> None:
+    sid = bytes([1]) * 32
+    payload = connect.ConnectSignResultErrPayload(code="denied", message="denied")
+    keys = connect.ConnectSessionKeys(
+        app_to_wallet=bytes([0x81]) * 32,
+        wallet_to_app=bytes([0x91]) * 32,
+    )
+    constructors = (
+        lambda: connect.ConnectFrame(
+            sid=sid,
+            direction=connect.ConnectDirection.APP_TO_WALLET,
+            sequence=value,  # type: ignore[arg-type]
+            control=connect.ConnectControlPing(nonce=1),
+        ),
+        lambda: connect.ConnectEnvelope(sequence=value, payload=payload),  # type: ignore[arg-type]
+        lambda: connect.ConnectSessionState(
+            sid=sid,
+            next_sequence_app_to_wallet=value,  # type: ignore[arg-type]
+        ),
+        lambda: connect.ConnectSession(
+            sid=sid,
+            keys=keys,
+            app_initial_sequence=value,  # type: ignore[arg-type]
+        ),
+        lambda: connect.seal_connect_payload(
+            bytes([2]) * 32,
+            sid,
+            direction=connect.ConnectDirection.APP_TO_WALLET,
+            sequence=value,  # type: ignore[arg-type]
+            payload=payload,
+        ),
+    )
+
+    for constructor in constructors:
+        with pytest.raises((TypeError, ValueError), match="integer"):
+            constructor()
+
+
+def test_connect_session_state_from_dict_rejects_boolean_counters() -> None:
+    payload = connect.ConnectSessionState(sid=bytes([1]) * 32).to_dict()
+    payload["next_sequence"]["app_to_wallet"] = True
+
+    with pytest.raises(TypeError, match="integer"):
+        connect.ConnectSessionState.from_dict(payload)
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1", -1, 1 << 16])
+def test_connect_control_codes_are_exact_u16_values(value: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="integer"):
+        connect.ConnectControlReject(
+            code=value,  # type: ignore[arg-type]
+            code_id="REJECTED",
+            reason="denied",
+        )
+    with pytest.raises((TypeError, ValueError), match="integer"):
+        connect.ConnectControlClose(
+            role=connect.ConnectRole.APP,
+            code=value,  # type: ignore[arg-type]
+            reason="closed",
+            retryable=False,
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1", -1, 1 << 64])
+def test_connect_control_nonces_are_exact_u64_values(value: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="integer"):
+        connect.ConnectControlPing(nonce=value)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError), match="integer"):
+        connect.ConnectControlPong(nonce=value)  # type: ignore[arg-type]
+
+
+def test_connect_control_nonce_zero_is_canonical() -> None:
+    assert connect.ConnectControlPing(nonce=0).nonce == 0
+    assert connect.ConnectControlPong(nonce=0).nonce == 0
+
+
+def test_connect_close_retryable_requires_an_exact_boolean() -> None:
+    with pytest.raises(TypeError, match="boolean"):
+        connect.ConnectControlClose(
+            role=connect.ConnectRole.APP,
+            code=1,
+            reason="closed",
+            retryable=1,  # type: ignore[arg-type]
         )
 
 

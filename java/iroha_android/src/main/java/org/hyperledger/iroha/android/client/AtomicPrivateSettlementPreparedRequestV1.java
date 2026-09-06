@@ -1,9 +1,11 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -56,12 +58,38 @@ public final class AtomicPrivateSettlementPreparedRequestV1 implements AutoClose
       throw new IllegalArgumentException(
           "atomic private settlement request has the wrong top-level fields");
     }
+    requireIntegerOnlyNoritoJson(parsed);
     final byte[] canonical = JsonEncoder.encode(parsed).getBytes(StandardCharsets.UTF_8);
     if (canonical.length > operation.maximumRequestBytes()) {
       throw new IllegalArgumentException(
           "canonical atomic private settlement request exceeds its route limit");
     }
     return new AtomicPrivateSettlementPreparedRequestV1(operation, canonical);
+  }
+
+  private static void requireIntegerOnlyNoritoJson(final Object value) {
+    if (value instanceof Map<?, ?> map) {
+      for (final Object child : map.values()) {
+        requireIntegerOnlyNoritoJson(child);
+      }
+      return;
+    }
+    if (value instanceof List<?> list) {
+      for (final Object child : list) {
+        requireIntegerOnlyNoritoJson(child);
+      }
+      return;
+    }
+    if (value instanceof BigInteger integer && integer.bitLength() > 256) {
+      throw new IllegalArgumentException(
+          "atomic private settlement request contains an oversized integer");
+    }
+    if (value instanceof java.math.BigDecimal
+        || value instanceof Double
+        || value instanceof Float) {
+      throw new IllegalArgumentException(
+          "atomic private settlement request must use the integer-only Norito JSON profile");
+    }
   }
 
   /** Exact operation to which this request is bound. */

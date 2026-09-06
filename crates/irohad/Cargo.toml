@@ -21,10 +21,16 @@ categories.workspace = true
 workspace = true
 
 [features]
-default = ["daemon"]
+# Shipping daemon builds retain the Core accelerator. Test/recovery corridors
+# can select `daemon` explicitly to exercise identical node semantics portably.
+default = ["daemon", "iroha_core/simd"]
 daemon = [
     "telemetry",
     "schema-endpoint",
+    "gost",
+    "sm",
+    "dag-recovery-verify",
+    "expensive-telemetry",
     "iroha_core/node",
     "iroha_torii/node-api",
     "iroha_crypto/consensus",
@@ -41,7 +47,10 @@ accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cud
 # enabled by a production/default build; `iroha_test_network` builds a separate
 # daemon binary in an isolated target directory when an adversarial network
 # test explicitly requests it.
-test-network-message-control = ["iroha_core/test-network-native-amx-fault-injection"]
+test-network-message-control = [
+    "iroha_core/test-network-native-amx-fault-injection",
+    "iroha_torii/test-network-private-settlement-route-control",
+]
 # Dedicated non-shipping daemon used only by the four-validator Parliament
 # integration corridor. It injects proof-valid beacon and TLE shares for this
 # daemon's exact roster seat and does not alter consensus verification.
@@ -53,11 +62,28 @@ sm = [
     "iroha_crypto/sm",
     "iroha_data_model/sm",
     "iroha_config/sm",
+    "iroha_genesis/sm",
+    "iroha_telemetry/sm",
+    "iroha_torii/sm",
+]
+gost = [
+    "iroha_core/gost",
+    "iroha_crypto/gost",
+    "iroha_data_model/gost",
+    "iroha_config/gost",
+    "iroha_torii/gost",
+]
+sm-ffi-openssl = [
+    "sm",
+    "iroha_config/sm-ffi-openssl",
+    "iroha_core/sm-ffi-openssl",
+    "iroha_crypto/sm-ffi-openssl",
+    "iroha_genesis/sm-ffi-openssl",
 ]
 beep = ["ivm/beep"]
 ## Enable deep DAG recovery diagnostics at startup.
 ## Recomputes per-block DAG fingerprints and compares with persisted sidecars.
-## Adds optional deps and is disabled by default to keep the daemon lean.
+## Adds optional deps and is included in the portable shipping daemon.
 dag-recovery-verify = ["dep:nonzero_ext"]
 # Support lightweight telemetry, including diagnostics
 telemetry = [
@@ -120,6 +146,7 @@ iroha_telemetry = { workspace = true, optional = true }
 iroha_config = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false }
 iroha_torii = { workspace = true, default-features = false }
+iroha_torii_shared = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_version = { workspace = true }
 ivm = { workspace = true }

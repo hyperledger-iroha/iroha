@@ -390,6 +390,24 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
         if self.matches_current_ready_record(context, address, digest, coordinator) {
             return true;
         }
+        self.matches_current_parked_record(context, address, digest, coordinator, None)
+    }
+
+    /// Compare the exact volatile wait installed after durable refanout.
+    ///
+    /// An exhaustive live-work census may run while its already-authenticated
+    /// CertifiedServe or ProducerTurn owns the coordinator's sole lease.
+    /// Finalization passes `None`, preserving its idle-only boundary; the two
+    /// execution corridors pass their exact expected lease and cannot
+    /// authorize any other active work class.
+    pub(super) fn matches_current_parked_record(
+        &self,
+        context: super::LifecycleContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+        expected_active_lease: Option<&super::TurnLease>,
+    ) -> bool {
         let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
         else {
             return false;
@@ -406,7 +424,13 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
         let expected_source = super::WaitSource::Recovery(digest);
         self.validates_at_raw_context(context, address, digest)
             && coordinator.fault.is_none()
-            && coordinator.active_lease.is_none()
+            && coordinator.active_lease.as_ref() == expected_active_lease
+            && expected_active_lease.is_none_or(|lease| {
+                matches!(
+                    lease.work_class(),
+                    LifecycleWorkClass::CertifiedServe | LifecycleWorkClass::ProducerTurn
+                )
+            })
             && coordinator.active_context == context
             && coordinator.high_water >= address.ordinal
             && record.key == self.candidate.key
@@ -2568,8 +2592,11 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
     ) -> bool {
         candidates.get(&self.candidate.key) == Some(&self.candidate)
     }
-    /// Compare the exact Ready Store coordinator record and its complete indexes.
-    pub(super) fn matches_current_ready_record(
+    /// Compare a Store coordinator record's state-independent shape and indexes.
+    ///
+    /// Callers must authenticate the row's Ready or exact reducer-fence-woken
+    /// state separately before relying on this predicate.
+    pub(super) fn matches_current_record_shape(
         &self,
         context: super::LifecycleContext,
         address: super::work_registry::ConcreteWorkAddress,
@@ -2595,7 +2622,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && record.ordinal == address.ordinal
             && record.work_class == LifecycleWorkClass::Store
             && record.stage == self.candidate.stage
-            && record.state == super::LifecycleState::Ready
             && record.physical_slots == physical
             && record.episode.slot_universe == universe
             && record.episode.consumed_slots == consumed
@@ -2603,6 +2629,20 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && metadata.matches_admission(&self.candidate)
             && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+    }
+    /// Compare the exact Ready Store coordinator record and its complete indexes.
+    pub(super) fn matches_current_ready_record(
+        &self,
+        context: super::LifecycleContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+    ) -> bool {
+        self.matches_current_record_shape(context, address, digest, coordinator)
+            && coordinator
+                .records
+                .get(&address.ordinal)
+                .is_some_and(|record| record.state == super::LifecycleState::Ready)
             && coordinator.ready_index.contains(&address.ordinal)
     }
 }

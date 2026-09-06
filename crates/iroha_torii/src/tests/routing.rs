@@ -25,7 +25,7 @@ mod tests {
         metadata::Metadata,
         sorafs::capacity::ProviderId,
     };
-    use iroha_telemetry::metrics::{Metrics, NexusStatus};
+    use iroha_telemetry::metrics::Metrics;
     use std::{
         io::Cursor,
         sync::{Arc, Mutex},
@@ -173,82 +173,6 @@ mod tests {
             assert!(paths.contains_key("/v1/aliases/resolve-index"));
         });
     }
-    #[test]
-    fn status_tail_accesses_field() {
-        let policy = ActualLaneRoutingPolicy {
-            default_lane: LaneId::new(0),
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![iroha_config::parameters::actual::LaneRoutingRule {
-                lane: LaneId::new(3),
-                dataspace: Some(DataSpaceId::new(6647857470246403404)),
-                matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
-                    account: None,
-                    instruction: Some("smartcontract::deploy".into()),
-                    description: Some("Route contract deployments to private is".into()),
-                },
-            }],
-        };
-        let metrics = Metrics::default();
-        let mut status = Status::from(&metrics);
-        status.nexus = Some(NexusStatus::from_routing_policy(&policy));
-        status.observed_at_ms = 1_000;
-        status.queue_queued = 3;
-        status.queue_inflight = 2;
-        status.last_block_committed_at_ms = 900;
-        status.last_non_empty_block_committed_at_ms = 800;
-        status.time_since_last_block_ms = 100;
-        status.time_since_last_non_empty_block_ms = 200;
-        status.last_rejection_at_ms = Some(1_234);
-        status.txs_rejected_recent_5m = 7;
-        let peers = status_value_by_path(&status, "peers").unwrap();
-        assert_eq!(peers, json_value(&0u64));
-        let observed = status_value_by_path(&status, "observed_at_ms").unwrap();
-        assert_eq!(observed, json_value(&1_000u64));
-        let queued = status_value_by_path(&status, "queue_queued").unwrap();
-        assert_eq!(queued, json_value(&3u64));
-        let inflight = status_value_by_path(&status, "queue_inflight").unwrap();
-        assert_eq!(inflight, json_value(&2u64));
-        let last_block = status_value_by_path(&status, "last_block_committed_at_ms").unwrap();
-        assert_eq!(last_block, json_value(&900u64));
-        let last_non_empty =
-            status_value_by_path(&status, "last_non_empty_block_committed_at_ms").unwrap();
-        assert_eq!(last_non_empty, json_value(&800u64));
-        let since_block = status_value_by_path(&status, "time_since_last_block_ms").unwrap();
-        assert_eq!(since_block, json_value(&100u64));
-        let since_non_empty =
-            status_value_by_path(&status, "time_since_last_non_empty_block_ms").unwrap();
-        assert_eq!(since_non_empty, json_value(&200u64));
-        let last_rejection = status_value_by_path(&status, "last_rejection_at_ms").unwrap();
-        assert_eq!(last_rejection, json_value(&Some(1_234u64)));
-        let rejected_recent = status_value_by_path(&status, "txs_rejected_recent_5m").unwrap();
-        assert_eq!(rejected_recent, json_value(&7u64));
-        let secs = status_value_by_path(&status, "uptime/secs").unwrap();
-        assert_eq!(secs, json_value(&0u64));
-        let crypto = status_value_by_path(&status, "crypto").unwrap();
-        assert!(crypto.is_object());
-        let sm_helpers = status_value_by_path(&status, "crypto/sm_helpers_available").unwrap();
-        assert_eq!(sm_helpers, json_value(&cfg!(feature = "sm")));
-        let sm_preview =
-            status_value_by_path(&status, "crypto/sm_openssl_preview_enabled").unwrap();
-        assert_eq!(sm_preview, json_value(&false));
-        let governance = status_value_by_path(&status, "governance").unwrap();
-        assert!(governance.is_object());
-        let nexus = status_value_by_path(&status, "nexus").unwrap();
-        assert!(nexus.is_object());
-        let policy = status_value_by_path(&status, "nexus/routing_policy").unwrap();
-        assert!(policy.is_object());
-        let rules = status_value_by_path(&status, "nexus/routing_policy/rules").unwrap();
-        let rules = rules.as_array().expect("routing rules array");
-        assert_eq!(rules.len(), 1);
-        assert_eq!(
-            rules[0]
-                .get("matcher")
-                .and_then(|matcher| matcher.get("instruction"))
-                .and_then(norito::json::Value::as_str),
-            Some("smartcontract::deploy")
-        );
-        assert!(status_value_by_path(&status, "sorafs_micropayments").is_none());
-    }
     #[tokio::test]
     async fn status_response_bounds_unavailable_fresh_block_counter_sync() {
         let metrics = Arc::new(Metrics::default());
@@ -260,10 +184,8 @@ mod tests {
         let error = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            None,
             ActualLaneRoutingPolicy::default(),
             4_274,
-            None,
         )
         .await
         .expect_err("an unavailable telemetry actor must fail status retriably");
@@ -274,22 +196,6 @@ mod tests {
                 ..
             }
         ));
-    }
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn status_tail_rejects_removed_sorafs_micropayments_segment() {
-        let telemetry = MaybeTelemetry::for_tests();
-        let error = super::handle_status(
-            &telemetry,
-            None,
-            Some("sorafs_micropayments"),
-            ActualLaneRoutingPolicy::default(),
-            0,
-            None,
-        )
-        .await
-        .expect_err("removed status segment must not resolve");
-        assert!(matches!(error, Error::StatusSegmentNotFound(_)));
     }
     #[cfg(feature = "telemetry")]
     #[tokio::test]
@@ -312,10 +218,8 @@ mod tests {
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            None,
             policy,
             0,
-            None,
         )
         .await
         .expect("status succeeds");
@@ -354,66 +258,38 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn status_root_and_tail_include_universal_offline_capability() {
-        use http_body_util::BodyExt;
-        use iroha_torii_shared::offline_api::OfflineStatus;
-        let telemetry = MaybeTelemetry::for_tests();
-        let offline = OfflineStatus {
-            cash_handoff_capability: "cash_handoff_v1".to_owned(),
-            required_bridge_abi_version: 23,
-            max_hops: 8,
-            ready: true,
-        };
-        let response = super::handle_status(
-            &telemetry,
-            Some(axum::http::HeaderValue::from_static("application/json")),
-            None,
-            ActualLaneRoutingPolicy::default(),
-            0,
-            Some(offline.clone()),
-        )
-        .await
-        .expect("status succeeds");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect status body")
-            .to_bytes();
-        let payload: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode status payload");
-        let projected = payload.get("offline").expect("offline projection");
-        assert_eq!(
-            projected
-                .get("cash_handoff_capability")
-                .and_then(norito::json::Value::as_str),
-            Some("cash_handoff_v1")
+    async fn status_exact_probes_return_independent_json_scalars() {
+        let metrics = Arc::new(Metrics::default());
+        metrics.block_height.inc_by(4_193);
+        let telemetry = MaybeTelemetry::from_profile(
+            Some(Telemetry::new(metrics, true)),
+            TelemetryProfile::Full,
         );
-        assert_eq!(
-            projected
-                .get("required_bridge_abi_version")
-                .and_then(norito::json::Value::as_u64),
-            Some(22)
-        );
-        let response = super::handle_status(
-            &telemetry,
-            None,
-            Some("offline/cash_handoff_capability"),
-            ActualLaneRoutingPolicy::default(),
-            0,
-            Some(offline),
-        )
-        .await
-        .expect("offline status tail succeeds");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect status tail")
-            .to_bytes();
-        let payload: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode status tail");
-        assert_eq!(payload.as_str(), Some("cash_handoff_v1"));
+        for (response, expected) in [
+            (
+                super::handle_status_blocks(&telemetry, 4_274)
+                    .expect("block-height probe succeeds without a telemetry sync"),
+                4_274,
+            ),
+            (
+                super::handle_status_peers(&telemetry, 7)
+                    .expect("peer-count probe succeeds without a telemetry sync"),
+                7,
+            ),
+        ] {
+            assert_eq!(
+                response.headers().get(axum::http::header::CONTENT_TYPE),
+                Some(&axum::http::HeaderValue::from_static("application/json"))
+            );
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect exact status response")
+                .to_bytes();
+            let value: u64 = norito::json::from_slice(&body).expect("decode status scalar");
+            assert_eq!(value, expected);
+        }
     }
     #[cfg(feature = "telemetry")]
     #[tokio::test]
@@ -712,16 +588,14 @@ mod tests {
     #[tokio::test]
     async fn status_accept_header_returns_codec_norito() {
         let telemetry = MaybeTelemetry::for_tests();
-        let expected = Status::from(telemetry.metrics().await);
+        let expected = telemetry.metrics().await.status_snapshot();
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static(
                 crate::utils::NORITO_MIME_TYPE,
             )),
-            None,
             ActualLaneRoutingPolicy::default(),
             0,
-            None,
         )
         .await
         .expect("status handler");

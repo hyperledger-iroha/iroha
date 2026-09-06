@@ -38,7 +38,7 @@ use iroha::{
         prelude::{Name, QueryBuilderExt},
         privacy::{
             IrohaZkX509StarkP256StatementV1, PrivacyActiveLifecycleV1,
-            PrivacyCapabilityActivationStateV1, PrivacyCapabilityReadinessV1,
+            PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyOperationSchemaV1,
             PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
@@ -78,7 +78,7 @@ use tokio::time::{Instant, sleep, timeout};
 const RELEASE_TEST_NAME: &str =
     "canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart";
 const REQUIRED_DAEMON_FEATURE: &str = "zk-stark";
-const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
@@ -254,8 +254,8 @@ fn single_zk_x509_proof_bytes<'a>(
         .ok_or_else(|| eyre!("native ZK-X509 transaction omitted its direct privacy action"))?;
     match (&submission.envelope.statement, &submission.envelope.proof) {
         (
-            PrivacyStatementV1::IrohaZkX509StarkP256V0(statement),
-            PrivacyProofV1::IrohaZkX509StarkP256V0(proof),
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(statement),
+            PrivacyProofV1::IrohaZkX509StarkP256V1(proof),
         ) => {
             ensure!(
                 statement == expected_statement && statement.context.action_index == 0,
@@ -732,12 +732,12 @@ fn assert_all_exact_duplicate_certificate_nullifier_results(
     }
     Ok(())
 }
-fn assert_zk_x509_available(
+fn assert_zk_x509_capability(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     expected_height: u64,
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: PrivacyProtocolActivationRecordV1,
-    activation_state: PrivacyCapabilityActivationStateV1,
+    expected_readiness: PrivacyCapabilityReadinessV1,
     context: &str,
 ) -> Result<()> {
     snapshot
@@ -759,27 +759,28 @@ fn assert_zk_x509_available(
         row.compiled_profile
     );
     ensure!(
-        row.readiness == PrivacyCapabilityReadinessV1::Available,
-        "{context}: evidence-complete ZK-X509 was not reported available: {:?}",
+        row.readiness == expected_readiness,
+        "{context}: ZK-X509 readiness differs from evidence-derived state: expected {expected_readiness:?}, got {:?}",
         row.readiness
     );
     ensure!(
-        row.activation == Some(activation) && row.activation_state == activation_state,
-        "{context}: ZK-X509 lifecycle mismatch: activation={:?}, state={:?}",
-        row.activation,
-        row.activation_state
+        row.activation == Some(activation),
+        "{context}: ZK-X509 activation mismatch: expected {activation:?}, got {:?}",
+        row.activation
     );
     ensure!(
         row.operation_schema == PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1
             && row.execution_mode == PrivacyExecutionModeV1::PresentationAction
-            && row.privacy_feature_mask.bits() == 2
-            && row.limitation.is_none(),
+            && row.privacy_feature_mask.bits() == 2,
         "{context}: ZK-X509 public capability tuple drifted"
     );
     ensure!(
         row.is_network_available()
-            == (activation_state == PrivacyCapabilityActivationStateV1::Active),
-        "{context}: ZK-X509 network availability disagrees with its lifecycle"
+            == matches!(
+                expected_readiness,
+                PrivacyCapabilityReadinessV1::ProductionQualified
+            ),
+        "{context}: ZK-X509 network availability disagrees with registered qualification"
     );
     Ok(())
 }
@@ -788,7 +789,7 @@ async fn wait_for_available_snapshots(
     expected_height: u64,
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: PrivacyProtocolActivationRecordV1,
-    activation_state: PrivacyCapabilityActivationStateV1,
+    expected_readiness: PrivacyCapabilityReadinessV1,
     context: &str,
 ) -> Result<()> {
     ensure!(!clients.is_empty(), "{context}: validator list is empty");
@@ -799,12 +800,12 @@ async fn wait_for_available_snapshots(
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
             match client.get_privacy_capabilities() {
-                Ok(snapshot) => match assert_zk_x509_available(
+                Ok(snapshot) => match assert_zk_x509_capability(
                     &snapshot,
                     expected_height,
                     compiled,
                     activation,
-                    activation_state,
+                    expected_readiness,
                     context,
                 ) {
                     Ok(()) => match snapshot.canonical_bytes() {
@@ -1104,7 +1105,9 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             proposed_at_height,
             compiled_snapshot,
             proposed,
-            PrivacyCapabilityActivationStateV1::Proposed,
+            PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::Proposed,
+            ),
             "exact proposed ZK-X509 capability row",
         )
         .await?;
@@ -1131,7 +1134,9 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             activate_at_height,
             compiled_snapshot,
             active,
-            PrivacyCapabilityActivationStateV1::Active,
+            PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
+            ),
             "exact active ZK-X509 capability row",
         )
         .await?;
@@ -1289,7 +1294,9 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             pre_outage_tip.height,
             compiled_snapshot,
             active,
-            PrivacyCapabilityActivationStateV1::Active,
+            PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
+            ),
             "pre-outage byte-identical active ZK-X509 manifests",
         )
         .await?;
@@ -1424,7 +1431,9 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             sentinel_block.height,
             compiled_snapshot,
             active,
-            PrivacyCapabilityActivationStateV1::Active,
+            PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
+            ),
             "post-restart byte-identical active ZK-X509 manifests at the exact sentinel",
         )
         .await?;
@@ -1736,7 +1745,9 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             successor_block.height,
             compiled_snapshot,
             active,
-            PrivacyCapabilityActivationStateV1::Active,
+            PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
+            ),
             "all-four byte-identical active ZK-X509 manifests at the exact successor",
         )
         .await?;

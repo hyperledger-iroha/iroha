@@ -26,8 +26,6 @@
     {
       "peer_index": 0,
       "payload_bytes": 11010048.0,
-      "manifest_guard_allowed_total": 1.0,
-      "votes_ingested_total": 1.0,
       "bg_post_queue_depth": 15.0,
       "bg_post_queue_depth_labeled_max": 19.0,
       "p2p_queue_dropped_total": 0.0
@@ -35,8 +33,6 @@
     {
       "peer_index": 1,
       "payload_bytes": 11010048.0,
-      "manifest_guard_allowed_total": 1.0,
-      "votes_ingested_total": 1.0,
       "bg_post_queue_depth": 19.0,
       "bg_post_queue_depth_labeled_max": 19.0,
       "p2p_queue_dropped_total": 0.0
@@ -44,8 +40,6 @@
     {
       "peer_index": 2,
       "payload_bytes": 11010048.0,
-      "manifest_guard_allowed_total": 1.0,
-      "votes_ingested_total": 1.0,
       "bg_post_queue_depth": 16.0,
       "bg_post_queue_depth_labeled_max": 19.0,
       "p2p_queue_dropped_total": 0.0
@@ -53,8 +47,6 @@
     {
       "peer_index": 3,
       "payload_bytes": 11010048.0,
-      "manifest_guard_allowed_total": 1.0,
-      "votes_ingested_total": 1.0,
       "bg_post_queue_depth": 17.0,
       "bg_post_queue_depth_labeled_max": 19.0,
       "p2p_queue_dropped_total": 0.0

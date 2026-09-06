@@ -274,7 +274,7 @@ impl norito::json::JsonSerialize for TriggerCompletedSnapshot<'_> {
 }
 impl Default for Sandbox {
     fn default() -> Self {
-        let world = {
+        let mut world = {
             let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
             let asset_def = {
                 let __asset_definition_id = ASSET.clone();
@@ -297,6 +297,15 @@ impl Default for Sandbox {
                 .map(|(name, num)| Asset::new(asset(name), *num));
             World::with_assets([domain], accounts, [asset_def], assets, [])
         };
+        world.account_permissions.insert(
+            GENESIS_ACCOUNT.id.clone(),
+            std::collections::BTreeSet::from([
+                iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                    authority: GENESIS_ACCOUNT.id.clone(),
+                }
+                .into(),
+            ]),
+        );
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain_for_testing(world, kura, query_handle, CHAIN_ID.clone());
@@ -314,7 +323,7 @@ impl Default for Sandbox {
     }
 }
 impl Sandbox {
-    fn trigger_registration_metadata(&self) -> Metadata {
+    fn trigger_registration_metadata(&self, data_scope: bool) -> Metadata {
         let height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let registered_ms = self
             .state
@@ -332,6 +341,15 @@ impl Sandbox {
             .expect("registered timestamp metadata key");
         metadata.insert(key_height, Json::new(height));
         metadata.insert(key_time, Json::new(registered_ms));
+        if data_scope {
+            for (key, value) in crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &GENESIS_ACCOUNT.id,
+            )
+            .iter()
+            {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
         metadata
     }
     /// Add a time trigger that transfers the test asset after a timer fires.
@@ -373,7 +391,7 @@ impl Sandbox {
                 TimeEventFilter::new(ExecutionTime::PreCommit),
             )
             .expect("sandbox time-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata()),
+            .with_metadata(self.trigger_registration_metadata(false)),
         )
         .try_into()
         .unwrap();
@@ -462,7 +480,7 @@ impl Sandbox {
                     .for_asset(asset(src)),
             )
             .expect("sandbox data-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata()),
+            .with_metadata(self.trigger_registration_metadata(true)),
         )
         .try_into()
         .unwrap();

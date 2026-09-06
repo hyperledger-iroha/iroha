@@ -9,8 +9,13 @@
 //! ISI definitions can coordinate incentives deterministically. The repair module models
 //! audit-driven repair queues that tie proof failures to remediation workflows, and the
 //! transparency module defines canonical moderation ledger payloads/proofs for public SFM-4c
-//! verifiers. The `pop_registry` module defines the consensus-owned, payload-free credential issuer
-//! commitments and signed root/revocation publications used by SFM-4b1.
+//! verifiers. The `anonymity` module defines commitment-only citizen bonds for
+//! economic Sybil resistance; they are explicitly not proof of personhood.
+//! The `pop_registry` module retains the consensus-owned credential issuer
+//! commitments and signed root/revocation publications used by the existing
+//! moderation ledger.
+/// Commitment-only citizen bonds.
+pub mod anonymity;
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
 /// Gateway Authorization Record policy payload types.
@@ -40,6 +45,11 @@ pub mod transparency;
 /// Re-export commonly used `SoraFS` types.
 pub mod prelude {
     pub use super::{
+        anonymity::{
+            SORAFS_CITIZEN_BOND_SNAPSHOT_DOMAIN_V1, SORAFS_CITIZEN_BOND_SNAPSHOT_MIN_V1,
+            SORAFS_CITIZEN_BOND_VERSION_V1, SorafsCitizenBondErrorV1, SorafsCitizenBondSnapshotV1,
+            SorafsCitizenBondStateV1, SorafsCitizenBondV1,
+        },
         capacity::{
             CapacityAccrual, CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
             CapacityDisputeOutcome, CapacityDisputeRecord, CapacityDisputeResolution,
@@ -91,6 +101,7 @@ pub mod prelude {
             MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1, MODERATION_LEDGER_MAX_EXCLUSIONS_V1,
             MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1, MODERATION_LEDGER_MAX_NONCE_BYTES_V1,
             MODERATION_LEDGER_MAX_PANEL_SIZE_V1, MODERATION_LEDGER_MAX_PENALTY_POINTS_V1,
+            MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1,
             MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1,
             MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1, MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1,
             MODERATION_LEDGER_POLICY_VERSION_V1, MODERATION_LEDGER_ROSTER_HASH_DOMAIN_V1,
@@ -112,10 +123,10 @@ pub mod prelude {
             ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
             ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
             ModerationPoPRegistrySnapshotError, ModerationPoPRegistrySnapshotV1,
-            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
-            REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1, REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1,
-            REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1, REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1,
-            REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
+            ModerationRevealRecordV1, ModerationSortitionAnchorV1, ModerationSortitionError,
+            ModerationVoteCountsV1, REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1,
+            REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1, REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1,
+            REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
             REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1, REPAIR_LEDGER_MAX_LEASE_MS_V1,
             REPAIR_LEDGER_MAX_RECEIPTS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1,
             REPAIR_LEDGER_TASK_ID_DOMAIN_V1, REPAIR_LEDGER_TASK_VERSION_V1,

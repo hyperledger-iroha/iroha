@@ -1,6 +1,5 @@
-//! Core host Halo2 verification tests covering the Goldilocks backend.
+//! Core host rejection tests for using the Goldilocks field as an IPA group.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#[cfg(feature = "goldilocks_backend")]
 mod goldilocks {
     use iroha_config::parameters::defaults;
     use iroha_core::smartcontracts::ivm::host::CoreHost;
@@ -10,27 +9,30 @@ mod goldilocks {
     use std::{convert::TryFrom, sync::Arc};
     fn make_goldilocks_envelope() -> iroha_zkp_halo2::OpenVerifyEnvelope {
         use iroha_zkp_halo2::{
-            GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, Transcript,
-            backend::goldilocks::GoldilocksBackend, norito_helpers as nh,
+            Params, Polynomial, PrimeField64, Transcript, ZkCurveId,
+            backend::pallas::PallasBackend, norito_helpers as nh,
         };
-        let params = GoldilocksParams::new(8).expect("params");
-        let coeffs: Vec<GoldilocksScalar> =
-            (0u64..8).map(|i| GoldilocksScalar::from(i + 1)).collect();
-        let poly = GoldilocksPolynomial::from_coeffs(coeffs);
+        let params = Params::new(8).expect("params");
+        let coeffs: Vec<PrimeField64> = (0u64..8).map(|i| PrimeField64::from(i + 1)).collect();
+        let poly = Polynomial::from_coeffs(coeffs);
         let label = ivm::host::LABEL_VOTE_BALLOT;
         let mut tr = Transcript::new(label);
         let p_g = poly.commit(&params).expect("commit");
-        let z = GoldilocksScalar::from(4u64);
+        let z = PrimeField64::from(4u64);
         let (proof, t) = poly.open(&params, &mut tr, z, p_g).expect("open");
-        iroha_zkp_halo2::OpenVerifyEnvelope {
+        let mut envelope = iroha_zkp_halo2::OpenVerifyEnvelope {
             params: nh::params_to_wire(&params),
-            public: nh::poly_open_public::<GoldilocksBackend>(params.n(), z, t, p_g),
+            public: nh::poly_open_public::<PallasBackend>(params.n(), z, t, p_g),
             proof: nh::proof_to_wire(&proof),
             transcript_label: label.to_string(),
             vk_commitment: None,
             public_inputs_schema_hash: None,
             domain_tag: None,
-        }
+        };
+        // The unsupported field identity must be rejected before group decoding.
+        envelope.params.curve_id = ZkCurveId::Goldilocks.as_u16();
+        envelope.public.curve_id = ZkCurveId::Goldilocks.as_u16();
+        envelope
     }
     fn tlv_from_env(env: &iroha_zkp_halo2::OpenVerifyEnvelope) -> Vec<u8> {
         let payload = norito::to_bytes(env).expect("encode envelope");

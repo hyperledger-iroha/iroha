@@ -14,18 +14,44 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "cargo_fast.sh"
 CONTROLLED_ENV_VARS = (
+    "CI",
     "CARGO_BUILD_JOBS",
     "CARGO_FAST_TARGET_ROOT",
     "CARGO_INCREMENTAL",
+    "CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS",
+    "CARGO_PROFILE_BENCH_CODEGEN_UNITS",
     "CARGO_PROFILE_DEV_DEBUG",
+    "CARGO_PROFILE_DEV_BUILD_OVERRIDE_CODEGEN_UNITS",
+    "CARGO_PROFILE_DEV_CODEGEN_UNITS",
+    "CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS",
     "CARGO_PROFILE_TEST_DEBUG",
+    "CARGO_PROFILE_TEST_BUILD_OVERRIDE_CODEGEN_UNITS",
+    "CARGO_PROFILE_TEST_CODEGEN_UNITS",
     "CARGO_TARGET_DIR",
+    "CMAKE_BUILD_PARALLEL_LEVEL",
+    "GITHUB_ACTIONS",
     "IROHA_GIT_COMMIT_HASH",
+    "RUST_TEST_THREADS",
     "RUSTC_WRAPPER",
     "RUSTFLAGS",
     "SCCACHE_DIR",
     "VERGEN_GIT_SHA",
 )
+
+INHERITED_SINGLE_WORKER_FINGERPRINT = {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_DEV_BUILD_OVERRIDE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_TEST_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_TEST_BUILD_OVERRIDE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_BENCH_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "1",
+}
 
 
 def _write_executable(path: Path, source: str) -> None:
@@ -110,6 +136,100 @@ def test_default_preserves_cargo_arguments_and_profile_defaults(tmp_path: Path) 
     assert "CARGO_TARGET_DIR=workspace-default" in result.stdout
     assert "CARGO_BUILD_JOBS=cargo-default" in result.stdout
     assert "linker=system-default" in result.stdout
+
+
+def test_default_clears_exact_local_inherited_single_worker_fingerprint(
+    tmp_path: Path,
+) -> None:
+    result, environment, _ = _run_wrapper(
+        tmp_path,
+        "--no-sccache",
+        "--",
+        "check",
+        extra_env={**INHERITED_SINGLE_WORKER_FINGERPRINT, "RUST_TEST_THREADS": "1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    for name in INHERITED_SINGLE_WORKER_FINGERPRINT:
+        assert name not in environment
+    assert environment["RUST_TEST_THREADS"] == "1"
+    assert "cleared inherited local single-worker build limits" in result.stdout
+    assert "CARGO_BUILD_JOBS=cargo-default" in result.stdout
+
+
+def test_preserve_build_limits_keeps_exact_inherited_fingerprint(
+    tmp_path: Path,
+) -> None:
+    result, environment, _ = _run_wrapper(
+        tmp_path,
+        "--no-sccache",
+        "--preserve-build-limits",
+        "--",
+        "check",
+        extra_env=INHERITED_SINGLE_WORKER_FINGERPRINT,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for name, value in INHERITED_SINGLE_WORKER_FINGERPRINT.items():
+        assert environment[name] == value
+    assert "cleared inherited local single-worker build limits" not in result.stdout
+    assert "CARGO_BUILD_JOBS=1" in result.stdout
+
+
+def test_partial_inherited_build_limits_are_preserved(tmp_path: Path) -> None:
+    partial_fingerprint = dict(INHERITED_SINGLE_WORKER_FINGERPRINT)
+    partial_fingerprint.pop("CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS")
+    result, environment, _ = _run_wrapper(
+        tmp_path,
+        "--no-sccache",
+        "--",
+        "check",
+        extra_env=partial_fingerprint,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for name, value in partial_fingerprint.items():
+        assert environment[name] == value
+    assert "cleared inherited local single-worker build limits" not in result.stdout
+
+
+def test_ci_keeps_exact_inherited_build_limits(tmp_path: Path) -> None:
+    result, environment, _ = _run_wrapper(
+        tmp_path,
+        "--no-sccache",
+        "--",
+        "check",
+        extra_env={**INHERITED_SINGLE_WORKER_FINGERPRINT, "CI": "true"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    for name, value in INHERITED_SINGLE_WORKER_FINGERPRINT.items():
+        assert environment[name] == value
+    assert environment["CI"] == "true"
+    assert "cleared inherited local single-worker build limits" not in result.stdout
+
+
+def test_explicit_wrapper_limits_replace_the_cleared_inherited_values(
+    tmp_path: Path,
+) -> None:
+    result, environment, _ = _run_wrapper(
+        tmp_path,
+        "--no-sccache",
+        "--jobs",
+        "7",
+        "--incremental",
+        "--",
+        "check",
+        extra_env=INHERITED_SINGLE_WORKER_FINGERPRINT,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert environment["CARGO_BUILD_JOBS"] == "7"
+    assert environment["CARGO_INCREMENTAL"] == "1"
+    for name in INHERITED_SINGLE_WORKER_FINGERPRINT:
+        if name not in {"CARGO_BUILD_JOBS", "CARGO_INCREMENTAL"}:
+            assert name not in environment
+    assert "cleared inherited local single-worker build limits" in result.stdout
 
 
 @pytest.mark.parametrize(

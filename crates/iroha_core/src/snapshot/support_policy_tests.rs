@@ -27,7 +27,13 @@ use iroha_data_model::{
         AccountValue,
     },
     asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
-    block::{BlockHeader, SignedBlock},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{
+            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+        },
+        consensus_v2 as wire_v2,
+    },
     domain::DomainId,
     isi::{Log, space_directory::PublishSpaceDirectoryManifest},
     metadata::Metadata,
@@ -78,6 +84,104 @@ fn checked_random_snapshot_keypair() -> KeyPair {
 fn checked_random_snapshot_bls_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("snapshot BLS fixture key generation should succeed")
+}
+fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence {
+    let mut keys = (1_u8..=4)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic snapshot evidence key")
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let roster = keys
+        .iter()
+        .map(|key| wire_v2::ValidatorPower {
+            validator: PeerId::new(key.public_key().clone()),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let context = wire_v2::HeightContext {
+        network_id,
+        protocol_version: wire_v2::PROTOCOL_VERSION,
+        height: 1,
+        epoch: 0,
+        epoch_end_height: u64::MAX,
+        next_epoch_snapshot: None,
+        snapshot_bootstrap: None,
+        mode: wire_v2::ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        quorum: wire_v2::DualQuorum::from_roster(&roster)
+            .expect("equal-power snapshot evidence quorum"),
+        roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
+        nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
+        execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
+        da_layout: wire_v2::DataAvailabilityLayout {
+            encoding: wire_v2::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 32,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1024,
+            max_chunk_count: 64,
+        },
+        leader_seed: [0x51; 32],
+    };
+    context
+        .validate()
+        .expect("snapshot evidence height context must be valid");
+    let proofs_of_possession = keys
+        .iter()
+        .map(|key| {
+            bls_normal_pop_prove(key.private_key()).expect("snapshot evidence proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let round = wire_v2::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let execution_commitment =
+        wire_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"snapshot evidence parent state"),
+            Hash::new(b"snapshot evidence post state"),
+            Hash::new(b"snapshot evidence ordinary writes"),
+            1,
+            Hash::new(b"snapshot evidence executed block wire"),
+        );
+    let signer: wire_v2::ValidatorIndex = 1;
+    let signer_index = usize::try_from(signer).expect("snapshot evidence signer index fits usize");
+    let signed_vote = |seed: u8| {
+        let mut vote = wire_v2::Vote {
+            round,
+            proposal_round: round,
+            phase: wire_v2::GlobalPhase::Prepare,
+            subject: wire_v2::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])),
+                payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
+            },
+            execution_commitment,
+            signer,
+            signature: Vec::new(),
+        };
+        vote.signature =
+            Signature::try_new(keys[signer_index].private_key(), &vote.signature_preimage())
+                .expect("snapshot evidence phase-vote signature")
+                .payload()
+                .to_vec();
+        vote
+    };
+    crate::sumeragi::evidence::canonical_v2_evidence(&SumeragiV2EquivocationEvidence {
+        context,
+        proofs_of_possession,
+        conflict: wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: signed_vote(0x61),
+            second: signed_vote(0x62),
+        },
+    })
 }
 fn current_generation_name(store_dir: &Path) -> String {
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
@@ -185,13 +289,16 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
                 .expect("derive snapshot-eviction validator PoP")
         })
         .collect::<Vec<_>>();
-    let execution_commitment_template = ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"snapshot eviction parent state"),
-        Hash::new(b"snapshot eviction post state"),
-        Hash::new(b"snapshot eviction ordinary writes"),
-        1,
-        Hash::new(b"snapshot eviction executed block wire placeholder"),
-    );
+    let execution_commitment_template =
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"snapshot eviction parent state"),
+            Hash::new(b"snapshot eviction post state"),
+            Hash::new(b"snapshot eviction ordinary writes"),
+            1,
+            Hash::new(b"snapshot eviction executed block wire placeholder"),
+        );
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
     let mut parent: Option<V2FinalityArtifact> = None;
     let mut artifacts = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -208,6 +315,8 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
             roster: roster.clone(),
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
             nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -708,7 +817,7 @@ fn state_factory() -> State {
 }
 fn sccp_registry_for_snapshot_test() -> crate::state::SccpOnChainRegistryV1 {
     let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-        iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
         iroha_data_model::bridge::SccpRouteActivationV1::Staged,
     );
     crate::state::SccpOnChainRegistryV1 {
@@ -1017,6 +1126,45 @@ async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
     );
     assert_eq!(canonical_state_snapshot_hash(&state), tree_reference);
 }
+#[test]
+fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
+    let state = state_factory();
+    let committed_without_evidence = canonical_state_snapshot_hash(&state);
+    let staged = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    assert_eq!(
+        canonical_staged_state_snapshot_hash(&staged),
+        committed_without_evidence,
+        "an unchanged evidence table must preserve staged and committed WSV parity"
+    );
+    drop(staged);
+
+    let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
+    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
+    let mut staged = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    staged.world.consensus_evidence.insert(
+        evidence_key,
+        EvidenceRecord {
+            evidence,
+            recorded_at_height: 2,
+            recorded_at_view: 0,
+            recorded_at_ms: 2_000,
+            penalty_status: EvidencePenaltyStatus::Pending,
+        },
+    );
+    let staged_with_evidence = canonical_staged_state_snapshot_hash(&staged);
+    assert_ne!(
+        staged_with_evidence, committed_without_evidence,
+        "consensus-owned evidence must change the canonical WSV hash"
+    );
+    staged
+        .commit_world_overlay_for_testing()
+        .expect("commit the consensus evidence overlay");
+    assert_eq!(
+        staged_with_evidence,
+        canonical_state_snapshot_hash(&state),
+        "consensus evidence must have identical staged and committed WSV hashes"
+    );
+}
 #[tokio::test]
 async fn borrowed_snapshot_wsv_hash_canonicalizes_json_lexemes() {
     let lexical = br#"{"\u0077orld":{"note":"\u0061","number":1e0}}"#;
@@ -1024,15 +1172,6 @@ async fn borrowed_snapshot_wsv_hash_canonicalizes_json_lexemes() {
     assert_eq!(
         canonical_snapshot_wsv_hash(lexical).expect("hash lexical snapshot spelling"),
         Hash::new(canonical),
-    );
-
-    let lexical_set =
-        br#"{"world":{"parameters":{"sumeragi":{"key_allowed_hsm_providers":["\u0078","x"]}}}}"#;
-    let canonical_set =
-        br#"{"world":{"parameters":{"sumeragi":{"key_allowed_hsm_providers":["x"]}}}}"#;
-    assert_eq!(
-        canonical_snapshot_wsv_hash(lexical_set).expect("hash lexical set spelling"),
-        Hash::new(canonical_set),
     );
 }
 
@@ -1046,11 +1185,61 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
             staged,
             CanonicalWsvOverrides {
                 committed_external_event_buf: Some(committed_event_buffer),
+                ..CanonicalWsvOverrides::default()
             },
         )
         .expect("hash staged snapshot with its committed event buffer"),
         Hash::new(canonical),
     );
+}
+
+#[tokio::test]
+async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
+    for evidence in [
+        None,
+        Some(canonical_snapshot_v2_phase_vote_evidence(
+            snapshot_test_network_id(),
+        )),
+    ] {
+        let state = State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(TEST_CHAIN_ID),
+            snapshot_test_network_id(),
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            1_000,
+            0,
+        );
+        let mut state_block = state.block(header);
+        if let Some(evidence) = evidence {
+            let key = crate::sumeragi::evidence::evidence_key(&evidence);
+            state_block.world.consensus_evidence.insert(
+                key,
+                EvidenceRecord {
+                    evidence,
+                    recorded_at_height: 1,
+                    recorded_at_view: 0,
+                    recorded_at_ms: 1_000,
+                    penalty_status: EvidencePenaltyStatus::Pending,
+                },
+            );
+        }
+        let staged_hash = canonical_staged_state_snapshot_hash(&state_block);
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("commit consensus-evidence world overlay");
+        assert_eq!(
+            staged_hash,
+            canonical_state_snapshot_hash(&state),
+            "empty and populated consensus evidence must have identical staged and committed WSV projections",
+        );
+    }
 }
 
 #[tokio::test]
@@ -1085,7 +1274,7 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     );
 }
 #[tokio::test]
-async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
+async fn canonical_wsv_hash_sorts_sumeragi_key_algorithm_set() {
     let state = state_factory();
     {
         let mut parameters = state.world.parameters.block();
@@ -1093,12 +1282,6 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
             Algorithm::Secp256k1,
             Algorithm::Ed25519,
             Algorithm::Secp256k1,
-        ];
-        parameters.sumeragi.key_allowed_hsm_providers = vec![
-            "yubihsm".to_owned(),
-            "pkcs11".to_owned(),
-            "softkey".to_owned(),
-            "pkcs11".to_owned(),
         ];
         parameters.commit();
     }
@@ -1112,11 +1295,6 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
     {
         let mut parameters = state.world.parameters.block();
         parameters.sumeragi.key_allowed_algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1];
-        parameters.sumeragi.key_allowed_hsm_providers = vec![
-            "pkcs11".to_owned(),
-            "softkey".to_owned(),
-            "yubihsm".to_owned(),
-        ];
         parameters.commit();
     }
     let second = canonical_state_snapshot_bytes_for_tests(&state);
@@ -1128,24 +1306,8 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
     );
     assert_eq!(
         first, second,
-        "set-like Sumeragi key policy fields must not make WSV checkpoints order-sensitive"
+        "the set-like Sumeragi key algorithm field must not make WSV checkpoints order-sensitive"
     );
-    let value = canonical_state_snapshot_value(&state);
-    let providers = value
-        .get("world")
-        .and_then(|world| world.get("parameters"))
-        .and_then(|parameters| parameters.get("sumeragi"))
-        .and_then(|sumeragi| sumeragi.get("key_allowed_hsm_providers"))
-        .and_then(json::Value::as_array)
-        .expect("canonical snapshot should contain normalized HSM providers");
-    let providers = providers
-        .iter()
-        .map(|value| match value {
-            json::Value::String(provider) => provider.as_str(),
-            _ => panic!("HSM provider should serialize as a string"),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(providers, ["pkcs11", "softkey", "yubihsm"]);
 }
 #[tokio::test]
 async fn canonical_state_snapshot_ignores_consensus_topology_caches() {

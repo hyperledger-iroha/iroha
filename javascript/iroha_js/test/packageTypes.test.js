@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import ts from "typescript";
 
@@ -59,9 +59,6 @@ function createPackedLayout({ includeNodeTypes }) {
     }
   }
   fs.cpSync(path.join(PACKAGE_ROOT, "dist"), path.join(packagePath, "dist"), {
-    recursive: true,
-  });
-  fs.cpSync(path.join(PACKAGE_ROOT, "src"), path.join(packagePath, "src"), {
     recursive: true,
   });
   fs.symlinkSync(
@@ -121,6 +118,58 @@ test("retired generic confidential declarations are absent from the published su
   ].map((parts) => parts.join(""));
   for (const retired of retiredDeclarations) {
     assert.doesNotMatch(declarations, new RegExp(`\\b${retired}\\b`, "u"), retired);
+  }
+});
+
+test("algorithm options use omission rather than a nullable compatibility sentinel", () => {
+  const declarations = fs.readFileSync(path.join(PACKAGE_ROOT, "index.d.ts"), "utf8");
+  assert.doesNotMatch(
+    declarations,
+    /(?:privateKeyAlgorithm|algorithm)\?: string \| null/u,
+  );
+});
+
+test("first-release HTTP client declarations omit compatibility escape hatches", () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const declarationText = fs.readFileSync(declarationPath, "utf8");
+  const source = ts.createSourceFile(
+    declarationPath,
+    declarationText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declaration = (kind, name) => {
+    const node = source.statements.find(
+      (statement) => kind(statement) && statement.name?.text === name,
+    );
+    assert.ok(node, `missing ${name} declaration`);
+    return node;
+  };
+  const memberNames = (node) =>
+    node.members.map((member) => member.name?.getText(source)).filter(Boolean);
+
+  assert.equal(
+    memberNames(declaration(ts.isClassDeclaration, "NoritoRpcClient")).includes("close"),
+    false,
+  );
+  assert.equal(
+    memberNames(
+      declaration(ts.isInterfaceDeclaration, "ToriiBrowserClientOptions"),
+    ).includes("config"),
+    false,
+  );
+  assert.equal(
+    memberNames(
+      declaration(ts.isInterfaceDeclaration, "ToriiBrowserRequestOptions"),
+    ).includes("successStatuses"),
+    false,
+  );
+
+  for (const browserDeclaration of ["browser.d.ts", "torii-browser.d.ts"]) {
+    const text = fs.readFileSync(path.join(PACKAGE_ROOT, browserDeclaration), "utf8");
+    assert.doesNotMatch(text, /ToriiBrowserClient as ToriiClient/u);
+    assert.doesNotMatch(text, /ToriiBrowserHttpError as ToriiHttpError/u);
   }
 });
 
@@ -187,8 +236,8 @@ test("every public export has a safe runtime target and an explicit declaration 
     "typesVersions must cover every public subpath exactly once",
   );
   assert.deepEqual(packageJson.exports["./norito"], {
-    import: "./dist/norito.js",
-    types: "./index.d.ts",
+    import: "./dist/public/norito.js",
+    types: "./norito.d.ts",
   });
 });
 
@@ -250,16 +299,19 @@ test("package smoke rejects every non-portable or missing required artifact", ()
   ];
   const requiredPaths = [
     "package.json",
+    "atomic-private-settlement.d.ts",
     "index.d.ts",
     "browser.d.ts",
     "ivm-artifact.d.ts",
+    "kagemusha.d.ts",
     "kotodama-compiler.d.ts",
     "privacy-capabilities.d.ts",
     "repo-agreement.d.ts",
     "sumeragi-typed.d.ts",
-    "src/index.js",
     "dist/index.js",
+    "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
+    "dist/kagemusha.js",
     "dist/kotodamaCompiler/browser.js",
     "dist/kotodamaCompiler/index.js",
     "dist/nexusApp.js",
@@ -270,15 +322,27 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     ...requiredLazyPaths,
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
-    "scripts/build-dist.mjs",
   ];
   const metadata = {
     files: requiredPaths.map((entry) => ({ path: entry })),
   };
   assert.doesNotThrow(() => validatePackPaths(metadata));
+  for (const unpublishedPath of ["src/index.js", "scripts/build-dist.mjs"]) {
+    assert.throws(
+      () => validatePackPaths({
+        files: [...metadata.files, { path: unpublishedPath }],
+      }),
+      /unpublished development path/u,
+      unpublishedPath,
+    );
+  }
 
   for (const requiredPath of [
     "index.d.ts",
+    "atomic-private-settlement.d.ts",
+    "kagemusha.d.ts",
+    "dist/atomicPrivateSettlement.js",
+    "dist/kagemusha.js",
     "dist/tairaTestnetProfile.js",
     ...PORTABLE_RECIPES,
     ...requiredLazyPaths,
@@ -328,10 +392,25 @@ test("runtime namespace declarations expose exactly their module exports", async
     checker.getExportsOfModule(moduleSymbol).map((symbol) => [symbol.name, symbol]),
   );
 
-  for (const [namespaceName, moduleName] of [
+  for (const [namespaceName, moduleName, internalNames = []] of [
     ["Torii", "toriiClient"],
-    ["Norito", "norito"],
-    ["Crypto", "crypto"],
+    [
+      "Norito",
+      "norito",
+      ["_canonicalAccountIdNoritoValue", "_createNoritoInstructionApi"],
+    ],
+    [
+      "Crypto",
+      "crypto",
+      [
+        "CONFIDENTIAL_MEMO_SUITES_V1",
+        "ConfidentialMemoKeypairV1",
+        "_createCryptoApi",
+        "generateConfidentialMemoKeypairV1",
+        "openConfidentialMemoV1",
+        "sealConfidentialMemoV1",
+      ],
+    ],
   ]) {
     const namespaceSymbol = declarationExports.get(namespaceName);
     assert.ok(namespaceSymbol, `missing ${namespaceName} declaration`);
@@ -344,12 +423,168 @@ test("runtime namespace declarations expose exactly their module exports", async
       .map((symbol) => symbol.name)
       .sort();
     const runtimeModule = await import(`../src/${moduleName}.js`);
+    const internal = new Set(internalNames);
+    const runtimeNames = Object.keys(runtimeModule).filter((name) => !internal.has(name));
     assert.deepEqual(
       declaredNames,
-      Object.keys(runtimeModule).sort(),
+      runtimeNames.sort(),
       `${namespaceName} declaration diverges from ${moduleName}.js`,
     );
   }
+});
+
+test("root declarations expose exactly the source and distribution values", async () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const program = ts.createProgram([declarationPath], {
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    skipLibCheck: false,
+  });
+  const declarations = program.getSourceFile(declarationPath);
+  assert.ok(declarations);
+  const checker = program.getTypeChecker();
+  const moduleSymbol = checker.getSymbolAtLocation(declarations);
+  assert.ok(moduleSymbol);
+  const declaredValues = checker
+    .getExportsOfModule(moduleSymbol)
+    .filter((symbol) => {
+      const target =
+        (symbol.flags & ts.SymbolFlags.Alias) !== 0
+          ? checker.getAliasedSymbol(symbol)
+          : symbol;
+      return (target.flags & ts.SymbolFlags.Value) !== 0;
+    })
+    .map((symbol) => symbol.name)
+    .sort();
+
+  for (const runtimeTarget of ["../src/index.js", "../dist/index.js"]) {
+    const runtime = await import(runtimeTarget);
+    assert.deepEqual(
+      Object.keys(runtime).sort(),
+      declaredValues,
+      `${runtimeTarget} diverges from the root value declarations`,
+    );
+  }
+});
+
+test("Torii client declarations never promise unimplemented methods", async () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const declarationText = fs.readFileSync(declarationPath, "utf8");
+  const source = ts.createSourceFile(
+    declarationPath,
+    declarationText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  for (const [className, runtimeTarget] of [
+    ["ToriiClient", "../src/toriiClient.js"],
+    ["ToriiBrowserClient", "../src/toriiBrowserClient.js"],
+  ]) {
+    const declaration = source.statements.find(
+      (statement) =>
+        ts.isClassDeclaration(statement) && statement.name?.text === className,
+    );
+    assert.ok(declaration, `missing ${className} declaration`);
+    const runtime = await import(runtimeTarget);
+    const runtimeClass = runtime[className];
+    assert.equal(typeof runtimeClass, "function", `missing runtime ${className}`);
+
+    for (const member of declaration.members.filter(ts.isMethodDeclaration)) {
+      const methodName = member.name?.getText(source);
+      assert.ok(methodName, `${className} has an unnamed method declaration`);
+      const isStatic = member.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword,
+      );
+      const owner = isStatic ? runtimeClass : runtimeClass.prototype;
+      assert.equal(
+        typeof owner[methodName],
+        "function",
+        `${className}.${methodName} is declared but not implemented`,
+      );
+    }
+  }
+});
+
+test("narrow subpath declarations exactly match their runtime values", async () => {
+  const packageJson = readPackageJson();
+  const subpaths = Object.keys(packageJson.exports).filter(
+    (subpath) => subpath !== ".",
+  );
+
+  for (const subpath of subpaths) {
+    const descriptor = packageJson.exports[subpath];
+    const declarationPath = path.resolve(PACKAGE_ROOT, descriptor.types);
+    const program = ts.createProgram([declarationPath], {
+      strict: true,
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      skipLibCheck: false,
+    });
+    const declaration = program.getSourceFile(declarationPath);
+    assert.ok(declaration, `${subpath} declaration did not load`);
+    const declaredValues = [];
+    for (const statement of declaration.statements) {
+      if (
+        ts.isExportDeclaration(statement) &&
+        statement.isTypeOnly !== true &&
+        statement.exportClause !== undefined &&
+        ts.isNamedExports(statement.exportClause)
+      ) {
+        declaredValues.push(
+          ...statement.exportClause.elements
+            .filter((element) => element.isTypeOnly !== true)
+            .map((element) => element.name.text),
+        );
+        continue;
+      }
+      const isExported = statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      );
+      if (!isExported) continue;
+      if (
+        (ts.isClassDeclaration(statement) ||
+          ts.isFunctionDeclaration(statement) ||
+          ts.isEnumDeclaration(statement)) &&
+        statement.name
+      ) {
+        declaredValues.push(statement.name.text);
+        continue;
+      }
+      if (ts.isVariableStatement(statement)) {
+        for (const declarationNode of statement.declarationList.declarations) {
+          assert.ok(
+            ts.isIdentifier(declarationNode.name),
+            `${subpath} exports a destructured declaration`,
+          );
+          declaredValues.push(declarationNode.name.text);
+        }
+      }
+    }
+    const uniqueDeclaredValues = [...new Set(declaredValues)].sort();
+
+    const runtimeTargets = new Set(
+      [descriptor.import, descriptor.browser].filter(Boolean),
+    );
+    for (const runtimeTarget of runtimeTargets) {
+      const runtimePath = path.resolve(PACKAGE_ROOT, runtimeTarget);
+      const runtime = await import(pathToFileURL(runtimePath).href);
+      assert.deepEqual(
+        Object.keys(runtime).sort(),
+        uniqueDeclaredValues,
+        `${subpath} runtime ${runtimeTarget} diverges from its declarations`,
+      );
+    }
+  }
+
+  const addressText = fs.readFileSync(path.join(PACKAGE_ROOT, "address.d.ts"), "utf8");
+  const toriiText = fs.readFileSync(path.join(PACKAGE_ROOT, "torii.d.ts"), "utf8");
+  assert.doesNotMatch(addressText, /\bToriiClient\b/u);
+  assert.doesNotMatch(toriiText, /\bNetworkId\b/u);
 });
 
 test("SoraFS gateway denial declarations expose only governed catalog evidence", () => {
@@ -497,8 +732,11 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       [
         ...imports,
         `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
-        `import { Crypto, Norito, NumericV1, SorafsOrderbookSubmissionAmbiguousError, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type CanonicalRequestAuth, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsOrderbookSubmissionReceipt, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
-        `import { getPrivacyCapabilitiesV1, parsePrivacyCapabilitySnapshotV1, type PrivacyCapabilitySnapshotV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
+        `import { Crypto, Norito, NumericV1, Kagemusha, SorafsOrderbookSubmissionAmbiguousError, Torii, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type CanonicalRequestAuth, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsOrderbookSubmissionReceipt, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { buildSetAssetTransferBlacklistInstruction, buildSetAssetTransferControlInstruction, type AssetTransferControlWindow, type AssetTransferLimitInput, type SetAssetTransferBlacklistInstruction, type SetAssetTransferControlInstruction } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { decodePrivacyExact12CapabilityManifestV1, getPrivacyExact12CapabilityManifestV1, type PrivacyExact12CapabilityManifestV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
+        "type Expect<T extends true> = T;",
+        "const kagemushaWireVersion: 1 = Kagemusha.wireVersion;",
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
         'const cancelAssetLock: CancelAssetLockInstruction = buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: "15" });',
@@ -514,6 +752,16 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         'const setAvailability: SetAssetTransferAvailabilityInstruction = buildSetAssetTransferAvailabilityInstruction({ accountId: "i105...", assetDefinitionId: "asset...", expectedRevision: 0, incoming: availability, outgoing: "Enabled" });',
         '// @ts-expect-error availability spellings are exact.',
         'buildSetAssetTransferAvailabilityInstruction({ accountId: "i105...", assetDefinitionId: "asset...", expectedRevision: 0, incoming: "disabled", outgoing: "Enabled" });',
+        'const setBlacklist: SetAssetTransferBlacklistInstruction = buildSetAssetTransferBlacklistInstruction({ accountId: "i105...", assetDefinitionId: "asset...", blacklisted: true });',
+        'const controlWindow: AssetTransferControlWindow = "DAY";',
+        'const controlLimits: readonly AssetTransferLimitInput[] = [{ window: controlWindow, capAmount: "100" }, { window: "WEEK", capAmount: null }];',
+        'const setControl: SetAssetTransferControlInstruction = buildSetAssetTransferControlInstruction({ accountId: "i105...", assetDefinitionId: "asset...", limits: controlLimits });',
+        '// @ts-expect-error blacklist state is an exact boolean.',
+        'buildSetAssetTransferBlacklistInstruction({ accountId: "i105...", assetDefinitionId: "asset...", blacklisted: "true" });',
+        '// @ts-expect-error control window spellings are exact.',
+        'buildSetAssetTransferControlInstruction({ accountId: "i105...", assetDefinitionId: "asset...", limits: [{ window: "day", capAmount: "1" }] });',
+        '// @ts-expect-error transfer cap quantities reject lossy JavaScript numbers.',
+        'buildSetAssetTransferControlInstruction({ accountId: "i105...", assetDefinitionId: "asset...", limits: [{ window: "DAY", capAmount: 1 }] });',
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
         "declare const signedOrderbookTransaction: Uint8Array;",
         "const orderbookReceipt: Promise<SorafsOrderbookSubmissionReceipt> = new ToriiClient('https://torii.example').submitSorafsOrderbookOrder(signedOrderbookTransaction, { expectedReceiptSigner: 'ed0120...' });",
@@ -530,12 +778,12 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error fixture-only Exact12 codecs are not retained by the broad browser facade.",
         `void export${browserIndex}.noritoDecodePrivacyExact12FixtureBundleBase64V1;`,
         `const generateKeyPair: typeof export${cryptoIndex}.generateKeyPair = Crypto.generateKeyPair;`,
-        "const privacySnapshot: PrivacyCapabilitySnapshotV1 = parsePrivacyCapabilitySnapshotV1({});",
-        "const privacyCommittedHeight: bigint = privacySnapshot.committed_height;",
-        "const privacyNodeResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'), { canonicalAuth: { accountId: 'i105...', privateKey: '11'.repeat(32) } });",
-        "const privacyBrowserResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiBrowserClient('https://torii.example'), { authAccountId: 'i105...', sign: async () => new Uint8Array(64) });",
-        'const privacyProofSystems: PrivacyProofSystemIdV1[] = ["stark-fri-sha256-goldilocks", "anonymous-pgc-p256", "iroha-verange-p256", "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512", "vega-neutron-nova-spartan-hyrax-t256", "jindo-polynomial-commitment", "lantern-lnp22-module-linear-norm", "halo2-ipa-pasta", "fcmp-plus-plus-curve-tree-bulletproofs"];',
-        'const privacyEngines: PrivacyEngineIdV1[] = ["native-goldilocks-stark-fri", "native-anonymous-pgc-p256", "native-verange-p256", "native-zk-ams-masked-relaxed-spartan-t256-ristretto255", "native-vega", "native-jindo", "native-lantern-lnp22", "native-halo2-orchard", "native-fcmp-plus-plus"];',
+        "declare const exact12ManifestArchive: Uint8Array;",
+        "const privacyManifest: PrivacyExact12CapabilityManifestV1 = decodePrivacyExact12CapabilityManifestV1(exact12ManifestArchive);",
+        "const privacyCommittedHeight: bigint = privacyManifest.committed_height;",
+        "const privacyNodeResult: Promise<PrivacyExact12CapabilityManifestV1> = getPrivacyExact12CapabilityManifestV1(new ToriiClient('https://torii.example'), { canonicalAuth: { accountId: 'i105...', privateKey: '11'.repeat(32) } });",
+        'const privacyProofSystems: PrivacyProofSystemIdV1[] = ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "anonymous-pgc-p256", "iroha-verange-p256", "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512", "vega-neutron-nova-spartan-hyrax-t256", "jindo-polynomial-commitment", "lantern-lnp22-module-linear-norm", "halo2-ipa-pasta", "fcmp-plus-plus-curve-tree-bulletproofs"];',
+        'const privacyEngines: PrivacyEngineIdV1[] = ["native-goldilocks-poseidon-x7-stark-fri-6x64-v1", "native-anonymous-pgc-p256", "native-verange-p256", "native-zk-ams-masked-relaxed-spartan-t256-ristretto255", "native-vega", "native-jindo", "native-lantern-lnp22", "native-halo2-orchard", "native-fcmp-plus-plus"];',
         "// @ts-expect-error retired SIS-with-hints proof systems fail closed.",
         'const retiredPrivacyProofSystem: PrivacyProofSystemIdV1 = "sis-with-hints";',
         "// @ts-expect-error proof-system labels are case-sensitive.",
@@ -563,8 +811,8 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "void ToriiClient.prototype.getPrivacyCapabilitiesV1;",
         "// @ts-expect-error privacy capability parser is not a root runtime export.",
         "void RootSdk.parsePrivacyCapabilitySnapshotV1;",
-        "// @ts-expect-error the optional fetch API rejects unknown request options.",
-        "getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'), { canonicalAuth: { accountId: 'i105...', privateKey: '11'.repeat(32) }, unknown: true });",
+        "// @ts-expect-error the Exact12 fetch API rejects unknown request options.",
+        "getPrivacyExact12CapabilityManifestV1(new ToriiClient('https://torii.example'), { canonicalAuth: { accountId: 'i105...', privateKey: '11'.repeat(32) }, unknown: true });",
         "const quantityFrame: Uint8Array = NumericV1.encodeQuantityFrame(42n);",
         "const quantityEnvelope: Uint8Array = NumericV1.encodeQuantityEnvelope(42n);",
         "const quantityJson: string = NumericV1.encodeQuantityJson(42n);",
@@ -596,10 +844,22 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "void Torii.generateKeyPair;",
         "// @ts-expect-error Crypto does not expose Torii clients.",
         "void Crypto.ToriiClient;",
+        "// @ts-expect-error The source-only crypto runtime factory is not public.",
+        "void RootSdk._createCryptoApi;",
+        "// @ts-expect-error The Crypto namespace omits source-only runtime factories.",
+        "void Crypto._createCryptoApi;",
+        "// @ts-expect-error The crypto subpath omits source-only runtime factories.",
+        `void export${cryptoIndex}._createCryptoApi;`,
+        "// @ts-expect-error Source-only transaction runtime factories are not public.",
+        "void RootSdk._createTransactionApi;",
+        "// @ts-expect-error The Norito namespace omits source-only runtime factories.",
+        "void Norito._createNoritoInstructionApi;",
+        "// @ts-expect-error The Norito subpath omits source-only runtime factories.",
+        `void export${noritoIndex}._createNoritoInstructionApi;`,
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void cancelAssetLock; void toriiConstructor; void orderbookReceipt; void orderbookAmbiguity; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void privacyProofSystems; void privacyEngines; void retiredPrivacyProofSystem; void caseShiftedPrivacyProofSystem; void paddedPrivacyProofSystem; void retiredPrivacyEngine; void caseShiftedPrivacyEngine; void confusablePrivacyEngine; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void kagemushaWireVersion; void cancelAssetLock; void toriiConstructor; void orderbookReceipt; void orderbookAmbiguity; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacyManifest; void privacyCommittedHeight; void privacyNodeResult; void privacyProofSystems; void privacyEngines; void retiredPrivacyProofSystem; void caseShiftedPrivacyProofSystem; void paddedPrivacyProofSystem; void retiredPrivacyEngine; void caseShiftedPrivacyEngine; void confusablePrivacyEngine; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );
@@ -628,7 +888,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
 });
 
 test("dedicated browser declarations compile without ambient Node types", () => {
-  for (const declaration of ["index.d.ts", "src/blockProofTypes.d.ts"]) {
+  for (const declaration of ["index.d.ts", "dist/blockProofTypes.d.ts"]) {
     const source = fs.readFileSync(path.join(PACKAGE_ROOT, declaration), "utf8");
     assert.doesNotMatch(source, /reference types=["']node["']/u, declaration);
     assert.doesNotMatch(source, /["']node:/u, declaration);
@@ -644,7 +904,6 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         'import { browserTransactionCodec } from "@iroha/iroha-js/transaction-codec";',
         'import { computeIvmArtifactHashes } from "@iroha/iroha-js/ivm-artifact";',
         'import { canonicalQueryString } from "@iroha/iroha-js/canonical-request";',
-        'import { getPrivacyCapabilitiesV1, type PrivacyCapabilitiesBrowserClientV1, type PrivacyCapabilitySnapshotV1 } from "@iroha/iroha-js/privacy-capabilities";',
         'import { compileKotodamaProgram, KotodamaCompilerClient, type KotodamaCompiledEntrypointValueKindName, type KotodamaCompiledManifestMetadata, type KotodamaCompilerCallOptions, type KotodamaCompilerTransportOptions } from "@iroha/iroha-js/kotodama-compiler";',
         "declare const approval: BrowserConnectApproval;",
         "declare const connectSession: ReturnType<typeof createConnectAppSession>;",
@@ -655,8 +914,6 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         "void connectSession.signRaw(TORII_CANONICAL_REQUEST_DOMAIN_TAG, bytes);",
         "void new NexusAppClient({ chainDiscriminant: 753, transactionCodec: browserTransactionCodec });",
         "void computeIvmArtifactHashes(bytes);",
-        "declare const privacyClient: PrivacyCapabilitiesBrowserClientV1;",
-        "const privacyResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(privacyClient, { headers: { Accept: 'application/json' }, authAccountId: 'i105...', sign: async () => new Uint8Array(64) });",
         'void canonicalQueryString(new URLSearchParams({ browser: "true" }));',
         'void compileKotodamaProgram("CREATE DOMAIN browser");',
         "const compilerTransport: KotodamaCompilerTransportOptions = { signal: new AbortController().signal, timeoutMs: 30_000 };",
@@ -673,7 +930,7 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         'const retiredCompilerAmount: KotodamaCompiledEntrypointValueKindName = "Amount";',
         '// @ts-expect-error U128 is not a canonical V1 boundary kind.',
         'const retiredCompilerU128: KotodamaCompiledEntrypointValueKindName = "U128";',
-        'void privacyResult; void compilerTransport; void compilerCall; void compilerNumericKinds; void compilerManifestName; void compilerFingerprint; void compilerFeatureBitmap; void compilerEntrypoints; void compilerStates; void retiredCompilerAmount; void retiredCompilerU128;',
+        'void compilerTransport; void compilerCall; void compilerNumericKinds; void compilerManifestName; void compilerFingerprint; void compilerFeatureBitmap; void compilerEntrypoints; void compilerStates; void retiredCompilerAmount; void retiredCompilerU128;',
       ].join("\n"),
       "utf8",
     );

@@ -682,18 +682,18 @@ mod query_errors_handling {
         http_default::{RequestSnapshot, with_send_hook},
     };
     use http::Response;
-    use iroha_config::parameters::actual::SorafsRolloutPhase;
     use iroha_data_model::{
         ChainId,
         query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse, SignedQuery,
         },
     };
+    use iroha_service_model::soranet::AnonymityPolicy;
+    use iroha_service_model::soranet::RolloutPhase;
     use iroha_test_samples::gen_account_in;
     use iroha_version::codec::DecodeVersioned as _;
     use norito::codec::{Decode, Encode};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
-    use sorafs_orchestrator::AnonymityPolicy;
     use std::{
         collections::HashMap,
         num::NonZeroU64,
@@ -990,7 +990,7 @@ mod query_errors_handling {
             add_transaction_nonce: false,
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
-            rollout_phase: SorafsRolloutPhase::Default,
+            rollout_phase: RolloutPhase::Default,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         };
@@ -1043,7 +1043,7 @@ mod query_errors_handling {
             add_transaction_nonce: false,
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
-            rollout_phase: SorafsRolloutPhase::Default,
+            rollout_phase: RolloutPhase::Default,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         };
@@ -1111,7 +1111,7 @@ mod query_errors_handling {
                 add_transaction_nonce: false,
                 alias_cache_policy: sample_alias_policy(),
                 default_anonymity_policy: AnonymityPolicy::GuardPq,
-                rollout_phase: SorafsRolloutPhase::Default,
+                rollout_phase: RolloutPhase::Default,
                 data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
                 wire_format_preference: crate::client::WireFormatPreference::default(),
             };
@@ -1175,7 +1175,7 @@ mod query_errors_handling {
             add_transaction_nonce: false,
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
-            rollout_phase: SorafsRolloutPhase::Default,
+            rollout_phase: RolloutPhase::Default,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         }

@@ -13,11 +13,6 @@ name = "kotlin-fixture-gen"
 path = "src/main.rs"
 required-features = ["dev-tools"]
 
-[[bin]]
-name = "swift_kagemusha_peer_payment_v4"
-path = "src/bin/swift_kagemusha_peer_payment_v4.rs"
-required-features = ["dev-tools"]
-
 [dependencies]
 iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["application-model", "transparent_api"] }
 iroha_crypto = { path = "../../crates/iroha_crypto", default-features = false, features = ["node-crypto"] }

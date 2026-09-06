@@ -1,5 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Happy-path NPoS coverage for canonical v2 data availability and metrics.
+use super::sumeragi_da::submit_exact_large_da_log_and_verify_quorum;
 use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -15,7 +16,6 @@ const METRIC_ATTEMPTS: usize = 40;
 const METRIC_INTERVAL: Duration = Duration::from_millis(250);
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
-const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const TORII_CONTENT_HEADROOM_BYTES: usize = 2 * 1024 * 1024;
 fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
@@ -135,52 +135,20 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
-    let client = network.client();
-    let expected_height = client.get_status()?.blocks.saturating_add(1);
-    let payload = "N".repeat(LARGE_PAYLOAD_BYTES);
-    let submit_client = client.clone();
-    tokio::task::spawn_blocking(move || {
-        submit_client.submit(
-            Log::new(Level::INFO, payload),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-    })
-    .await
-    .wrap_err("join large NPoS DA submission")??;
-    tokio::time::timeout(
-        COMMIT_WAIT_BUDGET,
-        network.ensure_blocks_with(|height| height.total >= expected_height),
-    )
-    .await
-    .wrap_err("large NPoS DA payload did not commit within the budget")??;
-    let required = network.peers().len().saturating_sub(1).max(1);
-    let mut committed_subjects = Vec::new();
     for peer in network.peers() {
-        let peer_client = peer.client();
-        let status = peer_client.get_sumeragi_status()?;
-        status
-            .validate()
-            .map_err(|err| eyre!("invalid canonical v2 status: {err}"))?;
-        let diagnostics = peer_client.get_sumeragi_diagnostics()?;
-        if diagnostics.npos.is_some()
-            && status.last_committed_height >= expected_height
-            && status.last_committed_subject.is_some()
-        {
-            committed_subjects.push(status.last_committed_subject);
-        }
+        ensure!(
+            peer.client().get_sumeragi_diagnostics()?.npos.is_some(),
+            "{} did not activate the NPoS consensus diagnostics",
+            peer.mnemonic()
+        );
     }
-    ensure!(
-        committed_subjects.len() >= required,
-        "expected a canonical v2 commit subject on {required} peers, observed {}",
-        committed_subjects.len()
-    );
-    let expected_subject = committed_subjects[0];
-    ensure!(
-        committed_subjects
-            .iter()
-            .all(|subject| *subject == expected_subject),
-        "quorum peers must agree on the NPoS DA subject: {committed_subjects:?}"
-    );
+    submit_exact_large_da_log_and_verify_quorum(
+        &network,
+        b'N',
+        LARGE_PAYLOAD_BYTES,
+        stringify!(npos_large_da_payload_commits_with_consistent_v2_subject),
+    )
+    .await?;
     network.shutdown().await;
     Ok(())
 }

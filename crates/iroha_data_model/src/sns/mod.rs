@@ -24,6 +24,8 @@ pub const DATASPACE_ALIAS_SUFFIX_ID: SuffixId = 0x1003;
 /// Canonical selector payload for SNS names.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::NameSelectorV1")]
 pub struct NameSelectorV1 {
     /// Selector encoding version (currently `1`).
     pub version: u8,
@@ -85,6 +87,8 @@ pub enum NameSelectorError {
 /// Record describing the canonical ownership state of a SNS name.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::NameRecordV1")]
 pub struct NameRecordV1 {
     /// Canonical selector for the registered label.
     pub selector: NameSelectorV1,
@@ -160,6 +164,8 @@ impl NameRecordV1 {
     feature = "json",
     norito(tag = "status", content = "detail", no_fast_from_json)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::NameStatus")]
 pub enum NameStatus {
     /// Registration is active and fully paid.
     Active,
@@ -175,6 +181,8 @@ pub enum NameStatus {
 /// Details captured when a registration is frozen.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::NameFrozenStateV1")]
 pub struct NameFrozenStateV1 {
     /// Reason recorded by governance/guardian.
     pub reason: String,
@@ -184,6 +192,8 @@ pub struct NameFrozenStateV1 {
 /// Details captured when a registration is tombstoned.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::NameTombstoneStateV1")]
 pub struct NameTombstoneStateV1 {
     /// Reason recorded by governance/guardian.
     pub reason: String,
@@ -191,6 +201,8 @@ pub struct NameTombstoneStateV1 {
 /// Canonical representation of token amounts used by SNS pricing.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::TokenValue")]
 pub struct TokenValue {
     /// Settlement asset-holding identifier (`<asset-definition-id>#<account-id>`).
     pub asset_id: String,
@@ -210,6 +222,8 @@ impl TokenValue {
 /// Auction metadata recorded for pending or running auctions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::NameAuctionStateV1")]
 pub struct NameAuctionStateV1 {
     /// Auction flavour.
     pub kind: AuctionKind,
@@ -231,6 +245,8 @@ pub struct NameAuctionStateV1 {
     feature = "json",
     norito(tag = "kind", content = "detail", no_fast_from_json)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::AuctionKind")]
 pub enum AuctionKind {
     /// 72h commit / 24h reveal sealed-bid auction.
     VickreyCommitReveal,
@@ -240,6 +256,8 @@ pub enum AuctionKind {
 /// Controller descriptor referencing account addresses or resolver templates.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::NameControllerV1")]
 pub struct NameControllerV1 {
     /// Controller classification.
     pub controller_type: ControllerType,
@@ -268,6 +286,8 @@ impl NameControllerV1 {
     feature = "json",
     norito(tag = "kind", content = "detail", no_fast_from_json)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::ControllerType")]
 pub enum ControllerType {
     /// Single account address controller.
     Account,
@@ -281,6 +301,8 @@ pub enum ControllerType {
 /// Steward-advertised pricing tier definition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::PriceTierV1")]
 pub struct PriceTierV1 {
     /// Tier identifier.
     pub tier_id: u8,
@@ -300,6 +322,8 @@ pub struct PriceTierV1 {
 /// Reserved label assignment controlled by governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::ReservedNameV1")]
 pub struct ReservedNameV1 {
     /// Canonical lowercase label.
     pub normalized_label: String,
@@ -313,6 +337,8 @@ pub struct ReservedNameV1 {
 /// Basis-point split describing how funds are routed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::SuffixFeeSplitV1")]
 pub struct SuffixFeeSplitV1 {
     /// Treasury share (basis points).
     pub treasury_bps: u16,
@@ -330,6 +356,8 @@ pub struct SuffixFeeSplitV1 {
     feature = "json",
     norito(tag = "status", content = "detail", no_fast_from_json)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::SuffixStatus")]
 pub enum SuffixStatus {
     /// Policy active and available for registration.
     Active,
@@ -341,6 +369,8 @@ pub enum SuffixStatus {
 /// Minimal suffix policy definition consumed by the registrar.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sns::SuffixPolicyV1")]
 pub struct SuffixPolicyV1 {
     /// Assigned identifier.
     pub suffix_id: SuffixId,
@@ -457,6 +487,8 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
     #[derive(Encode)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::sns::tests::ForgedTokenValue")]
     struct ForgedTokenValue {
         asset_id: String,
         amount: Numeric,
@@ -525,4 +557,10 @@ mod tests {
             "the first-release SNS record must reject a missing ownership generation"
         );
     }
+
+    #[cfg(test)]
+    mod captured_sns_schema_tests;
 }
+
+#[cfg(test)]
+mod captured_sns_schema_tests;

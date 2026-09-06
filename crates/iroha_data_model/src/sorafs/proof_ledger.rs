@@ -28,6 +28,8 @@ pub const PROOF_OUTCOME_MAX_PROVIDER_KEY_BYTES_V1: usize = 8 * 1024;
 /// Provider-scoped governed keys used to validate relayed PDP and `PoTR` outcomes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeSignerPolicyV1")]
 pub struct ProofOutcomeSignerPolicyV1 {
     /// Policy schema version.
     pub version: u16,
@@ -61,6 +63,8 @@ pub struct ProofOutcomeSignerPolicyV1 {
 /// Activated provider-scoped proof signer policy with governance provenance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeSignerPolicyRecordV1")]
 pub struct ProofOutcomeSignerPolicyRecordV1 {
     /// Canonical governed key policy.
     pub policy: ProofOutcomeSignerPolicyV1,
@@ -76,6 +80,8 @@ pub struct ProofOutcomeSignerPolicyRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeKindV1")]
 pub enum ProofOutcomeKindV1 {
     /// Proof-of-data-possession terminal outcome.
     Pdp,
@@ -86,6 +92,8 @@ pub enum ProofOutcomeKindV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "status", content = "detail", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PdpOutcomeStatusV1")]
 pub enum PdpOutcomeStatusV1 {
     /// Exhaustive admission-bound verification succeeded.
     Accepted,
@@ -126,6 +134,8 @@ impl PdpOutcomeStatusV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "status", content = "detail", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PotrOutcomeStatusV1")]
 pub enum PotrOutcomeStatusV1 {
     /// Retrieval completed within the governed deadline.
     Success,
@@ -141,6 +151,8 @@ pub enum PotrOutcomeStatusV1 {
 /// Detached Ed25519 provider attestation over a canonical PDP proof digest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeEd25519AttestationV1")]
 pub struct ProofOutcomeEd25519AttestationV1 {
     /// Admission-governed provider public key.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -152,6 +164,8 @@ pub struct ProofOutcomeEd25519AttestationV1 {
 /// Payload-free PDP-specific terminal projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PdpOutcomeProjectionV1")]
 pub struct PdpOutcomeProjectionV1 {
     /// Monotonic sequence assigned by the provider challenge protocol.
     pub source_sequence: u64,
@@ -184,6 +198,8 @@ pub struct PdpOutcomeProjectionV1 {
 /// PoTR-specific terminal projection retaining the canonical signed receipt.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PotrOutcomeProjectionV1")]
 pub struct PotrOutcomeProjectionV1 {
     /// Stable receipt classification.
     pub status: PotrOutcomeStatusV1,
@@ -215,6 +231,8 @@ pub struct PotrOutcomeProjectionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "kind", content = "projection", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeProjectionV1")]
 pub enum ProofOutcomeProjectionV1 {
     /// PDP terminal metadata and detached proof attestation.
     Pdp(PdpOutcomeProjectionV1),
@@ -234,6 +252,8 @@ impl ProofOutcomeProjectionV1 {
 /// One chain-authoritative proof terminal outcome.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeRecordV1")]
 pub struct ProofOutcomeRecordV1 {
     /// Projection schema version.
     pub version: u16,
@@ -267,6 +287,8 @@ impl ProofOutcomeRecordV1 {
 /// Finalized block anchor for one coherent proof-outcome query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1")]
 pub struct ProofOutcomeFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -277,6 +299,8 @@ pub struct ProofOutcomeFinalizedCursorV1 {
 /// One authoritative proof outcome anchored to finalized chain state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1")]
 pub struct ProofOutcomeFinalizedRecordV1 {
     /// Finalized state anchor at which the outcome was read.
     pub finalized_cursor: ProofOutcomeFinalizedCursorV1,
@@ -286,6 +310,8 @@ pub struct ProofOutcomeFinalizedRecordV1 {
 /// Exclusive cursor for one committed proof-outcome event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1")]
 pub struct ProofOutcomeFinalizedEventCursorV1 {
     /// Monotonic event sequence beginning at one.
     pub sequence: u64,
@@ -300,6 +326,8 @@ pub struct ProofOutcomeFinalizedEventCursorV1 {
 /// Typed proof-outcome event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventV1")]
 pub struct ProofOutcomeFinalizedEventV1 {
     /// Monotonic proof-outcome event sequence beginning at one.
     pub sequence: u64,
@@ -328,6 +356,8 @@ impl ProofOutcomeFinalizedEventV1 {
 /// Cursor-bounded page of typed committed proof-outcome events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1")]
 pub struct ProofOutcomeFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ProofOutcomeFinalizedCursorV1,
@@ -364,3 +394,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_proof_ledger_schema_tests;

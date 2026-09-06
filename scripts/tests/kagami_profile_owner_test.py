@@ -68,11 +68,15 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
     cargo.chmod(0o700)
     target = tmp_path / "target"
     target.mkdir(mode=0o700)
+    authority = tmp_path / "authority"
+    authority.mkdir(mode=0o700)
     return [
         "--cargo",
         str(cargo),
         "--cargo-target-dir",
         str(target),
+        "--kagemusha-mint-finality-parameters-dir",
+        str(authority),
         "--cargo-lock-size",
         "311234",
         "--cargo-lock-sha256",
@@ -80,7 +84,7 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
     ]
 
 
-def test_profile_allowlist_and_closed_inventories_match_present_bundles() -> None:
+def test_profile_allowlist_describes_external_complete_bundles() -> None:
     assert set(MODULE.PROFILE_FILES) == {"iroha3-dev"}
     assert set(MODULE.PROFILE_FILES["iroha3-dev"]) == DEV_FILES
     assert len(DEV_FILES) == 11
@@ -89,17 +93,26 @@ def test_profile_allowlist_and_closed_inventories_match_present_bundles() -> Non
         for path in (REPO_ROOT / "defaults" / "kagami" / "iroha3-dev").iterdir()
         if path.is_file()
     }
-    assert present == DEV_FILES
+    assert present != DEV_FILES
+    assert "genesis.template.json" in present
+    assert "genesis.signed.nrt" not in present
 
 
 def test_profile_command_always_pins_one_profile_output_and_kagami() -> None:
     tools = MODULE.BuiltTools(Path("/external/target/debug/xtask"), Path("/external/target/debug/kagami"))
-    command = MODULE._profile_command(tools, "iroha3-dev", Path("/external/stage"))
+    command = MODULE._profile_command(
+        tools,
+        "iroha3-dev",
+        Path("/external/stage"),
+        Path("/external/authority"),
+    )
     assert command == [
         "/external/target/debug/xtask",
         "kagami-profiles",
         "--profile",
         "iroha3-dev",
+        "--kagemusha-mint-finality-parameters-dir",
+        "/external/authority",
         "--out",
         "/external/stage/defaults/kagami",
         "--kagami",
@@ -224,7 +237,7 @@ def test_cli_rejects_public_profiles_all_and_ambiguous_modes(tmp_path: Path) -> 
         )
 
 
-def test_post_manifest_has_only_the_dev_profile_owner() -> None:
+def test_post_manifest_does_not_claim_operator_bundles_are_checked_in() -> None:
     if POST_MANIFEST.exists():
         manifest_text = POST_MANIFEST.read_text(encoding="utf-8")
     else:
@@ -236,17 +249,4 @@ def test_post_manifest_has_only_the_dev_profile_owner() -> None:
         for entry in manifest["generated"]
         if entry["name"] == "kagami-iroha3-dev-profile-bundle"
     }
-    assert set(owners) == {"kagami-iroha3-dev-profile-bundle"}
-    dev = set(owners["kagami-iroha3-dev-profile-bundle"]["outputs"])
-    assert len(dev) == 11
-    assert all("iroha3-taira" not in output and "iroha3-nexus" not in output for output in dev)
-    for owner in owners.values():
-        assert "Cargo.lock" in owner["inputs"]
-        assert "kagami_profile_owner.py" in owner["generator"]
-        assert "--write" in owner["generator"]
-        assert "--check" in owner["check"]
-        assert "--stage-a" in owner["check"] and "--stage-b" in owner["check"]
-        assert "--cargo-lock-size 311234" in owner["generator"]
-        assert "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" in owner["generator"]
-        assert "--cargo-lock-size 311234" in owner["check"]
-        assert "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" in owner["check"]
+    assert owners == {}

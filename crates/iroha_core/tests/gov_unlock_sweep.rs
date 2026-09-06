@@ -3,11 +3,15 @@
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, World},
+    state::{
+        GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, State, World, WorldReadOnly,
+    },
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{block::BlockHeader, events::data::governance::GovernanceEvent};
 use iroha_test_samples::ALICE_ID;
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 fn checked_random_governance_unlock_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance unlock keypair")
@@ -27,17 +31,26 @@ fn unlocks_after_expiry_height() {
     {
         let mut sblock1 = state.block(header1);
         let mut stx = sblock1.transaction();
-        let mut map = iroha_core::state::GovernanceLocksForReferendum::default();
+        stx.world.governance_referenda_mut().insert(
+            "rid-unlock".to_owned(),
+            GovernanceReferendumRecord {
+                h_start: 0,
+                h_end: 0,
+                status: GovernanceReferendumStatus::Closed,
+                mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            },
+        );
+        let mut map = GovernanceLocksForReferendum::default();
         map.locks.insert(
             ALICE_ID.clone(),
-            iroha_core::state::GovernanceLockRecord {
+            GovernanceLockRecord {
                 owner: ALICE_ID.clone(),
-                amount: 10_u64.into(),
+                amount: 0_u64.into(),
                 slashed: 0_u64.into(),
                 expiry_height: 2,
                 direction: 0,
-                duration_blocks: 0,
-                custody: iroha_core::state::GovernanceLockCustody {
+                duration_blocks: 2,
+                custody: GovernanceLockCustody {
                     escrowed: false,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
@@ -95,4 +108,15 @@ fn unlocks_after_expiry_height() {
             .commit_empty_block_for_testing()
             .expect("commit block at H=3");
     }
+    let view = state.view();
+    let world = view.world();
+    assert!(world.governance_locks().get("rid-unlock").is_none());
+    assert_eq!(
+        world
+            .governance_referenda()
+            .get("rid-unlock")
+            .expect("unlock preserves the referendum history")
+            .status,
+        GovernanceReferendumStatus::Closed
+    );
 }

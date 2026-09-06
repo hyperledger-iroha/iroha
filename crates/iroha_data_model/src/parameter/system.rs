@@ -51,6 +51,67 @@ impl core::fmt::Display for ConsensusFingerprint {
         write!(formatter, "0x{}", hex::encode(self.0))
     }
 }
+/// Consensus-state staging record for the next KAGEMUSHA V1 Pasta roster.
+///
+/// Validators read this value from the finalized world state before building
+/// an epoch-boundary height context. The old roster then authenticates the
+/// complete next roster through the boundary context and its CommitQC.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaMintFinalityNextEpochParameterV1 {
+    /// Full separately provisioned public roster for the next election epoch.
+    pub roster: crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+}
+impl KagemushaMintFinalityNextEpochParameterV1 {
+    /// Sole custom-parameter identity for the next roster.
+    pub const PARAMETER_ID_STR: &'static str = "kagemusha_mint_finality_next_epoch_v1";
+
+    /// Construct the canonical custom-parameter identifier.
+    #[must_use]
+    pub fn parameter_id() -> CustomParameterId {
+        Self::PARAMETER_ID_STR
+            .parse()
+            .expect("valid KAGEMUSHA V1 next-roster parameter identifier")
+    }
+
+    /// Validate the complete public roster before it enters consensus state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the roster validation error unchanged.
+    pub fn validate(&self) -> Result<(), crate::isi::kagemusha_v1::KagemushaIsiValidationErrorV1> {
+        self.roster.validate()
+    }
+
+    /// Convert the typed payload into its canonical custom-parameter carrier.
+    #[must_use]
+    pub fn into_custom_parameter(self) -> CustomParameter {
+        CustomParameter::new(Self::parameter_id(), Json::new(self))
+    }
+
+    /// Decode and validate the typed payload from its sole parameter identity.
+    #[must_use]
+    pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
+        if custom.id != Self::parameter_id() {
+            return None;
+        }
+        let value = norito::json::from_str::<Self>(custom.payload().get()).ok()?;
+        value.validate().ok()?;
+        Some(value)
+    }
+}
 #[cfg(feature = "json")]
 impl JsonSerialize for ConsensusFingerprint {
     fn json_serialize(&self, out: &mut String) {
@@ -95,7 +156,6 @@ impl JsonDeserialize for ConsensusFingerprint {
 #[derive(
     Debug,
     Clone,
-    Copy,
     PartialEq,
     Eq,
     norito::derive::JsonSerialize,
@@ -114,6 +174,11 @@ pub struct ConsensusHandshakeMetadata {
     pub wire_protocol_version: u32,
     /// Canonical consensus fingerprint.
     pub consensus_fingerprint: ConsensusFingerprint,
+    /// Signed network-independent KAGEMUSHA mint-finality genesis authority.
+    ///
+    /// Core binds the final genesis-derived network identity to these
+    /// templates before constructing the first height context.
+    pub kagemusha_mint_finality: crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     /// Signed inputs for the first Sumeragi v2 height context.
     pub sumeragi_v2: crate::block::consensus_v2::SumeragiV2GenesisContextParameters,
 }
@@ -123,7 +188,8 @@ impl ConsensusHandshakeMetadata {
     /// # Errors
     ///
     /// Returns an error when the wire version is not the first-release version
-    /// or the signed Sumeragi v2 genesis context is invalid.
+    /// or the signed Sumeragi v2 context/KAGEMUSHA genesis authority is
+    /// invalid.
     pub fn validate(&self) -> Result<(), String> {
         let expected_version = u32::from(crate::block::consensus_v2::PROTOCOL_VERSION);
         if self.wire_protocol_version != expected_version {
@@ -132,6 +198,9 @@ impl ConsensusHandshakeMetadata {
             );
         }
         self.sumeragi_v2
+            .validate()
+            .map_err(|error| error.to_string())?;
+        self.kagemusha_mint_finality
             .validate()
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -296,15 +365,9 @@ mod model {
         /// Expiry grace window (blocks) after declared expiry.
         #[norito(default = "defaults::sumeragi::key_expiry_grace_blocks")]
         pub key_expiry_grace_blocks: u64,
-        /// Require HSM binding for consensus/committee keys.
-        #[norito(default = "defaults::sumeragi::key_require_hsm")]
-        pub key_require_hsm: bool,
         /// Allowed algorithms for consensus/committee keys.
         #[norito(default = "defaults::sumeragi::key_allowed_algorithms")]
         pub key_allowed_algorithms: Vec<iroha_crypto::Algorithm>,
-        /// Allowed HSM providers for consensus/committee keys.
-        #[norito(default = "defaults::sumeragi::key_allowed_hsm_providers")]
-        pub key_allowed_hsm_providers: Vec<String>,
     }
     /// NPoS-specific consensus parameters persisted as a custom parameter payload.
     #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -457,6 +520,20 @@ mod model {
                 || self.slashing_delay_blocks == 0
             {
                 return Err("NPoS finality and reconfiguration bounds must be greater than zero");
+            }
+            let accountability_window = self
+                .evidence_horizon_blocks
+                .checked_add(self.slashing_delay_blocks)
+                .ok_or("NPoS evidence-and-slashing window overflows u64")?;
+            let retained_roster_window = self
+                .epoch_length_blocks
+                .get()
+                .checked_mul(3)
+                .ok_or("NPoS three-epoch evidence capacity window overflows u64")?;
+            if accountability_window > retained_roster_window {
+                return Err(
+                    "evidence_horizon_blocks + slashing_delay_blocks must not exceed three epoch lengths",
+                );
             }
             Ok(())
         }
@@ -1092,18 +1169,11 @@ impl JsonSerialize for SumeragiParameters {
             "key_expiry_grace_blocks",
             &self.key_expiry_grace_blocks,
         );
-        json_support::write_field(out, &mut first, "key_require_hsm", &self.key_require_hsm);
         json_support::write_field(
             out,
             &mut first,
             "key_allowed_algorithms",
             &self.key_allowed_algorithms,
-        );
-        json_support::write_field(
-            out,
-            &mut first,
-            "key_allowed_hsm_providers",
-            &self.key_allowed_hsm_providers,
         );
         out.push('}');
     }
@@ -1139,18 +1209,11 @@ impl JsonSerialize for SumeragiParameters {
             "key_expiry_grace_blocks",
             &self.key_expiry_grace_blocks,
         )?;
-        json_support::write_field_to(out, &mut first, "key_require_hsm", &self.key_require_hsm)?;
         json_support::write_field_to(
             out,
             &mut first,
             "key_allowed_algorithms",
             &self.key_allowed_algorithms,
-        )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "key_allowed_hsm_providers",
-            &self.key_allowed_hsm_providers,
         )?;
         out.push('}')?;
         out.end_container();
@@ -1187,21 +1250,11 @@ impl JsonDeserialize for SumeragiParameters {
             .map(|value| json_support::expect_u64(&value, "key_expiry_grace_blocks"))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::key_expiry_grace_blocks);
-        let key_require_hsm = map
-            .remove("key_require_hsm")
-            .map(|value| json_support::expect_bool(&value, "key_require_hsm"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::key_require_hsm);
         let key_allowed_algorithms = map
             .remove("key_allowed_algorithms")
             .map(|value| json_support::parse_value_as::<Vec<Algorithm>>(&value))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::key_allowed_algorithms);
-        let key_allowed_hsm_providers = map
-            .remove("key_allowed_hsm_providers")
-            .map(|value| json_support::parse_value_as::<Vec<String>>(&value))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::key_allowed_hsm_providers);
         json_support::ensure_no_extra(map)?;
         let params = Self {
             block_cadence_ms,
@@ -1209,9 +1262,7 @@ impl JsonDeserialize for SumeragiParameters {
             key_activation_lead_blocks,
             key_overlap_grace_blocks,
             key_expiry_grace_blocks,
-            key_require_hsm,
             key_allowed_algorithms,
-            key_allowed_hsm_providers,
         };
         Ok(params)
     }
@@ -1235,14 +1286,8 @@ mod defaults {
         pub const fn key_expiry_grace_blocks() -> u64 {
             0
         }
-        pub const fn key_require_hsm() -> bool {
-            false
-        }
         pub fn key_allowed_algorithms() -> Vec<Algorithm> {
             vec![Algorithm::BlsNormal]
-        }
-        pub fn key_allowed_hsm_providers() -> Vec<String> {
-            vec!["pkcs11".into(), "softkey".into(), "yubihsm".into()]
         }
         pub mod npos {
             use core::num::NonZeroU64;
@@ -1275,7 +1320,7 @@ mod defaults {
                 1
             }
             pub const fn slashing_delay_blocks() -> u64 {
-                259_200
+                3_600
             }
             pub const fn epoch_length_blocks() -> NonZeroU64 {
                 nonzero_ext::nonzero!(3_600_u64)
@@ -1350,9 +1395,7 @@ impl Default for SumeragiParameters {
             key_activation_lead_blocks: key_activation_lead_blocks(),
             key_overlap_grace_blocks: key_overlap_grace_blocks(),
             key_expiry_grace_blocks: key_expiry_grace_blocks(),
-            key_require_hsm: key_require_hsm(),
             key_allowed_algorithms: key_allowed_algorithms(),
-            key_allowed_hsm_providers: key_allowed_hsm_providers(),
         }
     }
 }
@@ -1646,9 +1689,7 @@ impl SumeragiParameters {
             key_activation_lead_blocks: defaults::sumeragi::key_activation_lead_blocks(),
             key_overlap_grace_blocks: defaults::sumeragi::key_overlap_grace_blocks(),
             key_expiry_grace_blocks: defaults::sumeragi::key_expiry_grace_blocks(),
-            key_require_hsm: defaults::sumeragi::key_require_hsm(),
             key_allowed_algorithms: defaults::sumeragi::key_allowed_algorithms(),
-            key_allowed_hsm_providers: defaults::sumeragi::key_allowed_hsm_providers(),
         }
     }
     /// Convert [`Self`] into iterator of individual parameters
@@ -2538,7 +2579,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":259200}"#;
+        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -2549,6 +2590,22 @@ mod tests {
             SumeragiNposParameters::from_custom_parameter(&custom).is_some(),
             "real chain payload should decode"
         );
+    }
+    #[test]
+    fn sumeragi_npos_rejects_accountability_window_beyond_committed_capacity() {
+        let mut parameters = SumeragiNposParameters::default();
+        parameters.slashing_delay_blocks = 3_601;
+        assert_eq!(
+            parameters.validate(),
+            Err(
+                "evidence_horizon_blocks + slashing_delay_blocks must not exceed three epoch lengths"
+            )
+        );
+
+        parameters.slashing_delay_blocks = 3_600;
+        parameters
+            .validate()
+            .expect("four complete validator rosters fit the committed evidence table");
     }
     #[test]
     fn sumeragi_npos_json_rejects_missing_and_zero_epoch_seed() {
@@ -2591,8 +2648,9 @@ mod tests {
             block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
             wire_protocol_version: u32::from(crate::block::consensus_v2::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
-            sumeragi_v2:
-                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            kagemusha_mint_finality:
+                crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
+            sumeragi_v2: crate::block::consensus_v2::test_genesis_context_parameters(),
         }
     }
     #[cfg(feature = "json")]
@@ -2609,15 +2667,31 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
+    fn handshake_metadata_requires_kagemusha_genesis_authority() {
+        let mut value = norito::json::to_value(&handshake_metadata_fixture())
+            .expect("serialize handshake metadata");
+        value
+            .as_object_mut()
+            .expect("metadata object")
+            .remove("kagemusha_mint_finality");
+        norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
+            .expect_err("signed KAGEMUSHA genesis authority must be mandatory");
+    }
+    #[cfg(feature = "json")]
+    #[test]
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
-        let mut bad_version = baseline;
+        let mut bad_version = baseline.clone();
         bad_version.wire_protocol_version = 99;
         assert!(bad_version.validate().is_err());
         let mut bad_context = baseline;
         bad_context.sumeragi_v2.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
+
+        let mut bad_kagemusha = handshake_metadata_fixture();
+        bad_kagemusha.kagemusha_mint_finality.epoch_roster.epoch = 1;
+        assert!(bad_kagemusha.validate().is_err());
     }
     #[cfg(feature = "json")]
     #[test]
@@ -2658,7 +2732,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":3600,"epoch_length_blocks":3600,}"#;
         assert!(
             Json::from_raw_json(payload.to_owned()).is_err(),
             "invalid JSON must be rejected before it can enter a custom parameter"

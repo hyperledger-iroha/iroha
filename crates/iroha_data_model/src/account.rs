@@ -56,6 +56,8 @@ mod model {
     /// ```
     #[derive(Clone, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::account::model::AccountId")]
     pub struct AccountId {
         /// Controller responsible for authorising account actions.
         pub controller: AccountController,
@@ -500,6 +502,13 @@ impl AccountId {
     #[inline]
     pub fn set_signatory(&mut self, signatory: PublicKey) {
         self.controller = AccountController::single(signatory);
+    }
+    /// Wipe controller key bytes before discarding a confidential account copy.
+    ///
+    /// The identifier intentionally becomes invalid and must not be used after
+    /// this call. It is reserved for decrypted restricted payload containers.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.controller.zeroize_for_confidential_discard();
     }
     /// Borrow the single-signature public key, panicking if the controller is not single-key.
     #[inline]

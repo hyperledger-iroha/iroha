@@ -39,7 +39,7 @@ EXACT_SUPERSEDING_HEAD_ASSERTION = '''assert_eq!(
             GovernanceExpectedHeadPresentV1 {
                 subject_id: deploy_subject_id,
                 version: 1,
-                head_root: competing_code_hash.into(),
+                head_root: competing_contract_code_hash.into(),
             },
         )),
         "supersession must bind the exact authoritative contract head",
@@ -55,6 +55,38 @@ DISTINCT_SUPERSEDING_ARTIFACT_ASSERTION = '''assert_ne!(
         competing_contract_code_hash, code_hash,
         "the supersession fixture must install a genuinely distinct artifact head",
     );'''
+CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS = (
+    "let competing_deploy_proposal = ProposalKind::DeployContract(",
+    "let competing_deploy_create = CreateParliamentGovernanceAttemptV1 {",
+    "let competing_deploy_attempt_id = competing_deploy_create.governance_attempt_id();",
+    '''InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash: competing_contract_code_hash,
+                abi_hash: competing_abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            })''',
+    "InstructionBox::from(competing_deploy_create)",
+    "let competing_deploy_certificate = certify_failure_path_attempt(",
+    "assert!(current_height(&client)? < competing_deploy_certificate.enact_at_height);",
+    '''assert_eq!(
+        deploy_certificate.expected_head, competing_deploy_certificate.expected_head,
+        "both certified deployments must compare against the same pre-enactment head",
+    );''',
+    "let competing_enacted = read_attempt(&client, competing_deploy_attempt_id)?;",
+    '''assert_eq!(
+        competing_enacted.attempt().status,
+        GovernanceAttemptStatusV1::Enacted,
+    );''',
+    '''assert_eq!(
+        competing_enacted.certificate(),
+        Some(&competing_deploy_certificate),
+    );''',
+)
+DIRECT_SUPERSESSION_BYPASSES = (
+    "ActivateContractInstance",
+    "CommitContractDeployment",
+)
 NO_RESULT_RESTART_CONTRACT_ABSENCE = '''assert_governed_contract_absent(
         &restart_peer.client(),
         contract_address,
@@ -125,9 +157,7 @@ EXACT_GOVERNED_CONTRACT_BINDING_CALLS = (
         &client,
         &contract_address,
         competing_contract_code_hash,
-        competing_abi_hash,
-        "the competing direct binding must be authoritative before enactment",
-    )?;''',
+        competing_abi_hash,''',
     '''assert_governed_contract_binding(
             &peer_client,
             &contract_address,
@@ -159,9 +189,18 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     EXACT_INACTIVE_CONTRACT_PROJECTION,
     "expected the exact inactive governed-contract projection",
     "fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str)",
+    "let query = FindAssetById::new(asset_id.clone());",
+    "query.asset_id(),",
+    "singular asset query must remain bound to the exact requested identifier",
     "FindError::Asset(missing),",
     "if missing.as_ref() == asset_id => Ok(())",
-    "expected a typed asset-not-found result",
+    "Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {",
+    ".query(FindAssets::new())",
+    '.filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())',
+    ".execute_single_opt()",
+    "exact-ID asset query failed after a generic not-found response",
+    "generic not-found contradicted by exact-ID query returning asset",
+    "expected an exact asset-not-found result",
     "fn assert_timed_ovn_casting_context_not_castable(",
     '.expect_err("a sealed timed-OVN corpus must not return a casting context");',
     'rendered.contains("400 Bad Request")',
@@ -172,6 +211,17 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
         "a sealed corpus is no longer a cast-capable context",
     )?;''',
     "fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str)",
+    "fn exact_block(client: &Client, height: u64) -> Result<SignedBlock>",
+    "NonZeroU64::new(height)",
+    ".query(FindBlocks)",
+    '.filter_with(|block| block.equals("height", height).into_predicate())',
+    ".execute_all()",
+    ".filter(|block| block.header().height() == requested_height)",
+    'ok_or_else(|| eyre!("finalized block height {height} is absent"))',
+    "if matching.next().is_some()",
+    "finalized block stream contains duplicate height",
+    "if block.header().height() != requested_height",
+    "finalized block stream returned height",
     "let block = exact_block(client, height)",
     '''if block
         .npos_consensus_effects()
@@ -211,7 +261,7 @@ PARLIAMENT_FAILURE_PATH_MARKERS = {
     "four_validator_certified_effects_record_supersession_and_execution_failure": (
         DISTINCT_SUPERSEDING_ARTIFACT,
         DISTINCT_SUPERSEDING_ARTIFACT_ASSERTION,
-        "Hash::prehashed(competing_contract_code_hash.into_bytes())",
+        *CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS,
         "GovernanceAttemptStatusV1::Superseded",
         "superseded.certificate(), Some(&deploy_certificate)",
         EXACT_SUPERSEDING_HEAD_ASSERTION,
@@ -316,7 +366,14 @@ SUCCESSOR_SEED_EQUALITY = (
 )
 POSITIVE_BEACON_MODES = """constPOSITIVE_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
 FAIL_CLOSED_BEACON_MODES = """constFAIL_CLOSED_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
+FAIL_CLOSED_STATUS_REQUEST_BOUND = """letstatus_poll_request_timeout=status_poll_window.checked_div(requests_per_sweep).unwrap_or(Duration::ZERO).max(Duration::from_millis(1)).min(Duration::from_secs(5));"""
+FAIL_CLOSED_ACTIVATION_DEADLINE = (
+    "letactivation_deadline=Instant::now().checked_add(status_poll_window)"
+)
 FAIL_CLOSED_TIMEOUT = """letunexpected_pulse_height=tokio::time::timeout(FAIL_CLOSED_BEACON_OBSERVATION_WINDOW,network.peers()[0].once_block(pulse_height),).await;"""
+FAIL_CLOSED_POST_OBSERVATION_DEADLINE = (
+    "letpost_observation_deadline=Instant::now().checked_add(status_poll_window)"
+)
 SORANET_POW_CORRIDOR_MARKERS = (
     '.write(["network","soranet_handshake","pow","puzzle","memory_kib",],i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),)',
     '.write(["network","soranet_handshake","pow","puzzle","time_cost"],1_i64,)',
@@ -546,8 +603,38 @@ def validate_exact_absence_classification(source: str) -> None:
         "all six active-contract checks must use the exact projection helper",
     )
     require(
-        "QueryExecutionFail::NotFound" not in source,
-        "asset absence must not accept a generic query-store NotFound result",
+        source.count(
+            "Err(QueryError::Validation(ValidationFail::QueryFailed("
+            "QueryExecutionFail::NotFound))) => {"
+        )
+        == 1,
+        "asset absence must classify exactly one nested NotFound fallback",
+    )
+    require(
+        source.count("let query = FindAssetById::new(asset_id.clone());") == 1
+        and source.count("query.asset_id(),") == 1
+        and source.count(
+            '.filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())'
+        )
+        == 1
+        and source.count(".execute_single_opt()") == 1,
+        "generic asset NotFound must be corroborated by one bounded exact-ID query",
+    )
+    require(
+        source.count(
+            '.query(FindBlocks)\n        .filter_with(|block| block.equals("height", height).into_predicate())\n        .execute_all()'
+        )
+        == 1
+        and source.count(
+            '.filter_with(|block| block.equals("height", height).into_predicate())'
+        )
+        == 1
+        and source.count(
+            ".filter(|block| block.header().height() == requested_height)"
+        )
+        == 1
+        and source.count("if matching.next().is_some()") == 1,
+        "exact finalized-block checks must use one bounded, locally exact, duplicate-rejecting query",
     )
 
     broad_absence_patterns = {
@@ -594,6 +681,23 @@ def validate_parliament_failure_paths(source: str) -> None:
         _, test = parliament_failure_path_test(source, name)
         for marker in markers:
             require(marker in test, f"Parliament failure path `{name}` lost `{marker}`")
+        if name == (
+            "four_validator_certified_effects_record_supersession_and_execution_failure"
+        ):
+            certified_positions = [
+                test.index(marker)
+                for marker in CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS
+            ]
+            require(
+                certified_positions == sorted(certified_positions),
+                "certified supersession path must propose, certify, and autonomously "
+                "enact the competing deployment in order",
+            )
+            for bypass in DIRECT_SUPERSESSION_BYPASSES:
+                require(
+                    bypass not in test,
+                    f"certified supersession path regained direct `{bypass}` authority",
+                )
 
 
 def capacity_failure_builder(source: str) -> tuple[re.Match[str], str]:
@@ -904,7 +1008,43 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "filter(|mode| **mode == ParliamentBeaconSignerMode::Valid)",
         "let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;",
         "let predecessor_height = pulse_height - 1;",
+        "let pulse_status_is_active = |status: &SumeragiV2Status| -> Result<bool> {",
+        "SumeragiV2StatusPhase::PendingApply",
+        "SumeragiV2BodyState::PendingApply",
+        "SumeragiV2BodyState::Applied",
+        "status.liveness.work.application,",
+        "SumeragiV2LocalWorkStage::Queued",
+        "SumeragiV2LocalWorkStage::Running",
+        "SumeragiV2LocalWorkStage::Complete",
+        "SumeragiV2ProgressTransition::Applied",
+        "let status_poll_window = network.sync_timeout();",
+        "status_poll_window.is_zero()",
+        "let requests_per_sweep = u32::try_from(network.peers().len())",
+        ".and_then(|peers| peers.checked_mul(2))",
+        "client.torii_request_timeout = status_poll_request_timeout;",
+        "let activation_deadline = Instant::now()",
+        "let mut last_activation_status_error = None;",
+        "for (peer_index, peer_client) in status_poll_clients.iter().enumerate() {",
+        "let observed_height = match current_height(peer_client) {",
+        'Some(format!("peer {peer_index} height: {error}"));',
+        "let status = match peer_client.get_sumeragi_status() {",
+        "last_activation_status_error =",
+        'Some(format!("peer {peer_index} sumeragi status: {error}"));',
+        "all_pulse_heights_active = false;",
+        "activation_deadline.saturating_duration_since(Instant::now())",
+        "in-flight request bound; last status fetch error: {}",
+        "last status fetch error: {}",
+        "all_pulse_heights_active &= pulse_status_is_active(&status)?;",
         "unexpected_pulse_height.is_err()",
+        "let post_observation_deadline = Instant::now()",
+        "let mut last_post_observation_status_error = None;",
+        "let mut all_post_observation_statuses_verified = true;",
+        "last_post_observation_status_error =",
+        "all_post_observation_statuses_verified = false;",
+        "if all_post_observation_statuses_verified {",
+        "post_observation_deadline.saturating_duration_since(Instant::now())",
+        "after the below-threshold observation; last status fetch error: {}",
+        "without leaving detached blocking",
         "peer.is_running()",
         "!status.restart_required",
         "assert_eq!(status.last_committed_height, predecessor_height);",
@@ -912,9 +1052,64 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
     )
     for marker in required:
         require(marker in test, f"fail-closed NPoS beacon test lost `{marker}`")
+    compacted = compact(test)
+    pre_apply_start = compacted.index(
+        "ifstatus.body_state==SumeragiV2BodyState::PendingApply{"
+    )
+    applied_handoff_start = compacted.index(
+        "assert_eq!(status.body_state,SumeragiV2BodyState::Applied);",
+        pre_apply_start,
+    )
     require(
-        FAIL_CLOSED_TIMEOUT in compact(test),
+        "returnOk(false);" in compacted[pre_apply_start:applied_handoff_start],
+        "the durable pre-application predecessor must remain a retry, not an active pulse",
+    )
+    require(
+        FAIL_CLOSED_STATUS_REQUEST_BOUND in compacted,
+        "fail-closed NPoS beacon test lost its short non-zero per-request bound",
+    )
+    require(
+        FAIL_CLOSED_TIMEOUT in compacted,
         "fail-closed NPoS beacon test lost its bounded no-block observation",
+    )
+    require(
+        FAIL_CLOSED_ACTIVATION_DEADLINE in compacted,
+        "fail-closed NPoS beacon test lost its monotonic pulse-context activation deadline",
+    )
+    require(
+        FAIL_CLOSED_POST_OBSERVATION_DEADLINE in compacted,
+        "fail-closed NPoS beacon test lost its fresh monotonic post-observation deadline",
+    )
+    require(
+        compacted.index(FAIL_CLOSED_ACTIVATION_DEADLINE)
+        < compacted.index(FAIL_CLOSED_TIMEOUT)
+        < compacted.index(FAIL_CLOSED_POST_OBSERVATION_DEADLINE),
+        "fail-closed NPoS beacon gates must order activation, observation, then post-observation verification",
+    )
+    require(
+        test.count("let observed_height = match current_height(peer_client) {") == 2
+        and test.count('Some(format!("peer {peer_index} height: {error}"));') == 2,
+        "both fail-closed NPoS status gates must retry transient authoritative-height failures",
+    )
+    require(
+        test.count(
+            'Some(format!("peer {peer_index} sumeragi status: {error}"));'
+        )
+        == 2,
+        "both fail-closed NPoS status gates must retry transient Sumeragi-status failures",
+    )
+    require(
+        test.count("Instant::now() >= activation_deadline") == 3
+        and test.count("Instant::now() >= post_observation_deadline") == 3,
+        "both fail-closed NPoS status gates must check their deadline around every synchronous request",
+    )
+    require(
+        test.count(".saturating_duration_since(Instant::now())") == 2,
+        "both fail-closed NPoS status gates must bound their retry sleep by the remaining deadline",
+    )
+    require(
+        test.count("pulse_status_is_active(&status)?") == 2,
+        "fail-closed NPoS beacon test must validate the pulse context before and after observation",
     )
     require(
         ".with_permissioned_consensus()" not in test,
@@ -923,6 +1118,10 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
     require(
         ".with_parliament_test_signers()" not in test,
         "fail-closed beacon test replaced the exact per-peer fault profile",
+    )
+    require(
+        "spawn_blocking" not in test,
+        "fail-closed beacon status polls must not leave detached blocking requests",
     )
     require(
         "network.shutdown().await;" in test,
@@ -962,7 +1161,7 @@ def validate_feature_only_fault_wiring(
         '#[cfg(feature = "test-network-parliament-signers")]',
         "test_network_emit_invalid_outbound_partial_v1()",
         "partial.signature_share[0] ^= 1;",
-        "let _ = active.aggregator.accept_partial(partial)?;",
+        "let _ = next_aggregator.accept_partial(partial)?;",
     ):
         require(marker in lifecycle, f"feature-only beacon lifecycle lost `{marker}`")
 
@@ -1177,8 +1376,26 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "sealed timed-OVN casting-context lookup": corridor
             + "\nclient.get_parliament_timed_ovn_casting_context(ballot_attempt_id)"
             ".is_err();\n",
-            "generic asset not-found fallback": corridor
-            + "\nQueryExecutionFail::NotFound;\n",
+            "generic asset not-found drops exact request binding": corridor.replace(
+                "query.asset_id(),",
+                "asset_id,",
+                1,
+            ),
+            "generic asset not-found drops exact corroboration": corridor.replace(
+                '.filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())',
+                '.filter_with(|asset| asset.equals("definition", asset_id.clone()).into_predicate())',
+                1,
+            ),
+            "block lookup drops exact height filter": corridor.replace(
+                '.filter_with(|block| block.equals("height", height).into_predicate())',
+                '.filter_with(|block| block.equals("hash", height).into_predicate())',
+                1,
+            ),
+            "unbounded block inventory query": corridor.replace(
+                ".query(FindBlocks)\n        .filter_with(|block| block.equals(\"height\", height).into_predicate())\n        .execute_all()",
+                ".query(FindBlocks)\n        .execute_all()",
+                1,
+            ),
             "bare active-contract transport success": corridor
             + "\nclient.get_gov_contract_json(&contract_address)?;\n",
             "inactive route still expects HTTP 404": corridor.replace(
@@ -1221,6 +1438,23 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                     validate_parliament_failure_paths(
                         mutate_parliament_failure_path_test(corridor, name, marker)
                     )
+
+        certified_name = (
+            "four_validator_certified_effects_record_supersession_and_execution_failure"
+        )
+        certified_anchor = CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS[0]
+        for bypass in DIRECT_SUPERSESSION_BYPASSES:
+            with self.subTest(name=certified_name, bypass=bypass), self.assertRaises(
+                ContractError
+            ):
+                validate_parliament_failure_paths(
+                    mutate_parliament_failure_path_test(
+                        corridor,
+                        certified_name,
+                        certified_anchor,
+                        f"{bypass};\n    {certified_anchor}",
+                    )
+                )
 
     def test_capacity_failure_genesis_rejects_adversarial_mutations(self) -> None:
         corridor = read_corridor_source()
@@ -1401,6 +1635,75 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 corridor,
                 "let unexpected_pulse_height = tokio::time::timeout(",
                 "let unexpected_pulse_height = passthrough(",
+            ),
+            "per-request timeout disabled": mutate_fail_closed_npos_test(
+                corridor,
+                "client.torii_request_timeout = status_poll_request_timeout;",
+                "client.torii_request_timeout = Duration::ZERO;",
+            ),
+            "pulse activation deadline omitted": mutate_fail_closed_npos_test(
+                corridor,
+                "if Instant::now() >= activation_deadline {",
+                "if false {",
+            ),
+            "post-observation deadline omitted": mutate_fail_closed_npos_test(
+                corridor,
+                "if Instant::now() >= post_observation_deadline {",
+                "if false {",
+            ),
+            "applied predecessor handoff weakened": mutate_fail_closed_npos_test(
+                corridor,
+                "SumeragiV2StatusPhase::PendingApply",
+                "SumeragiV2StatusPhase::AwaitingProposal",
+            ),
+            "pre-application predecessor accepted as active": mutate_fail_closed_npos_test(
+                corridor,
+                '''            return Ok(false);
+        }
+        assert_eq!(status.body_state, SumeragiV2BodyState::Applied);''',
+                '''            return Ok(true);
+        }
+        assert_eq!(status.body_state, SumeragiV2BodyState::Applied);''',
+            ),
+            "activation height-fetch retry omitted": mutate_fail_closed_npos_test(
+                corridor,
+                '''Err(error) => {
+                    last_activation_status_error =
+                        Some(format!("peer {peer_index} height: {error}"));
+                    all_pulse_heights_active = false;
+                    continue;
+                }''',
+                "Err(error) => return Err(error.into()),",
+            ),
+            "activation Sumeragi-status retry omitted": mutate_fail_closed_npos_test(
+                corridor,
+                '''Err(error) => {
+                    last_activation_status_error =
+                        Some(format!("peer {peer_index} sumeragi status: {error}"));
+                    all_pulse_heights_active = false;
+                    continue;
+                }''',
+                "Err(error) => return Err(error.into()),",
+            ),
+            "post-observation height-fetch retry omitted": mutate_fail_closed_npos_test(
+                corridor,
+                '''Err(error) => {
+                    last_post_observation_status_error =
+                        Some(format!("peer {peer_index} height: {error}"));
+                    all_post_observation_statuses_verified = false;
+                    continue;
+                }''',
+                "Err(error) => return Err(error.into()),",
+            ),
+            "post-observation Sumeragi-status retry omitted": mutate_fail_closed_npos_test(
+                corridor,
+                '''Err(error) => {
+                    last_post_observation_status_error =
+                        Some(format!("peer {peer_index} sumeragi status: {error}"));
+                    all_post_observation_statuses_verified = false;
+                    continue;
+                }''',
+                "Err(error) => return Err(error.into()),",
             ),
             "validator liveness omitted": mutate_fail_closed_npos_test(
                 corridor,

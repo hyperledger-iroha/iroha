@@ -1,11 +1,10 @@
-//! Witness-side proof construction for active-receiver snapshots.
-use crate::sumeragi::{
-    consensus::ExecWitness,
-    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KvPair},
-};
+//! Witness-side proof construction for consensus-authenticated synthetic writes.
+use crate::sumeragi::smt::KvPair;
 use iroha_crypto::Hash;
-use iroha_data_model::offline::{
-    KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1, KagemushaActiveReceiverWitnessProofV1,
+use iroha_data_model::block::consensus::ExecWitness;
+use iroha_data_model::isi::kagemusha_v1::{
+    KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1, KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1,
+    KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1,
 };
 use iroha_data_model::parliament_casting::{
     PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1, ParliamentTimedOvnCastingWitnessProofV1,
@@ -14,46 +13,70 @@ use iroha_data_model::validation_fee::{
     VALIDATION_FEE_POLICY_WITNESS_KEY_V1, ValidationFeePolicyWitnessProofV1,
 };
 use std::collections::{BTreeMap, BTreeSet};
-/// Construct the exact fixed-key proof against the ordinary-write SMT.
-pub(crate) fn active_receiver_witness_proof_v1(
+
+fn is_kagemusha_reserve_receipt_witness_key_v1(key: &[u8]) -> bool {
+    key.len() == KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1
+        && key.first() == Some(&KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1)
+}
+
+/// Construct every Kagemusha V1 reserve-receipt proof in one execution witness.
+///
+/// The returned entries are sorted by operation id and are derived from the same
+/// last-write-wins ordinary-write set used by the consensus commitment. Duplicate
+/// receipt keys fail closed instead of being hidden by last-write-wins projection.
+pub(crate) fn kagemusha_reserve_receipt_witnesses_v1(
     witness: &ExecWitness,
-) -> Result<(KagemushaActiveReceiverWitnessProofV1, Hash), String> {
-    let target_count = witness
+) -> Result<(Vec<KagemushaReserveReceiptWitnessV1>, Hash), String> {
+    let tagged_write_count = witness
         .writes
         .iter()
-        .filter(|entry| entry.key.as_slice() == KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1)
+        .filter(|entry| is_kagemusha_reserve_receipt_witness_key_v1(&entry.key))
         .count();
-    if target_count != 1 {
-        return Err(format!(
-            "execution witness contains {target_count} active-receiver synthetic writes; expected exactly one"
-        ));
-    }
     let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
     for entry in &witness.writes {
         canonical.insert(entry.key.clone(), entry.value.clone());
     }
     let ordinary = canonical
         .into_iter()
-        .filter(|(key, _)| key.first() != Some(&KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG))
         .map(|(key, value)| KvPair::new(key, value))
         .collect::<Vec<_>>();
-    let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
-    let target = ordinary
+    let targets = ordinary
         .iter()
-        .find(|pair| pair.key.as_slice() == KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1)
-        .ok_or_else(|| {
-            "active-receiver synthetic write is absent from ordinary writes".to_owned()
-        })?;
-    let siblings = sparse_smt_siblings(&ordinary, target)?;
-    let proof = KagemushaActiveReceiverWitnessProofV1 {
-        key: target.key.clone(),
-        value: target.value.clone(),
-        siblings,
-    };
-    if !proof.verify(ordinary_root) {
-        return Err("constructed active-receiver witness proof does not reconstruct the ordinary-write root".to_owned());
+        .filter(|pair| is_kagemusha_reserve_receipt_witness_key_v1(&pair.key))
+        .collect::<Vec<_>>();
+    if targets.len() != tagged_write_count {
+        return Err("execution witness contains duplicate Kagemusha V1 receipt writes".to_owned());
     }
-    Ok((proof, ordinary_root))
+    let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+    let mut proofs = Vec::with_capacity(targets.len());
+    for target in targets {
+        let receipt: KagemushaReserveReceiptV1 = norito::decode_canonical(&target.value)
+            .map_err(|error| format!("Kagemusha V1 receipt is not canonical Norito: {error}"))?;
+        if target.key != KagemushaReserveReceiptWitnessV1::expected_key(receipt.operation_id) {
+            return Err(
+                "Kagemusha V1 receipt witness key does not match its operation id".to_owned(),
+            );
+        }
+        let proof = KagemushaReserveReceiptWitnessV1 {
+            key: target.key.clone(),
+            receipt,
+            siblings: sparse_smt_siblings(&ordinary, target)?,
+        };
+        if !proof.verify(ordinary_root) {
+            return Err(
+                "constructed Kagemusha V1 receipt proof does not reconstruct the ordinary-write root"
+                    .to_owned(),
+            );
+        }
+        proofs.push(proof);
+    }
+    if proofs
+        .windows(2)
+        .any(|pair| pair[0].receipt.operation_id >= pair[1].receipt.operation_id)
+    {
+        return Err("Kagemusha V1 receipt proofs are not canonically ordered".to_owned());
+    }
+    Ok((proofs, ordinary_root))
 }
 /// Construct the exact fixed-key validation-fee policy proof against the ordinary-write SMT.
 pub(crate) fn validation_fee_policy_witness_proof_v1(
@@ -75,7 +98,6 @@ pub(crate) fn validation_fee_policy_witness_proof_v1(
     }
     let ordinary = canonical
         .into_iter()
-        .filter(|(key, _)| key.first() != Some(&KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG))
         .map(|(key, value)| KvPair::new(key, value))
         .collect::<Vec<_>>();
     let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
@@ -119,7 +141,6 @@ pub(crate) fn parliament_timed_ovn_casting_witness_proof_v1(
     }
     let ordinary = canonical
         .into_iter()
-        .filter(|(key, _)| key.first() != Some(&KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG))
         .map(|(key, value)| KvPair::new(key, value))
         .collect::<Vec<_>>();
     let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
@@ -261,78 +282,9 @@ fn mask_tail_bits(bytes: &mut [u8], len_bits: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sumeragi::consensus::ExecKv;
-    use iroha_data_model::offline::{
-        KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1, KagemushaActiveReceiverSnapshotCommitmentV1,
-        KagemushaActiveReceiverSnapshotStatusV1,
-    };
+    use iroha_data_model::block::consensus::ExecKv;
+    use iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1;
     use iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1;
-    fn snapshot_value() -> Vec<u8> {
-        norito::to_bytes(&KagemushaActiveReceiverSnapshotCommitmentV1 {
-            version: KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1,
-            evaluated_height: 7,
-            evaluated_at_ms: 1_000,
-            status: KagemushaActiveReceiverSnapshotStatusV1::Available(Hash::new(b"policy")),
-            leaf_count: 0,
-            tree_root: Hash::new(b"empty receiver tree"),
-        })
-        .expect("encode snapshot")
-    }
-    #[test]
-    fn fixed_write_proof_matches_consensus_ordinary_root_and_rejects_tampering() {
-        let witness = ExecWitness {
-            reads: Vec::new(),
-            writes: vec![
-                ExecKv {
-                    key: b"ordinary-a".to_vec(),
-                    value: b"one".to_vec(),
-                },
-                ExecKv {
-                    key: KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
-                    value: snapshot_value(),
-                },
-                ExecKv {
-                    key: b"ordinary-b".to_vec(),
-                    value: b"two".to_vec(),
-                },
-            ],
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
-        };
-        let (proof, root) = active_receiver_witness_proof_v1(&witness).expect("proof");
-        assert_eq!(proof.siblings.len(), 256);
-        assert!(proof.verify(root));
-        let mut tampered = proof.clone();
-        tampered.siblings[127] = Hash::new(b"tampered sibling");
-        assert!(!tampered.verify(root));
-    }
-    #[test]
-    fn fixed_write_must_appear_exactly_once() {
-        let empty = ExecWitness {
-            reads: Vec::new(),
-            writes: Vec::new(),
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
-        };
-        assert!(active_receiver_witness_proof_v1(&empty).is_err());
-        let duplicate = ExecWitness {
-            reads: Vec::new(),
-            writes: vec![
-                ExecKv {
-                    key: KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
-                    value: snapshot_value(),
-                },
-                ExecKv {
-                    key: KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
-                    value: snapshot_value(),
-                },
-            ],
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
-        };
-        assert!(active_receiver_witness_proof_v1(&duplicate).is_err());
-    }
-
     #[test]
     fn parliament_casting_fixed_write_has_256_siblings_and_rejects_tampering() {
         let snapshot = ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(7);
@@ -397,5 +349,77 @@ mod tests {
             fastpq_batches: Vec::new(),
         };
         assert!(parliament_timed_ovn_casting_witness_proof_v1(&duplicate).is_err());
+    }
+
+    #[test]
+    fn kagemusha_receipt_proof_is_exact_and_duplicate_safe() {
+        let operation_id = [0x61; 32];
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"kagemusha-receipt-proof"),
+        ));
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+            iroha_crypto::Hash::new(b"kagemusha-receipt-proof-incarnation").into(),
+        )
+        .expect("asset incarnation");
+        let receipt = KagemushaReserveReceiptV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            operation_id,
+            kind: iroha_data_model::isi::kagemusha_v1::KagemushaOperationKindV1::TopUp,
+            request_digest: [0x62; 32],
+            mint_statement_digest: [0x64; 32],
+            network_id,
+            asset: asset.clone(),
+            asset_incarnation,
+            scale: 0,
+            liability_pool_id: iroha_data_model::kagemusha::kagemusha_liability_pool_id_v1(
+                &network_id,
+                &asset,
+                asset_incarnation,
+            )
+            .expect("liability pool"),
+            amount: 7,
+            previous_pool_receipt_digest: [0; 32],
+            total_topups: 7,
+            total_redemptions: 0,
+            transaction_hash: [0x63; 32],
+            committed_at_ms: 1,
+        };
+        let receipt_write = ExecKv {
+            key: KagemushaReserveReceiptWitnessV1::expected_key(operation_id),
+            value: norito::encode_canonical(&receipt).expect("canonical receipt"),
+        };
+        let witness = ExecWitness {
+            reads: Vec::new(),
+            writes: vec![
+                ExecKv {
+                    key: b"ordinary".to_vec(),
+                    value: b"value".to_vec(),
+                },
+                ExecKv {
+                    key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                    value: b"separate d5-prefixed synthetic namespace".to_vec(),
+                },
+                receipt_write.clone(),
+            ],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        let (proofs, root) =
+            kagemusha_reserve_receipt_witnesses_v1(&witness).expect("receipt proof");
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(proofs[0].receipt, receipt);
+        assert!(proofs[0].verify(root));
+
+        let duplicate = ExecWitness {
+            writes: vec![receipt_write.clone(), receipt_write],
+            ..ExecWitness::default()
+        };
+        assert!(kagemusha_reserve_receipt_witnesses_v1(&duplicate).is_err());
     }
 }

@@ -13,15 +13,15 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["application"]
+default = ["node-crypto"]
 dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
 application = ["rand", "json", "ecc-batch", "bfv-accel", "pqc"]
 # Cryptography required by consensus and canonical node identities.
 consensus = ["rand", "bls"]
-# Complete shipping node surface.
-node-crypto = ["application", "consensus"]
+# Complete portable shipping node surface.
+node-crypto = ["application", "consensus", "gost", "sm", "rayon"]
 json = ["norito/json", "mv"]
 bfv-accel = []
 # Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.
@@ -34,7 +34,7 @@ sm-ffi-openssl = ["dep:openssl"]
 sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
 crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
-# Enable support for BLS signatures. Disabled by default due to long compile times.
+# Enable support for BLS signatures. The shipping `node-crypto` aggregate includes it.
 bls = ["dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle", "dep:w3f-bls"]
 
 # Expose FFI API for dynamic linking (Internal use only)

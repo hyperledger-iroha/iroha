@@ -1,12 +1,12 @@
-use ivm::IVM;
+use ivm::{IVM, VMError};
 #[test]
 fn memory_compact_bundle_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     let addr = ivm::Memory::HEAP_START + 128;
     vm.memory.store_u64(addr, 0xAA55_AA55_AA55_AA55).unwrap();
     vm.memory.commit();
-    let bundle = ivm::merkle_utils::memory_compact_bundle(&mut vm.memory, addr, Some(16));
-    let (cp, root) = vm.memory.merkle_compact(addr, Some(16));
+    let bundle = ivm::merkle_utils::memory_compact_bundle(&mut vm.memory, addr, Some(16)).unwrap();
+    let (cp, root) = vm.memory.merkle_compact(addr, Some(16)).unwrap();
     let cp2 = bundle.to_compact_proof();
     assert_eq!(bundle.depth, cp.depth());
     assert_eq!(bundle.dirs, cp.dirs());
@@ -53,8 +53,8 @@ fn memory_compact_bundle_roundtrip() {
 fn registers_compact_bundle_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(3, 0xDEADBEEF);
-    let bundle = ivm::merkle_utils::registers_compact_bundle(&vm.registers, 3, Some(16));
-    let (cp, root) = vm.registers.merkle_compact(3, Some(16));
+    let bundle = ivm::merkle_utils::registers_compact_bundle(&vm.registers, 3, Some(16)).unwrap();
+    let (cp, root) = vm.registers.merkle_compact(3, Some(16)).unwrap();
     let cp2 = bundle.to_compact_proof();
     assert_eq!(bundle.depth, cp.depth());
     assert_eq!(bundle.dirs, cp.dirs());
@@ -82,4 +82,15 @@ fn registers_compact_bundle_roundtrip() {
         NonZeroU64::new(256).expect("register count is non-zero"),
     );
     assert!(full.verify_sha256(&leaf_t, &commitment));
+}
+
+#[test]
+fn memory_compact_bundle_rejects_non_addresses() {
+    let mut vm = IVM::new(u64::MAX);
+    for invalid in [vm.memory.stack_top(), u64::MAX] {
+        assert_eq!(
+            ivm::merkle_utils::memory_compact_bundle(&mut vm.memory, invalid, None),
+            Err(VMError::MemoryOutOfBounds)
+        );
+    }
 }

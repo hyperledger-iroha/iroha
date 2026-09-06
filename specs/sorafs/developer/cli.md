@@ -64,8 +64,8 @@ scripts/release_sorafs_cli.sh \
 - The signer adapter uses `signing_provider=authenticated_external_signer` with
   exact `signing_backend=software`; private signing material remains
   runtime-only. Verified output is `signer_qualification=software-key-qualified`.
-- The provider boundary remains compatible with a future HSM adapter, which
-  requires new HSM-backed evidence and promotion signatures.
+- Iroha exposes no hardware-specific signer mode; the authenticated signer
+  process boundary remains provider-neutral.
 - The raw 32-byte public key, reviewed fingerprint, native verifier path, and
   reviewed verifier SHA256 are all mandatory. Cosign/OIDC remains a separate
   provenance layer.

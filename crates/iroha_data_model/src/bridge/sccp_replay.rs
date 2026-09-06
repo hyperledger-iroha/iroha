@@ -23,6 +23,15 @@ pub const SCCP_REPLAY_SMT_SHARD_COUNT_V1: usize = 256;
 pub const SCCP_REPLAY_SMT_DEPTH_V1: usize = 248;
 /// Maximum number of explicitly encoded non-default siblings.
 pub const SCCP_REPLAY_SMT_MAX_SIBLINGS_V1: usize = SCCP_REPLAY_SMT_DEPTH_V1;
+/// Maximum canonical Norito size accepted for one sparse replay witness.
+///
+/// The largest V1 witness carries 248 explicit 32-byte siblings; 16 KiB leaves
+/// ample fixed headroom for the Norito header and collection framing without
+/// making an untrusted HTTP allocation input-dependent.
+pub const SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1: usize = 16 * 1024;
+/// Maximum canonical padded-base64 length of one sparse replay witness.
+pub const SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1: usize =
+    4 * SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1.div_ceil(3);
 
 /// Closed replay boundary and operation inventory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -31,6 +40,8 @@ pub const SCCP_REPLAY_SMT_MAX_SIBLINGS_V1: usize = SCCP_REPLAY_SMT_DEPTH_V1;
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "boundary", content = "operation")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayBoundaryV1")]
 pub enum SccpReplayBoundaryV1 {
     /// SORA-side outbound lock/admission.
     #[codec(index = 0x01)]
@@ -65,15 +76,15 @@ pub enum SccpReplayBoundaryV1 {
     /// TON recipient-wallet mint credit.
     #[codec(index = 0x34)]
     TonWalletMintCredit,
-    /// TON custody-wallet SCCP burn debit.
+    /// TON wallet authorization for a bridge-governed burn.
     #[codec(index = 0x35)]
-    TonWalletBurnDebit,
-    /// TON custody-wallet refund debit.
+    TonWalletBurnAuthorization,
+    /// TON wallet lock consumed by a bridge-governed burn.
     #[codec(index = 0x36)]
-    TonWalletRefundDebit,
-    /// TON recipient-wallet refund credit.
+    TonWalletBurnLock,
+    /// TON wallet refund after a failed bridge-governed burn.
     #[codec(index = 0x37)]
-    TonWalletRefundCredit,
+    TonWalletBurnRefund,
 }
 
 impl SccpReplayBoundaryV1 {
@@ -92,9 +103,9 @@ impl SccpReplayBoundaryV1 {
             Self::TonMasterMint => 0x32,
             Self::TonMasterBurn => 0x33,
             Self::TonWalletMintCredit => 0x34,
-            Self::TonWalletBurnDebit => 0x35,
-            Self::TonWalletRefundDebit => 0x36,
-            Self::TonWalletRefundCredit => 0x37,
+            Self::TonWalletBurnAuthorization => 0x35,
+            Self::TonWalletBurnLock => 0x36,
+            Self::TonWalletBurnRefund => 0x37,
         }
     }
 }
@@ -105,6 +116,8 @@ impl SccpReplayBoundaryV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpTonAccountV1")]
 pub struct SccpTonAccountV1 {
     /// Signed TON workchain.
     pub workchain: i32,
@@ -128,6 +141,8 @@ impl SccpTonAccountV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "actor", content = "identity")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayActorV1")]
 pub enum SccpReplayActorV1 {
     /// Route-wide SORA accumulator; no contract actor is encoded.
     #[codec(index = 0)]
@@ -161,28 +176,30 @@ impl SccpReplayActorV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "principal", content = "identity")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayPrincipalV1")]
 pub enum SccpReplayPrincipalV1 {
     /// Canonical domainless SORA account identifier.
-    #[codec(index = 1)]
+    #[codec(index = 0)]
     SoraAccount(AccountId),
     /// Raw 20-byte EVM address.
-    #[codec(index = 2)]
+    #[codec(index = 1)]
     Evm([u8; 20]),
     /// Raw 20-byte TRON account payload, excluding the `0x41` prefix.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     Tron([u8; 20]),
     /// Canonical TON workchain and account identifier.
-    #[codec(index = 4)]
+    #[codec(index = 3)]
     Ton(SccpTonAccountV1),
 }
 
 impl SccpReplayPrincipalV1 {
     fn canonical_parts(&self) -> Result<(u8, Vec<u8>), SccpReplayAccumulatorError> {
         let (kind, bytes) = match self {
-            Self::SoraAccount(account) => (1, account.encode()),
-            Self::Evm(address) => (2, address.to_vec()),
-            Self::Tron(address) => (3, address.to_vec()),
-            Self::Ton(account) => (4, account.canonical_bytes().to_vec()),
+            Self::SoraAccount(account) => (0, account.encode()),
+            Self::Evm(address) => (1, address.to_vec()),
+            Self::Tron(address) => (2, address.to_vec()),
+            Self::Ton(account) => (3, account.canonical_bytes().to_vec()),
         };
         if bytes.is_empty() || u16::try_from(bytes.len()).is_err() {
             return Err(SccpReplayAccumulatorError::InvalidPrincipal);
@@ -197,6 +214,8 @@ impl SccpReplayPrincipalV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayDomainV1")]
 pub struct SccpReplayDomainV1 {
     /// Network where the economic operation originated.
     pub source_network: SccpNetworkV1,
@@ -212,17 +231,21 @@ pub struct SccpReplayDomainV1 {
     pub actor: SccpReplayActorV1,
 }
 
-/// Consensus key selecting one route-scoped replay forest.
+/// Consensus key selecting one complete-domain replay forest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayAccumulatorIdV1")]
 pub struct SccpReplayAccumulatorIdV1 {
     /// Exact immutable governed route.
     pub route_key: SccpRouteKeyV1,
     /// Replay boundary retained independently for this route.
     pub boundary: SccpReplayBoundaryV1,
+    /// Hash of the complete replay domain, including its actor identity.
+    pub domain_hash: [u8; 32],
 }
 
 /// Semantic material committed by an occupied replay leaf.
@@ -231,6 +254,8 @@ pub struct SccpReplayAccumulatorIdV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayRecordV1")]
 pub struct SccpReplayRecordV1 {
     /// Must equal the forest's boundary.
     pub operation: SccpReplayBoundaryV1,
@@ -238,20 +263,22 @@ pub struct SccpReplayRecordV1 {
     pub replay_id: [u8; 32],
     /// SHA-256 of exact canonical SCCP payload bytes.
     pub payload_sha256: [u8; 32],
-    /// Unsigned 256-bit big-endian amount in canonical SCCP units.
-    pub amount_be: [u8; 32],
+    /// Positive scale-9 amount in canonical SCCP units.
+    pub amount: u128,
     /// Economic recipient or owner.
     pub principal: SccpReplayPrincipalV1,
-    /// Operation-specific canonical security identity.
-    pub auxiliary: Vec<u8>,
+    /// SHA-256 of the operation-specific canonical auxiliary identity.
+    pub auxiliary_identity_sha256: [u8; 32],
 }
 
 /// Canonically compressed sparse-Merkle membership or non-membership witness.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1")]
 pub struct SccpSparseMerkleWitnessV1 {
     /// Root against which the caller prepared this witness.
     pub expected_shard_root: [u8; 32],
@@ -263,12 +290,68 @@ pub struct SccpSparseMerkleWitnessV1 {
     pub siblings: Vec<[u8; 32]>,
 }
 
+impl SccpSparseMerkleWitnessV1 {
+    /// Construct the unique canonical non-membership witness for an empty shard.
+    #[must_use]
+    pub fn empty_shard() -> Self {
+        Self {
+            expected_shard_root: sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1],
+            prior_record_digest: [0; 32],
+            sibling_bitmap: [0; 32],
+            siblings: Vec::new(),
+        }
+    }
+
+    /// Validate the canonical compressed sibling representation.
+    ///
+    /// This checks the representation independently of a particular replay
+    /// key or current shard root. State-dependent path checks remain part of
+    /// [`SccpReplayForestV1::occupy`] and the membership verifiers.
+    pub fn validate(&self) -> Result<(), SccpReplayAccumulatorError> {
+        validate_and_expand_siblings(self, &sccp_replay_empty_hashes_v1()).map(|_| ())
+    }
+
+    /// Verify this witness against the caller's current authoritative shard root.
+    ///
+    /// A zero record digest denotes non-membership. The replay key is never a
+    /// sentinel, so the complete 256-bit key space—including the all-zero key—is
+    /// accepted. Successful verification requires the supplied current root,
+    /// this witness's expected root, and the reconstructed path root to be exact.
+    pub fn verify_against_current_root(
+        &self,
+        key: [u8; 32],
+        record_digest: [u8; 32],
+        current_root: [u8; 32],
+    ) -> Result<(), SccpReplayAccumulatorError> {
+        if self.expected_shard_root != current_root {
+            return Err(SccpReplayAccumulatorError::StaleRoot);
+        }
+        if self.prior_record_digest != record_digest {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        self.validate()?;
+        let empty = sccp_replay_empty_hashes_v1();
+        let siblings = validate_and_expand_siblings(self, &empty)?;
+        let leaf = if record_digest == [0; 32] {
+            empty[0]
+        } else {
+            occupied_leaf_hash(key, record_digest)
+        };
+        if fold_path(&key, leaf, &siblings) != current_root {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        Ok(())
+    }
+}
+
 /// Constant-size consensus replay state for one route boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayForestV1")]
 pub struct SccpReplayForestV1 {
     /// Shards whose roots differ from the canonical empty root.
     pub nonempty_shard_roots: BTreeMap<u8, [u8; 32]>,
@@ -289,11 +372,13 @@ impl Default for SccpReplayForestV1 {
 }
 
 /// Authenticated replay transition emitted to rebuild witness indexes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayDeltaV1")]
 pub struct SccpReplayDeltaV1 {
     /// Domain hash selecting the exact replay boundary.
     pub domain_hash: [u8; 32],
@@ -319,13 +404,10 @@ pub enum SccpReplayAccumulatorError {
     /// Domain has an unsupported or contradictory shape.
     #[error("invalid SCCP replay domain")]
     InvalidDomain,
-    /// Principal has an empty or oversized canonical representation.
+    /// Principal has an empty/oversized representation or the wrong operation kind.
     #[error("invalid SCCP replay principal")]
     InvalidPrincipal,
-    /// Auxiliary identity exceeds the canonical two-byte length bound.
-    #[error("invalid SCCP replay auxiliary identity")]
-    InvalidAuxiliary,
-    /// Replay identifier, payload commitment, or amount is zero.
+    /// A required record role is zero or the occupied-record hash is invalid.
     #[error("invalid SCCP replay record")]
     InvalidRecord,
     /// Record operation and forest boundary disagree.
@@ -361,17 +443,11 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
 
 fn network_tag(network: SccpNetworkV1) -> u32 {
     match network {
-        SccpNetworkV1::SoraTaira => 1,
-        SccpNetworkV1::EthereumMainnet => 2,
-        SccpNetworkV1::EthereumSepolia => 3,
-        SccpNetworkV1::BscMainnet => 4,
-        SccpNetworkV1::BscTestnet => 5,
-        SccpNetworkV1::TronMainnet => 10,
-        SccpNetworkV1::TronNile => 11,
-        SccpNetworkV1::TronShasta => 12,
-        SccpNetworkV1::SolanaTestnet => 13,
-        SccpNetworkV1::TonMainnet => 14,
-        SccpNetworkV1::TonTestnet => 15,
+        SccpNetworkV1::SoraTaira => 0x40,
+        SccpNetworkV1::EthereumMainnet => 0x41,
+        SccpNetworkV1::BscMainnet => 0x42,
+        SccpNetworkV1::TronMainnet => 0x43,
+        SccpNetworkV1::TonMainnet => 0x44,
     }
 }
 
@@ -381,7 +457,7 @@ fn domain_boundary_is_valid(domain: &SccpReplayDomainV1) -> bool {
     use SccpReplayBoundaryV1::{
         EvmDestinationMint, EvmSourceBurn, SoraInboundRelease, SoraOutboundLock,
         TonBridgeInboundMint, TonBridgeOutboundBurn, TonMasterBurn, TonMasterMint,
-        TonWalletBurnDebit, TonWalletMintCredit, TonWalletRefundCredit, TonWalletRefundDebit,
+        TonWalletBurnAuthorization, TonWalletBurnLock, TonWalletBurnRefund, TonWalletMintCredit,
         TronDestinationMint, TronSourceBurn,
     };
 
@@ -408,23 +484,54 @@ fn domain_boundary_is_valid(domain: &SccpReplayDomainV1) -> bool {
         | (TronDestinationMint, SoraTaira, TronMainnet, Tron(_))
         | (TronSourceBurn, TronMainnet, SoraTaira, Tron(_))
         | (
-            TonBridgeInboundMint
-            | TonMasterMint
-            | TonWalletMintCredit
-            | TonWalletRefundDebit
-            | TonWalletRefundCredit,
+            TonBridgeInboundMint | TonMasterMint | TonWalletMintCredit,
             SoraTaira,
             TonMainnet,
             Ton(_),
         )
         | (
-            TonBridgeOutboundBurn | TonMasterBurn | TonWalletBurnDebit,
+            TonBridgeOutboundBurn
+            | TonMasterBurn
+            | TonWalletBurnAuthorization
+            | TonWalletBurnLock
+            | TonWalletBurnRefund,
             TonMainnet,
             SoraTaira,
             Ton(_),
         ) => true,
         _ => false,
     }
+}
+
+fn operation_principal_is_valid(
+    operation: SccpReplayBoundaryV1,
+    principal: &SccpReplayPrincipalV1,
+) -> bool {
+    use SccpReplayBoundaryV1::{
+        EvmDestinationMint, EvmSourceBurn, SoraInboundRelease, SoraOutboundLock,
+        TonBridgeInboundMint, TonBridgeOutboundBurn, TonMasterBurn, TonMasterMint,
+        TonWalletBurnAuthorization, TonWalletBurnLock, TonWalletBurnRefund, TonWalletMintCredit,
+        TronDestinationMint, TronSourceBurn,
+    };
+    use SccpReplayPrincipalV1::{Evm, SoraAccount, Ton, Tron};
+
+    matches!(
+        (operation, principal),
+        (SoraOutboundLock | SoraInboundRelease, SoraAccount(_))
+            | (EvmSourceBurn | EvmDestinationMint, Evm(_))
+            | (TronSourceBurn | TronDestinationMint, Tron(_))
+            | (
+                TonBridgeInboundMint
+                    | TonBridgeOutboundBurn
+                    | TonMasterMint
+                    | TonMasterBurn
+                    | TonWalletMintCredit
+                    | TonWalletBurnAuthorization
+                    | TonWalletBurnLock
+                    | TonWalletBurnRefund,
+                Ton(_),
+            )
+    )
 }
 
 /// Hash the canonical replay domain.
@@ -437,6 +544,8 @@ pub fn sccp_replay_domain_hash_v1(
     {
         return Err(SccpReplayAccumulatorError::InvalidDomain);
     }
+    let source_network_tag = network_tag(domain.source_network);
+    let target_network_tag = network_tag(domain.target_network);
     let (actor_kind, actor) = domain.actor.canonical_parts();
     let actor_len = u16::try_from(actor.len())
         .map_err(|_| SccpReplayAccumulatorError::InvalidDomain)?
@@ -444,8 +553,8 @@ pub fn sccp_replay_domain_hash_v1(
     Ok(sha256(&[
         SCCP_REPLAY_SMT_MAGIC_V1,
         &[0x00],
-        &network_tag(domain.source_network).to_be_bytes(),
-        &network_tag(domain.target_network).to_be_bytes(),
+        &source_network_tag.to_be_bytes(),
+        &target_network_tag.to_be_bytes(),
         &[domain.boundary.tag()],
         &domain.route_revision.to_be_bytes(),
         &domain.route_configuration_hash,
@@ -453,6 +562,55 @@ pub fn sccp_replay_domain_hash_v1(
         &actor_len,
         &actor,
     ]))
+}
+
+impl SccpReplayAccumulatorIdV1 {
+    /// Derive the unique accumulator identity for a governed route and complete replay domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpReplayAccumulatorError::InvalidDomain`] when the route key is malformed or
+    /// its revision or lane does not match the supplied domain.
+    pub fn from_domain(
+        route_key: SccpRouteKeyV1,
+        domain: &SccpReplayDomainV1,
+    ) -> Result<Self, SccpReplayAccumulatorError> {
+        route_key
+            .validate()
+            .map_err(|_| SccpReplayAccumulatorError::InvalidDomain)?;
+        let domain_hash = sccp_replay_domain_hash_v1(domain)?;
+        let lane = route_key.lane_id;
+        let networks_match = if domain.source_network == SccpNetworkV1::SoraTaira {
+            lane.source == domain.target_network && lane.target == domain.source_network
+        } else {
+            lane.source == domain.source_network && lane.target == domain.target_network
+        };
+        if route_key.revision != domain.route_revision || !networks_match {
+            return Err(SccpReplayAccumulatorError::InvalidDomain);
+        }
+        Ok(Self {
+            route_key,
+            boundary: domain.boundary,
+            domain_hash,
+        })
+    }
+
+    /// Verify that this identity commits to the supplied complete replay domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpReplayAccumulatorError::InvalidDomain`] when any route coordinate, boundary,
+    /// configuration commitment, network direction, or actor identity differs.
+    pub fn validate_domain(
+        &self,
+        domain: &SccpReplayDomainV1,
+    ) -> Result<(), SccpReplayAccumulatorError> {
+        let expected = Self::from_domain(self.route_key.clone(), domain)?;
+        if *self != expected {
+            return Err(SccpReplayAccumulatorError::InvalidDomain);
+        }
+        Ok(())
+    }
 }
 
 /// Derive a replay leaf key from its domain and replay identifier.
@@ -467,10 +625,13 @@ pub fn sccp_replay_record_digest_v1(
 ) -> Result<[u8; 32], SccpReplayAccumulatorError> {
     if record.replay_id == [0; 32]
         || record.payload_sha256 == [0; 32]
-        || record.amount_be == [0; 32]
-        || record.auxiliary.is_empty()
+        || record.amount == 0
+        || record.auxiliary_identity_sha256 == [0; 32]
     {
         return Err(SccpReplayAccumulatorError::InvalidRecord);
+    }
+    if !operation_principal_is_valid(record.operation, &record.principal) {
+        return Err(SccpReplayAccumulatorError::InvalidPrincipal);
     }
     let (principal_kind, principal) = record.principal.canonical_parts()?;
     let principal_len = u16::try_from(principal.len())
@@ -482,24 +643,23 @@ pub fn sccp_replay_record_digest_v1(
         &principal_len,
         &principal,
     ]);
-    let auxiliary_len = u16::try_from(record.auxiliary.len())
-        .map_err(|_| SccpReplayAccumulatorError::InvalidAuxiliary)?
-        .to_be_bytes();
     let auxiliary_digest = sha256(&[
         SCCP_REPLAY_SMT_MAGIC_V1,
         &[0x04, record.operation.tag()],
-        &auxiliary_len,
-        &record.auxiliary,
+        &record.auxiliary_identity_sha256,
     ]);
     let digest = sha256(&[
         SCCP_REPLAY_SMT_MAGIC_V1,
         &[0x02, record.operation.tag()],
         &record.replay_id,
         &record.payload_sha256,
-        &record.amount_be,
+        &record.amount.to_be_bytes(),
         &principal_digest,
         &auxiliary_digest,
     ]);
+    if digest == [0; 32] {
+        return Err(SccpReplayAccumulatorError::InvalidRecord);
+    }
     Ok(digest)
 }
 
@@ -613,7 +773,8 @@ impl SccpReplayForestV1 {
                 .values()
                 .any(|root| *root == empty_root)
             || (self.leaf_count == 0) != self.nonempty_shard_roots.is_empty()
-            || self.update_sequence < self.leaf_count
+            || self.leaf_count < u64::try_from(self.nonempty_shard_roots.len()).unwrap_or(u64::MAX)
+            || self.update_sequence != self.leaf_count
         {
             return Err(SccpReplayAccumulatorError::InvalidForest);
         }
@@ -701,11 +862,66 @@ impl SccpReplayForestV1 {
         }
         Ok(())
     }
+
+    /// Verify an exact replay key and prior-record digest without re-deriving
+    /// either value from higher-level protocol fields.
+    ///
+    /// This is the narrow verifier used at untrusted witness-service
+    /// boundaries. A zero `record_digest` proves non-membership; a nonzero
+    /// digest proves membership. Every other witness-canonicality and current
+    /// shard-root rule is identical to [`Self::occupy`]. The complete 256-bit
+    /// key space is valid, including the all-zero key if SHA-256 happens to
+    /// derive it.
+    pub fn verify_key_digest(
+        &self,
+        key: [u8; 32],
+        record_digest: [u8; 32],
+        witness: &SccpSparseMerkleWitnessV1,
+    ) -> Result<(), SccpReplayAccumulatorError> {
+        self.validate()?;
+        let current_root = self.shard_root(key[0]);
+        witness.verify_against_current_root(key, record_digest, current_root)
+    }
+
+    /// Verify exact non-membership without mutating the forest.
+    pub fn verify_non_membership(
+        &self,
+        domain: &SccpReplayDomainV1,
+        replay_id: [u8; 32],
+        witness: &SccpSparseMerkleWitnessV1,
+    ) -> Result<(), SccpReplayAccumulatorError> {
+        self.validate()?;
+        if replay_id == [0; 32] || witness.prior_record_digest != [0; 32] {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        let domain_hash = sccp_replay_domain_hash_v1(domain)?;
+        let key = sccp_replay_key_v1(domain_hash, replay_id);
+        let current_root = self.shard_root(key[0]);
+        if witness.expected_shard_root != current_root {
+            return Err(SccpReplayAccumulatorError::StaleRoot);
+        }
+        let empty = sccp_replay_empty_hashes_v1();
+        let siblings = validate_and_expand_siblings(witness, &empty)?;
+        if fold_path(&key, empty[0], &siblings) != current_root {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use norito::codec::DecodeAll as _;
+
     use super::*;
+
+    fn sora_account() -> AccountId {
+        AccountId::new(
+            "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
+                .parse()
+                .expect("parse deterministic replay principal key"),
+        )
+    }
 
     fn domain(boundary: SccpReplayBoundaryV1) -> SccpReplayDomainV1 {
         SccpReplayDomainV1 {
@@ -719,24 +935,159 @@ mod tests {
     }
 
     fn record(boundary: SccpReplayBoundaryV1) -> SccpReplayRecordV1 {
-        let mut amount_be = [0; 32];
-        amount_be[31] = 9;
         SccpReplayRecordV1 {
             operation: boundary,
             replay_id: [0x11; 32],
             payload_sha256: [0x22; 32],
-            amount_be,
-            principal: SccpReplayPrincipalV1::Evm([0x33; 20]),
-            auxiliary: vec![0x55; 32],
+            amount: 9,
+            principal: SccpReplayPrincipalV1::SoraAccount(sora_account()),
+            auxiliary_identity_sha256: [0x55; 32],
         }
     }
 
     fn empty_witness() -> SccpSparseMerkleWitnessV1 {
-        SccpSparseMerkleWitnessV1 {
-            expected_shard_root: sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1],
-            prior_record_digest: [0; 32],
-            sibling_bitmap: [0; 32],
-            siblings: Vec::new(),
+        SccpSparseMerkleWitnessV1::empty_shard()
+    }
+
+    fn hex32(value: &str) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        hex::decode_to_slice(value, &mut bytes).expect("golden hash is canonical hex");
+        bytes
+    }
+
+    #[test]
+    fn rejects_semantically_invalid_frozen_cross_language_vector() {
+        // The frozen fixture currently pairs operation 0x01 with an EVM
+        // principal. Strict final V1 rejects that shape. The fixture owner will
+        // regenerate the complete cross-language vector in its coordinated
+        // release window.
+        let domain = domain(SccpReplayBoundaryV1::SoraOutboundLock);
+        let mut record = record(SccpReplayBoundaryV1::SoraOutboundLock);
+        record.principal = SccpReplayPrincipalV1::Evm([0x33; 20]);
+        let domain_hash = sccp_replay_domain_hash_v1(&domain).expect("golden domain is valid");
+        assert_ne!(domain_hash, [0; 32]);
+        assert_ne!(sccp_replay_key_v1(domain_hash, record.replay_id), [0; 32]);
+        assert_eq!(
+            sccp_replay_record_digest_v1(&record),
+            Err(SccpReplayAccumulatorError::InvalidPrincipal)
+        );
+        assert_eq!(
+            empty_witness().expected_shard_root,
+            hex32("cefd4f39c0d2ba5c33835008c6c3e7bca47d6ea1c4da5bfc8a63f09dbc66651f")
+        );
+    }
+
+    #[test]
+    fn record_operations_require_the_exact_principal_kind() {
+        use SccpReplayBoundaryV1::{
+            EvmDestinationMint, EvmSourceBurn, SoraInboundRelease, SoraOutboundLock,
+            TonBridgeInboundMint, TonBridgeOutboundBurn, TonMasterBurn, TonMasterMint,
+            TonWalletBurnAuthorization, TonWalletBurnLock, TonWalletBurnRefund,
+            TonWalletMintCredit, TronDestinationMint, TronSourceBurn,
+        };
+
+        let ton = SccpReplayPrincipalV1::Ton(SccpTonAccountV1 {
+            workchain: 0,
+            account: [0x33; 32],
+        });
+        let groups = [
+            (
+                vec![SoraOutboundLock, SoraInboundRelease],
+                SccpReplayPrincipalV1::SoraAccount(sora_account()),
+                SccpReplayPrincipalV1::Evm([0x31; 20]),
+            ),
+            (
+                vec![EvmSourceBurn, EvmDestinationMint],
+                SccpReplayPrincipalV1::Evm([0x32; 20]),
+                SccpReplayPrincipalV1::Tron([0x33; 20]),
+            ),
+            (
+                vec![TronSourceBurn, TronDestinationMint],
+                SccpReplayPrincipalV1::Tron([0x34; 20]),
+                ton.clone(),
+            ),
+            (
+                vec![
+                    TonBridgeInboundMint,
+                    TonBridgeOutboundBurn,
+                    TonMasterMint,
+                    TonMasterBurn,
+                    TonWalletMintCredit,
+                    TonWalletBurnAuthorization,
+                    TonWalletBurnLock,
+                    TonWalletBurnRefund,
+                ],
+                ton,
+                SccpReplayPrincipalV1::SoraAccount(sora_account()),
+            ),
+        ];
+        for (operations, valid, invalid) in groups {
+            for operation in operations {
+                let mut candidate = record(SoraOutboundLock);
+                candidate.operation = operation;
+                candidate.principal = valid.clone();
+                assert!(sccp_replay_record_digest_v1(&candidate).is_ok());
+                candidate.principal = invalid.clone();
+                assert_eq!(
+                    sccp_replay_record_digest_v1(&candidate),
+                    Err(SccpReplayAccumulatorError::InvalidPrincipal)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn replay_network_tags_are_mainnet_only_and_final_v1() {
+        assert_eq!(network_tag(SccpNetworkV1::SoraTaira), 0x40);
+        assert_eq!(network_tag(SccpNetworkV1::EthereumMainnet), 0x41);
+        assert_eq!(network_tag(SccpNetworkV1::BscMainnet), 0x42);
+        assert_eq!(network_tag(SccpNetworkV1::TronMainnet), 0x43);
+        assert_eq!(network_tag(SccpNetworkV1::TonMainnet), 0x44);
+    }
+
+    #[test]
+    fn ton_wallet_burn_boundaries_have_exact_names_tags_and_direction() {
+        let ton_domain = |boundary, source_network, target_network| SccpReplayDomainV1 {
+            source_network,
+            target_network,
+            boundary,
+            route_revision: 7,
+            route_configuration_hash: [0x44; 32],
+            actor: SccpReplayActorV1::Ton(SccpTonAccountV1 {
+                workchain: 0,
+                account: [0x33; 32],
+            }),
+        };
+        let sora = SccpNetworkV1::SoraTaira;
+        let ton = SccpNetworkV1::TonMainnet;
+        let sora_to_ton = [
+            SccpReplayBoundaryV1::TonBridgeInboundMint,
+            SccpReplayBoundaryV1::TonMasterMint,
+            SccpReplayBoundaryV1::TonWalletMintCredit,
+        ];
+        let ton_to_sora = [
+            SccpReplayBoundaryV1::TonBridgeOutboundBurn,
+            SccpReplayBoundaryV1::TonMasterBurn,
+            SccpReplayBoundaryV1::TonWalletBurnAuthorization,
+            SccpReplayBoundaryV1::TonWalletBurnLock,
+            SccpReplayBoundaryV1::TonWalletBurnRefund,
+        ];
+        assert_eq!(SccpReplayBoundaryV1::TonWalletBurnAuthorization.tag(), 0x35);
+        assert_eq!(SccpReplayBoundaryV1::TonWalletBurnLock.tag(), 0x36);
+        assert_eq!(SccpReplayBoundaryV1::TonWalletBurnRefund.tag(), 0x37);
+        for boundary in sora_to_ton {
+            assert!(sccp_replay_domain_hash_v1(&ton_domain(boundary, sora, ton)).is_ok());
+            assert_eq!(
+                sccp_replay_domain_hash_v1(&ton_domain(boundary, ton, sora)),
+                Err(SccpReplayAccumulatorError::InvalidDomain)
+            );
+        }
+        for boundary in ton_to_sora {
+            assert!(sccp_replay_domain_hash_v1(&ton_domain(boundary, ton, sora)).is_ok());
+            assert_eq!(
+                sccp_replay_domain_hash_v1(&ton_domain(boundary, sora, ton)),
+                Err(SccpReplayAccumulatorError::InvalidDomain)
+            );
         }
     }
 
@@ -803,6 +1154,88 @@ mod tests {
     }
 
     #[test]
+    fn standalone_witness_validation_checks_canonical_shape() {
+        let mut witness = empty_witness();
+        witness.expected_shard_root = [0; 32];
+        witness
+            .validate()
+            .expect("the root is a full-width hash and zero is not a sentinel");
+
+        witness.expected_shard_root = [0x88; 32];
+        witness
+            .validate()
+            .expect("standalone validation does not require the current state root");
+
+        witness.sibling_bitmap[0] = 1;
+        witness.siblings.push([0x77; 32]);
+        assert_eq!(
+            witness.validate(),
+            Err(SccpReplayAccumulatorError::NonCanonicalWitness)
+        );
+
+        let mut literal_zero_sibling = empty_witness();
+        literal_zero_sibling.sibling_bitmap[31] = 1;
+        literal_zero_sibling.siblings.push([0; 32]);
+        literal_zero_sibling
+            .validate()
+            .expect("a literal zero sibling is non-default and therefore canonical at level zero");
+    }
+
+    #[test]
+    fn exact_non_membership_rejects_occupied_and_wrong_paths() {
+        let boundary = SccpReplayBoundaryV1::SoraOutboundLock;
+        let domain = domain(boundary);
+        let record = record(boundary);
+        let mut forest = SccpReplayForestV1::default();
+        forest
+            .verify_non_membership(&domain, record.replay_id, &empty_witness())
+            .expect("empty forest proves exact non-membership");
+        let delta = forest
+            .occupy(&domain, &record, &empty_witness())
+            .expect("record occupies its leaf");
+        let occupied = SccpSparseMerkleWitnessV1 {
+            expected_shard_root: delta.new_root,
+            prior_record_digest: delta.record_digest,
+            ..empty_witness()
+        };
+        assert_eq!(
+            forest.verify_non_membership(&domain, record.replay_id, &occupied),
+            Err(SccpReplayAccumulatorError::InvalidPath)
+        );
+    }
+
+    #[test]
+    fn generic_key_digest_verifier_accepts_the_complete_key_space() {
+        let forest = SccpReplayForestV1::default();
+        let current_root = forest.shard_root(0);
+        forest
+            .verify_key_digest([0; 32], [0; 32], &empty_witness())
+            .expect("the all-zero derived key is not a sentinel");
+        empty_witness()
+            .verify_against_current_root([0; 32], [0; 32], current_root)
+            .expect("the standalone verifier accepts the all-zero key against the exact root");
+
+        assert_eq!(
+            empty_witness().verify_against_current_root([0; 32], [0; 32], [0x55; 32],),
+            Err(SccpReplayAccumulatorError::StaleRoot)
+        );
+
+        let mut false_claim = empty_witness();
+        false_claim.expected_shard_root = [0x55; 32];
+        assert_eq!(
+            false_claim.verify_against_current_root([0; 32], [0; 32], [0x55; 32]),
+            Err(SccpReplayAccumulatorError::InvalidPath)
+        );
+
+        let mut wrong_digest = empty_witness();
+        wrong_digest.prior_record_digest = [0x55; 32];
+        assert_eq!(
+            forest.verify_key_digest([0; 32], [0; 32], &wrong_digest),
+            Err(SccpReplayAccumulatorError::InvalidPath)
+        );
+    }
+
+    #[test]
     fn domain_and_record_changes_are_separated() {
         let boundary = SccpReplayBoundaryV1::SoraOutboundLock;
         let base_domain = domain(boundary);
@@ -818,10 +1251,120 @@ mod tests {
         );
 
         let mut other_record = base_record;
-        other_record.amount_be[31] += 1;
+        other_record.amount += 1;
         assert_ne!(
             record_hash,
             sccp_replay_record_digest_v1(&other_record).expect("valid changed record")
+        );
+
+        let mut invalid_domain = base_domain;
+        invalid_domain.target_network = SccpNetworkV1::SoraTaira;
+        assert_eq!(
+            sccp_replay_domain_hash_v1(&invalid_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut invalid_record = record(boundary);
+        invalid_record.auxiliary_identity_sha256 = [0; 32];
+        assert_eq!(
+            sccp_replay_record_digest_v1(&invalid_record),
+            Err(SccpReplayAccumulatorError::InvalidRecord)
+        );
+    }
+
+    #[test]
+    fn accumulator_identity_binds_the_complete_actor_domain() {
+        let route_key = SccpRouteKeyV1::new(
+            super::super::SccpLaneIdV1 {
+                source: SccpNetworkV1::TonMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_ton_xor".to_owned(),
+            "xor".to_owned(),
+            7,
+        )
+        .expect("valid TON route key");
+        let first_domain = SccpReplayDomainV1 {
+            source_network: SccpNetworkV1::SoraTaira,
+            target_network: SccpNetworkV1::TonMainnet,
+            boundary: SccpReplayBoundaryV1::TonWalletMintCredit,
+            route_revision: 7,
+            route_configuration_hash: [0x44; 32],
+            actor: SccpReplayActorV1::Ton(SccpTonAccountV1 {
+                workchain: 0,
+                account: [0x51; 32],
+            }),
+        };
+        let first = SccpReplayAccumulatorIdV1::from_domain(route_key.clone(), &first_domain)
+            .expect("first wallet domain is valid");
+        assert_eq!(
+            first.domain_hash,
+            sccp_replay_domain_hash_v1(&first_domain).expect("first domain hashes")
+        );
+        first
+            .validate_domain(&first_domain)
+            .expect("identity validates its source domain");
+        let encoded = Encode::encode(&first);
+        assert_eq!(
+            SccpReplayAccumulatorIdV1::decode_all(&mut encoded.as_slice())
+                .expect("current replay identity layout decodes"),
+            first,
+            "the complete domain hash must survive the Norito wire roundtrip"
+        );
+
+        let mut second_domain = first_domain;
+        second_domain.actor = SccpReplayActorV1::Ton(SccpTonAccountV1 {
+            workchain: 0,
+            account: [0x52; 32],
+        });
+        let second = SccpReplayAccumulatorIdV1::from_domain(route_key.clone(), &second_domain)
+            .expect("second wallet domain is valid");
+        assert_ne!(first, second, "actor-local replay forests must not alias");
+        assert_eq!(
+            first.validate_domain(&second_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut wrong_boundary = first.clone();
+        wrong_boundary.boundary = SccpReplayBoundaryV1::TonMasterMint;
+        assert_eq!(
+            wrong_boundary.validate_domain(&first_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+        let mut wrong_hash = first.clone();
+        wrong_hash.domain_hash[0] ^= 1;
+        assert_eq!(
+            wrong_hash.validate_domain(&first_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut reconfigured_domain = first_domain;
+        reconfigured_domain.route_configuration_hash = [0x45; 32];
+        let reconfigured =
+            SccpReplayAccumulatorIdV1::from_domain(route_key.clone(), &reconfigured_domain)
+                .expect("reconfigured domain is structurally valid");
+        assert_ne!(first, reconfigured, "route configurations must not alias");
+
+        let wrong_lane = SccpRouteKeyV1::new(
+            super::super::SccpLaneIdV1 {
+                source: SccpNetworkV1::EthereumMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_eth_xor".to_owned(),
+            "xor".to_owned(),
+            7,
+        )
+        .expect("valid but unrelated Ethereum route key");
+        assert_eq!(
+            SccpReplayAccumulatorIdV1::from_domain(wrong_lane, &first_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut wrong_revision = first_domain;
+        wrong_revision.route_revision += 1;
+        assert_eq!(
+            SccpReplayAccumulatorIdV1::from_domain(route_key, &wrong_revision),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
         );
     }
 
@@ -835,6 +1378,15 @@ mod tests {
         };
         assert_eq!(
             malformed.validate(),
+            Err(SccpReplayAccumulatorError::InvalidForest)
+        );
+        let impossible_shard_count = SccpReplayForestV1 {
+            nonempty_shard_roots: BTreeMap::from([(3, [0x88; 32]), (4, [0x99; 32])]),
+            leaf_count: 1,
+            update_sequence: 1,
+        };
+        assert_eq!(
+            impossible_shard_count.validate(),
             Err(SccpReplayAccumulatorError::InvalidForest)
         );
 
@@ -859,3 +1411,6 @@ mod tests {
         assert_eq!(exhausted, before);
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_replay_schema_tests;

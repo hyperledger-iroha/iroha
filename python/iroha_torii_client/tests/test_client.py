@@ -7,7 +7,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, get_args, get_type_hints
+from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import quote
 
 import pytest
@@ -48,25 +48,18 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     GovernanceContractResponse,
     GovernanceLockCustody,
     GovernanceLockRecord,
-    KagemushaRedeemRequestV4,
-    KagemushaTopUpRequestV4,
+    KagemushaReadinessV1,
     MultisigDraftIntent,
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineAppliedOperation,
-    OfflineAssetScale,
-    OfflinePendingOperation,
-    OfflineRejectedOperation,
-    OfflineStatus,
-    OfflineTopUpAnchor,
-    OfflineTopUpFinalityProof,
     SumeragiDiagnosticsStatus,
     SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     ToriiLocalSigningContext,
     ToriiOperatorSigningContext,
+    UnverifiedKagemushaOperationStatusV1,
     VpnQuoteCreateRequest,
     VpnReceiptSubmitRequest,
     VpnSessionCreateRequest,
@@ -81,48 +74,10 @@ from iroha_torii_client.native_amx import (  # noqa: E402
     compute_native_amx_proposal_hash,
     compute_native_amx_validator_set_hash,
 )
-from offline_test_support import (  # noqa: E402
-    OFFLINE_NETWORK_ID,
-    OFFLINE_OPERATION_BYTES,
-    OFFLINE_OPERATION_ID,
-    OFFLINE_OTHER_NETWORK_ID,
-    OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
-    OFFLINE_STATUS_URI,
-    OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
-    OFFLINE_TRANSACTION_HASH,
-)
-from offline_test_support import (  # noqa: E402
-    offline_applied_top_up_status as _offline_applied_top_up_status,
-)
-from offline_test_support import (  # noqa: E402
-    offline_capability_payload as _offline_capability_payload,
-)
-from offline_test_support import (  # noqa: E402
-    offline_fixed_bytes as _offline_fixed_bytes,
-)
-from offline_test_support import (  # noqa: E402
-    offline_norito_frame as _offline_norito_frame,
-)
-from offline_test_support import (  # noqa: E402
-    offline_operation_reference as _offline_operation_reference,
-)
-from offline_test_support import (  # noqa: E402
-    offline_redeem_request as _offline_redeem_request,
-)
-from offline_test_support import (  # noqa: E402
-    offline_rejected_status as _offline_rejected_status,
-)
-from offline_test_support import (  # noqa: E402
-    offline_top_up_anchor as _offline_top_up_anchor,
-)
-from offline_test_support import (  # noqa: E402
-    offline_top_up_finality_proof as _offline_top_up_finality_proof,
-)
-from offline_test_support import (  # noqa: E402
-    offline_top_up_request as _offline_top_up_request,
-)
+from iroha_torii_client.norito_frame import encode_norito_frame  # noqa: E402
 
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
+OFFLINE_NETWORK_ID = _canonical_hash(0x91)
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 CHECKSUM_INVALID_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF2"
@@ -360,7 +315,8 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "parent_state_root": _canonical_hash(0x34),
         "post_state_root": _canonical_hash(0x35),
         "ordinary_writes_root": _canonical_hash(0x36),
-        "topup_anchor_count": 0,
+        "kagemusha_top_up_root": None,
+        "kagemusha_top_up_count": 0,
         "native_amx_application_manifest_version": 1,
         "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
         "native_amx_application_manifest_count": 0,
@@ -4648,8 +4604,26 @@ def test_get_governance_contract_parses_response() -> None:
             payload={
                 "found": True,
                 "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+                "contract_subject_account": CANONICAL_OWNER,
                 "dataspace": "universal",
+                "active": True,
+                "lifecycle": {
+                    "version": 1,
+                    "origin": "direct",
+                    "origin_account": CANONICAL_OWNER,
+                    "origin_proposal_content_id_hex": None,
+                    "origin_governance_attempt_id_hex": None,
+                    "owner": CANONICAL_OWNER,
+                    "pending_owner": "parliament",
+                    "parliament_delegated": True,
+                    "active_code_hash_hex": "22" * 32,
+                    "revision": 7,
+                    "emergency_hold": None,
+                },
+                "emergency_hold_active": False,
                 "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+                "public_entrypoints": ["transfer", "view_balance"],
             },
         )
     )
@@ -4663,10 +4637,180 @@ def test_get_governance_contract_parses_response() -> None:
     assert isinstance(result, GovernanceContractResponse)
     assert result.found is True
     assert result.code_hash_hex == "22" * 32
+    assert result.lifecycle is not None
+    assert result.lifecycle.revision == 7
+    assert result.lifecycle.active_code_hash_hex == "22" * 32
+    assert result.lifecycle.pending_owner == "parliament"
+    assert result.public_entrypoints == ["transfer", "view_balance"]
     assert session.calls[0]["url"] == (
         "http://node.test/v1/gov/contracts/"
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     )
+
+
+def test_governance_contract_response_enforces_the_exact_lifecycle_shape() -> None:
+    contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    active = {
+        "found": True,
+        "contract_address": contract_address,
+        "contract_subject_account": CANONICAL_OWNER,
+        "dataspace": "universal",
+        "active": True,
+        "lifecycle": {
+            "version": 1,
+            "origin": "direct",
+            "origin_account": CANONICAL_OWNER,
+            "origin_proposal_content_id_hex": None,
+            "origin_governance_attempt_id_hex": None,
+            "owner": CANONICAL_OWNER,
+            "pending_owner": None,
+            "parliament_delegated": False,
+            "active_code_hash_hex": "22" * 32,
+            "revision": 7,
+            "emergency_hold": None,
+        },
+        "emergency_hold_active": False,
+        "code_hash_hex": "22" * 32,
+        "abi_hash_hex": "33" * 32,
+        "public_entrypoints": ["transfer", "view_balance"],
+    }
+    absent = ToriiClient._parse_governance_contract_response(
+        {
+            "found": False,
+            "contract_address": contract_address,
+            "dataspace": "universal",
+        },
+        context="governance contract response",
+    )
+    assert absent.found is False
+    assert absent.active is None
+    assert absent.lifecycle is None
+
+    invalid_cases = []
+    mismatched = copy.deepcopy(active)
+    mismatched["lifecycle"]["active_code_hash_hex"] = "44" * 32
+    invalid_cases.append(mismatched)
+    unsorted = copy.deepcopy(active)
+    unsorted["public_entrypoints"] = ["view_balance", "transfer"]
+    invalid_cases.append(unsorted)
+    alias_owner = copy.deepcopy(active)
+    alias_owner["lifecycle"]["owner"] = "alice@universal"
+    invalid_cases.append(alias_owner)
+    absent_with_retired_null = {
+        "found": False,
+        "contract_address": contract_address,
+        "dataspace": "universal",
+        "code_hash_hex": None,
+    }
+    invalid_cases.append(absent_with_retired_null)
+    for payload in invalid_cases:
+        with pytest.raises((RuntimeError, ValueError)):
+            ToriiClient._parse_governance_contract_response(
+                payload,
+                context="governance contract response",
+            )
+
+
+def test_governance_contract_lifecycle_requires_exact_wire_u64_values() -> None:
+    lifecycle = {
+        "version": 1,
+        "origin": "direct",
+        "origin_account": CANONICAL_OWNER,
+        "origin_proposal_content_id_hex": None,
+        "origin_governance_attempt_id_hex": None,
+        "owner": CANONICAL_OWNER,
+        "pending_owner": None,
+        "parliament_delegated": False,
+        "active_code_hash_hex": "22" * 32,
+        "revision": (1 << 64) - 1,
+        "emergency_hold": None,
+    }
+    parsed = ToriiClient._parse_governance_contract_lifecycle(
+        lifecycle,
+        context="governance contract response.lifecycle",
+    )
+    assert parsed.revision == (1 << 64) - 1
+
+    for value in (True, "7", 7.0, -1, 1 << 64):
+        invalid = copy.deepcopy(lifecycle)
+        invalid["revision"] = value
+        with pytest.raises(RuntimeError, match="unsigned 64-bit JSON integer"):
+            ToriiClient._parse_governance_contract_lifecycle(
+                invalid,
+                context="governance contract response.lifecycle",
+            )
+
+    hold = {
+        "incident_digest_hex": "44" * 32,
+        "proposal_content_id_hex": "55" * 32,
+        "governance_attempt_id_hex": "66" * 32,
+        "reason": "containment",
+        "imposed_at_height": (1 << 64) - 2,
+        "expires_at_height": (1 << 64) - 1,
+    }
+    parsed_hold = ToriiClient._parse_governance_contract_emergency_hold(
+        hold,
+        context="governance contract response.lifecycle.emergency_hold",
+    )
+    assert parsed_hold.expires_at_height == (1 << 64) - 1
+
+    for value in (True, "10", 10.0, -1, 1 << 64):
+        invalid = copy.deepcopy(hold)
+        invalid["imposed_at_height"] = value
+        with pytest.raises(RuntimeError, match="unsigned 64-bit JSON integer"):
+            ToriiClient._parse_governance_contract_emergency_hold(
+                invalid,
+                context="governance contract response.lifecycle.emergency_hold",
+            )
+
+
+def test_governance_contract_transport_rejects_duplicate_lifecycle_keys() -> None:
+    contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    payload = {
+        "found": True,
+        "contract_address": contract_address,
+        "contract_subject_account": CANONICAL_OWNER,
+        "dataspace": "universal",
+        "active": True,
+        "lifecycle": {
+            "version": 1,
+            "origin": "direct",
+            "origin_account": CANONICAL_OWNER,
+            "origin_proposal_content_id_hex": None,
+            "origin_governance_attempt_id_hex": None,
+            "owner": CANONICAL_OWNER,
+            "pending_owner": None,
+            "parliament_delegated": False,
+            "active_code_hash_hex": "22" * 32,
+            "revision": 7,
+            "emergency_hold": None,
+        },
+        "emergency_hold_active": False,
+        "code_hash_hex": "22" * 32,
+        "abi_hash_hex": "33" * 32,
+        "public_entrypoints": ["ping"],
+    }
+    duplicate = json.dumps(payload, separators=(",", ":")).replace(
+        '"revision":7',
+        '"revision":7,"revision":8',
+    )
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            raw=duplicate.encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="duplicate JSON object member `revision`"):
+        client.get_governance_contract(
+            contract_address,
+            canonical_auth=_governance_auth(),
+        )
+
+    assert session.calls[0]["stream"] is True
+    assert session.calls[0]["allow_redirects"] is False
 
 
 @pytest.mark.parametrize(
@@ -5267,6 +5411,47 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     assert call["url"].endswith(f"/v1/explorer/accounts/{quote(CANONICAL_OWNER, safe='')}/qr")
     assert call["params"] == {}
     assert call["headers"]["Accept"] == "application/json"
+    assert all(not name.lower().startswith("x-iroha-") for name in call["headers"])
+
+
+def test_get_explorer_account_qr_optionally_signs_exact_final_path() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "canonical_id": CANONICAL_OWNER,
+                "literal": CANONICAL_OWNER,
+                "network_prefix": 26,
+                "error_correction": "quartile",
+                "modules": 33,
+                "qr_version": 5,
+                "svg": "<svg></svg>",
+            }
+        )
+    )
+    captured: List[bytes] = []
+    auth = _governance_auth(captured)
+    client = ToriiClient("https://node.test", session=session)
+
+    qr = client.get_explorer_account_qr(CANONICAL_OWNER, canonical_auth=auth)
+
+    exact_path = f"/v1/explorer/accounts/{quote(CANONICAL_OWNER, safe='')}/qr"
+    assert qr.canonical_id == CANONICAL_OWNER
+    assert captured == [
+        canonical_network_request_signature_message(
+            auth.network_id,
+            "GET",
+            exact_path,
+            b"",
+            timestamp_ms=auth.timestamp_ms or 0,
+            nonce=auth.nonce or "",
+        )
+    ]
+    call = session.calls[0]
+    assert call["url"].endswith(exact_path)
+    assert call["allow_redirects"] is False
+    assert "X-Iroha-Account" in call["headers"]
+    assert "X-Iroha-Signature" in call["headers"]
 
 
 def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:
@@ -5381,8 +5566,26 @@ def test_contract_helpers_against_mock_server() -> None:
                 "gov_contracts": {
                     contract_address: {
                         "found": True,
+                        "contract_subject_account": CANONICAL_OWNER,
                         "dataspace": "universal",
+                        "active": True,
+                        "lifecycle": {
+                            "version": 1,
+                            "origin": "direct",
+                            "origin_account": CANONICAL_OWNER,
+                            "origin_proposal_content_id_hex": None,
+                            "origin_governance_attempt_id_hex": None,
+                            "owner": CANONICAL_OWNER,
+                            "pending_owner": None,
+                            "parliament_delegated": False,
+                            "active_code_hash_hex": "22" * 32,
+                            "revision": 1,
+                            "emergency_hold": None,
+                        },
+                        "emergency_hold_active": False,
                         "code_hash_hex": "22" * 32,
+                        "abi_hash_hex": "33" * 32,
+                        "public_entrypoints": ["ping"],
                     }
                 },
                 "contract_call_response": _contract_call_draft(
@@ -7621,19 +7824,6 @@ def test_get_configuration_returns_snapshot() -> None:
     assert transport.norito_rpc.canary_allowlist_size == 3
 
 
-def test_update_configuration_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=202))
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.update_configuration({"logger": {"level": "Info", "filter": "net=debug"}})
-
-    assert result == {}
-    assert session.calls[0]["method"] == "POST"
-    assert session.calls[0]["url"].endswith("/v1/configuration")
-    assert json.loads(session.calls[0]["data"]) == {"logger": {"level": "Info", "filter": "net=debug"}}
-
-
 def test_get_sumeragi_qc_parses_authoritative_v2_references() -> None:
     highest = copy.deepcopy(_sumeragi_v2_status_payload()["last_commit_qc"]["certificate"])
     highest["phase"] = {"phase": "prepare", "details": None}
@@ -8177,17 +8367,37 @@ def test_get_sumeragi_evidence_count_returns_int() -> None:
     assert session.calls[0]["url"].endswith("/v1/sumeragi/evidence/count")
 
 
-def _sumeragi_evidence_common(*, admitted: Optional[int] = None) -> Dict[str, Any]:
-    return {
-        "recorded_height": 40,
-        "recorded_view": 2,
-        "recorded_ms": 1_700_000_000_000,
-        "consensus_admitted_height": admitted,
-    }
+def test_get_sumeragi_evidence_count_rejects_non_success_with_valid_body() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=503, payload={"count": 0}))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected status 503"):
+        client.get_sumeragi_evidence_count()
+
+
+@pytest.mark.parametrize("payload", [{}, {"count": 1, "total": 1}, {"count": "1"}])
+def test_get_sumeragi_evidence_count_rejects_noncanonical_envelope(
+    payload: Dict[str, Any],
+) -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(RuntimeError):
+        client.get_sumeragi_evidence_count()
 
 
 def _sumeragi_v2_equivocation_record(
-    *, evidence_class: str = "phase_vote"
+    *, evidence_class: str = "phase_vote", penalty_status: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     return {
         "kind": "SumeragiV2Equivocation",
@@ -8199,19 +8409,13 @@ def _sumeragi_v2_equivocation_record(
         "context_id": "11" * 32,
         "artifact_hash_1": "22" * 32,
         "artifact_hash_2": "33" * 32,
-        **_sumeragi_evidence_common(admitted=41),
-    }
-
-
-def _sumeragi_censorship_record() -> Dict[str, Any]:
-    return {
-        "kind": "Censorship",
-        "tx_hash": "44" * 32,
-        "receipt_count": 2,
-        "signers": ["alice@test", "bob@test"],
-        "submitted_at_height_min": 20,
-        "submitted_at_height_max": 22,
-        **_sumeragi_evidence_common(),
+        "recorded_height": 40,
+        "recorded_view": 2,
+        "recorded_ms": 1_700_000_000_000,
+        "consensus_admitted_height": 41,
+        "penalty_status": penalty_status
+        if penalty_status is not None
+        else {"status": "pending", "details": None},
     }
 
 
@@ -8226,29 +8430,82 @@ def test_sumeragi_v2_equivocation_accepts_exact_classes(evidence_class: str) -> 
     assert parsed.class_ == evidence_class
 
 
-def test_sumeragi_evidence_rejects_unknown_record_kind() -> None:
-    record = {"kind": "UnknownEvidence", **_sumeragi_evidence_common()}
+@pytest.mark.parametrize(
+    ("status", "status_type"),
+    [
+        ("applied", client_module.SumeragiEvidenceAppliedPenaltyStatus),
+        ("cancelled", client_module.SumeragiEvidenceCancelledPenaltyStatus),
+    ],
+)
+def test_sumeragi_evidence_accepts_committed_penalty_statuses(
+    status: str, status_type: type
+) -> None:
+    parsed = ToriiClient._parse_sumeragi_evidence_record(
+        _sumeragi_v2_equivocation_record(
+            penalty_status={"status": status, "details": {"height": 44}}
+        ),
+        context="evidence",
+    )
 
-    with pytest.raises(RuntimeError, match=r"kind must be one of"):
+    assert isinstance(parsed.penalty_status, status_type)
+    assert parsed.penalty_status.details.height == 44
+
+
+def test_sumeragi_evidence_rejects_unknown_record_kind() -> None:
+    record = _sumeragi_v2_equivocation_record()
+    record["kind"] = "DoublePrepare"
+
+    with pytest.raises(RuntimeError, match=r"kind must be SumeragiV2Equivocation"):
         ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
 
 
 @pytest.mark.parametrize(
-    "alias",
+    "payload",
     [
-        "min_height",
-        "max_height",
-        "minHeight",
-        "maxHeight",
-        "submittedAtHeightMin",
-        "submittedAtHeightMax",
+        {"items": []},
+        {"total": 0},
+        {"total": 0, "items": [], "cursor": None},
+        {"total": "0", "items": []},
     ],
 )
-def test_sumeragi_censorship_rejects_retired_height_aliases(alias: str) -> None:
-    record = _sumeragi_censorship_record()
-    record[alias] = 20
+def test_sumeragi_evidence_page_rejects_noncanonical_envelope(
+    payload: Dict[str, Any],
+) -> None:
+    with pytest.raises(RuntimeError):
+        ToriiClient._parse_sumeragi_evidence_page(payload, context="evidence")
 
-    with pytest.raises(RuntimeError, match=rf"unexpected {alias}"):
+
+def test_sumeragi_evidence_page_rejects_impossible_or_oversized_results() -> None:
+    record = _sumeragi_v2_equivocation_record()
+    with pytest.raises(RuntimeError, match="at most 50"):
+        ToriiClient._parse_sumeragi_evidence_page(
+            {"total": 51, "items": [record] * 51},
+            context="evidence",
+        )
+    with pytest.raises(RuntimeError, match="cover offset"):
+        ToriiClient._parse_sumeragi_evidence_page(
+            {"total": 1, "items": [record]},
+            context="evidence",
+            offset=1,
+        )
+
+
+def test_sumeragi_evidence_page_accepts_empty_page_beyond_total() -> None:
+    page = ToriiClient._parse_sumeragi_evidence_page(
+        {"total": 1, "items": []},
+        context="evidence",
+        offset=10,
+    )
+
+    assert page.total == 1
+    assert page.items == []
+
+
+def test_sumeragi_evidence_rejects_retired_fields() -> None:
+    record = _sumeragi_v2_equivocation_record()
+    record["penalty_applied"] = False
+
+    with pytest.raises(RuntimeError, match=r"unexpected penalty_applied"):
         ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
 
 
@@ -8285,26 +8542,21 @@ def test_sumeragi_v2_equivocation_rejects_missing_fields(
 
 
 @pytest.mark.parametrize(
-    ("receipt_count", "signers", "height_min", "height_max", "match"),
+    ("penalty_status", "match"),
     [
-        (2, ["alice@test"], 20, 22, r"receipt_count must equal len\(signers\)"),
-        (2, ["alice@test", "bob@test"], 23, 22, r"submitted_at_height_min"),
+        ({"status": "pending", "details": {}}, r"details must be null"),
+        ({"status": "applied", "details": None}, r"must be a JSON object"),
+        (
+            {"status": "cancelled", "details": {"height": 4, "note": "x"}},
+            r"must contain exactly height",
+        ),
+        ({"status": "retired", "details": None}, r"must be pending, applied, or cancelled"),
     ],
 )
-def test_sumeragi_censorship_rejects_inconsistent_receipt_metadata(
-    receipt_count: int,
-    signers: List[str],
-    height_min: int,
-    height_max: int,
-    match: str,
+def test_sumeragi_evidence_rejects_invalid_penalty_status(
+    penalty_status: Dict[str, Any], match: str
 ) -> None:
-    record = _sumeragi_censorship_record()
-    record.update(
-        receipt_count=receipt_count,
-        signers=signers,
-        submitted_at_height_min=height_min,
-        submitted_at_height_max=height_max,
-    )
+    record = _sumeragi_v2_equivocation_record(penalty_status=penalty_status)
 
     with pytest.raises(RuntimeError, match=match):
         ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
@@ -8316,34 +8568,26 @@ def test_list_sumeragi_evidence_validates_limit() -> None:
     try:
         client.list_sumeragi_evidence(limit=2000)
     except RuntimeError as exc:
-        assert "limit must be <= 1000" in str(exc)
+        assert "limit must be in 1..=1000" in str(exc)
     else:
         raise AssertionError("expected RuntimeError for oversized limit")
 
 
+def test_list_sumeragi_evidence_validates_offset_and_kind() -> None:
+    client = ToriiClient("http://node.test")
+
+    with pytest.raises(RuntimeError, match="offset must be in 0..=10000"):
+        client.list_sumeragi_evidence(offset=10_001)
+    with pytest.raises(RuntimeError, match="kind must be SumeragiV2Equivocation"):
+        client.list_sumeragi_evidence(kind="DoublePrepare")
+    with pytest.raises(RuntimeError, match="limit must be an integer"):
+        client.list_sumeragi_evidence(limit="1")
+    with pytest.raises(RuntimeError, match="offset must be an integer"):
+        client.list_sumeragi_evidence(offset=True)
+
+
 def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
     assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
-
-
-def test_configuration_update_rejects_confidential_gas_before_request() -> None:
-    session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(ValueError, match="confidential_gas is read-only"):
-        client.update_configuration(
-            {
-                "logger": {"level": "INFO", "filter": None},
-                "confidential_gas": {
-                    "proof_base": 1,
-                    "per_public_input": 2,
-                    "per_proof_byte": 3,
-                    "per_nullifier": 4,
-                    "per_commitment": 5,
-                },
-            }
-        )
-
-    assert session.calls == []
 
 
 def test_get_time_now_parses_snapshot_alt_values() -> None:
@@ -8635,1366 +8879,270 @@ def test_trigger_registration_deletion_and_query() -> None:
     }
 
 
-def test_offline_public_request_annotations_are_closed_first_release_types() -> None:
-    assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV4
-    assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV4
-    assert get_args(OfflineAssetScale) == tuple(range(29))
-    assert "next_zero_leaf_index" in (
-        client_module.OfflineRecursiveSpendStatementJson.__required_keys__
-    )
-    assert "network_id" in client_module.OfflineSpendableNoteJson.__required_keys__
-    assert "chain_id" not in client_module.OfflineSpendableNoteJson.__required_keys__
-
-
-def test_offline_finality_execution_commitment_requires_executed_wire_identity() -> None:
-    payload = {
-        "parent_state_root": _canonical_hash(0x91),
-        "post_state_root": _canonical_hash(0x92),
-        "ordinary_writes_root": _canonical_hash(0x93),
-        "topup_anchor_count": 0,
-        "native_amx_application_manifest_version": 1,
-        "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
-        "native_amx_application_manifest_count": 0,
-        "lane_finality_manifest": None,
-        "merge_carrier": None,
-        "executed_block_wire_len": 321,
-        "executed_block_wire_hash": _canonical_hash(0x94),
-    }
-    commitment = client_module._offline_top_up_finality_execution_commitment(
-        payload,
-        "test.execution_commitment",
-        require_topup=False,
-    )
-    assert commitment.executed_block_wire_len == payload["executed_block_wire_len"]
-    assert commitment.executed_block_wire_hash == payload["executed_block_wire_hash"]
-
-    payload["native_amx_application_manifest_root"] = _canonical_hash(0x95)
-    payload["native_amx_application_manifest_count"] = 1
-    nonempty_commitment = (
-        client_module._offline_top_up_finality_execution_commitment(
-            payload,
-            "test.execution_commitment",
-            require_topup=False,
-        )
-    )
-    assert nonempty_commitment.native_amx_application_manifest_count == 1
-
-    for invalid in (None, True, 0, -1, 1 << 64, "321"):
-        invalid_payload = dict(payload)
-        invalid_payload["executed_block_wire_len"] = invalid
-        with pytest.raises(RuntimeError, match="executed_block_wire_len"):
-            client_module._offline_top_up_finality_execution_commitment(
-                invalid_payload,
-                "test.execution_commitment",
-                require_topup=False,
-            )
-
-    missing_len = dict(payload)
-    del missing_len["executed_block_wire_len"]
-    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
-        client_module._offline_top_up_finality_execution_commitment(
-            missing_len,
-            "test.execution_commitment",
-            require_topup=False,
-        )
-
-    del payload["executed_block_wire_hash"]
-    with pytest.raises(RuntimeError, match="executed_block_wire_hash"):
-        client_module._offline_top_up_finality_execution_commitment(
-            payload,
-            "test.execution_commitment",
-            require_topup=False,
-        )
-
-
-def test_offline_finality_execution_commitment_requires_exact_merge_carrier() -> None:
-    def payload() -> Dict[str, Any]:
-        return {
-            "parent_state_root": _canonical_hash(0x91),
-            "post_state_root": _canonical_hash(0x92),
-            "ordinary_writes_root": _canonical_hash(0x93),
-            "topup_anchor_count": 0,
-            "native_amx_application_manifest_version": 1,
-            "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
-            "native_amx_application_manifest_count": 0,
-            "lane_finality_manifest": None,
-            "merge_carrier": None,
-            "executed_block_wire_len": 321,
-            "executed_block_wire_hash": _canonical_hash(0x94),
-        }
-
-    parsed = client_module._offline_top_up_finality_execution_commitment(
-        payload(), "test.execution_commitment", require_topup=False
-    )
-    assert parsed.merge_carrier is None
-
-    carrier_payload = payload()
-    carrier_payload["merge_carrier"] = {
-        "version": 1,
-        "entry_hash": _canonical_hash(0x95),
-    }
-    parsed = client_module._offline_top_up_finality_execution_commitment(
-        carrier_payload, "test.execution_commitment", require_topup=False
-    )
-    assert parsed.merge_carrier is not None
-    assert parsed.merge_carrier.entry_hash == _canonical_hash(0x95)
-
-    invalid_payloads = []
-    missing = payload()
-    del missing["merge_carrier"]
-    invalid_payloads.append(missing)
-    malformed = payload()
-    malformed["merge_carrier"] = []
-    invalid_payloads.append(malformed)
-    wrong_version = payload()
-    wrong_version["merge_carrier"] = {
-        "version": 2,
-        "entry_hash": _canonical_hash(0x95),
-    }
-    invalid_payloads.append(wrong_version)
-    missing_version = payload()
-    missing_version["merge_carrier"] = {
-        "entry_hash": _canonical_hash(0x95),
-    }
-    invalid_payloads.append(missing_version)
-    missing_entry_hash = payload()
-    missing_entry_hash["merge_carrier"] = {"version": 1}
-    invalid_payloads.append(missing_entry_hash)
-    bad_hash = payload()
-    bad_hash["merge_carrier"] = {"version": 1, "entry_hash": "bad"}
-    invalid_payloads.append(bad_hash)
-    unknown = payload()
-    unknown["merge_carrier"] = {
-        "version": 1,
-        "entry_hash": _canonical_hash(0x95),
-        "future": 1,
-    }
-    invalid_payloads.append(unknown)
-
-    for invalid in invalid_payloads:
-        with pytest.raises(RuntimeError):
-            client_module._offline_top_up_finality_execution_commitment(
-                invalid,
-                "test.execution_commitment",
-                require_topup=False,
-            )
-
-
-@pytest.mark.parametrize(
-    ("mutate", "error"),
-    [
-        (
-            lambda payload: payload.update(
-                native_amx_application_manifest_version=2
-            ),
-            "native_amx_application_manifest_version must equal 1",
-        ),
-        (
-            lambda payload: payload.update(
-                native_amx_application_manifest_count=1025
-            ),
-            "native_amx_application_manifest_count",
-        ),
-        (
-            lambda payload: payload.update(
-                native_amx_application_manifest_root=_canonical_hash(0x95)
-            ),
-            "must be zero exactly for the canonical empty root",
-        ),
-        (
-            lambda payload: payload.update(
-                native_amx_application_manifest_count=1
-            ),
-            "must be zero exactly for the canonical empty root",
-        ),
-    ],
-)
-def test_offline_finality_execution_commitment_rejects_invalid_native_manifest(
-    mutate, error: str
-) -> None:
-    payload = {
-        "parent_state_root": _canonical_hash(0x91),
-        "post_state_root": _canonical_hash(0x92),
-        "ordinary_writes_root": _canonical_hash(0x93),
-        "topup_anchor_count": 0,
-        "native_amx_application_manifest_version": 1,
-        "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
-        "native_amx_application_manifest_count": 0,
-        "lane_finality_manifest": None,
-        "merge_carrier": None,
-        "executed_block_wire_len": 321,
-        "executed_block_wire_hash": _canonical_hash(0x94),
-    }
-    mutate(payload)
-
-    with pytest.raises(RuntimeError, match=error):
-        client_module._offline_top_up_finality_execution_commitment(
-            payload,
-            "test.execution_commitment",
-            require_topup=False,
-        )
-
-
-def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload=_offline_capability_payload()))
-    client = ToriiClient("http://node.test", session=session)
-
-    capability = client.get_offline_capability(timeout=12.5)
-
-    assert isinstance(capability, OfflineStatus)
-    assert capability.cash_handoff_capability == "cash_handoff_v1"
-    assert capability.required_bridge_abi_version == 23
-    assert capability.max_hops == 8
-    assert capability.ready is True
-    call = session.calls[0]
-    assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/offline/readiness")
-    assert call["params"] == {}
-    assert call["headers"]["Accept"] == "application/json"
-    assert call["allow_redirects"] is False
-    assert call["timeout"] == 12.5
-    assert not hasattr(ToriiClient, "get_kagemusha_readiness")
-
-    for invalid_timeout in (True, 0, -1, float("inf"), float("nan"), "1"):
-        with pytest.raises(ValueError, match="positive finite number"):
-            client.get_offline_capability(timeout=invalid_timeout)  # type: ignore[arg-type]
-
-
-def test_get_offline_capability_rejects_non_universal_claims() -> None:
-    payloads = [
-        _offline_capability_payload(mandatory=True),
-        _offline_capability_payload(cash_handoff_capability="cash_handoff_v2"),
-        _offline_capability_payload(required_bridge_abi_version=20),
-        _offline_capability_payload(max_hops=7),
-        _offline_capability_payload(ready=False),
-        _offline_capability_payload(assets=[{"asset_definition_id": "asset-specific"}]),
-        _offline_capability_payload(
-            blockers=[{"code": "backend_gate", "message": "not universal"}]
-        ),
-        _offline_capability_payload(unexpected_field=True),
-    ]
-    missing_field = _offline_capability_payload()
-    missing_field.pop("cash_handoff_capability")
-    payloads.append(missing_field)
-
-    for payload in payloads:
-        session = RecordingSession()
-        session.queue(StubResponse(payload=payload))
-        with pytest.raises(RuntimeError, match="offline capability response"):
-            ToriiClient("http://node.test", session=session).get_offline_capability()
-
-
-def test_offline_asset_definition_id_validation_matches_canonical_rust_codec() -> None:
-    assert client_module._offline_canonical_asset_definition_id(
-        CANONICAL_ASSET_DEFINITION_ID,
-        "asset_definition_id",
-    ) == CANONICAL_ASSET_DEFINITION_ID
-
-    for invalid in (
-        CHECKSUM_INVALID_ASSET_DEFINITION_ID,
-        CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID,
-        CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID,
-    ):
-        with pytest.raises(RuntimeError, match="checksummed UUIDv4"):
-            client_module._offline_canonical_asset_definition_id(
-                invalid,
-                "asset_definition_id",
-            )
-
-
-def test_offline_status_transaction_hash_requires_iroha_marker() -> None:
-    with pytest.raises(RuntimeError, match="canonical Iroha HashOf marker"):
-        client_module._offline_transaction_hash(
-            "22" * 32,
-            "offline operation status.transaction_hash",
-        )
-
-
-def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> None:
+@pytest.mark.parametrize("ready", [True, False])
+def test_get_kagemusha_readiness_is_exact_v1(ready: bool) -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
-            status_code=202,
-            payload=_offline_operation_reference(),
-            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
+            payload={
+                "kagemusha_handoff_capability": "kagemusha_handoff_v1",
+                "wire_version": 1,
+                "device_lifecycle_version": 1,
+                "ready": ready,
+            }
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    request = _offline_top_up_request()
-    reference = client.submit_kagemusha_top_up(request, timeout=7.5)
+    readiness = client.get_kagemusha_readiness(timeout=12.5)
 
-    assert reference.operation_id == OFFLINE_OPERATION_ID
-    assert reference.kind.kind == "top_up"
-    assert reference.state.state == "pending"
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/offline/top-up")
-    assert call["headers"] == {
-        "Accept": "application/json",
-        "Content-Type": "application/x-norito",
-        "Idempotency-Key": OFFLINE_OPERATION_ID,
-    }
-    assert call["data"] is request.norito
-    assert call["allow_redirects"] is False
-    assert call["timeout"] == 7.5
-
-
-def test_submit_kagemusha_redeem_uses_only_the_final_route() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            status_code=202,
-            payload=_offline_operation_reference(kind={"kind": "redeem", "value": None}),
-            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
-        )
+    assert readiness == KagemushaReadinessV1(
+        kagemusha_handoff_capability="kagemusha_handoff_v1",
+        wire_version=1,
+        device_lifecycle_version=1,
+        ready=ready,
     )
-    client = ToriiClient("http://node.test", session=session)
-
-    request = _offline_redeem_request()
-    reference = client.submit_kagemusha_redeem(request, timeout=8.5)
-
-    assert reference.kind.kind == "redeem"
-    assert session.calls[0]["url"].endswith("/v1/offline/redeem")
-    assert session.calls[0]["headers"]["Content-Type"] == "application/x-norito"
-    assert session.calls[0]["data"] is request.norito
+    assert session.calls[0]["url"].endswith("/v1/kagemusha/readiness")
     assert session.calls[0]["allow_redirects"] is False
-    assert session.calls[0]["timeout"] == 8.5
+    assert session.calls[0]["timeout"] == 12.5
 
 
-def test_kagemusha_request_methods_reject_invalid_timeouts_before_network() -> None:
-    client = ToriiClient("http://node.test", session=RecordingSession())
-    calls = (
-        lambda timeout: client.submit_kagemusha_top_up(
-            _offline_top_up_request(),
-            timeout=timeout,
-        ),
-        lambda timeout: client.submit_kagemusha_redeem(
-            _offline_redeem_request(),
-            timeout=timeout,
-        ),
-        lambda timeout: client.get_kagemusha_operation_status(
-            OFFLINE_OPERATION_ID,
-            timeout=timeout,
-        ),
+def test_get_kagemusha_readiness_rejects_non_v1_contract() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "kagemusha_handoff_capability": "kagemusha_handoff_v1",
+                "wire_version": 1,
+                "device_lifecycle_version": 1,
+                "ready": True,
+                "unexpected": 8,
+            }
+        )
     )
 
-    for call in calls:
-        for invalid_timeout in (True, 0, -1, float("inf"), float("nan"), "1"):
-            with pytest.raises(ValueError, match="positive finite number"):
-                call(invalid_timeout)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="unexpected"):
+        ToriiClient("http://node.test", session=session).get_kagemusha_readiness()
 
 
-def test_kagemusha_command_validation_rejects_noncanonical_inputs_before_network() -> None:
+def _kagemusha_command_archive(schema: str, operation_id: bytes) -> bytes:
+    payload = b"\x02\x01\x00\x20" + operation_id + b"\x01\x00"
+    return encode_norito_frame(
+        payload,
+        type_name=schema,
+        flags=0x02,
+        payload_alignment=16,
+    )
+
+
+def test_submit_and_get_kagemusha_operation_use_exact_v1_routes() -> None:
+    operation_id = bytes((0x41,)) * 32
+    pending = {
+        "version": 1,
+        "operation_id": list(operation_id),
+        "kind": {"kind": "top_up", "value": None},
+        "state": {"state": "pending", "value": None},
+        "result": None,
+        "rejection": None,
+    }
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
-    for malformed in ({}, b"request", "request", bytearray(b"request"), memoryview(b"request")):
-        with pytest.raises(TypeError):
-            client.submit_kagemusha_top_up(malformed)  # type: ignore[arg-type]
-        with pytest.raises(TypeError):
-            client.submit_kagemusha_redeem(malformed)  # type: ignore[arg-type]
-
-    for request_type, maximum_bytes in (
-        (KagemushaTopUpRequestV4, 512 * 1024),
-        (KagemushaRedeemRequestV4, 48 * 1024 * 1024),
-    ):
-        with pytest.raises(ValueError, match="must not be empty"):
-            request_type(norito=b"", operation_id=OFFLINE_OPERATION_ID)
-        with pytest.raises(ValueError, match="exceeds"):
-            request_type(norito=b"x" * (maximum_bytes + 1), operation_id=OFFLINE_OPERATION_ID)
-        for norito in (bytearray(b"x"), memoryview(b"x"), "x"):
-            with pytest.raises(TypeError, match="immutable bytes"):
-                request_type(norito=norito, operation_id=OFFLINE_OPERATION_ID)  # type: ignore[arg-type]
-        for operation_id in (
-            "0" * 64,
-            "11" * 31,
-            "11" * 33,
-            "AA" * 32,
-            "gg" * 32,
-            f" {OFFLINE_OPERATION_ID}",
-        ):
-            with pytest.raises(RuntimeError, match="operation_id"):
-                schema_name = (
-                    OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
-                    if request_type is KagemushaTopUpRequestV4
-                    else OFFLINE_REDEEM_REQUEST_SCHEMA_NAME
-                )
-                request_type(
-                    norito=_offline_norito_frame(schema_name),
-                    operation_id=operation_id,
-                )
-    assert session.calls == []
-
-
-def test_kagemusha_command_requires_exact_schema_bound_norito_frame() -> None:
-    top_up = _offline_norito_frame(OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
-    redeem = _offline_norito_frame(OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
-
-    assert KagemushaTopUpRequestV4(top_up, OFFLINE_OPERATION_ID).norito == top_up
-    assert KagemushaRedeemRequestV4(redeem, OFFLINE_OPERATION_ID).norito == redeem
-    with pytest.raises(ValueError, match="schema hash did not match"):
-        KagemushaTopUpRequestV4(redeem, OFFLINE_OPERATION_ID)
-    with pytest.raises(ValueError, match="schema hash did not match"):
-        KagemushaRedeemRequestV4(top_up, OFFLINE_OPERATION_ID)
-
-    corrupted = bytearray(top_up)
-    corrupted[-1] ^= 0xFF
-    with pytest.raises(ValueError, match="CRC64 mismatch"):
-        KagemushaTopUpRequestV4(bytes(corrupted), OFFLINE_OPERATION_ID)
-
-    compressed = bytearray(top_up)
-    compressed[22] = 1
-    with pytest.raises(ValueError, match="uncompressed"):
-        KagemushaTopUpRequestV4(bytes(compressed), OFFLINE_OPERATION_ID)
-
-    without_alignment_padding = top_up[:40] + top_up[48:]
-    with pytest.raises(ValueError, match="exact type requires 8"):
-        KagemushaTopUpRequestV4(without_alignment_padding, OFFLINE_OPERATION_ID)
-
-    alternate_flags = bytearray(top_up)
-    alternate_flags[39] = 0
-    with pytest.raises(ValueError, match="exact type requires 0x02"):
-        KagemushaTopUpRequestV4(bytes(alternate_flags), OFFLINE_OPERATION_ID)
-
-
-def test_offline_acceptance_cross_checks_reference_and_location() -> None:
-    cases = [
-        (_offline_operation_reference(operation_id="33" * 32), OFFLINE_STATUS_URI),
-        (
-            _offline_operation_reference(kind={"kind": "redeem", "value": None}),
-            OFFLINE_STATUS_URI,
-        ),
-        (
-            _offline_operation_reference(status_uri="/v1/offline/operations/not-a-digest"),
-            OFFLINE_STATUS_URI,
-        ),
-        (_offline_operation_reference(), f"/v1/offline/operations/{'44' * 32}"),
-        (_offline_operation_reference(), None),
-    ]
-    for payload, location in cases:
-        session = RecordingSession()
-        headers = (
-            {"Location": location, "Retry-After": "1"}
-            if location is not None
-            else {"Retry-After": "1"}
-        )
-        session.queue(StubResponse(status_code=202, payload=payload, headers=headers))
-        client = ToriiClient("http://node.test", session=session)
-        with pytest.raises(RuntimeError):
-            client.submit_kagemusha_top_up(_offline_top_up_request())
-
-    wrong_media_session = RecordingSession()
-    wrong_media_session.queue(
+    session.queue(
         StubResponse(
             status_code=202,
-            payload=_offline_operation_reference(),
+            payload=pending,
             headers={
-                "Content-Type": "text/plain",
-                "Location": OFFLINE_STATUS_URI,
+                "Location": f"/v1/kagemusha/operations/{operation_id.hex()}",
                 "Retry-After": "1",
             },
         )
     )
-    wrong_media_client = ToriiClient("http://node.test", session=wrong_media_session)
-    with pytest.raises(RuntimeError, match="Content-Type application/json"):
-        wrong_media_client.submit_kagemusha_top_up(_offline_top_up_request())
+    session.queue(StubResponse(payload=pending))
+    client = ToriiClient("http://node.test", session=session)
+    signed_transaction = b"\x01payer-signed-kagemusha-top-up"
+
+    submitted = client.submit_kagemusha_top_up(signed_transaction, operation_id)
+    fetched = client.get_kagemusha_operation(operation_id.hex())
+
+    assert isinstance(submitted, UnverifiedKagemushaOperationStatusV1)
+    assert submitted.operation_id == operation_id
+    assert submitted.kind == "top_up" and submitted.state == "pending"
+    assert fetched == submitted
+    post = session.calls[0]
+    assert post["url"].endswith("/v1/kagemusha/top-up")
+    assert post["headers"]["Content-Type"] == "application/x-norito"
+    assert post["headers"]["Idempotency-Key"] == operation_id.hex()
+    assert post["data"] == signed_transaction
+    assert post["allow_redirects"] is False
+    assert session.calls[1]["url"].endswith(
+        f"/v1/kagemusha/operations/{operation_id.hex()}"
+    )
+
+
+def test_submit_kagemusha_top_up_rejects_unsigned_request_and_operation_id_aliases() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    operation_id = bytes((0x41,)) * 32
+
+    with pytest.raises(TypeError, match="signed_transaction must be exact immutable bytes"):
+        client.submit_kagemusha_top_up(bytearray(b"\x01signed"), operation_id)
+    with pytest.raises(ValueError, match="version-1 SignedTransaction"):
+        client.submit_kagemusha_top_up(b"unsigned", operation_id)
+    with pytest.raises(TypeError, match="operation_id must be exact immutable bytes"):
+        client.submit_kagemusha_top_up(b"\x01signed", operation_id.hex())
+    with pytest.raises(ValueError, match="nonzero 32-byte"):
+        client.submit_kagemusha_top_up(b"\x01signed", bytes(32))
+
+
+def test_submit_kagemusha_top_up_accepts_terminal_response_without_retry_after() -> None:
+    operation_id = bytes((0x44,)) * 32
+    applied = {
+        "version": 1,
+        "operation_id": list(operation_id),
+        "kind": {"kind": "top_up", "value": None},
+        "state": {"state": "applied", "value": None},
+        "result": {"opaque_until_verified": True},
+        "rejection": None,
+    }
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=200,
+            payload=applied,
+            headers={"Location": f"/v1/kagemusha/operations/{operation_id.hex()}"},
+        )
+    )
+
+    status = ToriiClient("http://node.test", session=session).submit_kagemusha_top_up(
+        b"\x01signed", operation_id
+    )
+
+    assert status.state == "applied"
+    assert not hasattr(status, "result")
 
 
 @pytest.mark.parametrize(
-    "retry_after",
-    [None, "0", "soon", str(1 << 64), "9" * 10_000],
+    ("status_code", "state", "headers", "message"),
+    (
+        (202, "pending", {"Retry-After": "1"}, "Location"),
+        (202, "pending", {"Location": "wrong", "Retry-After": "1"}, "Location"),
+        (202, "pending", {"Location": "canonical"}, "positive Retry-After"),
+        (
+            202,
+            "pending",
+            {"Location": "canonical", "Retry-After": "0"},
+            "positive Retry-After",
+        ),
+        (
+            202,
+            "applied",
+            {"Location": "canonical", "Retry-After": "1"},
+            "HTTP 202 response must be pending",
+        ),
+        (
+            200,
+            "pending",
+            {"Location": "canonical"},
+            "HTTP 200 response must be applied or rejected",
+        ),
+        (
+            200,
+            "applied",
+            {"Location": "canonical", "Retry-After": "1"},
+            "must not have Retry-After",
+        ),
+    ),
 )
-def test_offline_acceptance_requires_positive_u64_retry_after(
-    retry_after: Optional[str],
+def test_submit_kagemusha_top_up_rejects_invalid_response_contract(
+    status_code: int,
+    state: str,
+    headers: Mapping[str, str],
+    message: str,
 ) -> None:
-    headers = {"Location": OFFLINE_STATUS_URI}
-    if retry_after is not None:
-        headers["Retry-After"] = retry_after
+    operation_id = bytes((0x45,)) * 32
+    canonical_location = f"/v1/kagemusha/operations/{operation_id.hex()}"
+    response_headers = {
+        name: canonical_location if value == "canonical" else value
+        for name, value in headers.items()
+    }
+    payload = {
+        "version": 1,
+        "operation_id": list(operation_id),
+        "kind": {"kind": "top_up", "value": None},
+        "state": {"state": state, "value": None},
+        "result": {"opaque_until_verified": True} if state == "applied" else None,
+        "rejection": None,
+    }
     session = RecordingSession()
     session.queue(
         StubResponse(
-            status_code=202,
-            payload=_offline_operation_reference(),
-            headers=headers,
+            status_code=status_code,
+            payload=payload,
+            headers=response_headers,
         )
     )
 
-    with pytest.raises(RuntimeError, match="Retry-After"):
+    with pytest.raises(RuntimeError, match=message):
         ToriiClient("http://node.test", session=session).submit_kagemusha_top_up(
-            _offline_top_up_request()
+            b"\x01signed", operation_id
         )
 
 
-def test_offline_pending_timestamps_must_be_positive() -> None:
-    reference_session = RecordingSession()
-    reference_session.queue(
+def test_submit_kagemusha_redemption_uses_exact_v1_route() -> None:
+    operation_id = bytes((0x43,)) * 32
+    pending = {
+        "version": 1,
+        "operation_id": list(operation_id),
+        "kind": {"kind": "redemption", "value": None},
+        "state": {"state": "pending", "value": None},
+        "result": None,
+        "rejection": None,
+    }
+    session = RecordingSession()
+    session.queue(
         StubResponse(
             status_code=202,
-            payload=_offline_operation_reference(submitted_at_ms=0),
-            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
-        )
-    )
-    with pytest.raises(RuntimeError, match="submitted_at_ms"):
-        ToriiClient(
-            "http://node.test", session=reference_session
-        ).submit_kagemusha_top_up(_offline_top_up_request())
-
-    status_session = RecordingSession()
-    status_session.queue(
-        StubResponse(
-            payload={
-                "state": "pending",
-                "value": {
-                    "operation_id": OFFLINE_OPERATION_ID,
-                    "kind": {"kind": "top_up", "value": None},
-                    "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                    "submitted_at_ms": 0,
-                },
-            }
-        )
-    )
-    with pytest.raises(RuntimeError, match="submitted_at_ms"):
-        ToriiClient(
-            "http://node.test", session=status_session
-        ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_get_kagemusha_operation_status_parses_all_tagged_states() -> None:
-    statuses = [
-        (
-            {
-                "state": "pending",
-                "value": {
-                    "operation_id": OFFLINE_OPERATION_ID,
-                    "kind": {"kind": "top_up", "value": None},
-                    "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                    "submitted_at_ms": 10,
-                },
+            payload=pending,
+            headers={
+                "Location": f"/v1/kagemusha/operations/{operation_id.hex()}",
+                "Retry-After": "1",
             },
-            OfflinePendingOperation,
-        ),
-        (
-            {
-                "state": "applied",
-                "value": {
-                    "operation_id": OFFLINE_OPERATION_ID,
-                    "result": {
-                        "kind": "top_up",
-                        "result": {
-                            "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                            "finalized_block_height": 12,
-                            "server_time_ms": 13,
-                            "anchor": _offline_top_up_anchor(),
-                            "finality_proof": _offline_top_up_finality_proof(),
-                        },
-                    },
-                },
-            },
-            OfflineAppliedOperation,
-        ),
-        (
-            {
-                "state": "rejected",
-                "value": {
-                    "operation_id": OFFLINE_OPERATION_ID,
-                    "kind": {"kind": "redeem", "value": None},
-                    "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                    "error": {
-                        "code": "offline_operation_rejected",
-                        "message": "rejected",
-                        "details": {"layer": "torii"},
-                    },
-                },
-            },
-            OfflineRejectedOperation,
-        ),
-    ]
-    for payload, expected_type in statuses:
-        session = RecordingSession()
-        session.queue(StubResponse(payload=payload))
-        client = ToriiClient("http://node.test", session=session)
-        status = client.get_kagemusha_operation_status(
-            OFFLINE_OPERATION_ID,
-            timeout=9.5,
-        )
-        assert isinstance(status, expected_type)
-        assert status.operation_id == OFFLINE_OPERATION_ID
-        assert session.calls[0]["url"].endswith(OFFLINE_STATUS_URI)
-        assert session.calls[0]["allow_redirects"] is False
-        assert session.calls[0]["timeout"] == 9.5
-
-
-def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
-    unknown_anchor = _offline_top_up_anchor(unknown_member={"attacker_controlled": True})
-    session = RecordingSession()
-    session.queue(StubResponse(payload=_offline_applied_top_up_status(unknown_anchor)))
-    with pytest.raises(RuntimeError, match="first-release contract"):
-        ToriiClient(
-            "http://node.test", session=session
-        ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-    exact_session = RecordingSession()
-    exact_session.queue(
-        StubResponse(payload=_offline_applied_top_up_status(_offline_top_up_anchor()))
-    )
-
-    status = ToriiClient(
-        "http://node.test", session=exact_session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-    assert isinstance(status, OfflineAppliedOperation)
-    assert status.result.kind == "top_up"
-    typed_anchor = status.result.result.anchor
-    assert isinstance(typed_anchor, OfflineTopUpAnchor)
-    # ABI-21 promotes the finalized anchor and its authenticated artifact
-    # binding atomically to the V4 wire contract.
-    assert typed_anchor.version == 4
-    assert typed_anchor.network_id == OFFLINE_NETWORK_ID
-    assert typed_anchor.amount.scale == 4
-    assert typed_anchor.shield_leaf_index == 7
-    assert typed_anchor.shield_verifier_id.backend == "halo2/ipa"
-    assert typed_anchor.artifact_binding.version == 4
-    assert typed_anchor.artifact_binding.generation == "generation-1"
-    assert typed_anchor.artifact_binding.manifest_sha256 == tuple(
-        _offline_fixed_bytes(0x81)
-    )
-    assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
-
-
-def test_offline_top_up_finality_proof_is_closed_and_direct_typed() -> None:
-    proof = _offline_top_up_finality_proof()
-    session = RecordingSession()
-    session.queue(
-        StubResponse(payload=_offline_applied_top_up_status(finality_proof=proof))
-    )
-
-    status = ToriiClient(
-        "http://node.test", session=session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-    assert isinstance(status, OfflineAppliedOperation)
-    assert status.result.kind == "top_up"
-    typed_proof = status.result.result.finality_proof
-    assert isinstance(typed_proof, OfflineTopUpFinalityProof)
-    assert typed_proof.version == 1
-    assert typed_proof.anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
-    assert typed_proof.anchor.anchor_digest == tuple(_offline_fixed_bytes(0x71))
-    assert typed_proof.commit_qc.height_context.protocol_version == 4
-    assert (
-        typed_proof.commit_qc.height_context.da_layout.encoding.encoding
-        == "reed_solomon16"
-    )
-    assert typed_proof.commit_qc.height_context.da_layout.data_shards == 1
-    assert typed_proof.commit_qc.height_context.da_layout.parity_shards == 1
-    assert typed_proof.commit_qc.certificate.round.height == 12
-    assert (
-        typed_proof.commit_qc.certificate.proposal_round
-        == typed_proof.commit_qc.certificate.round
-    )
-    assert typed_proof.commit_qc.height_context.snapshot_bootstrap is None
-    assert typed_proof.anchor_path.leaf_count == 1
-
-
-def test_offline_top_up_public_parser_types_snapshot_and_omitted_genesis_authorities() -> None:
-    snapshot_proof = _offline_top_up_finality_proof()
-    snapshot_context = snapshot_proof["commit_qc"]["height_context"]
-    snapshot_context["parent_commit_qc"] = None
-    snapshot_context["snapshot_bootstrap"] = {
-        "snapshot_height": 11,
-        "snapshot_block_hash": _canonical_hash(0xA6),
-        "snapshot_block_creation_time_ms": 1_000,
-        "snapshot_state_hash": _canonical_hash(0xA7),
-    }
-    snapshot_session = RecordingSession()
-    snapshot_session.queue(
-        StubResponse(
-            payload=_offline_applied_top_up_status(finality_proof=snapshot_proof)
         )
     )
-
-    snapshot_status = ToriiClient(
-        "http://node.test", session=snapshot_session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-    assert isinstance(snapshot_status, OfflineAppliedOperation)
-    snapshot_bootstrap = (
-        snapshot_status.result.result.finality_proof.commit_qc.height_context.snapshot_bootstrap
-    )
-    assert snapshot_bootstrap is not None
-    assert snapshot_bootstrap.snapshot_height == 11
-    assert snapshot_bootstrap.snapshot_block_creation_time_ms == 1_000
-
-    genesis_anchor = _offline_top_up_anchor(finalized_height=1)
-    genesis_proof = _offline_top_up_finality_proof(
-        genesis_anchor,
-        finalized_height=1,
-    )
-    genesis_context = genesis_proof["commit_qc"]["height_context"]
-    for optional_field in (
-        "next_epoch_snapshot",
-        "parent_commit_qc",
-        "snapshot_bootstrap",
-    ):
-        genesis_context.pop(optional_field)
-    genesis_session = RecordingSession()
-    genesis_session.queue(
-        StubResponse(
-            payload=_offline_applied_top_up_status(
-                genesis_anchor,
-                finalized_block_height=1,
-                finality_proof=genesis_proof,
-            )
-        )
-    )
-
-    genesis_status = ToriiClient(
-        "http://node.test", session=genesis_session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-    assert isinstance(genesis_status, OfflineAppliedOperation)
-    genesis_height_context = (
-        genesis_status.result.result.finality_proof.commit_qc.height_context
-    )
-    assert genesis_height_context.next_epoch_snapshot is None
-    assert genesis_height_context.parent_commit_qc is None
-    assert genesis_height_context.snapshot_bootstrap is None
-
-
-def test_offline_top_up_public_parser_rejects_noncanonical_da_layouts() -> None:
-    invalid_proofs = []
-
-    missing_encoding = copy.deepcopy(_offline_top_up_finality_proof())
-    missing_encoding["commit_qc"]["height_context"]["da_layout"].pop("encoding")
-    invalid_proofs.append(
-        (missing_encoding, r"da_layout\.encoding is required")
-    )
-
-    missing_variant = copy.deepcopy(_offline_top_up_finality_proof())
-    missing_variant["commit_qc"]["height_context"]["da_layout"]["encoding"] = {
-        "details": None,
-    }
-    invalid_proofs.append(
-        (missing_variant, r"da_layout\.encoding\.encoding is required")
-    )
-
-    for retired_or_unknown in ("plain", "rs16"):
-        invalid_encoding = copy.deepcopy(_offline_top_up_finality_proof())
-        layout = invalid_encoding["commit_qc"]["height_context"]["da_layout"]
-        layout["encoding"]["encoding"] = retired_or_unknown
-        invalid_proofs.append(
-            (
-                invalid_encoding,
-                r"da_layout\.encoding\.encoding must be reed_solomon16",
-            )
-        )
-
-    for field in ("data_shards", "parity_shards"):
-        zero_shard = copy.deepcopy(_offline_top_up_finality_proof())
-        zero_shard["commit_qc"]["height_context"]["da_layout"][field] = 0
-        invalid_proofs.append(
-            (zero_shard, rf"da_layout\.{field} must be between 1 and 65535")
-        )
-
-    for proof, expected_error in invalid_proofs:
-        session = RecordingSession()
-        session.queue(
-            StubResponse(
-                payload=_offline_applied_top_up_status(finality_proof=proof)
-            )
-        )
-        with pytest.raises(RuntimeError, match=expected_error):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_top_up_public_parser_rejects_unknown_finality_projection_fields() -> None:
-    def next_epoch_snapshot() -> Dict[str, Any]:
-        return {
-            "epoch": 1,
-            "epoch_end_height": 100,
-            "mode": {"mode": "permissioned", "details": None},
-            "roster": [{"validator": _NATIVE_AMX_VALIDATOR_SET[0], "power": 1}],
-            "validator_set_pops": [[1] * 96],
-            "quorum": {"min_signers": 1, "total_power": 1},
-            "leader_seed": _offline_fixed_bytes(0xA5),
-        }
-
-    invalid_proofs: List[tuple[Dict[str, Any], str]] = []
-
-    def reject_unknown(
-        proof: Dict[str, Any], target: Dict[str, Any], field: str, context: str
-    ) -> None:
-        target[field] = "retired-extension"
-        invalid_proofs.append((proof, rf"{context}\.{field} is not part"))
-
-    proof = _offline_top_up_finality_proof()
-    height_context = proof["commit_qc"]["height_context"]
-    reject_unknown(proof, height_context, "future_context", r"height_context")
-
-    proof = _offline_top_up_finality_proof()
-    certificate = proof["commit_qc"]["certificate"]
-    reject_unknown(proof, certificate, "future_certificate", r"certificate")
-
-    for component in ("round", "proposal_round", "phase", "subject"):
-        proof = _offline_top_up_finality_proof()
-        nested = proof["commit_qc"]["certificate"][component]
-        reject_unknown(proof, nested, f"future_{component}", rf"certificate\.{component}")
-
-    proof = _offline_top_up_finality_proof()
-    execution = proof["commit_qc"]["certificate"]["execution_commitment"]
-    reject_unknown(
-        proof,
-        execution,
-        "future_execution",
-        r"certificate\.execution_commitment",
-    )
-
-    proof = _offline_top_up_finality_proof()
-    mode = proof["commit_qc"]["height_context"]["mode"]
-    reject_unknown(proof, mode, "future_mode", r"height_context\.mode")
-
-    proof = _offline_top_up_finality_proof()
-    reject_unknown(proof, proof["anchor_path"], "future_path", r"anchor_path")
-
-    proof = _offline_top_up_finality_proof()
-    height_context = proof["commit_qc"]["height_context"]
-    height_context["epoch_end_height"] = 12
-    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
-    reject_unknown(
-        proof,
-        height_context["next_epoch_snapshot"],
-        "future_snapshot",
-        r"next_epoch_snapshot",
-    )
-
-    proof = _offline_top_up_finality_proof()
-    height_context = proof["commit_qc"]["height_context"]
-    height_context["epoch_end_height"] = 12
-    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
-    reject_unknown(
-        proof,
-        height_context["next_epoch_snapshot"]["roster"][0],
-        "future_validator",
-        r"roster\[0\]",
-    )
-
-    proof = _offline_top_up_finality_proof()
-    height_context = proof["commit_qc"]["height_context"]
-    height_context["epoch_end_height"] = 12
-    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
-    reject_unknown(
-        proof,
-        height_context["next_epoch_snapshot"]["quorum"],
-        "future_quorum",
-        r"next_epoch_snapshot\.quorum",
-    )
-
-    proof = _offline_top_up_finality_proof()
-    height_context = proof["commit_qc"]["height_context"]
-    height_context["parent_commit_qc"] = None
-    height_context["snapshot_bootstrap"] = {
-        "snapshot_height": 11,
-        "snapshot_block_hash": _canonical_hash(0xA6),
-        "snapshot_block_creation_time_ms": 1_000,
-        "snapshot_state_hash": _canonical_hash(0xA7),
-    }
-    reject_unknown(
-        proof,
-        height_context["snapshot_bootstrap"],
-        "future_bootstrap",
-        r"snapshot_bootstrap",
-    )
-
-    for proof, expected_error in invalid_proofs:
-        session = RecordingSession()
-        session.queue(
-            StubResponse(
-                payload=_offline_applied_top_up_status(finality_proof=proof)
-            )
-        )
-        with pytest.raises(RuntimeError, match=expected_error):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confused_fields() -> None:
-    missing = _offline_applied_top_up_status()
-    del missing["value"]["result"]["result"]["finality_proof"]
-
-    def mutated(*path_and_value: Any) -> Dict[str, Any]:
-        *path, value = path_and_value
-        proof = copy.deepcopy(_offline_top_up_finality_proof())
-        cursor: Dict[str, Any] = proof
-        for component in path[:-1]:
-            cursor = cursor[component]
-        cursor[path[-1]] = value
-        return _offline_applied_top_up_status(finality_proof=proof)
-
-    invalid = [
-        missing,
-        _offline_applied_top_up_status(finality_proof="bm90LWEtZGlyZWN0LXByb29m"),
-        mutated("version", 2),
-        mutated("anchor", "topup_operation_id", _offline_fixed_bytes(0x12)),
-        mutated("anchor", "anchor_digest", _offline_fixed_bytes(0x72)),
-        mutated("commit_qc", []),
-        mutated("commit_qc", "height_context", []),
-        mutated("commit_qc", "height_context", "height", 11),
-        mutated("commit_qc", "certificate", []),
-        mutated("commit_qc", "certificate", "round", []),
-        mutated("commit_qc", "certificate", "round", "height", 13),
-        mutated("commit_qc", "certificate", "proposal_round", "view", 1),
-        mutated("anchor_path", []),
-    ]
-    for payload in invalid:
-        session = RecordingSession()
-        session.queue(StubResponse(payload=payload))
-        with pytest.raises(RuntimeError):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_redeem_result_rejects_every_top_up_only_field() -> None:
-    for field in ("anchor", "finality_proof"):
-        result = {
-            "transaction_hash": OFFLINE_TRANSACTION_HASH,
-            "finalized_block_height": 12,
-            "server_time_ms": 13,
-            field: {},
-        }
-        payload = {
-            "state": "applied",
-            "value": {
-                "operation_id": OFFLINE_OPERATION_ID,
-                "result": {"kind": "redeem", "result": result},
-            },
-        }
-        session = RecordingSession()
-        session.queue(StubResponse(payload=payload))
-        with pytest.raises(RuntimeError, match=field):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_top_up_anchor_preserves_full_width_amounts_and_heights() -> None:
-    amount = {"atomic_units": (1 << 128) - 1, "scale": 28}
-    finalized_height = (1 << 64) - 1
-    anchor = _offline_top_up_anchor(amount=amount, finalized_height=finalized_height)
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload=_offline_applied_top_up_status(
-                anchor,
-                finalized_block_height=finalized_height,
-            )
-        )
-    )
-
-    status = ToriiClient(
-        "http://node.test", session=session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-    assert isinstance(status, OfflineAppliedOperation)
-    assert status.result.kind == "top_up"
-    assert status.result.result.anchor.amount.atomic_units == (1 << 128) - 1
-    assert status.result.result.anchor.finalized_height == finalized_height
-
-
-def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() -> None:
-    missing_digest = _offline_top_up_anchor()
-    missing_digest.pop("anchor_digest")
-    invalid = [
-        missing_digest,
-        _offline_top_up_anchor(chain_id="wonderland"),
-        _offline_top_up_anchor(network_id="wonderland"),
-        _offline_top_up_anchor(version=1),
-        _offline_top_up_anchor(asset_scale=29),
-        _offline_top_up_anchor(asset_scale=3),
-        _offline_top_up_anchor(finalized_root=_offline_fixed_bytes(0x10)),
-        _offline_top_up_anchor(shield_leaf_index=-1),
-        _offline_top_up_anchor(shield_leaf_index=1 << 16),
-        _offline_top_up_anchor(topup_operation_id=_offline_fixed_bytes(0x12)),
-        _offline_top_up_anchor(finalized_height=11),
-        _offline_top_up_anchor(finalized_tx_hash=_offline_fixed_bytes(0x22)),
-        _offline_top_up_anchor(anchor_digest=_offline_fixed_bytes(0)),
-        _offline_top_up_anchor(
-            shield_verifier_id={"backend": "", "name": "asset-topup-shield-v2"}
-        ),
-        _offline_top_up_anchor(
-            shield_verifier_id={"backend": "halo2/ipa", "name": "v" * 257}
-        ),
-        _offline_top_up_anchor(shield_verifier_commitment=_offline_fixed_bytes(0)),
-        _offline_top_up_anchor(
-            artifact_binding={
-                "version": 4,
-                "generation": "é" * 65,
-                "manifest_sha256": _offline_fixed_bytes(0x81),
-            }
-        ),
-        _offline_top_up_anchor(
-            artifact_binding={
-                "version": 4,
-                "generation": "generation-1",
-                "manifest_sha256": _offline_fixed_bytes(0),
-            }
-        ),
-        _offline_top_up_anchor(
-            artifact_binding={"generation": "generation-1"}
-        ),
-        _offline_top_up_anchor(
-            current_note={
-                "network_id": OFFLINE_NETWORK_ID,
-                "asset": CANONICAL_ASSET_ID,
-                "note_commitment": _offline_fixed_bytes(0x41),
-                "spend_nullifier": _offline_fixed_bytes(0x41),
-                "amount": {"atomic_units": 17, "scale": 4},
-            }
-        ),
-        _offline_top_up_anchor(
-            current_note={
-                "network_id": OFFLINE_OTHER_NETWORK_ID,
-                "asset": CANONICAL_ASSET_ID,
-                "note_commitment": _offline_fixed_bytes(0x41),
-                "spend_nullifier": _offline_fixed_bytes(0x51),
-                "amount": {"atomic_units": 17, "scale": 4},
-            }
-        ),
-        _offline_top_up_anchor(
-            current_note={
-                "network_id": OFFLINE_NETWORK_ID,
-                "asset": "different-asset",
-                "note_commitment": _offline_fixed_bytes(0x41),
-                "spend_nullifier": _offline_fixed_bytes(0x51),
-                "amount": {"atomic_units": 17, "scale": 4},
-            }
-        ),
-        _offline_top_up_anchor(
-            current_note={
-                "network_id": OFFLINE_NETWORK_ID,
-                "asset": CANONICAL_ASSET_ID,
-                "note_commitment": _offline_fixed_bytes(0x41),
-                "spend_nullifier": _offline_fixed_bytes(0x51),
-                "amount": {"atomic_units": 18, "scale": 4},
-            }
-        ),
-    ]
-
-    for anchor in invalid:
-        session = RecordingSession()
-        session.queue(StubResponse(payload=_offline_applied_top_up_status(anchor)))
-        with pytest.raises(RuntimeError):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_applied_status_rejects_zero_finality_fields() -> None:
-    for kind in ("top_up", "redeem"):
-        for field in ("finalized_block_height", "server_time_ms"):
-            result: Dict[str, Any] = {
-                "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                "finalized_block_height": 1,
-                "server_time_ms": 1,
-            }
-            result[field] = 0
-            if kind == "top_up":
-                anchor = _offline_top_up_anchor(finalized_height=result["finalized_block_height"])
-                result["anchor"] = anchor
-                result["finality_proof"] = _offline_top_up_finality_proof(
-                    anchor,
-                    finalized_height=result["finalized_block_height"],
-                )
-            payload = {
-                "state": "applied",
-                "value": {
-                    "operation_id": OFFLINE_OPERATION_ID,
-                    "result": {"kind": kind, "result": result},
-                },
-            }
-            session = RecordingSession()
-            session.queue(StubResponse(payload=payload))
-            with pytest.raises(RuntimeError, match=field):
-                ToriiClient(
-                    "http://node.test", session=session
-                ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_error_codes_use_the_global_finite_grammar() -> None:
-    accepted_session = RecordingSession()
-    accepted_session.queue(
-        StubResponse(
-            payload=_offline_rejected_status(
-                {"code": "1_future_code", "message": "future rejection"}
-            )
-        )
-    )
-    accepted = ToriiClient(
-        "http://node.test", session=accepted_session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-    assert isinstance(accepted, OfflineRejectedOperation)
-    assert accepted.error.code == "1_future_code"
-
-    for code in ("", "_leading_underscore", "a" * 65):
-        session = RecordingSession()
-        session.queue(
-            StubResponse(
-                payload=_offline_rejected_status({"code": code, "message": "invalid code"})
-            )
-        )
-        with pytest.raises(RuntimeError):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_error_messages_require_exact_non_control_text() -> None:
-    for message in ("", " leading", "trailing ", "line\nbreak", "control\u0085"):
-        session = RecordingSession()
-        session.queue(
-            StubResponse(
-                payload=_offline_rejected_status(
-                    {"code": "offline_operation_rejected", "message": message}
-                )
-            )
-        )
-        with pytest.raises(RuntimeError):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-    accepted_session = RecordingSession()
-    accepted_session.queue(
-        StubResponse(
-            payload=_offline_rejected_status(
-                {"code": "offline_operation_rejected", "message": "😀" * 1024}
-            )
-        )
-    )
-    accepted = ToriiClient(
-        "http://node.test", session=accepted_session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-    assert isinstance(accepted, OfflineRejectedOperation)
-    assert len(accepted.error.message) == 1024
-
-    oversized_session = RecordingSession()
-    oversized_session.queue(
-        StubResponse(
-            payload=_offline_rejected_status(
-                {"code": "offline_operation_rejected", "message": "x" * 1025}
-            )
-        )
-    )
-    with pytest.raises(RuntimeError, match="1024-character/4096-byte"):
-        ToriiClient(
-            "http://node.test", session=oversized_session
-        ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_error_details_are_closed_and_typed() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload=_offline_rejected_status(
-                {
-                    "code": "offline_operation_rejected",
-                    "message": "rejected",
-                    "unknown_envelope_member": "ignored",
-                    "details": {
-                        "layer": "torii",
-                        "reject_code": "QUEUE_FULL",
-                        "retry_after_seconds": 3,
-                        "endpoint": "/v1/offline/redeem",
-                        "field": "authorization",
-                        "expected": "fresh",
-                        "actual": "replayed",
-                        "profile": "minamoto",
-                        "chain_discriminant": 753,
-                        "entrypoint_hash": _canonical_hash(0x21),
-                        "tx_hash": OFFLINE_TRANSACTION_HASH,
-                        "last_status": "queued",
-                        "hint": "retry later",
-                        "unknown_detail": {"attacker_controlled": True},
-                        "queue": {
-                            "state": "saturated",
-                            "queued": 5,
-                            "capacity": 5,
-                            "saturated": True,
-                            "unknown_queue_member": "ignored",
-                        },
-                        "axt": {
-                            "code": "handle_era_stale",
-                            "reason": "stale handle era",
-                            "snapshot_version": 7,
-                            "dataspace": 8,
-                            "lane": 9,
-                            "active_handle_era": 10,
-                            "next_handle_counter": 11,
-                            "unknown_axt_member": "ignored",
-                        },
-                    },
-                }
-            )
-        )
-    )
-    status = ToriiClient(
-        "http://node.test", session=session
-    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-    assert isinstance(status, OfflineRejectedOperation)
-    details = status.error.details
-    assert details is not None
-    assert details.layer == "torii"
-    assert details.reject_code == "QUEUE_FULL"
-    assert details.retry_after_seconds == 3
-    assert details.chain_discriminant == 753
-    assert details.entrypoint_hash == _canonical_hash(0x21)
-    assert details.tx_hash == OFFLINE_TRANSACTION_HASH
-    assert details.queue is not None
-    assert details.queue.queued == 5
-    assert details.queue.saturated is True
-    assert details.axt is not None
-    assert details.axt.lane == 9
-    assert details.axt.active_handle_era == 10
-    assert details.axt.next_handle_counter == 11
-    assert not hasattr(details, "unknown_detail")
-    assert not hasattr(details.queue, "unknown_queue_member")
-    assert not hasattr(details.axt, "unknown_axt_member")
-
-
-def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> None:
-    invalid_details = [
-        {"axt": {"next_min_handle_era": 1}},
-        {"axt": {"next_min_sub_nonce": 1}},
-        {"queue": {"state": "healthy", "queued": 0, "capacity": 1}},
-        {
-            "queue": {
-                "state": "healthy",
-                "queued": -1,
-                "capacity": 1,
-                "saturated": False,
-            }
-        },
-        {
-            "queue": {
-                "state": "healthy",
-                "queued": 0,
-                "capacity": 1,
-                "saturated": "false",
-            }
-        },
-        {"retry_after_seconds": -1},
-        {"chain_discriminant": 65_536},
-        {"entrypoint_hash": 7},
-        {"axt": {"lane": 1 << 32}},
-        {"axt": {"snapshot_version": "1"}},
-        {"axt": []},
-    ]
-    for details in invalid_details:
-        session = RecordingSession()
-        session.queue(
-            StubResponse(
-                payload=_offline_rejected_status(
-                    {"code": "rejected", "message": "no", "details": details}
-                )
-            )
-        )
-        with pytest.raises(RuntimeError):
-            ToriiClient(
-                "http://node.test", session=session
-            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
-
-
-def test_offline_json_decoder_rejects_duplicates_non_finite_depth_and_size() -> None:
-    valid = json.dumps(_offline_capability_payload())
-    duplicate = valid.replace('"ready": true', '"ready": true, "ready": true')
-    assert duplicate != valid, "duplicate-key fixture must actually introduce a duplicate"
-    non_finite = valid.replace('"max_hops": 8', '"max_hops": NaN')
-    infinity = valid.replace('"max_hops": 8', '"max_hops": Infinity')
-    deep_value = "0"
-    for _ in range(130):
-        deep_value = f"[{deep_value}]"
-    deep = valid[:-1] + f', "unknown": {deep_value}}}'
-    oversized = valid[:-1] + f', "unknown": "{"x" * (256 * 1024)}"}}'
-
-    for body in (duplicate, non_finite, infinity, deep, oversized):
-        session = RecordingSession()
-        session.queue(
-            StubResponse(
-                text=body,
-                headers={"Content-Type": "application/json"},
-            )
-        )
-        with pytest.raises(RuntimeError):
-            ToriiClient("http://node.test", session=session).get_offline_capability()
-
-
-def test_offline_status_rejects_noncanonical_paths_and_adversarial_envelopes() -> None:
-    session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
-    for operation_id in (
-        "AB" * 32,
-        "00" * 32,
-        "11",
-        f"{OFFLINE_OPERATION_ID}/extra",
-    ):
-        with pytest.raises(RuntimeError):
-            client.get_kagemusha_operation_status(operation_id)
-    assert session.calls == []
+    archive = _kagemusha_command_archive(
+        "iroha.torii.v1.kagemusha.redeem.request", operation_id
+    )
 
-    invalid_statuses = [
-        {"state": "unknown", "value": {"operation_id": OFFLINE_OPERATION_ID}},
+    submitted = client.submit_kagemusha_redemption(archive)
+
+    assert submitted.operation_id == operation_id
+    assert submitted.kind == "redemption" and submitted.state == "pending"
+    post = session.calls[0]
+    assert post["url"].endswith("/v1/kagemusha/redeem")
+    assert post["headers"]["Content-Type"] == "application/x-norito"
+    assert post["headers"]["Idempotency-Key"] == operation_id.hex()
+    assert post["data"] == archive
+    assert post["allow_redirects"] is False
+
+
+def test_applied_kagemusha_result_requires_caller_pinned_verifier() -> None:
+    operation_id = bytes((0x42,)) * 32
+    status = UnverifiedKagemushaOperationStatusV1.from_payload(
         {
-            "state": "pending",
-            "value": {
-                "operation_id": "33" * 32,
-                "kind": {"kind": "top_up"},
-                "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                "submitted_at_ms": 1,
-            },
-        },
-        {
-            "state": "pending",
-            "value": {
-                "operation_id": OFFLINE_OPERATION_ID,
-                "kind": {"kind": "top_up", "value": {}},
-                "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                "submitted_at_ms": 1,
-            },
-        },
-        {
-            "state": "applied",
-            "value": {
-                "operation_id": OFFLINE_OPERATION_ID,
-                "result": {
-                    "kind": "redeem",
-                    "result": {
-                        "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                        "finalized_block_height": 1,
-                        "server_time_ms": 2,
-                        "anchor": {},
-                    },
-                },
-            },
-        },
-        {
-            "state": "rejected",
-            "value": {
-                "operation_id": OFFLINE_OPERATION_ID,
-                "kind": {"kind": "redeem"},
-                "transaction_hash": OFFLINE_TRANSACTION_HASH,
-                "error": {"code": "INVALID-CODE", "message": "no"},
-            },
-        },
-    ]
-    for payload in invalid_statuses:
-        invalid_session = RecordingSession()
-        invalid_session.queue(StubResponse(payload=payload))
-        invalid_client = ToriiClient("http://node.test", session=invalid_session)
-        with pytest.raises(RuntimeError):
-            invalid_client.get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+            "version": 1,
+            "operation_id": list(operation_id),
+            "kind": {"kind": "redemption", "value": None},
+            "state": {"state": "applied", "value": None},
+            "result": {"kind": "opaque-until-verified"},
+            "rejection": None,
+        }
+    )
+    assert not hasattr(status, "result")
+    with pytest.raises(TypeError, match="trust anchor"):
+        status.verify_against(None, lambda source, anchor: source)
+    released = status.verify_against(
+        object(), lambda source, _anchor: source["result"]
+    )
+    assert released == {"kind": "opaque-until-verified"}
 
 
 def test_status_snapshot_parses_mode_and_consensus_caps() -> None:

@@ -15,9 +15,9 @@ use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
     PrivateSettlementAbortReasonV1, PrivateSettlementAbortReceiptV1,
-    PrivateSettlementCommitBundleV1, PrivateSettlementCommitteeAuthorityV1,
-    PrivateSettlementDeltaV1, PrivateSettlementLegReceiptV1, PrivateSettlementPhaseCertificateV1,
-    PrivateSettlementPhaseV1, PrivateSettlementReceiptV1,
+    PrivateSettlementAuthorityCatalogV1, PrivateSettlementCommitBundleV1,
+    PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1, PrivateSettlementLegReceiptV1,
+    PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1, PrivateSettlementReceiptV1,
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -46,7 +46,7 @@ pub(crate) enum PrivateSettlementBundleLifecycleV1 {
 pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
     /// New evidence was stored without completing the current global barrier.
     Stored,
-    /// The supplied evidence was byte-for-byte identical to existing evidence.
+    /// The supplied evidence was identical or quorum-equivalent to existing evidence.
     Idempotent,
     /// This insertion completed the current global barrier.
     BarrierCompleted,
@@ -56,7 +56,7 @@ pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
 #[derive(Clone, Debug)]
 pub(crate) struct PrivateSettlementBundleCoordinatorV1 {
     manifest: AtomicPrivateSettlementV1,
-    authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    authority_catalog: PrivateSettlementAuthorityCatalogV1,
     audited_evidence: Vec<Option<Hash>>,
     deltas: Vec<Option<PrivateSettlementDeltaV1>>,
     prepare_certificates: Vec<Option<PrivateSettlementPhaseCertificateV1>>,
@@ -86,6 +86,11 @@ impl PrivateSettlementBundleCoordinatorV1 {
                 return Err(PrivateSettlementCoordinatorErrorV1::Authority);
             }
         }
+        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
+            &manifest,
+            &authority_catalog,
+        )
+        .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
         let leg_count = manifest.legs.len();
         Ok(Self {
             manifest,
@@ -246,12 +251,12 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let ordinal = delta.leg_ordinal;
         let authority = self
             .authority_catalog
-            .get(usize::from(ordinal))
-            .ok_or(PrivateSettlementCoordinatorErrorV1::Binding)?;
+            .authority_for_leg(&self.manifest, usize::from(ordinal))
+            .map_err(|_| PrivateSettlementCoordinatorErrorV1::Binding)?;
         let expected = private_settlement_phase_body_v1(
             &self.manifest,
             &delta,
-            authority,
+            &authority,
             PrivateSettlementPhaseV1::Prepare,
             private_settlement_reserved_prepared_bundle_digest_v1(),
         )
@@ -259,10 +264,11 @@ impl PrivateSettlementBundleCoordinatorV1 {
         if certificate.body != expected {
             return Err(PrivateSettlementCoordinatorErrorV1::Binding);
         }
-        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, authority)
+        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, &authority)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
         if let Some(existing) = self.prepare_certificates[usize::from(ordinal)].as_ref() {
-            return if existing == &certificate
+            return if existing.body == certificate.body
+                && existing.authority_catalog_index == certificate.authority_catalog_index
                 && self.deltas[usize::from(ordinal)].as_ref() == Some(&delta)
             {
                 Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
@@ -310,8 +316,8 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let index = usize::from(ordinal);
         let authority = self
             .authority_catalog
-            .get(index)
-            .ok_or(PrivateSettlementCoordinatorErrorV1::Binding)?;
+            .authority_for_leg(&self.manifest, index)
+            .map_err(|_| PrivateSettlementCoordinatorErrorV1::Binding)?;
         let delta = self
             .deltas
             .get(index)
@@ -323,7 +329,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let expected = private_settlement_phase_body_v1(
             &self.manifest,
             delta,
-            authority,
+            &authority,
             PrivateSettlementPhaseV1::Commit,
             prepared_bundle_digest,
         )
@@ -331,10 +337,12 @@ impl PrivateSettlementBundleCoordinatorV1 {
         if certificate.body != expected {
             return Err(PrivateSettlementCoordinatorErrorV1::Binding);
         }
-        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, authority)
+        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, &authority)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
         if let Some(existing) = self.commit_certificates[index].as_ref() {
-            return if existing == &certificate {
+            return if existing.body == certificate.body
+                && existing.authority_catalog_index == certificate.authority_catalog_index
+            {
                 Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
             } else {
                 Err(PrivateSettlementCoordinatorErrorV1::Substitution)
@@ -356,7 +364,9 @@ impl PrivateSettlementBundleCoordinatorV1 {
     ///
     /// `authoritative_height` proves that coordination is still live, but is
     /// deliberately not encoded: the eventual inclusion height is assigned by
-    /// consensus when the carrier executes.
+    /// consensus when the carrier executes. The byte bound is an early check of
+    /// the complete boxed instruction; signed-transaction admission performs
+    /// the authoritative check including authority, metadata, and signature.
     pub(crate) fn carrier_bundle(
         &mut self,
         authoritative_height: u64,
@@ -393,9 +403,10 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let validation_receipt = bundle.clone().into_receipt(authoritative_height);
         verify_private_settlement_receipt_v1(&validation_receipt)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
-        let encoded = norito::encode_canonical(&bundle)
+        let carrier_bytes = bundle
+            .canonical_carrier_bytes_len()
             .map_err(|_| PrivateSettlementCoordinatorErrorV1::Encoding)?;
-        if max_carrier_bytes == 0 || encoded.len() > max_carrier_bytes {
+        if max_carrier_bytes == 0 || carrier_bytes > max_carrier_bytes {
             return Err(PrivateSettlementCoordinatorErrorV1::CarrierTooLarge);
         }
         Ok(bundle)
@@ -496,7 +507,7 @@ pub(crate) enum PrivateSettlementCoordinatorErrorV1 {
     /// A route, ordinal, digest, phase, or receipt binding differs.
     #[error("private-settlement evidence binding is invalid")]
     Binding,
-    /// Existing evidence was replaced rather than replayed identically.
+    /// Existing evidence was replaced by non-equivalent material.
     #[error("private-settlement evidence substitution was rejected")]
     Substitution,
     /// A participant certificate or authority proof is invalid.
@@ -525,7 +536,7 @@ impl PrivateSettlementCoordinatorErrorV1 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::private_settlement::{
         protocol::{
@@ -533,15 +544,15 @@ mod tests {
         },
         sidecar_store::tests::{SidecarFixtureV1, sidecar_fixture},
     };
-    use iroha_crypto::{HashOf, KeyPair};
-    use iroha_data_model::peer::PeerId;
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_data_model::{account::AccountId, peer::PeerId, privacy::PrivacyRecipientIdV1};
 
     fn fixture_parts() -> (
         SidecarFixtureV1,
         Vec<PrivateSettlementDeltaV1>,
         Vec<PrivateSettlementCommitteeAuthorityV1>,
     ) {
-        let fixture = sidecar_fixture();
+        let mut fixture = sidecar_fixture();
         let first = fixture.sidecar.payload.delta.clone();
         let mut second = first.clone();
         second.leg_ordinal = 1;
@@ -549,6 +560,13 @@ mod tests {
         second.pool_id = fixture.sidecar.manifest.legs[1].pool_id;
         second.asset_binding_commitment = fixture.sidecar.manifest.legs[1].asset_binding_commitment;
         second.audit_policy_digest = fixture.sidecar.manifest.legs[1].audit_policy_digest;
+        for (index, output) in second.encrypted_outputs.iter_mut().enumerate() {
+            output.recipient = PrivacyRecipientIdV1::new(
+                [0xC0_u8 + u8::try_from(index).expect("fixed output ordinal fits u8"); 32],
+            );
+        }
+        fixture.sidecar.manifest.legs[1].delta_digest =
+            second.digest().expect("second delta digest");
         assert_eq!(
             second.digest().expect("second delta digest"),
             fixture.sidecar.manifest.legs[1].delta_digest
@@ -602,6 +620,77 @@ mod tests {
             .expect("phase certificate")
     }
 
+    pub(crate) fn certified_commit_bundle_fixture() -> (PrivateSettlementCommitBundleV1, KeyPair) {
+        let (fixture, deltas, authorities) = fixture_parts();
+        let manifest = fixture.sidecar.manifest.clone();
+        let mut coordinator =
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+                .expect("coordinator fixture");
+        for index in 0..deltas.len() {
+            let ordinal = u8::try_from(index).expect("fixture ordinal fits u8");
+            coordinator
+                .record_audited(
+                    ordinal,
+                    Hash::new([ordinal]),
+                    manifest.authority_context_height,
+                )
+                .expect("audit fixture");
+        }
+        for index in 0..deltas.len() {
+            let prepare = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys,
+                PrivateSettlementPhaseV1::Prepare,
+                private_settlement_reserved_prepared_bundle_digest_v1(),
+            );
+            coordinator
+                .record_prepare(
+                    deltas[index].clone(),
+                    prepare,
+                    manifest.authority_context_height,
+                )
+                .expect("Prepare fixture");
+        }
+        let prepared_bundle_digest = coordinator
+            .prepared_bundle_digest()
+            .expect("complete Prepare fixture");
+        for index in 0..deltas.len() {
+            let commit = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys,
+                PrivateSettlementPhaseV1::Commit,
+                prepared_bundle_digest,
+            );
+            coordinator
+                .record_commit(commit, manifest.authority_context_height)
+                .expect("Commit fixture");
+        }
+        let bundle = coordinator
+            .carrier_bundle(manifest.authority_context_height, 4 * 1024 * 1024)
+            .expect("certified carrier fixture");
+        assert_eq!(bundle.authority_catalog.rosters.len(), 1);
+        assert_eq!(bundle.authority_catalog.leg_roster_indices, vec![0, 0]);
+        for (index, authority) in authorities.iter().enumerate() {
+            assert_eq!(
+                bundle
+                    .authority_catalog
+                    .authority_for_leg(&bundle.manifest, index)
+                    .expect("compact authority resolves"),
+                *authority
+            );
+        }
+        let sponsor_key = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
+        assert_eq!(
+            bundle.manifest.sponsor,
+            AccountId::new(sponsor_key.public_key().clone())
+        );
+        (bundle, sponsor_key)
+    }
+
     #[test]
     fn all_prepare_and_commit_barriers_precede_finalization() {
         let (fixture, deltas, authorities) = fixture_parts();
@@ -650,6 +739,18 @@ mod tests {
                     PrivateSettlementCoordinatorOutcomeV1::Stored
                 }
             );
+            let equivalent_prepare = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys[1..],
+                PrivateSettlementPhaseV1::Prepare,
+                private_settlement_reserved_prepared_bundle_digest_v1(),
+            );
+            assert_eq!(
+                coordinator.record_prepare(deltas[index].clone(), equivalent_prepare, 12,),
+                Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
+            );
         }
         assert_eq!(
             coordinator.lifecycle(),
@@ -680,6 +781,18 @@ mod tests {
                 prepared_bundle_digest,
             );
             coordinator.record_commit(commit, 13).expect("commit");
+            let equivalent_commit = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys[1..],
+                PrivateSettlementPhaseV1::Commit,
+                prepared_bundle_digest,
+            );
+            assert_eq!(
+                coordinator.record_commit(equivalent_commit, 13),
+                Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
+            );
         }
         let receipt = coordinator
             .carrier_bundle(14, 4 * 1024 * 1024)

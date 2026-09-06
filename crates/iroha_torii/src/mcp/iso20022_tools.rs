@@ -10,7 +10,7 @@ fn iso20022_operator_auth_schema() -> Value {
                 "minLength": 1,
                 "maxLength": (OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES),
                 "pattern": "^[!-~]+$",
-                "description": "Iroha multihash public key of the configured operator."
+                "description": "Iroha multihash public key of a configured participant operator; read-only status calls also accept a separately configured audit-admin key."
             },
             "timestamp_ms": {
                 "type": "integer",
@@ -40,7 +40,7 @@ fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
         "iroha.iso20022.pacs008.submit",
         "pacs.008",
         "/v1/iso20022/pacs008",
-        "Submit an ISO 20022 pacs.008 payload from canonical `body_base64` XML bytes.",
+        "Submit an ISO 20022 pacs.008 payload from canonical `body_base64` XML bytes. The signer must own the AppHdr From identity and the selected profile must be configured for that participant.",
     )
 }
 fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
@@ -48,7 +48,7 @@ fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
         "iroha.iso20022.pacs009.submit",
         "pacs.009",
         "/v1/iso20022/pacs009",
-        "Submit an ISO 20022 pacs.009 payload from canonical `body_base64` XML bytes.",
+        "Submit an ISO 20022 pacs.009 payload from canonical `body_base64` XML bytes. The signer must own the AppHdr From identity and the selected profile must be configured for that participant.",
     )
 }
 fn iroha_iso20022_lifecycle_submit_tool(
@@ -58,13 +58,13 @@ fn iroha_iso20022_lifecycle_submit_tool(
     description: &str,
 ) -> ToolSpec {
     let body_description = format!("Base64/base64url encoded {message_type} XML payload bytes.");
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        path_template.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["body_base64", "operator_auth"],
@@ -86,14 +86,14 @@ fn iroha_iso20022_lifecycle_submit_tool(
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_iso20022_pacs002_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.pacs002.submit",
         "pacs.002",
         "/v1/iso20022/pacs002",
-        "Submit an ISO 20022 pacs.002 lifecycle payload from canonical `body_base64` XML bytes.",
+        "Submit a counterparty-authorized ISO 20022 pacs.002 lifecycle payload. The original profile is pinned, and settlement requires committed-transaction evidence.",
     )
 }
 fn iroha_iso20022_pacs004_submit_tool() -> ToolSpec {
@@ -101,7 +101,7 @@ fn iroha_iso20022_pacs004_submit_tool() -> ToolSpec {
         "iroha.iso20022.pacs004.submit",
         "pacs.004",
         "/v1/iso20022/pacs004",
-        "Submit an ISO 20022 pacs.004 lifecycle payload from canonical `body_base64` XML bytes.",
+        "Submit a counterparty-authorized ISO 20022 pacs.004 lifecycle payload using the original pinned profile.",
     )
 }
 fn iroha_iso20022_camt056_submit_tool() -> ToolSpec {
@@ -109,7 +109,7 @@ fn iroha_iso20022_camt056_submit_tool() -> ToolSpec {
         "iroha.iso20022.camt056.submit",
         "camt.056",
         "/v1/iso20022/camt056",
-        "Submit an ISO 20022 camt.056 lifecycle payload from canonical `body_base64` XML bytes.",
+        "Submit an originator-authorized ISO 20022 camt.056 lifecycle payload using the original pinned profile.",
     )
 }
 fn iroha_iso20022_sese023_submit_tool() -> ToolSpec {
@@ -125,7 +125,7 @@ fn iroha_iso20022_sese024_submit_tool() -> ToolSpec {
         "iroha.iso20022.sese024.submit",
         "sese.024",
         "/v1/iso20022/sese024",
-        "Submit an ISO 20022 sese.024 settlement status payload from canonical `body_base64` XML bytes.",
+        "Submit a counterparty-authorized ISO 20022 sese.024 settlement status payload using the original pinned profile.",
     )
 }
 fn iroha_iso20022_sese025_submit_tool() -> ToolSpec {
@@ -133,7 +133,7 @@ fn iroha_iso20022_sese025_submit_tool() -> ToolSpec {
         "iroha.iso20022.sese025.submit",
         "sese.025",
         "/v1/iso20022/sese025",
-        "Submit an ISO 20022 sese.025 settlement confirmation payload from canonical `body_base64` XML bytes.",
+        "Submit a counterparty-authorized ISO 20022 sese.025 settlement confirmation payload using the original pinned profile.",
     )
 }
 fn iroha_iso20022_colr012_submit_tool() -> ToolSpec {
@@ -145,13 +145,14 @@ fn iroha_iso20022_colr012_submit_tool() -> ToolSpec {
     )
 }
 fn iroha_iso20022_status_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.iso20022.status.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.iso20022.status.get"),
-        description: "Fetch ISO 20022 bridge status by canonical `path.msg_id`.".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/iso20022/messages/{msg_id}".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.iso20022.status.get".to_owned(),
+        "Fetch ISO 20022 bridge status by canonical `path.msg_id`; access is limited to either original participant or a configured audit admin."
+            .to_owned(),
+        manual_tool_effect_from_name("iroha.iso20022.status.get"),
+        Method::GET,
+        "/v1/iso20022/messages/{msg_id}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path", "operator_auth"],
@@ -168,5 +169,5 @@ fn iroha_iso20022_status_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }

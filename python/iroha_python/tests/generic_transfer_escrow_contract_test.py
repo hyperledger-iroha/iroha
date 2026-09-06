@@ -131,8 +131,9 @@ def _norito_response(payload: bytes, status: int = 200) -> requests.Response:
     return response
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     def __init__(self, responses: list[requests.Response]) -> None:
+        super().__init__()
         self.responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 

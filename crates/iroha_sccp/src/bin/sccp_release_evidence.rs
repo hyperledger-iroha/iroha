@@ -1,21 +1,23 @@
 //! Offline canonical validator for public SCCP release-lane evidence.
 //!
-//! This binary is intentionally read-only and deterministic. It accepts one
-//! bounded canonical Norito JSON file, invokes the same typed native verifier
-//! used by admission, and emits one bounded machine-readable validation
-//! receipt. It never accesses a network, signs data, or writes files.
+//! This binary is intentionally read-only and deterministic. Its subcommands
+//! accept only command-specific bounded canonical inputs and emit one bounded
+//! machine-readable validator identity or validation receipt. It never accesses
+//! a network, signs data, or writes files.
 use iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as SUMERAGI_V2_PROTOCOL_VERSION;
 use iroha_data_model::bridge::{
-    BridgeSccpDestinationProofBackendV1, SCCP_TON_BASECHAIN_WORKCHAIN_V1,
-    SCCP_TON_MAINNET_GLOBAL_ID_V1, SCCP_V1_TON_STORAGE_VERSION, SccpDestinationDeploymentV1,
-    SccpEvmDestinationDeploymentV1, SccpGovernedRouteV1, SccpGroth16Bls12381SemanticCircuitV1,
-    SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254SemanticCircuitV1,
-    SccpGroth16Bn254VerifyingKeyV1, SccpNativeTrustAnchorV1, SccpNetworkV1,
-    SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSourceIdentityV1, SccpTonAddressV1,
-    SccpTonDestinationDeploymentV1, SccpTronDestinationDeploymentV1,
-    sccp_groth16_bls12381_public_signal_schema_hash_v1,
+    BridgeSccpDestinationProofBackendV1, SCCP_REPLAY_SMT_DEPTH_V1, SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+    SCCP_TON_MAINNET_GLOBAL_ID_V1, SCCP_V1_TON_MAX_COINS, SCCP_V1_TON_STORAGE_VERSION,
+    SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpGovernedRouteV1,
+    SccpGroth16Bls12381SemanticCircuitV1, SccpGroth16Bls12381VerifyingKeyV1,
+    SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpNativeTrustAnchorV1,
+    SccpNetworkV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1,
+    SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSourceIdentityV1, SccpTonAccountV1,
+    SccpTonAddressV1, SccpTonDestinationDeploymentV1, SccpTonMintBreakerGuardianKeysV1,
+    SccpTronDestinationDeploymentV1, sccp_groth16_bls12381_public_signal_schema_hash_v1,
     sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_network_identity_hash_v1,
-    sccp_semantic_proof_profile_hash_v1, sccp_sora_finality_anchor_hash_v1,
+    sccp_replay_domain_hash_v1, sccp_replay_empty_hashes_v1, sccp_semantic_proof_profile_hash_v1,
+    sccp_sora_finality_anchor_hash_v1,
 };
 use iroha_sccp::{
     SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1, SCCP_TAIRA_CHAIN_ID_V1,
@@ -40,16 +42,17 @@ use std::{
     process::ExitCode,
 };
 use tiny_keccak::{Hasher as _, Keccak};
-const INPUT_SCHEMA: &str = "sccp-release-lane-evidence-v1";
-const OUTPUT_SCHEMA: &str = "sccp-release-lane-validation-v1";
-const RELEASE_SIGNATURE_OUTPUT_SCHEMA: &str = "sccp-release-signature-validation-v1";
-const SEMANTIC_PROOF_OUTPUT_SCHEMA: &str = "sccp-semantic-proof-validation-v1";
-const PRODUCTION_POLICY_SCHEMA: &str = "sccp-release-trust-policy-v1";
-const TEST_POLICY_SCHEMA: &str = "sccp-release-test-trust-policy-v1";
-const RELEASE_EVIDENCE_SCHEMA: &str = "sccp-release-evidence-v1";
+const INPUT_SCHEMA: &str = "sccp-release-lane-evidence-final-v1";
+const OUTPUT_SCHEMA: &str = "sccp-release-lane-validation-final-v1";
+const RELEASE_SIGNATURE_OUTPUT_SCHEMA: &str = "sccp-release-signature-validation-final-v1";
+const SEMANTIC_PROOF_OUTPUT_SCHEMA: &str = "sccp-semantic-proof-validation-final-v1";
+const PRODUCTION_POLICY_SCHEMA: &str = "sccp-release-trust-policy-final-v1";
+#[cfg(any(test, feature = "test-fixtures"))]
+const TEST_POLICY_SCHEMA: &str = "sccp-release-test-trust-policy-final-v1";
+const RELEASE_EVIDENCE_SCHEMA: &str = "sccp-release-evidence-final-v1";
 const VALIDATOR_PROTOCOL_VERSION: u8 = 1;
 const PRODUCTION_VALIDATOR_FEATURES: [&str; 1] = ["dev-tools"];
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 const MAX_INPUT_BYTES: u64 = 40 * 1024 * 1024;
 const MAX_LANE_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_RELEASE_POLICY_BYTES: u64 = 64 * 1024;
@@ -57,17 +60,49 @@ const MAX_RELEASE_EVIDENCE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_VALIDATOR_BINARY_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_AUDIT_REPORT_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_SEMANTIC_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_TOTAL_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_RELEASE_ARTIFACTS: usize = 64;
+const MAX_SEMANTIC_ARTIFACT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_TOTAL_ARTIFACT_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+const MAX_RELEASE_ARTIFACTS: usize = 128;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 const MAX_RUNTIME_CODE_BYTES: usize = 24_576;
 const MAX_TON_CONTRACT_BOC_BYTES: usize = 64 * 1024;
-const MAX_DESTINATION_ATTESTATION_AGE_MS: u64 = 24 * 60 * 60 * 1_000;
-const BUILD_ID_DOMAIN: &[u8] = b"sccp:release-evidence-validator-build:v1\0";
+const MAX_POLICY_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+const MAX_DESTINATION_ATTESTATION_AGE_MS: u64 = 15 * 60 * 1_000;
+const BUILD_ID_DOMAIN: &[u8] = b"sccp:release-evidence-validator-build:final-v1\0";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseEnvironment {
+    Production,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    TestFixture,
+}
+
+impl ReleaseEnvironment {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            #[cfg(any(test, feature = "test-fixtures"))]
+            Self::TestFixture => "test-fixture",
+        }
+    }
+
+    const fn schema(self) -> &'static str {
+        match self {
+            Self::Production => PRODUCTION_POLICY_SCHEMA,
+            #[cfg(any(test, feature = "test-fixtures"))]
+            Self::TestFixture => TEST_POLICY_SCHEMA,
+        }
+    }
+
+    const fn is_production(self) -> bool {
+        matches!(self, Self::Production)
+    }
+}
 const DESTINATION_ATTESTATION_DOMAIN: &[u8] = b"iroha:sccp:destination-state-attestation:v1\0";
-const RELEASE_SIGNING_DOMAIN: &[u8] = b"iroha:sccp:release-evidence:v1\0";
-const CIRCUIT_AUDIT_DOMAIN: &[u8] = b"iroha:sccp:circuit-policy-audit:v1\0";
+const RELEASE_SIGNING_DOMAIN: &[u8] = b"iroha:sccp:release-evidence:final-v1\0";
+const CIRCUIT_AUDIT_DOMAIN: &[u8] = b"iroha:sccp:circuit-policy-audit:final-v1\0";
+const POLICY_ROOT_HASH_DOMAIN: &[u8] = b"iroha:sccp:release-policy-root:final-v1\0";
+const POLICY_ROOT_SIGNING_DOMAIN: &[u8] = b"iroha:sccp:release-policy-root-signature:final-v1\0";
 const RELEASE_PROFILES: [&str; 4] = [
     "ethereum-mainnet",
     "bsc-mainnet",
@@ -77,19 +112,102 @@ const RELEASE_PROFILES: [&str; 4] = [
 const RELEASE_DOMAINS: [u32; 4] = [1, 2, 5, 4];
 const RELEASE_PROOF_CURVES: [&str; 4] = ["bn254", "bn254", "bn254", "bls12-381"];
 const RELEASE_ROLES: [&str; 2] = ["release-engineering", "release-security"];
-const CIRCUIT_AUDIT_ROLES: [&str; 2] = ["semantic-security-audit", "prover-reproducibility-audit"];
-const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
-    ("circuit-artifact", "semantic-circuit", "circuit.bin"),
+const VALIDATOR_BUILD_HASH_ROLES: [&str; 15] = [
+    "validator_builder_policy_sha256_hex",
+    "validator_source_archive_sha256_hex",
+    "validator_dependency_inventory_sha256_hex",
+    "validator_cargo_metadata_closure_sha256_hex",
+    "validator_sbom_sha256_hex",
+    "validator_toolchain_inventory_sha256_hex",
+    "validator_sysroot_inventory_sha256_hex",
+    "validator_linker_sha256_hex",
+    "validator_build_recipe_sha256_hex",
+    "validator_build_environment_sha256_hex",
+    "validator_container_manifest_sha256_hex",
+    "validator_builder_report_sha256_hex",
+    "validator_executable_sha256_hex",
+    "validator_complete_build_closure_sha256_hex",
+    "validator_output_lock_sha256_hex",
+];
+const CIRCUIT_AUDIT_ROLES: [&str; 3] = [
+    "semantic-cryptographic-audit",
+    "reproducibility-ceremony-audit",
+    "destination-integration-audit",
+];
+const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 21] = [
+    ("source-archive", "circuit-source-archive", "source.tar.zst"),
     (
-        "witness-generator",
-        "witness-generator",
-        "witness-generator.bin",
+        "vendor-inventory",
+        "circuit-vendor-inventory",
+        "vendor.inventory.json",
     ),
-    ("verifying-key", "verifying-key", "verifying-key.bin"),
-    ("prover-build", "prover-build", "prover-build.bin"),
-    ("toolchain-lock", "toolchain-lock", "toolchain.lock"),
-    ("honest-witness", "honest-witness", "honest-witness.bin"),
-    ("honest-proof", "honest-proof", "honest-proof.norito"),
+    (
+        "toolchain-inventory",
+        "circuit-toolchain-inventory",
+        "toolchain.inventory.json",
+    ),
+    ("sbom", "circuit-sbom", "sbom.spdx.json"),
+    ("message-r1cs", "r1cs", "message.r1cs"),
+    ("anchor-r1cs", "r1cs", "anchor.r1cs"),
+    (
+        "message-proving-key",
+        "proving-key",
+        "message-proving-key.bin",
+    ),
+    (
+        "anchor-proving-key",
+        "proving-key",
+        "anchor-proving-key.bin",
+    ),
+    (
+        "message-verifying-key",
+        "verifying-key",
+        "message-verifying-key.bin",
+    ),
+    (
+        "anchor-verifying-key",
+        "verifying-key",
+        "anchor-verifying-key.bin",
+    ),
+    (
+        "phase1-transcript",
+        "phase1-ceremony-transcript",
+        "phase1.transcript",
+    ),
+    (
+        "message-phase2-transcript",
+        "phase2-ceremony-transcript",
+        "message-phase2.transcript",
+    ),
+    (
+        "anchor-phase2-transcript",
+        "phase2-ceremony-transcript",
+        "anchor-phase2.transcript",
+    ),
+    (
+        "message-witness-compiler",
+        "witness-compiler",
+        "message-witness-compiler.bin",
+    ),
+    (
+        "anchor-witness-compiler",
+        "witness-compiler",
+        "anchor-witness-compiler.bin",
+    ),
+    ("message-prover", "prover", "message-prover.bin"),
+    ("anchor-prover", "prover", "anchor-prover.bin"),
+    (
+        "message-fixed-key-verifier",
+        "fixed-key-verifier",
+        "message-fixed-key-verifier.bin",
+    ),
+    (
+        "anchor-fixed-key-verifier",
+        "fixed-key-verifier",
+        "anchor-fixed-key-verifier.bin",
+    ),
+    ("message-kat", "message-kat", "message-kat.norito"),
+    ("anchor-kat", "anchor-kat", "anchor-kat.norito"),
 ];
 const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 75] = [
     "3908a9df4eb45c2c3eb744f5a5fde5af87f346a59a4995378e95c3895b9e2d5d",
@@ -218,6 +336,7 @@ const WORKSPACE_MANIFEST: &[u8] = include_bytes!("../../../../Cargo.toml");
 const CARGO_LOCK: &[u8] = include_bytes!("../../../../Cargo.lock");
 const RUST_TOOLCHAIN_LOCK: &[u8] = include_bytes!("../../../../rust-toolchain.toml");
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ReleaseLaneEvidenceV1 {
     schema: String,
     version: u8,
@@ -226,30 +345,35 @@ struct ReleaseLaneEvidenceV1 {
     outbound: ReleaseOutboundEvidenceV1,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "status", content = "evidence", rename_all = "snake_case")]
 enum ReleaseInboundEvidenceV1 {
     Available(Box<AvailableInboundEvidenceV1>),
     Unavailable(UnavailableDirectionV1),
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct AvailableInboundEvidenceV1 {
     proof: SccpNativeInboundMessageProofV1,
     governed_source_identity: SccpSourceIdentityV1,
     governed_trust_anchor: SccpNativeTrustAnchorV1,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "status", content = "evidence", rename_all = "snake_case")]
 enum ReleaseOutboundEvidenceV1 {
     Available(Box<AvailableOutboundEvidenceV1>),
     Unavailable(UnavailableDirectionV1),
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct AvailableOutboundEvidenceV1 {
     statement: DestinationStateStatementV1,
     attestor_id: String,
     signature_hex: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "family", content = "state", rename_all = "snake_case")]
 enum DestinationStateStatementV1 {
     Evm(EvmDestinationStateV1),
@@ -257,6 +381,7 @@ enum DestinationStateStatementV1 {
     Ton(TonDestinationStateV1),
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct EvmDestinationStateV1 {
     schema: String,
     profile: SccpNetworkV1,
@@ -270,9 +395,21 @@ struct EvmDestinationStateV1 {
     token_bridge_address: [u8; 20],
     route_token_address: [u8; 20],
     route_verifier_address: [u8; 20],
+    route_replay_verifier_address: [u8; 20],
+    route_mint_breaker_address: [u8; 20],
+    mint_breaker_route_address: [u8; 20],
     token_runtime_code_hex: String,
     verifier_runtime_code_hex: String,
     route_runtime_code_hex: String,
+    replay_verifier_runtime_code_hex: String,
+    mint_breaker_runtime_code_hex: String,
+    /// Exact `maxWrappedSupply()` value authenticated at the finalized block.
+    route_max_wrapped_supply: u128,
+    token_total_supply: String,
+    mint_breaker_vote_count: u8,
+    mint_breaker_minting_disabled: bool,
+    source_replay_state: DestinationReplayForestReadbackV1,
+    destination_replay_state: DestinationReplayForestReadbackV1,
     verifier_key_hash: [u8; 32],
     semantic_proof_profile_hash: [u8; 32],
     sora_finality_anchor_hash: [u8; 32],
@@ -280,10 +417,9 @@ struct EvmDestinationStateV1 {
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
-    /// Exact `maxWrappedSupply()` value authenticated at the finalized block.
-    max_wrapped_supply: u128,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct TronDestinationStateV1 {
     schema: String,
     profile: SccpNetworkV1,
@@ -297,9 +433,21 @@ struct TronDestinationStateV1 {
     token_bridge_address: [u8; 20],
     route_token_address: [u8; 20],
     route_verifier_address: [u8; 20],
+    route_replay_verifier_address: [u8; 20],
+    route_mint_breaker_address: [u8; 20],
+    mint_breaker_route_address: [u8; 20],
     token_runtime_code_hex: String,
     verifier_runtime_code_hex: String,
     route_runtime_code_hex: String,
+    replay_verifier_runtime_code_hex: String,
+    mint_breaker_runtime_code_hex: String,
+    /// Exact `maxWrappedSupply()` value authenticated at the solid block.
+    route_max_wrapped_supply: u128,
+    token_total_supply: String,
+    mint_breaker_vote_count: u8,
+    mint_breaker_minting_disabled: bool,
+    source_replay_state: DestinationReplayForestReadbackV1,
+    destination_replay_state: DestinationReplayForestReadbackV1,
     verifier_key_hash: [u8; 32],
     semantic_proof_profile_hash: [u8; 32],
     sora_finality_anchor_hash: [u8; 32],
@@ -307,8 +455,6 @@ struct TronDestinationStateV1 {
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
-    /// Exact `maxWrappedSupply()` value authenticated at the solid block.
-    max_wrapped_supply: u128,
 }
 /// Pinned TON destination readback signed by the configured release attestor.
 ///
@@ -319,6 +465,7 @@ struct TronDestinationStateV1 {
 /// and requires every mutable field to be in canonical deployment zero state
 /// before the route may be activated.
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct TonDestinationStateV1 {
     schema: String,
     profile: SccpNetworkV1,
@@ -332,6 +479,8 @@ struct TonDestinationStateV1 {
     route_revision: u32,
     jetton_master_address: SccpTonAddressV1,
     route_address: SccpTonAddressV1,
+    route_reported_jetton_master_address: SccpTonAddressV1,
+    jetton_master_reported_route_address: SccpTonAddressV1,
     jetton_master_code_boc_hex: String,
     jetton_wallet_code_boc_hex: String,
     route_code_boc_hex: String,
@@ -347,26 +496,44 @@ struct TonDestinationStateV1 {
     /// This is a canonical unsigned decimal string because TON coin values
     /// exceed the exact integer range of common JSON consumers.
     jetton_master_total_supply: String,
-    /// Semantically decoded Jetton master mint-replay dictionary size.
-    jetton_master_mint_replay_entries: u64,
-    /// Semantically decoded Jetton master burn-replay dictionary size.
-    jetton_master_burn_replay_entries: u64,
+    /// Code hash returned by the route's canonical-master StateInit getter.
+    route_reported_jetton_master_code_hash: [u8; 32],
+    /// Data hash returned by the route's canonical-master StateInit getter.
+    route_reported_jetton_master_initial_data_hash: [u8; 32],
+    /// Current code hash returned by the Jetton master's StateInit getter.
+    jetton_master_reported_code_hash: [u8; 32],
+    /// Canonical initial-data hash returned by the Jetton master's StateInit getter.
+    jetton_master_reported_initial_data_hash: [u8; 32],
+    /// Route getter projection of the exact governed guardian keys.
+    route_mint_breaker_guardian_keys: SccpTonMintBreakerGuardianKeysV1,
+    /// Jetton-master getter projection of the exact governed guardian keys.
+    jetton_master_mint_breaker_guardian_keys: SccpTonMintBreakerGuardianKeysV1,
+    /// Route getter projection of the immutable wrapped-supply ceiling.
+    route_max_wrapped_supply: u128,
+    /// Jetton-master getter projection of the immutable wrapped-supply ceiling.
+    jetton_master_max_wrapped_supply: u128,
+    /// Route one-way mint-breaker state.
+    route_minting_disabled: bool,
+    /// Jetton-master one-way mint-breaker state.
+    jetton_master_minting_disabled: bool,
+    /// TEP-74 mintability projection returned with the Jetton supply.
+    jetton_master_mintable: bool,
+    /// Route pending-mint count.
+    route_pending_mint_count: u16,
+    /// Route pending-burn count.
+    route_pending_burn_count: u16,
+    /// Jetton-master pending-mint count.
+    jetton_master_pending_mint_count: u16,
+    /// Jetton-master mint replay-forest getter projection.
+    jetton_master_mint_replay_state: DestinationReplayForestReadbackV1,
+    /// Jetton-master burn replay-forest getter projection.
+    jetton_master_burn_replay_state: DestinationReplayForestReadbackV1,
     /// Semantically decoded route storage-layout version.
     route_storage_version: u8,
-    /// Semantically decoded rejected-deposit refund allocator.
-    route_refund_sequence: u64,
-    /// Semantically decoded route nonce dictionary size.
-    route_nonce_entries: u64,
-    /// Semantically decoded inbound replay dictionary size.
-    route_inbound_replay_entries: u64,
-    /// Semantically decoded outbound replay dictionary size.
-    route_outbound_replay_entries: u64,
-    /// Semantically decoded pending-mint dictionary size.
-    route_pending_mint_entries: u64,
-    /// Semantically decoded pending-burn dictionary size.
-    route_pending_burn_entries: u64,
-    /// Semantically decoded pending-refund dictionary size.
-    route_pending_refund_entries: u64,
+    /// Route inbound-mint replay-forest getter projection.
+    route_inbound_mint_replay_state: DestinationReplayForestReadbackV1,
+    /// Route outbound-burn replay-forest getter projection.
+    route_outbound_burn_replay_state: DestinationReplayForestReadbackV1,
     verifier_circuit_hash: [u8; 32],
     proof_profile_commitment: [u8; 32],
     verifier_key_hash: [u8; 32],
@@ -375,13 +542,21 @@ struct TonDestinationStateV1 {
     verifying_key: SccpGroth16Bls12381VerifyingKeyV1,
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
+    jetton_master_route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
-    /// Exact cap decoded from the finalized Jetton master configuration cell.
-    jetton_master_max_wrapped_supply: u128,
-    /// Exact cap decoded from the finalized route configuration cell.
-    route_max_wrapped_supply: u128,
+}
+/// Exact five-value projection returned by a destination replay-forest getter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct DestinationReplayForestReadbackV1 {
+    domain_hash: [u8; 32],
+    shard: u8,
+    shard_root: [u8; 32],
+    leaf_count: u64,
+    update_sequence: u64,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct UnavailableDirectionV1 {
     reason: String,
 }
@@ -431,6 +606,7 @@ struct ReleaseLaneValidationV1 {
     destination_build_policy_sha256_hex: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ValidatorIdentityV1 {
     protocol_version: u8,
     crate_name: String,
@@ -449,6 +625,7 @@ struct ValidatorIdentityV1 {
     build_identity_hex: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ReleaseTrustPolicyV1 {
     schema: String,
     environment: String,
@@ -457,31 +634,65 @@ struct ReleaseTrustPolicyV1 {
     destination_attestors: Vec<TrustedDestinationAttestorV1>,
     circuit_auditors: Vec<TrustedCircuitAuditorV1>,
     proof_systems: Vec<ProofSystemPolicyV1>,
+    issued_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    policy_root_sha256_hex: String,
+    offline_policy_root_signers: Vec<TrustedPolicyRootSignerV1>,
+    offline_policy_root_signatures: Vec<PolicyRootSignatureV1>,
+    freshness_authorities: Vec<TrustedFreshnessAuthorityV1>,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct TrustedPolicyRootSignerV1 {
+    signer_id: String,
+    public_key_hex: String,
+}
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PolicyRootSignatureV1 {
+    signer_id: String,
+    algorithm: String,
+    public_key_hex: String,
+    signature_b64: String,
+}
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct TrustedFreshnessAuthorityV1 {
+    authority_id: String,
+    https_endpoint: String,
+    public_key_hex: String,
+}
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct TrustedReleaseRoleV1 {
     role: String,
     signer_id: String,
     public_key_hex: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct TrustedDestinationAttestorV1 {
     counterparty_profile: String,
     attestor_id: String,
     public_key_hex: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct TrustedCircuitAuditorV1 {
     role: String,
     auditor_id: String,
     public_key_hex: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SoraFinalityAnchorPolicyV1 {
     version: u8,
     source_profile: String,
     protocol_version: u16,
     chain_id_hash_hex: String,
+    epoch: u64,
+    epoch_end_height: u64,
+    roster_commitment_hex: String,
     checkpoint_height: u64,
     checkpoint_block_hash_hex: String,
     checkpoint_context_id_hex: String,
@@ -492,11 +703,13 @@ struct ValidatedSoraFinalityAnchorPolicyV1 {
     anchor: SccpSoraFinalityAnchorV1,
     anchor_hash: [u8; 32],
     chain_id_hash: [u8; 32],
+    roster_commitment: [u8; 32],
     checkpoint_block_hash: [u8; 32],
     checkpoint_context_id: [u8; 32],
     checkpoint_finality_artifact_hash: [u8; 32],
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ProofSystemPolicyV1 {
     counterparty_profile: String,
     circuit_id: String,
@@ -515,8 +728,27 @@ struct ProofSystemPolicyV1 {
     toolchain_lock_sha256_hex: String,
     destination_build: DestinationBuildPolicyV1,
     audit_attestations: Vec<CircuitAuditAttestationV1>,
+    anchor_circuit_id: String,
+    source_archive_sha256_hex: String,
+    vendor_inventory_sha256_hex: String,
+    toolchain_inventory_sha256_hex: String,
+    sbom_sha256_hex: String,
+    proving_key_sha256_hex: String,
+    anchor_circuit_artifact_sha256_hex: String,
+    anchor_proving_key_sha256_hex: String,
+    anchor_verifying_key_sha256_hex: String,
+    phase1_transcript_sha256_hex: String,
+    phase2_transcript_sha256_hex: String,
+    anchor_phase2_transcript_sha256_hex: String,
+    anchor_witness_compiler_sha256_hex: String,
+    anchor_prover_sha256_hex: String,
+    fixed_key_verifier_sha256_hex: String,
+    anchor_fixed_key_verifier_sha256_hex: String,
+    message_kat_sha256_hex: String,
+    anchor_kat_sha256_hex: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct DestinationBuildPolicyV1 {
     #[norito(rename = "source_bundle_sha256_hex")]
     source_bundle_sha256: String,
@@ -540,8 +772,57 @@ struct DestinationBuildPolicyV1 {
     route_interface_sha256: String,
     #[norito(rename = "route_runtime_hash_hex")]
     route_runtime_hash: String,
+    #[norito(rename = "replay_verifier_artifact_sha256_hex")]
+    replay_verifier_artifact_sha256: String,
+    #[norito(rename = "replay_verifier_interface_sha256_hex")]
+    replay_verifier_interface_sha256: String,
+    #[norito(rename = "replay_verifier_runtime_hash_hex")]
+    replay_verifier_runtime_hash: String,
+    #[norito(rename = "mint_breaker_artifact_sha256_hex")]
+    mint_breaker_artifact_sha256: String,
+    #[norito(rename = "mint_breaker_interface_sha256_hex")]
+    mint_breaker_interface_sha256: String,
+    #[norito(rename = "mint_breaker_runtime_hash_hex")]
+    mint_breaker_runtime_hash: String,
+    #[norito(rename = "ton_builder_policy_sha256_hex")]
+    ton_builder_policy_sha256: String,
+    #[norito(rename = "ton_source_closure_sha256_hex")]
+    ton_source_closure_sha256: String,
+    #[norito(rename = "ton_output_lock_sha256_hex")]
+    ton_output_lock_sha256: String,
+    #[norito(rename = "validator_builder_policy_sha256_hex")]
+    validator_builder_policy_sha256: String,
+    #[norito(rename = "validator_source_archive_sha256_hex")]
+    validator_source_archive_sha256: String,
+    #[norito(rename = "validator_dependency_inventory_sha256_hex")]
+    validator_dependency_inventory_sha256: String,
+    #[norito(rename = "validator_cargo_metadata_closure_sha256_hex")]
+    validator_cargo_metadata_closure_sha256: String,
+    #[norito(rename = "validator_sbom_sha256_hex")]
+    validator_sbom_sha256: String,
+    #[norito(rename = "validator_toolchain_inventory_sha256_hex")]
+    validator_toolchain_inventory_sha256: String,
+    #[norito(rename = "validator_sysroot_inventory_sha256_hex")]
+    validator_sysroot_inventory_sha256: String,
+    #[norito(rename = "validator_linker_sha256_hex")]
+    validator_linker_sha256: String,
+    #[norito(rename = "validator_build_recipe_sha256_hex")]
+    validator_build_recipe_sha256: String,
+    #[norito(rename = "validator_build_environment_sha256_hex")]
+    validator_build_environment_sha256: String,
+    #[norito(rename = "validator_container_manifest_sha256_hex")]
+    validator_container_manifest_sha256: String,
+    #[norito(rename = "validator_builder_report_sha256_hex")]
+    validator_builder_report_sha256: String,
+    #[norito(rename = "validator_executable_sha256_hex")]
+    validator_executable_sha256: String,
+    #[norito(rename = "validator_complete_build_closure_sha256_hex")]
+    validator_complete_build_closure_sha256: String,
+    #[norito(rename = "validator_output_lock_sha256_hex")]
+    validator_output_lock_sha256: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct CircuitAuditAttestationV1 {
     role: String,
     auditor_id: String,
@@ -549,8 +830,19 @@ struct CircuitAuditAttestationV1 {
     public_key_hex: String,
     report_sha256_hex: String,
     signature_b64: String,
+    completed_at_unix_ms: u64,
+    #[norito(required)]
+    unresolved_findings: Option<UnresolvedAuditFindingsV1>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct UnresolvedAuditFindingsV1 {
+    critical: u32,
+    high: u32,
+    medium: u32,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ReleaseEvidenceSignaturesV1 {
     schema: String,
     release_id: String,
@@ -565,34 +857,52 @@ struct ReleaseEvidenceSignaturesV1 {
     artifacts: Vec<ReleaseArtifactV1>,
     validation: ReleaseValidationV1,
     provenance: Vec<ReleaseProvenanceV1>,
+    validator_built_at_unix_ms: u64,
+    contract_builds: Vec<ContractBuildFreshnessV1>,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ContractBuildFreshnessV1 {
+    counterparty_profile: String,
+    built_at_unix_ms: u64,
+}
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SignedLaneSummaryV1 {
     counterparty_profile: String,
     counterparty_domain: u32,
     inbound_status: String,
     outbound_status: String,
     evidence_artifact_path: String,
+    lane_evidence_at_unix_ms: u64,
+    canary_at_unix_ms: u64,
+    destination_readback_at_unix_ms: u64,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ReleaseArtifactV1 {
     path: String,
     kind: String,
     sha256_hex: String,
     size_bytes: u64,
+    declared_max_bytes: u64,
+    created_at_unix_ms: u64,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ReleaseValidationV1 {
     corridor: String,
     phases: Vec<ReleaseValidationPhaseV1>,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ReleaseValidationPhaseV1 {
     name: String,
     status: String,
     artifact_path: String,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ReleaseProvenanceV1 {
     role: String,
     signer_id: String,
@@ -612,6 +922,11 @@ struct ReleaseSignatureValidationV1 {
     circuit_audit_signatures_verified: u8,
     destination_attestors_validated: u8,
     distinct_trust_identities: u8,
+    offline_policy_root_signatures_verified: u8,
+    freshness_authorities_validated: u8,
+    policy_root_sha256_hex: Option<String>,
+    policy_issued_at_unix_ms: Option<u64>,
+    policy_expires_at_unix_ms: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, norito::JsonSerialize)]
 struct SemanticProofClaimV1 {
@@ -668,6 +983,26 @@ struct ApprovedProofSystemV1 {
     token_runtime_hash: [u8; 32],
     verifier_runtime_hash: [u8; 32],
     route_runtime_hash: [u8; 32],
+    replay_verifier_runtime_hash: [u8; 32],
+    mint_breaker_runtime_hash: [u8; 32],
+    ton_builder_policy_sha256: [u8; 32],
+    ton_source_closure_sha256: [u8; 32],
+    ton_output_lock_sha256: [u8; 32],
+    validator_builder_policy_sha256: [u8; 32],
+    validator_source_archive_sha256: [u8; 32],
+    validator_dependency_inventory_sha256: [u8; 32],
+    validator_cargo_metadata_closure_sha256: [u8; 32],
+    validator_sbom_sha256: [u8; 32],
+    validator_toolchain_inventory_sha256: [u8; 32],
+    validator_sysroot_inventory_sha256: [u8; 32],
+    validator_linker_sha256: [u8; 32],
+    validator_build_recipe_sha256: [u8; 32],
+    validator_build_environment_sha256: [u8; 32],
+    validator_container_manifest_sha256: [u8; 32],
+    validator_builder_report_sha256: [u8; 32],
+    validator_executable_sha256: [u8; 32],
+    validator_complete_build_closure_sha256: [u8; 32],
+    validator_output_lock_sha256: [u8; 32],
 }
 fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -1088,12 +1423,131 @@ fn destination_build_hash_roles(
         ("route_artifact_sha256_hex", &value.route_artifact_sha256),
         ("route_interface_sha256_hex", &value.route_interface_sha256),
         ("route_runtime_hash_hex", &value.route_runtime_hash),
+        (
+            "replay_verifier_artifact_sha256_hex",
+            &value.replay_verifier_artifact_sha256,
+        ),
+        (
+            "replay_verifier_interface_sha256_hex",
+            &value.replay_verifier_interface_sha256,
+        ),
+        (
+            "replay_verifier_runtime_hash_hex",
+            &value.replay_verifier_runtime_hash,
+        ),
+        (
+            "mint_breaker_artifact_sha256_hex",
+            &value.mint_breaker_artifact_sha256,
+        ),
+        (
+            "mint_breaker_interface_sha256_hex",
+            &value.mint_breaker_interface_sha256,
+        ),
+        (
+            "mint_breaker_runtime_hash_hex",
+            &value.mint_breaker_runtime_hash,
+        ),
+        (
+            "ton_builder_policy_sha256_hex",
+            &value.ton_builder_policy_sha256,
+        ),
+        (
+            "ton_source_closure_sha256_hex",
+            &value.ton_source_closure_sha256,
+        ),
+        ("ton_output_lock_sha256_hex", &value.ton_output_lock_sha256),
+        (
+            "validator_builder_policy_sha256_hex",
+            &value.validator_builder_policy_sha256,
+        ),
+        (
+            "validator_source_archive_sha256_hex",
+            &value.validator_source_archive_sha256,
+        ),
+        (
+            "validator_dependency_inventory_sha256_hex",
+            &value.validator_dependency_inventory_sha256,
+        ),
+        (
+            "validator_cargo_metadata_closure_sha256_hex",
+            &value.validator_cargo_metadata_closure_sha256,
+        ),
+        ("validator_sbom_sha256_hex", &value.validator_sbom_sha256),
+        (
+            "validator_toolchain_inventory_sha256_hex",
+            &value.validator_toolchain_inventory_sha256,
+        ),
+        (
+            "validator_sysroot_inventory_sha256_hex",
+            &value.validator_sysroot_inventory_sha256,
+        ),
+        (
+            "validator_linker_sha256_hex",
+            &value.validator_linker_sha256,
+        ),
+        (
+            "validator_build_recipe_sha256_hex",
+            &value.validator_build_recipe_sha256,
+        ),
+        (
+            "validator_build_environment_sha256_hex",
+            &value.validator_build_environment_sha256,
+        ),
+        (
+            "validator_container_manifest_sha256_hex",
+            &value.validator_container_manifest_sha256,
+        ),
+        (
+            "validator_builder_report_sha256_hex",
+            &value.validator_builder_report_sha256,
+        ),
+        (
+            "validator_executable_sha256_hex",
+            &value.validator_executable_sha256,
+        ),
+        (
+            "validator_complete_build_closure_sha256_hex",
+            &value.validator_complete_build_closure_sha256,
+        ),
+        (
+            "validator_output_lock_sha256_hex",
+            &value.validator_output_lock_sha256,
+        ),
     ];
     let mut parsed = Vec::with_capacity(fields.len());
     for (field, digest) in fields {
-        parsed.push((field, require_hash(digest, field)?));
+        let digest = require_hash(digest, field)?;
+        if digest == [0; 32] {
+            return Err(format!("destination build {field} must be nonzero"));
+        }
+        parsed.push((field, digest));
     }
     Ok(parsed)
+}
+fn parsed_destination_build_hash_roles(
+    value: &DestinationBuildPolicyV1,
+) -> Result<BTreeMap<&'static str, [u8; 32]>, String> {
+    let roles = destination_build_hash_roles(value)?;
+    let mut digests = BTreeSet::new();
+    for (_, digest) in &roles {
+        if !digests.insert(*digest) {
+            return Err("destination build hash roles must be pairwise distinct".to_owned());
+        }
+    }
+    Ok(roles.into_iter().collect())
+}
+fn validator_build_receipt_hashes(
+    value: &DestinationBuildPolicyV1,
+) -> Result<[[u8; 32]; 15], String> {
+    let roles = parsed_destination_build_hash_roles(value)?;
+    let mut hashes = [[0_u8; 32]; 15];
+    for (index, role) in VALIDATOR_BUILD_HASH_ROLES.iter().enumerate() {
+        hashes[index] = roles
+            .get(role)
+            .copied()
+            .ok_or_else(|| format!("destination build policy is missing {role}"))?;
+    }
+    Ok(hashes)
 }
 fn register_hash_role(
     local: &mut BTreeSet<[u8; 32]>,
@@ -1128,10 +1582,16 @@ fn validate_sora_finality_anchor_policy(
     if policy.version != 1
         || policy.source_profile != "sora-taira"
         || policy.protocol_version != SUMERAGI_V2_PROTOCOL_VERSION
+        || policy.epoch == 0
+        || policy.epoch_end_height < policy.checkpoint_height
     {
         return Err("SORA finality anchor must select exact Taira Sumeragi-v2".to_owned());
     }
     let chain_id_hash = require_hash(&policy.chain_id_hash_hex, "SORA finality anchor chain id")?;
+    let roster_commitment = require_hash(
+        &policy.roster_commitment_hex,
+        "SORA finality anchor roster commitment",
+    )?;
     let checkpoint_block_hash = require_hash(
         &policy.checkpoint_block_hash_hex,
         "SORA finality checkpoint block",
@@ -1149,6 +1609,9 @@ fn validate_sora_finality_anchor_policy(
         source_network: SccpNetworkV1::SoraTaira,
         protocol_version: policy.protocol_version,
         chain_id_hash,
+        epoch: policy.epoch,
+        epoch_end_height: policy.epoch_end_height,
+        roster_commitment,
         checkpoint_height: policy.checkpoint_height,
         checkpoint_block_hash,
         checkpoint_context_id,
@@ -1163,6 +1626,7 @@ fn validate_sora_finality_anchor_policy(
         anchor,
         anchor_hash,
         chain_id_hash,
+        roster_commitment,
         checkpoint_block_hash,
         checkpoint_context_id,
         checkpoint_finality_artifact_hash,
@@ -1174,24 +1638,28 @@ struct ValidatedReleaseTrustV1 {
 }
 struct ValidatedReleaseTrustIdentitiesV1 {
     release_keys: [[u8; 32]; 2],
-    audit_keys: [[u8; 32]; 2],
+    audit_keys: [[u8; 32]; 3],
+    policy_root_keys: [[u8; 32]; 3],
 }
 fn validate_release_trust_header(
     policy: &ReleaseTrustPolicyV1,
-    expected_environment: &str,
+    expected_environment: ReleaseEnvironment,
 ) -> Result<(), String> {
-    let expected_schema = match expected_environment {
-        "production" => PRODUCTION_POLICY_SCHEMA,
-        "test-fixture" => TEST_POLICY_SCHEMA,
-        _ => return Err("release signature mode is invalid".to_owned()),
-    };
+    let expected_schema = expected_environment.schema();
     if policy.schema != expected_schema
-        || policy.environment != expected_environment
+        || policy.environment != expected_environment.name()
         || !canonical_identifier(&policy.policy_id)
         || policy.roles.len() != RELEASE_ROLES.len()
         || policy.destination_attestors.len() != RELEASE_PROFILES.len()
         || policy.circuit_auditors.len() != CIRCUIT_AUDIT_ROLES.len()
         || policy.proof_systems.len() != RELEASE_PROFILES.len()
+        || (expected_environment.is_production()
+            && (policy.issued_at_unix_ms == 0
+                || policy.expires_at_unix_ms <= policy.issued_at_unix_ms
+                || policy.expires_at_unix_ms - policy.issued_at_unix_ms > MAX_POLICY_LIFETIME_MS
+                || policy.offline_policy_root_signers.len() != 3
+                || !(2..=3).contains(&policy.offline_policy_root_signatures.len())
+                || policy.freshness_authorities.len() != 3))
     {
         return Err("release trust policy has the wrong schema, mode, or cardinality".to_owned());
     }
@@ -1199,7 +1667,7 @@ fn validate_release_trust_header(
 }
 fn validate_release_trust_identities(
     policy: &ReleaseTrustPolicyV1,
-    expected_environment: &str,
+    expected_environment: ReleaseEnvironment,
 ) -> Result<ValidatedReleaseTrustIdentitiesV1, String> {
     let mut identities = BTreeSet::new();
     let mut keys = BTreeSet::new();
@@ -1239,7 +1707,7 @@ fn validate_release_trust_identities(
             return Err("destination attestor key is reused".to_owned());
         }
     }
-    let mut audit_keys = [[0_u8; 32]; 2];
+    let mut audit_keys = [[0_u8; 32]; 3];
     for (index, auditor) in policy.circuit_auditors.iter().enumerate() {
         if auditor.role != CIRCUIT_AUDIT_ROLES[index]
             || !canonical_identifier(&auditor.auditor_id)
@@ -1257,7 +1725,64 @@ fn validate_release_trust_identities(
         }
         audit_keys[index] = key;
     }
-    if expected_environment == "production"
+    let mut policy_root_keys = [[0_u8; 32]; 3];
+    if expected_environment.is_production() {
+        for (index, signer) in policy.offline_policy_root_signers.iter().enumerate() {
+            if !canonical_identifier(&signer.signer_id)
+                || key_encodings.contains(&signer.signer_id)
+                || !identities.insert(signer.signer_id.clone())
+            {
+                return Err("offline policy-root signer identity is invalid or reused".to_owned());
+            }
+            let key =
+                validate_ed25519_public_key(&signer.public_key_hex, "offline policy-root key")?;
+            if identities.contains(&signer.public_key_hex)
+                || !keys.insert(key)
+                || !key_encodings.insert(signer.public_key_hex.clone())
+            {
+                return Err("offline policy-root signer key is reused".to_owned());
+            }
+            policy_root_keys[index] = key;
+        }
+        let mut authority_hosts = BTreeSet::new();
+        for authority in &policy.freshness_authorities {
+            if !canonical_identifier(&authority.authority_id)
+                || key_encodings.contains(&authority.authority_id)
+                || !identities.insert(authority.authority_id.clone())
+            {
+                return Err("freshness authority identity is invalid or reused".to_owned());
+            }
+            let endpoint = authority.https_endpoint.as_str();
+            let Some(authority_and_path) = endpoint.strip_prefix("https://") else {
+                return Err("freshness authority must use canonical HTTPS".to_owned());
+            };
+            let Some((host, path)) = authority_and_path.split_once('/') else {
+                return Err("freshness authority HTTPS endpoint must include a path".to_owned());
+            };
+            if host.is_empty()
+                || path.is_empty()
+                || host.chars().any(|character| matches!(character, '@' | ':'))
+                || endpoint
+                    .chars()
+                    .any(|character| matches!(character, '?' | '#'))
+                || host.eq_ignore_ascii_case("localhost")
+                || !authority_hosts.insert(host.to_ascii_lowercase())
+            {
+                return Err(
+                    "freshness authorities must use independent canonical HTTPS hosts".to_owned(),
+                );
+            }
+            let key =
+                validate_ed25519_public_key(&authority.public_key_hex, "freshness authority key")?;
+            if identities.contains(&authority.public_key_hex)
+                || !keys.insert(key)
+                || !key_encodings.insert(authority.public_key_hex.clone())
+            {
+                return Err("freshness authority key is reused".to_owned());
+            }
+        }
+    }
+    if expected_environment.is_production()
         && (identities
             .iter()
             .any(|identity| identity.starts_with("fixture-"))
@@ -1270,6 +1795,7 @@ fn validate_release_trust_identities(
     Ok(ValidatedReleaseTrustIdentitiesV1 {
         release_keys,
         audit_keys,
+        policy_root_keys,
     })
 }
 fn validate_proof_policy_header(
@@ -1377,6 +1903,10 @@ fn proof_policy_hash_roles(
         ("sora_finality_anchor_hash_hex", finality_anchor.anchor_hash),
         ("anchor_chain_id_hash_hex", finality_anchor.chain_id_hash),
         (
+            "anchor_roster_commitment_hex",
+            finality_anchor.roster_commitment,
+        ),
+        (
             "anchor_checkpoint_block_hash_hex",
             finality_anchor.checkpoint_block_hash,
         ),
@@ -1399,7 +1929,7 @@ fn proof_policy_hash_roles(
 fn validate_proof_audits(
     policy: &ReleaseTrustPolicyV1,
     proof: &ProofSystemPolicyV1,
-    audit_keys: &[[u8; 32]; 2],
+    audit_keys: &[[u8; 32]; 3],
     local_hash_roles: &mut BTreeSet<[u8; 32]>,
     global_hash_roles: &mut BTreeMap<[u8; 32], &'static str>,
     audit_report_hashes: &mut BTreeSet<[u8; 32]>,
@@ -1420,6 +1950,19 @@ fn validate_proof_audits(
             || audit.algorithm != "ed25519"
         {
             return Err("circuit audit does not match its trusted role".to_owned());
+        }
+        if policy.environment == "production"
+            && (audit.completed_at_unix_ms == 0
+                || audit.unresolved_findings.as_ref()
+                    != Some(&UnresolvedAuditFindingsV1 {
+                        critical: 0,
+                        high: 0,
+                        medium: 0,
+                    }))
+        {
+            return Err(
+                "circuit audit has an unresolved critical, high, or medium finding".to_owned(),
+            );
         }
         let report_hash = require_hash(&audit.report_sha256_hex, "circuit audit report")?;
         register_audit_report(audit_report_hashes, report_hash)?;
@@ -1445,15 +1988,108 @@ fn validate_proof_audits(
 }
 fn validate_release_proof_systems(
     policy: &ReleaseTrustPolicyV1,
-    audit_keys: &[[u8; 32]; 2],
+    audit_keys: &[[u8; 32]; 3],
     signature_set: &mut BTreeSet<[u8; 64]>,
 ) -> Result<(), String> {
     let mut global_hash_roles = BTreeMap::new();
     let mut audit_report_hashes = BTreeSet::new();
+    let mut kat_hashes = BTreeSet::new();
+    let mut validator_build_receipt: Option<[[u8; 32]; 15]> = None;
     for (profile_index, proof) in policy.proof_systems.iter().enumerate() {
+        if policy.environment == "production" {
+            let receipt = validator_build_receipt_hashes(&proof.destination_build)?;
+            if validator_build_receipt
+                .as_ref()
+                .is_some_and(|expected| *expected != receipt)
+            {
+                return Err(
+                    "all proof profiles must bind one identical validator build receipt".to_owned(),
+                );
+            }
+            validator_build_receipt.get_or_insert(receipt);
+        }
         let mut local_hash_roles = BTreeSet::new();
         for (role, digest) in proof_policy_hash_roles(proof, profile_index)? {
             register_hash_role(&mut local_hash_roles, &mut global_hash_roles, role, digest)?;
+        }
+        if policy.environment == "production" {
+            let expected_anchor_id = proof
+                .circuit_id
+                .replace("-groth16-", "-anchor-update-groth16-");
+            if proof.anchor_circuit_id != expected_anchor_id
+                || proof.anchor_circuit_id == proof.circuit_id
+                || !canonical_identifier(&proof.anchor_circuit_id)
+            {
+                return Err(
+                    "proof policy must bind an independent exact epoch-anchor circuit".to_owned(),
+                );
+            }
+            let final_roles = [
+                (
+                    "source_archive_sha256_hex",
+                    &proof.source_archive_sha256_hex,
+                ),
+                (
+                    "vendor_inventory_sha256_hex",
+                    &proof.vendor_inventory_sha256_hex,
+                ),
+                (
+                    "toolchain_inventory_sha256_hex",
+                    &proof.toolchain_inventory_sha256_hex,
+                ),
+                ("sbom_sha256_hex", &proof.sbom_sha256_hex),
+                ("proving_key_sha256_hex", &proof.proving_key_sha256_hex),
+                (
+                    "anchor_circuit_artifact_sha256_hex",
+                    &proof.anchor_circuit_artifact_sha256_hex,
+                ),
+                (
+                    "anchor_proving_key_sha256_hex",
+                    &proof.anchor_proving_key_sha256_hex,
+                ),
+                (
+                    "anchor_verifying_key_sha256_hex",
+                    &proof.anchor_verifying_key_sha256_hex,
+                ),
+                (
+                    "phase1_transcript_sha256_hex",
+                    &proof.phase1_transcript_sha256_hex,
+                ),
+                (
+                    "phase2_transcript_sha256_hex",
+                    &proof.phase2_transcript_sha256_hex,
+                ),
+                (
+                    "anchor_phase2_transcript_sha256_hex",
+                    &proof.anchor_phase2_transcript_sha256_hex,
+                ),
+                (
+                    "anchor_witness_compiler_sha256_hex",
+                    &proof.anchor_witness_compiler_sha256_hex,
+                ),
+                ("anchor_prover_sha256_hex", &proof.anchor_prover_sha256_hex),
+                (
+                    "fixed_key_verifier_sha256_hex",
+                    &proof.fixed_key_verifier_sha256_hex,
+                ),
+                (
+                    "anchor_fixed_key_verifier_sha256_hex",
+                    &proof.anchor_fixed_key_verifier_sha256_hex,
+                ),
+                ("message_kat_sha256_hex", &proof.message_kat_sha256_hex),
+                ("anchor_kat_sha256_hex", &proof.anchor_kat_sha256_hex),
+            ];
+            for (role, value) in final_roles {
+                let digest = require_hash(value, role)?;
+                if matches!(role, "message_kat_sha256_hex" | "anchor_kat_sha256_hex")
+                    && !kat_hashes.insert(digest)
+                {
+                    return Err(
+                        "every profile must bind unique message and anchor KAT bytes".to_owned(),
+                    );
+                }
+                register_hash_role(&mut local_hash_roles, &mut global_hash_roles, role, digest)?;
+            }
         }
         validate_proof_audits(
             policy,
@@ -1469,11 +2105,55 @@ fn validate_release_proof_systems(
 }
 fn validate_release_trust_policy(
     policy: &ReleaseTrustPolicyV1,
-    expected_environment: &str,
+    expected_environment: ReleaseEnvironment,
     signature_set: &mut BTreeSet<[u8; 64]>,
 ) -> Result<ValidatedReleaseTrustV1, String> {
     validate_release_trust_header(policy, expected_environment)?;
     let identities = validate_release_trust_identities(policy, expected_environment)?;
+    if expected_environment.is_production() {
+        let mut body = norito::json::to_value(policy)
+            .map_err(|_| "release policy root body cannot be encoded".to_owned())?;
+        body = value_without_field(
+            body,
+            "offline_policy_root_signatures",
+            "release policy root body",
+        )?;
+        body = value_without_field(body, "policy_root_sha256_hex", "release policy root body")?;
+        let canonical = norito::json::to_json(&body)
+            .map_err(|_| "release policy root body cannot be canonically encoded".to_owned())?;
+        let mut root_input = Vec::with_capacity(POLICY_ROOT_HASH_DOMAIN.len() + canonical.len());
+        root_input.extend_from_slice(POLICY_ROOT_HASH_DOMAIN);
+        root_input.extend_from_slice(canonical.as_bytes());
+        let root = sha256(&root_input);
+        if require_hash(&policy.policy_root_sha256_hex, "release policy root")? != root {
+            return Err("release policy root does not match the final-V1 policy body".to_owned());
+        }
+        let mut root_payload = Vec::with_capacity(POLICY_ROOT_SIGNING_DOMAIN.len() + root.len());
+        root_payload.extend_from_slice(POLICY_ROOT_SIGNING_DOMAIN);
+        root_payload.extend_from_slice(&root);
+        let mut used_signers = BTreeSet::new();
+        for signature in &policy.offline_policy_root_signatures {
+            let Some((index, trusted)) = policy
+                .offline_policy_root_signers
+                .iter()
+                .enumerate()
+                .find(|(_, signer)| signer.signer_id == signature.signer_id)
+            else {
+                return Err("offline policy-root signature uses an untrusted signer".to_owned());
+            };
+            if signature.algorithm != "ed25519"
+                || signature.public_key_hex != trusted.public_key_hex
+                || !used_signers.insert(signature.signer_id.as_str())
+            {
+                return Err("offline policy-root signature is duplicated or malformed".to_owned());
+            }
+            let decoded = decode_signature_base64(&signature.signature_b64)?;
+            if !signature_set.insert(decoded) {
+                return Err("offline policy-root signature is replayed across roles".to_owned());
+            }
+            verify_ed25519_signature(&identities.policy_root_keys[index], &decoded, &root_payload)?;
+        }
+    }
     validate_release_proof_systems(policy, &identities.audit_keys, signature_set)?;
     Ok(ValidatedReleaseTrustV1 {
         release_keys: identities.release_keys,
@@ -1484,28 +2164,61 @@ fn release_artifact_limit(kind: &str) -> Option<u64> {
         "phase-transcript" => Some(MAX_TRANSCRIPT_BYTES),
         "lane-evidence" => Some(MAX_LANE_INPUT_BYTES),
         "circuit-audit-report" => Some(MAX_AUDIT_REPORT_BYTES),
-        "honest-proof" => u64::try_from(SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).ok(),
-        "semantic-circuit" | "witness-generator" | "verifying-key" | "prover-build"
-        | "toolchain-lock" | "honest-witness" => Some(MAX_SEMANTIC_ARTIFACT_BYTES),
+        "message-kat" | "anchor-kat" => {
+            u64::try_from(SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).ok()
+        }
+        "circuit-source-archive"
+        | "circuit-vendor-inventory"
+        | "circuit-toolchain-inventory"
+        | "circuit-sbom"
+        | "r1cs"
+        | "proving-key"
+        | "verifying-key"
+        | "phase1-ceremony-transcript"
+        | "phase2-ceremony-transcript"
+        | "witness-compiler"
+        | "prover"
+        | "fixed-key-verifier" => Some(MAX_SEMANTIC_ARTIFACT_BYTES),
         _ => None,
     }
 }
-fn semantic_artifact_role(kind: &str) -> Option<(&'static str, &'static str)> {
+fn is_semantic_artifact_kind(kind: &str) -> bool {
     SEMANTIC_ARTIFACT_ROLES
         .iter()
-        .find_map(|(role, expected_kind, filename)| {
-            (*expected_kind == kind).then_some((*role, *filename))
-        })
+        .any(|(_, expected_kind, _)| *expected_kind == kind)
+}
+fn semantic_artifact_path_is_exact(kind: &str, digest: &str, path: &str) -> bool {
+    SEMANTIC_ARTIFACT_ROLES
+        .iter()
+        .filter(|(_, expected_kind, _)| *expected_kind == kind)
+        .any(|(role, _, filename)| semantic_artifact_path(role, digest, filename) == path)
 }
 fn semantic_policy_digest<'a>(proof: &'a ProofSystemPolicyV1, role: &str) -> Option<&'a str> {
-    match role {
-        "circuit-artifact" => Some(&proof.circuit_artifact_sha256_hex),
-        "witness-generator" => Some(&proof.witness_generator_sha256_hex),
-        "verifying-key" => Some(&proof.verifying_key_sha256_hex),
-        "prover-build" => Some(&proof.prover_build_sha256_hex),
-        "toolchain-lock" => Some(&proof.toolchain_lock_sha256_hex),
-        _ => None,
-    }
+    let digest = match role {
+        "source-archive" => &proof.source_archive_sha256_hex,
+        "vendor-inventory" => &proof.vendor_inventory_sha256_hex,
+        "toolchain-inventory" => &proof.toolchain_inventory_sha256_hex,
+        "sbom" => &proof.sbom_sha256_hex,
+        "message-r1cs" => &proof.circuit_artifact_sha256_hex,
+        "anchor-r1cs" => &proof.anchor_circuit_artifact_sha256_hex,
+        "message-proving-key" => &proof.proving_key_sha256_hex,
+        "anchor-proving-key" => &proof.anchor_proving_key_sha256_hex,
+        "message-verifying-key" => &proof.verifying_key_sha256_hex,
+        "anchor-verifying-key" => &proof.anchor_verifying_key_sha256_hex,
+        "phase1-transcript" => &proof.phase1_transcript_sha256_hex,
+        "message-phase2-transcript" => &proof.phase2_transcript_sha256_hex,
+        "anchor-phase2-transcript" => &proof.anchor_phase2_transcript_sha256_hex,
+        "message-witness-compiler" => &proof.witness_generator_sha256_hex,
+        "anchor-witness-compiler" => &proof.anchor_witness_compiler_sha256_hex,
+        "message-prover" => &proof.prover_build_sha256_hex,
+        "anchor-prover" => &proof.anchor_prover_sha256_hex,
+        "message-fixed-key-verifier" => &proof.fixed_key_verifier_sha256_hex,
+        "anchor-fixed-key-verifier" => &proof.anchor_fixed_key_verifier_sha256_hex,
+        "message-kat" => &proof.message_kat_sha256_hex,
+        "anchor-kat" => &proof.anchor_kat_sha256_hex,
+        _ => return None,
+    };
+    Some(digest.as_str())
 }
 fn semantic_artifact_path(role: &str, digest: &str, filename: &str) -> String {
     format!("artifacts/semantic/{role}/{digest}-{filename}")
@@ -1520,9 +2233,7 @@ fn validate_release_semantic_inventory<'a>(
 ) -> Result<(), String> {
     let mut counts = BTreeMap::<&str, usize>::new();
     for artifact in artifact_by_path.values() {
-        if artifact.kind == "circuit-audit-report"
-            || semantic_artifact_role(&artifact.kind).is_some()
-        {
+        if artifact.kind == "circuit-audit-report" || is_semantic_artifact_kind(&artifact.kind) {
             *counts.entry(artifact.kind.as_str()).or_default() += 1;
         }
     }
@@ -1533,11 +2244,18 @@ fn validate_release_semantic_inventory<'a>(
         .sum::<usize>();
     if counts.get("circuit-audit-report").copied() != Some(expected_audit_reports) {
         return Err(
-            "production evidence requires exactly two circuit audit reports per profile".to_owned(),
+            "production evidence requires exactly three circuit audit reports per profile"
+                .to_owned(),
         );
     }
+    let mut role_counts = BTreeMap::<&str, usize>::new();
     for (_, kind, _) in SEMANTIC_ARTIFACT_ROLES {
-        if !(1..=RELEASE_PROFILES.len()).contains(&counts.get(kind).copied().unwrap_or(0)) {
+        *role_counts.entry(kind).or_default() += 1;
+    }
+    for (kind, roles_per_profile) in role_counts {
+        if !(roles_per_profile..=roles_per_profile * RELEASE_PROFILES.len())
+            .contains(&counts.get(kind).copied().unwrap_or(0))
+        {
             return Err(format!(
                 "production evidence has an invalid {kind} artifact cardinality"
             ));
@@ -1574,9 +2292,12 @@ fn validate_release_semantic_inventory<'a>(
         }
     }
     for artifact in artifact_by_path.values() {
-        if let Some((role, filename)) = semantic_artifact_role(&artifact.kind) {
-            let expected = semantic_artifact_path(role, &artifact.sha256_hex, filename);
-            if artifact.path != expected {
+        if is_semantic_artifact_kind(&artifact.kind) {
+            if !semantic_artifact_path_is_exact(
+                &artifact.kind,
+                &artifact.sha256_hex,
+                &artifact.path,
+            ) {
                 return Err("semantic artifact path must be exact and content-addressed".to_owned());
             }
             referenced.insert(artifact.path.as_str());
@@ -1593,7 +2314,7 @@ fn validate_release_semantic_inventory<'a>(
 fn validate_release_evidence_envelope(
     evidence: &ReleaseEvidenceSignaturesV1,
     policy: &ReleaseTrustPolicyV1,
-    expected_environment: &str,
+    expected_environment: ReleaseEnvironment,
 ) -> Result<(), String> {
     if evidence.created_at_unix_ms == 0
         || evidence.validation.corridor != "sccp-production-corridor-v1"
@@ -1603,10 +2324,44 @@ fn validate_release_evidence_envelope(
     {
         return Err("release evidence inventory or corridor is not exact".to_owned());
     }
+    if expected_environment.is_production() {
+        if evidence.validator_built_at_unix_ms == 0
+            || evidence.validator_built_at_unix_ms
+                > evidence.created_at_unix_ms.saturating_add(2 * 60 * 1_000)
+            || evidence.contract_builds.len() != RELEASE_PROFILES.len()
+        {
+            return Err("release build freshness inventory is not exact".to_owned());
+        }
+        for (index, build) in evidence.contract_builds.iter().enumerate() {
+            if build.counterparty_profile != RELEASE_PROFILES[index]
+                || build.built_at_unix_ms == 0
+                || build.built_at_unix_ms
+                    > evidence.created_at_unix_ms.saturating_add(2 * 60 * 1_000)
+            {
+                return Err("contract build freshness inventory is not exact".to_owned());
+            }
+        }
+    }
     validate_validator_identity_shape(&evidence.validator)?;
     let expected_validator = validator_identity()?;
     if evidence.validator != expected_validator {
         return Err("release evidence selects a different Rust validator build".to_owned());
+    }
+    let executed_validator_sha256 = require_hash(
+        &evidence.validator.executable_sha256_hex,
+        "release validator executable digest",
+    )?;
+    let approved_validator_build = policy
+        .proof_systems
+        .first()
+        .ok_or_else(|| "release policy has no approved proof systems".to_owned())?;
+    if expected_environment.is_production()
+        && validator_build_receipt_hashes(&approved_validator_build.destination_build)?[12]
+            != executed_validator_sha256
+    {
+        return Err(
+            "validator build receipt does not bind the signed and executed validator".to_owned(),
+        );
     }
     let mut artifact_by_path = BTreeMap::new();
     let mut artifact_hashes = BTreeSet::new();
@@ -1621,7 +2376,13 @@ fn validate_release_evidence_envelope(
         previous_path = Some(&artifact.path);
         let maximum = release_artifact_limit(&artifact.kind)
             .ok_or_else(|| "release artifact kind is not part of SCCP V1".to_owned())?;
-        if artifact.size_bytes == 0 || artifact.size_bytes > maximum {
+        if artifact.size_bytes == 0
+            || artifact.size_bytes > maximum
+            || (expected_environment.is_production()
+                && (artifact.declared_max_bytes < artifact.size_bytes
+                    || artifact.declared_max_bytes > maximum
+                    || artifact.created_at_unix_ms == 0))
+        {
             return Err("release artifact size is outside its kind-specific bound".to_owned());
         }
         total_size = total_size
@@ -1660,19 +2421,30 @@ fn validate_release_evidence_envelope(
             || !matches!(lane.inbound_status.as_str(), "verified" | "unavailable")
             || !matches!(lane.outbound_status.as_str(), "verified" | "unavailable")
             || !canonical_relative_path(&lane.evidence_artifact_path)
+            || (expected_environment.is_production()
+                && (lane.lane_evidence_at_unix_ms == 0
+                    || lane.canary_at_unix_ms == 0
+                    || lane.destination_readback_at_unix_ms == 0))
         {
             return Err("release evidence lane matrix is not exact".to_owned());
         }
         let artifact = artifact_by_path
             .get(lane.evidence_artifact_path.as_str())
             .ok_or_else(|| "release lane references no artifact".to_owned())?;
+        if expected_environment.is_production()
+            && (lane.lane_evidence_at_unix_ms > artifact.created_at_unix_ms
+                || lane.canary_at_unix_ms > artifact.created_at_unix_ms
+                || lane.destination_readback_at_unix_ms > artifact.created_at_unix_ms)
+        {
+            return Err("lane temporal evidence postdates its signed artifact".to_owned());
+        }
         if artifact.kind != "lane-evidence"
             || !referenced.insert(lane.evidence_artifact_path.as_str())
         {
             return Err("release lanes must reference distinct typed evidence".to_owned());
         }
     }
-    if expected_environment == "production" {
+    if expected_environment.is_production() {
         validate_release_semantic_inventory(policy, &artifact_by_path, &mut referenced)?;
     }
     if referenced.len() != artifact_by_path.len() {
@@ -1689,7 +2461,7 @@ fn validate_release_hub(evidence: &ReleaseEvidenceSignaturesV1) -> Result<(), St
 fn validate_release_context(
     policy_bytes: &[u8],
     evidence_bytes: &[u8],
-    expected_environment: &str,
+    expected_environment: ReleaseEnvironment,
 ) -> Result<
     (
         ReleaseTrustPolicyV1,
@@ -1730,7 +2502,7 @@ fn validate_release_context(
     }
     validate_release_hub(&evidence)?;
     validate_release_evidence_envelope(&evidence, &policy, expected_environment)?;
-    if expected_environment == "production" && evidence.validator.build_profile != "release" {
+    if expected_environment.is_production() && evidence.validator.build_profile != "release" {
         return Err("production evidence requires a release-profile validator build".to_owned());
     }
     let unsigned = value_without_field(evidence_value, "provenance", "release evidence")?;
@@ -1767,12 +2539,16 @@ fn validate_release_context(
     let destination_attestors_validated = u8::try_from(policy.destination_attestors.len())
         .map_err(|_| "destination attestor inventory exceeds the receipt bound".to_owned())?;
     let distinct_trust_identities = u8::try_from(
-        policy.roles.len() + policy.destination_attestors.len() + policy.circuit_auditors.len(),
+        policy.roles.len()
+            + policy.destination_attestors.len()
+            + policy.circuit_auditors.len()
+            + policy.offline_policy_root_signers.len()
+            + policy.freshness_authorities.len(),
     )
     .map_err(|_| "trust identity inventory exceeds the receipt bound".to_owned())?;
     let receipt = ReleaseSignatureValidationV1 {
         schema: RELEASE_SIGNATURE_OUTPUT_SCHEMA.to_owned(),
-        environment: expected_environment.to_owned(),
+        environment: expected_environment.name().to_owned(),
         policy_id: policy.policy_id.clone(),
         release_id: evidence.release_id.clone(),
         policy_sha256_hex: lowercase_hex(&sha256(policy_bytes)),
@@ -1781,15 +2557,29 @@ fn validate_release_context(
         circuit_audit_signatures_verified,
         destination_attestors_validated,
         distinct_trust_identities,
+        offline_policy_root_signatures_verified: u8::try_from(
+            policy.offline_policy_root_signatures.len(),
+        )
+        .map_err(|_| "offline policy-root signature inventory exceeds u8".to_owned())?,
+        freshness_authorities_validated: u8::try_from(policy.freshness_authorities.len())
+            .map_err(|_| "freshness authority inventory exceeds u8".to_owned())?,
+        policy_root_sha256_hex: expected_environment
+            .is_production()
+            .then(|| policy.policy_root_sha256_hex.clone()),
+        policy_issued_at_unix_ms: expected_environment
+            .is_production()
+            .then_some(policy.issued_at_unix_ms),
+        policy_expires_at_unix_ms: expected_environment
+            .is_production()
+            .then_some(policy.expires_at_unix_ms),
     };
     Ok((policy, evidence, receipt))
 }
 fn validate_release_signatures(
     policy_bytes: &[u8],
     evidence_bytes: &[u8],
-    expected_environment: &str,
 ) -> Result<ReleaseSignatureValidationV1, String> {
-    validate_release_context(policy_bytes, evidence_bytes, expected_environment)
+    validate_release_context(policy_bytes, evidence_bytes, ReleaseEnvironment::Production)
         .map(|(_, _, receipt)| receipt)
 }
 fn validate_semantic_profile_binding(
@@ -2124,15 +2914,9 @@ fn validate_semantic_proof_in_release_context(
     policy_bytes: &[u8],
     evidence_bytes: &[u8],
     expected_profile: &str,
-    expected_environment: &str,
 ) -> Result<SemanticProofValidationV1, String> {
-    if expected_environment != "production" {
-        return Err(
-            "semantic proof validation is available only for production evidence".to_owned(),
-        );
-    }
     let (policy, evidence, _) =
-        validate_release_context(policy_bytes, evidence_bytes, expected_environment)?;
+        validate_release_context(policy_bytes, evidence_bytes, ReleaseEnvironment::Production)?;
     let profile_index = RELEASE_PROFILES
         .iter()
         .position(|profile| *profile == expected_profile)
@@ -2144,23 +2928,21 @@ fn validate_semantic_proof_in_release_context(
     )?;
     let proof_curve = policy.proof_systems[profile_index].proof_curve.clone();
     let proof_digest = lowercase_hex(&sha256(proof_bytes));
-    let proof_path = semantic_artifact_path("honest-proof", &proof_digest, "honest-proof.norito");
+    let proof_path = semantic_artifact_path("message-kat", &proof_digest, "message-kat.norito");
     let metadata = evidence
         .artifacts
         .iter()
         .find(|artifact| artifact.path == proof_path)
-        .ok_or_else(|| {
-            "honest proof bytes are not present in signed release evidence".to_owned()
-        })?;
-    if metadata.kind != "honest-proof"
+        .ok_or_else(|| "message KAT bytes are not present in signed release evidence".to_owned())?;
+    if metadata.kind != "message-kat"
         || metadata.sha256_hex != proof_digest
         || metadata.size_bytes != proof_bytes.len() as u64
     {
-        return Err("honest proof bytes do not match signed artifact metadata".to_owned());
+        return Err("message KAT bytes do not match signed artifact metadata".to_owned());
     }
     Ok(SemanticProofValidationV1 {
         schema: SEMANTIC_PROOF_OUTPUT_SCHEMA.to_owned(),
-        environment: expected_environment.to_owned(),
+        environment: ReleaseEnvironment::Production.name().to_owned(),
         policy_id: policy.policy_id,
         release_id: evidence.release_id,
         policy_sha256_hex: lowercase_hex(&sha256(policy_bytes)),
@@ -2188,6 +2970,59 @@ fn value_without_field(
 }
 fn decode_runtime_code(value: &str, label: &str) -> Result<Vec<u8>, String> {
     decode_lowercase_hex_bounded(value, label, MAX_RUNTIME_CODE_BYTES)
+}
+fn parse_canonical_u128_decimal(value: &str, label: &str) -> Result<u128, String> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.as_bytes().iter().all(u8::is_ascii_digit)
+    {
+        return Err(format!(
+            "{label} must be a canonical unsigned decimal integer"
+        ));
+    }
+    value
+        .parse::<u128>()
+        .map_err(|_| format!("{label} exceeds the u128 domain"))
+}
+fn replay_domain_hash(
+    source_network: SccpNetworkV1,
+    target_network: SccpNetworkV1,
+    boundary: SccpReplayBoundaryV1,
+    route_revision: u32,
+    route_configuration_hash: [u8; 32],
+    actor: SccpReplayActorV1,
+) -> Result<[u8; 32], String> {
+    sccp_replay_domain_hash_v1(&SccpReplayDomainV1 {
+        source_network,
+        target_network,
+        boundary,
+        route_revision,
+        route_configuration_hash,
+        actor,
+    })
+    .map_err(|error| format!("destination replay domain is invalid: {error}"))
+}
+fn validate_empty_replay_readback(
+    readback: DestinationReplayForestReadbackV1,
+    expected_domain_hash: [u8; 32],
+    label: &str,
+) -> Result<(), String> {
+    // The destination getters return forest-wide leaf/update counters together
+    // with one selected shard. Zero global counters plus the canonical shard-0
+    // empty root is the bounded deployment-zero projection for the pinned
+    // runtime/StateInit.
+    let empty_root = sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1];
+    if readback.domain_hash != expected_domain_hash
+        || readback.shard != 0
+        || readback.shard_root != empty_root
+        || readback.leaf_count != 0
+        || readback.update_sequence != 0
+    {
+        return Err(format!(
+            "authenticated {label} replay forest is not canonical deployment-zero state"
+        ));
+    }
+    Ok(())
 }
 fn decode_lowercase_hex_bounded(
     value: &str,
@@ -2241,16 +3076,29 @@ struct ValidatedDestinationStateV1 {
     token_runtime_hash: [u8; 32],
     verifier_runtime_hash: [u8; 32],
     route_runtime_hash: [u8; 32],
+    replay_verifier_runtime_hash: Option<[u8; 32]>,
+    mint_breaker_runtime_hash: Option<[u8; 32]>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct EvmDestinationReadback<'a> {
     deployment: SccpEvmDestinationDeploymentV1,
     token_bridge_address: [u8; 20],
     route_token_address: [u8; 20],
     route_verifier_address: [u8; 20],
+    route_replay_verifier_address: [u8; 20],
+    route_mint_breaker_address: [u8; 20],
+    mint_breaker_route_address: [u8; 20],
     token_runtime_code_hex: &'a str,
     verifier_runtime_code_hex: &'a str,
     route_runtime_code_hex: &'a str,
+    replay_verifier_runtime_code_hex: &'a str,
+    mint_breaker_runtime_code_hex: &'a str,
+    route_max_wrapped_supply: u128,
+    token_total_supply: &'a str,
+    mint_breaker_vote_count: u8,
+    mint_breaker_minting_disabled: bool,
+    source_replay_state: DestinationReplayForestReadbackV1,
+    destination_replay_state: DestinationReplayForestReadbackV1,
     verifier_key_hash: [u8; 32],
     semantic_proof_profile_hash: [u8; 32],
     sora_finality_anchor_hash: [u8; 32],
@@ -2259,7 +3107,6 @@ struct EvmDestinationReadback<'a> {
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
-    max_wrapped_supply: u128,
     observed_at_unix_ms: u64,
     finality_height: u64,
     finality_block_hash: [u8; 32],
@@ -2303,9 +3150,20 @@ fn validate_evm_destination_state(
             token_bridge_address: state.token_bridge_address,
             route_token_address: state.route_token_address,
             route_verifier_address: state.route_verifier_address,
+            route_replay_verifier_address: state.route_replay_verifier_address,
+            route_mint_breaker_address: state.route_mint_breaker_address,
+            mint_breaker_route_address: state.mint_breaker_route_address,
             token_runtime_code_hex: &state.token_runtime_code_hex,
             verifier_runtime_code_hex: &state.verifier_runtime_code_hex,
             route_runtime_code_hex: &state.route_runtime_code_hex,
+            replay_verifier_runtime_code_hex: &state.replay_verifier_runtime_code_hex,
+            mint_breaker_runtime_code_hex: &state.mint_breaker_runtime_code_hex,
+            route_max_wrapped_supply: state.route_max_wrapped_supply,
+            token_total_supply: &state.token_total_supply,
+            mint_breaker_vote_count: state.mint_breaker_vote_count,
+            mint_breaker_minting_disabled: state.mint_breaker_minting_disabled,
+            source_replay_state: state.source_replay_state,
+            destination_replay_state: state.destination_replay_state,
             verifier_key_hash: state.verifier_key_hash,
             semantic_proof_profile_hash: state.semantic_proof_profile_hash,
             sora_finality_anchor_hash: state.sora_finality_anchor_hash,
@@ -2314,7 +3172,6 @@ fn validate_evm_destination_state(
             destination_binding_hash: state.destination_binding_hash,
             route_configuration_hash: state.route_configuration_hash,
             governed_route_configuration_hash: state.governed_route_configuration_hash,
-            max_wrapped_supply: state.max_wrapped_supply,
             observed_at_unix_ms: state.observed_at_unix_ms,
             finality_height: state.finalized_block_height,
             finality_block_hash: state.finalized_block_hash,
@@ -2353,6 +3210,42 @@ fn validate_destination_readback(
         readback.route_runtime_code_hex,
         "route runtime code",
     )?);
+    let replay_verifier_code_hash = keccak256(&decode_runtime_code(
+        readback.replay_verifier_runtime_code_hex,
+        "replay-verifier runtime code",
+    )?);
+    let mint_breaker_code_hash = keccak256(&decode_runtime_code(
+        readback.mint_breaker_runtime_code_hex,
+        "mint-breaker runtime code",
+    )?);
+    let token_total_supply =
+        parse_canonical_u128_decimal(readback.token_total_supply, "token total supply")?;
+    let source_replay_domain_hash = replay_domain_hash(
+        route.lane_id.source,
+        route.lane_id.target,
+        SccpReplayBoundaryV1::EvmSourceBurn,
+        route.revision,
+        expected_route_configuration,
+        SccpReplayActorV1::Evm(readback.deployment.route_address),
+    )?;
+    let destination_replay_domain_hash = replay_domain_hash(
+        route.lane_id.target,
+        route.lane_id.source,
+        SccpReplayBoundaryV1::EvmDestinationMint,
+        route.revision,
+        expected_route_configuration,
+        SccpReplayActorV1::Evm(readback.deployment.route_address),
+    )?;
+    validate_empty_replay_readback(
+        readback.source_replay_state,
+        source_replay_domain_hash,
+        "EVM source",
+    )?;
+    validate_empty_replay_readback(
+        readback.destination_replay_state,
+        destination_replay_domain_hash,
+        "EVM destination",
+    )?;
     let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
         &readback.verifying_key,
     )
@@ -2372,9 +3265,18 @@ fn validate_destination_readback(
     if readback.token_bridge_address != readback.deployment.route_address
         || readback.route_token_address != readback.deployment.token_address
         || readback.route_verifier_address != readback.deployment.verifier_address
+        || readback.route_replay_verifier_address != readback.deployment.replay_verifier_address
+        || readback.route_mint_breaker_address != readback.deployment.mint_breaker_address
+        || readback.mint_breaker_route_address != readback.deployment.route_address
         || token_code_hash != readback.deployment.token_code_hash
         || verifier_code_hash != readback.deployment.verifier_code_hash
         || route_code_hash != readback.deployment.route_code_hash
+        || replay_verifier_code_hash != readback.deployment.replay_verifier_code_hash
+        || mint_breaker_code_hash != readback.deployment.mint_breaker_code_hash
+        || readback.route_max_wrapped_supply != readback.deployment.max_wrapped_supply
+        || token_total_supply != 0
+        || readback.mint_breaker_vote_count != 0
+        || readback.mint_breaker_minting_disabled
         || readback.verifier_key_hash != readback.deployment.verifier_key_hash
         || readback.semantic_proof_profile_hash != expected_semantic_profile_hash
         || readback.sora_finality_anchor_hash != expected_finality_anchor_hash
@@ -2385,7 +3287,6 @@ fn validate_destination_readback(
         || readback.destination_binding_hash != expected_binding
         || readback.route_configuration_hash != expected_route_configuration
         || readback.governed_route_configuration_hash != expected_governed_configuration
-        || readback.max_wrapped_supply != readback.deployment.max_wrapped_supply
     {
         return Err("authenticated EVM destination state differs from governed route".to_owned());
     }
@@ -2405,6 +3306,8 @@ fn validate_destination_readback(
         token_runtime_hash: token_code_hash,
         verifier_runtime_hash: verifier_code_hash,
         route_runtime_hash: route_code_hash,
+        replay_verifier_runtime_hash: Some(replay_verifier_code_hash),
+        mint_breaker_runtime_hash: Some(mint_breaker_code_hash),
     })
 }
 fn validate_tron_destination_state(
@@ -2470,6 +3373,42 @@ fn validate_tron_destination_readback(
         &state.route_runtime_code_hex,
         "TRON route runtime code",
     )?);
+    let replay_verifier_code_hash = keccak256(&decode_runtime_code(
+        &state.replay_verifier_runtime_code_hex,
+        "TRON replay-verifier runtime code",
+    )?);
+    let mint_breaker_code_hash = keccak256(&decode_runtime_code(
+        &state.mint_breaker_runtime_code_hex,
+        "TRON mint-breaker runtime code",
+    )?);
+    let token_total_supply =
+        parse_canonical_u128_decimal(&state.token_total_supply, "TRON token total supply")?;
+    let source_replay_domain_hash = replay_domain_hash(
+        route.lane_id.source,
+        route.lane_id.target,
+        SccpReplayBoundaryV1::TronSourceBurn,
+        route.revision,
+        expected_route_configuration,
+        SccpReplayActorV1::Tron(deployment.route_address),
+    )?;
+    let destination_replay_domain_hash = replay_domain_hash(
+        route.lane_id.target,
+        route.lane_id.source,
+        SccpReplayBoundaryV1::TronDestinationMint,
+        route.revision,
+        expected_route_configuration,
+        SccpReplayActorV1::Tron(deployment.route_address),
+    )?;
+    validate_empty_replay_readback(
+        state.source_replay_state,
+        source_replay_domain_hash,
+        "TRON source",
+    )?;
+    validate_empty_replay_readback(
+        state.destination_replay_state,
+        destination_replay_domain_hash,
+        "TRON destination",
+    )?;
     let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
         &state.verifying_key,
     )
@@ -2488,9 +3427,18 @@ fn validate_tron_destination_readback(
     if state.token_bridge_address != deployment.route_address
         || state.route_token_address != deployment.token_address
         || state.route_verifier_address != deployment.verifier_address
+        || state.route_replay_verifier_address != deployment.replay_verifier_address
+        || state.route_mint_breaker_address != deployment.mint_breaker_address
+        || state.mint_breaker_route_address != deployment.route_address
         || token_code_hash != deployment.token_code_hash
         || verifier_code_hash != deployment.verifier_code_hash
         || route_code_hash != deployment.route_code_hash
+        || replay_verifier_code_hash != deployment.replay_verifier_code_hash
+        || mint_breaker_code_hash != deployment.mint_breaker_code_hash
+        || state.route_max_wrapped_supply != deployment.max_wrapped_supply
+        || token_total_supply != 0
+        || state.mint_breaker_vote_count != 0
+        || state.mint_breaker_minting_disabled
         || state.verifier_key_hash != deployment.verifier_key_hash
         || state.semantic_proof_profile_hash != expected_semantic_profile_hash
         || state.sora_finality_anchor_hash != expected_finality_anchor_hash
@@ -2501,7 +3449,6 @@ fn validate_tron_destination_readback(
         || state.destination_binding_hash != expected_binding
         || state.route_configuration_hash != expected_route_configuration
         || state.governed_route_configuration_hash != expected_governed_configuration
-        || state.max_wrapped_supply != deployment.max_wrapped_supply
     {
         return Err("authenticated TRON destination state differs from governed route".to_owned());
     }
@@ -2521,6 +3468,8 @@ fn validate_tron_destination_readback(
         token_runtime_hash: token_code_hash,
         verifier_runtime_hash: verifier_code_hash,
         route_runtime_hash: route_code_hash,
+        replay_verifier_runtime_hash: Some(replay_verifier_code_hash),
+        mint_breaker_runtime_hash: Some(mint_breaker_code_hash),
     })
 }
 fn validate_ton_destination_state(
@@ -2639,24 +3588,92 @@ fn validate_ton_destination_readback(
             "authenticated TON addresses do not match their exact StateInit cells".to_owned(),
         );
     }
+    let jetton_master_total_supply = parse_canonical_u128_decimal(
+        &state.jetton_master_total_supply,
+        "TON Jetton master total supply",
+    )?;
     if state.jetton_master_storage_version != SCCP_V1_TON_STORAGE_VERSION
-        || state.jetton_master_total_supply != "0"
-        || state.jetton_master_mint_replay_entries != 0
-        || state.jetton_master_burn_replay_entries != 0
         || state.route_storage_version != SCCP_V1_TON_STORAGE_VERSION
-        || state.route_refund_sequence != 0
-        || state.route_nonce_entries != 0
-        || state.route_inbound_replay_entries != 0
-        || state.route_outbound_replay_entries != 0
-        || state.route_pending_mint_entries != 0
-        || state.route_pending_burn_entries != 0
-        || state.route_pending_refund_entries != 0
+        || jetton_master_total_supply != 0
+        || state.route_minting_disabled
+        || state.jetton_master_minting_disabled
+        || !state.jetton_master_mintable
+        || state.route_pending_mint_count != 0
+        || state.route_pending_burn_count != 0
+        || state.jetton_master_pending_mint_count != 0
     {
         return Err(
             "authenticated TON destination readback is not canonical deployment-zero state"
                 .to_owned(),
         );
     }
+    if deployment.max_wrapped_supply == 0
+        || deployment.max_wrapped_supply > SCCP_V1_TON_MAX_COINS
+        || state.route_max_wrapped_supply != deployment.max_wrapped_supply
+        || state.jetton_master_max_wrapped_supply != deployment.max_wrapped_supply
+    {
+        return Err("authenticated TON wrapped-supply ceiling is not canonical".to_owned());
+    }
+    let route_actor = SccpReplayActorV1::Ton(SccpTonAccountV1 {
+        workchain: deployment.route_address.workchain,
+        account: deployment.route_address.account,
+    });
+    let jetton_master_actor = SccpReplayActorV1::Ton(SccpTonAccountV1 {
+        workchain: deployment.jetton_master_address.workchain,
+        account: deployment.jetton_master_address.account,
+    });
+    let route_inbound_mint_domain = replay_domain_hash(
+        route.lane_id.target,
+        route.lane_id.source,
+        SccpReplayBoundaryV1::TonBridgeInboundMint,
+        route.revision,
+        expected_route_configuration,
+        route_actor,
+    )?;
+    let route_outbound_burn_domain = replay_domain_hash(
+        route.lane_id.source,
+        route.lane_id.target,
+        SccpReplayBoundaryV1::TonBridgeOutboundBurn,
+        route.revision,
+        expected_route_configuration,
+        route_actor,
+    )?;
+    let jetton_master_mint_domain = replay_domain_hash(
+        route.lane_id.target,
+        route.lane_id.source,
+        SccpReplayBoundaryV1::TonMasterMint,
+        route.revision,
+        expected_route_configuration,
+        jetton_master_actor,
+    )?;
+    let jetton_master_burn_domain = replay_domain_hash(
+        route.lane_id.source,
+        route.lane_id.target,
+        SccpReplayBoundaryV1::TonMasterBurn,
+        route.revision,
+        expected_route_configuration,
+        jetton_master_actor,
+    )?;
+    validate_empty_replay_readback(
+        state.route_inbound_mint_replay_state,
+        route_inbound_mint_domain,
+        "TON route inbound-mint",
+    )?;
+    validate_empty_replay_readback(
+        state.route_outbound_burn_replay_state,
+        route_outbound_burn_domain,
+        "TON route outbound-burn",
+    )?;
+    validate_empty_replay_readback(
+        state.jetton_master_mint_replay_state,
+        jetton_master_mint_domain,
+        "TON Jetton-master mint",
+    )?;
+    validate_empty_replay_readback(
+        state.jetton_master_burn_replay_state,
+        jetton_master_burn_domain,
+        "TON Jetton-master burn",
+    )?;
     let verifying_key_bytes = canonical_sccp_groth16_bls12381_verifying_key_bytes_v1(
         &state.verifying_key,
     )
@@ -2679,12 +3696,20 @@ fn validate_ton_destination_readback(
     };
     if state.jetton_master_address != deployment.jetton_master_address
         || state.route_address != deployment.route_address
+        || state.route_reported_jetton_master_address != deployment.jetton_master_address
+        || state.jetton_master_reported_route_address != deployment.route_address
         || jetton_master_code_hash != deployment.jetton_master_code_hash
         || jetton_wallet_code_hash != deployment.jetton_wallet_code_hash
         || route_code_hash != deployment.route_code_hash
         || embedded_verifier_code_hash != deployment.embedded_verifier_code_hash
         || jetton_master_initial_data_hash != deployment.jetton_master_initial_data_hash
         || route_initial_data_hash != deployment.route_initial_data_hash
+        || state.route_reported_jetton_master_code_hash != jetton_master_code_hash
+        || state.route_reported_jetton_master_initial_data_hash != jetton_master_initial_data_hash
+        || state.jetton_master_reported_code_hash != jetton_master_code_hash
+        || state.jetton_master_reported_initial_data_hash != jetton_master_initial_data_hash
+        || state.route_mint_breaker_guardian_keys != deployment.mint_breaker_guardian_keys
+        || state.jetton_master_mint_breaker_guardian_keys != deployment.mint_breaker_guardian_keys
         || state.verifier_circuit_hash != deployment.verifier_circuit_hash
         || state.verifier_circuit_hash != circuit.circuit_commitment
         || circuit.public_signal_schema_hash != sccp_groth16_bls12381_public_signal_schema_hash_v1()
@@ -2699,9 +3724,8 @@ fn validate_ton_destination_readback(
         || state.route_revision != route.revision
         || state.destination_binding_hash != expected_binding
         || state.route_configuration_hash != expected_route_configuration
+        || state.jetton_master_route_configuration_hash != expected_route_configuration
         || state.governed_route_configuration_hash != expected_governed_configuration
-        || state.jetton_master_max_wrapped_supply != deployment.max_wrapped_supply
-        || state.route_max_wrapped_supply != deployment.max_wrapped_supply
     {
         return Err("authenticated TON destination state differs from governed route".to_owned());
     }
@@ -2721,6 +3745,8 @@ fn validate_ton_destination_readback(
         token_runtime_hash: jetton_master_code_hash,
         verifier_runtime_hash: embedded_verifier_code_hash,
         route_runtime_hash: route_code_hash,
+        replay_verifier_runtime_hash: None,
+        mint_breaker_runtime_hash: None,
     })
 }
 fn authenticate_destination_state(
@@ -2772,6 +3798,46 @@ fn validate_approved_proof_system(
     validated: &ValidatedDestinationStateV1,
     approved: &ApprovedProofSystemV1,
 ) -> Result<(), String> {
+    let destination_build_commitments = [
+        approved.token_runtime_hash,
+        approved.verifier_runtime_hash,
+        approved.route_runtime_hash,
+        approved.replay_verifier_runtime_hash,
+        approved.mint_breaker_runtime_hash,
+        approved.ton_builder_policy_sha256,
+        approved.ton_source_closure_sha256,
+        approved.ton_output_lock_sha256,
+        approved.validator_builder_policy_sha256,
+        approved.validator_source_archive_sha256,
+        approved.validator_dependency_inventory_sha256,
+        approved.validator_cargo_metadata_closure_sha256,
+        approved.validator_sbom_sha256,
+        approved.validator_toolchain_inventory_sha256,
+        approved.validator_sysroot_inventory_sha256,
+        approved.validator_linker_sha256,
+        approved.validator_build_recipe_sha256,
+        approved.validator_build_environment_sha256,
+        approved.validator_container_manifest_sha256,
+        approved.validator_builder_report_sha256,
+        approved.validator_executable_sha256,
+        approved.validator_complete_build_closure_sha256,
+        approved.validator_output_lock_sha256,
+    ];
+    let mut distinct_destination_build_commitments = BTreeSet::new();
+    let destination_build_commitments_are_valid = destination_build_commitments
+        .iter()
+        .all(|digest| *digest != [0; 32] && distinct_destination_build_commitments.insert(*digest));
+    let auxiliary_runtime_hashes_match = match validated.proof_curve {
+        "bn254" => {
+            validated.replay_verifier_runtime_hash == Some(approved.replay_verifier_runtime_hash)
+                && validated.mint_breaker_runtime_hash == Some(approved.mint_breaker_runtime_hash)
+        }
+        "bls12-381" => {
+            validated.replay_verifier_runtime_hash.is_none()
+                && validated.mint_breaker_runtime_hash.is_none()
+        }
+        _ => false,
+    };
     if approved.circuit_id.is_empty()
         || approved.circuit_id.len() > 128
         || !approved.circuit_id.as_bytes().iter().all(|byte| {
@@ -2795,6 +3861,8 @@ fn validate_approved_proof_system(
         || validated.token_runtime_hash != approved.token_runtime_hash
         || validated.verifier_runtime_hash != approved.verifier_runtime_hash
         || validated.route_runtime_hash != approved.route_runtime_hash
+        || !auxiliary_runtime_hashes_match
+        || !destination_build_commitments_are_valid
     {
         return Err("destination verifier is not the policy-approved semantic circuit".to_owned());
     }
@@ -2803,6 +3871,13 @@ fn validate_approved_proof_system(
 fn approved_proof_system_from_policy(
     proof: &ProofSystemPolicyV1,
 ) -> Result<ApprovedProofSystemV1, String> {
+    let destination_build_hashes = parsed_destination_build_hash_roles(&proof.destination_build)?;
+    let destination_build_hash = |role: &'static str| {
+        destination_build_hashes
+            .get(role)
+            .copied()
+            .ok_or_else(|| format!("destination build policy is missing {role}"))
+    };
     let destination_build_value = norito::json::to_value(&proof.destination_build)
         .map_err(|_| "destination build policy cannot be represented as JSON".to_owned())?;
     let destination_build_json = norito::json::to_json(&destination_build_value)
@@ -2842,18 +3917,49 @@ fn approved_proof_system_from_policy(
             "toolchain lock digest",
         )?,
         destination_build_policy_sha256: sha256(destination_build_json.as_bytes()),
-        token_runtime_hash: require_hash(
-            &proof.destination_build.token_runtime_hash,
-            "token runtime hash",
+        token_runtime_hash: destination_build_hash("token_runtime_hash_hex")?,
+        verifier_runtime_hash: destination_build_hash("verifier_runtime_hash_hex")?,
+        route_runtime_hash: destination_build_hash("route_runtime_hash_hex")?,
+        replay_verifier_runtime_hash: destination_build_hash("replay_verifier_runtime_hash_hex")?,
+        mint_breaker_runtime_hash: destination_build_hash("mint_breaker_runtime_hash_hex")?,
+        ton_builder_policy_sha256: destination_build_hash("ton_builder_policy_sha256_hex")?,
+        ton_source_closure_sha256: destination_build_hash("ton_source_closure_sha256_hex")?,
+        ton_output_lock_sha256: destination_build_hash("ton_output_lock_sha256_hex")?,
+        validator_builder_policy_sha256: destination_build_hash(
+            "validator_builder_policy_sha256_hex",
         )?,
-        verifier_runtime_hash: require_hash(
-            &proof.destination_build.verifier_runtime_hash,
-            "verifier runtime hash",
+        validator_source_archive_sha256: destination_build_hash(
+            "validator_source_archive_sha256_hex",
         )?,
-        route_runtime_hash: require_hash(
-            &proof.destination_build.route_runtime_hash,
-            "route runtime hash",
+        validator_dependency_inventory_sha256: destination_build_hash(
+            "validator_dependency_inventory_sha256_hex",
         )?,
+        validator_cargo_metadata_closure_sha256: destination_build_hash(
+            "validator_cargo_metadata_closure_sha256_hex",
+        )?,
+        validator_sbom_sha256: destination_build_hash("validator_sbom_sha256_hex")?,
+        validator_toolchain_inventory_sha256: destination_build_hash(
+            "validator_toolchain_inventory_sha256_hex",
+        )?,
+        validator_sysroot_inventory_sha256: destination_build_hash(
+            "validator_sysroot_inventory_sha256_hex",
+        )?,
+        validator_linker_sha256: destination_build_hash("validator_linker_sha256_hex")?,
+        validator_build_recipe_sha256: destination_build_hash("validator_build_recipe_sha256_hex")?,
+        validator_build_environment_sha256: destination_build_hash(
+            "validator_build_environment_sha256_hex",
+        )?,
+        validator_container_manifest_sha256: destination_build_hash(
+            "validator_container_manifest_sha256_hex",
+        )?,
+        validator_builder_report_sha256: destination_build_hash(
+            "validator_builder_report_sha256_hex",
+        )?,
+        validator_executable_sha256: destination_build_hash("validator_executable_sha256_hex")?,
+        validator_complete_build_closure_sha256: destination_build_hash(
+            "validator_complete_build_closure_sha256_hex",
+        )?,
+        validator_output_lock_sha256: destination_build_hash("validator_output_lock_sha256_hex")?,
     })
 }
 fn unavailable_reason_is_canonical(reason: &str) -> bool {
@@ -2960,7 +4066,7 @@ fn validated_fields(
         lowercase_hex(&validated.lane_hash),
         lowercase_hex(&validated.source_identity_hash),
         lowercase_hex(&validated.trust_anchor.anchor_hash),
-        lowercase_hex(&validated.message_key.message_id),
+        lowercase_hex(&validated.message_id),
         lowercase_hex(&validated.payload_hash),
         lowercase_hex(&validated.source_event_digest),
         validated.source_finality.height.to_string(),
@@ -3177,10 +4283,9 @@ fn validate_lane_in_release_context(
     lane_bytes: &[u8],
     policy_bytes: &[u8],
     evidence_bytes: &[u8],
-    expected_environment: &str,
 ) -> Result<ReleaseLaneValidationV1, String> {
     let (policy, evidence, release_receipt) =
-        validate_release_context(policy_bytes, evidence_bytes, expected_environment)?;
+        validate_release_context(policy_bytes, evidence_bytes, ReleaseEnvironment::Production)?;
     let lane_json = std::str::from_utf8(lane_bytes)
         .map_err(|_| "lane evidence must be canonical UTF-8".to_owned())?;
     let lane_value = norito::json::from_str::<ReleaseLaneEvidenceV1>(lane_json)
@@ -3221,6 +4326,7 @@ fn validate_lane_in_release_context(
         if observed_at_unix_ms > evidence.created_at_unix_ms
             || evidence.created_at_unix_ms - observed_at_unix_ms
                 > MAX_DESTINATION_ATTESTATION_AGE_MS
+            || observed_at_unix_ms != signed_lane.destination_readback_at_unix_ms
         {
             return Err("destination state attestation is future-dated or stale".to_owned());
         }
@@ -3268,7 +4374,7 @@ fn print_validator_identity() -> Result<(), String> {
     println!("{json}");
     Ok(())
 }
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn emit_ethereum_fixture() -> Result<(), String> {
     let (proof, governed_source_identity, governed_trust_anchor) =
         iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
@@ -3293,7 +4399,7 @@ fn emit_ethereum_fixture() -> Result<(), String> {
     println!("{json}");
     Ok(())
 }
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn emit_unavailable_fixture(profile: &str) -> Result<(), String> {
     let network = SccpNetworkV1::from_profile_key(profile)
         .filter(|network| release_profile_supported(*network))
@@ -3324,16 +4430,12 @@ fn run_validate_release(args: &mut impl Iterator<Item = std::ffi::OsString>) -> 
         .next()
         .map(PathBuf::from)
         .ok_or_else(|| "validate-release requires one evidence path".to_owned())?;
-    let environment = args
-        .next()
-        .and_then(|value| value.into_string().ok())
-        .ok_or_else(|| "validate-release requires one environment".to_owned())?;
     if args.next().is_some() {
-        return Err("validate-release accepts exactly three arguments".to_owned());
+        return Err("validate-release accepts exactly two arguments".to_owned());
     }
     let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
     let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
-    let receipt = validate_release_signatures(&policy_bytes, &evidence_bytes, &environment)?;
+    let receipt = validate_release_signatures(&policy_bytes, &evidence_bytes)?;
     print_release_signature_receipt(&receipt)
 }
 fn run_validate_semantic_proof(
@@ -3355,12 +4457,8 @@ fn run_validate_semantic_proof(
         .next()
         .and_then(|value| value.into_string().ok())
         .ok_or_else(|| "validate-semantic-proof requires one profile".to_owned())?;
-    let environment = args
-        .next()
-        .and_then(|value| value.into_string().ok())
-        .ok_or_else(|| "validate-semantic-proof requires one environment".to_owned())?;
     if args.next().is_some() {
-        return Err("validate-semantic-proof accepts exactly five arguments".to_owned());
+        return Err("validate-semantic-proof accepts exactly four arguments".to_owned());
     }
     let proof_bytes = read_direct_input(
         &proof_path,
@@ -3374,7 +4472,6 @@ fn run_validate_semantic_proof(
         &policy_bytes,
         &evidence_bytes,
         &profile,
-        &environment,
     )?;
     print_semantic_proof_receipt(&receipt)
 }
@@ -3391,22 +4488,13 @@ fn run_validate_lane(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Res
         .next()
         .map(PathBuf::from)
         .ok_or_else(|| "validate requires one release-evidence path".to_owned())?;
-    let environment = args
-        .next()
-        .and_then(|value| value.into_string().ok())
-        .ok_or_else(|| "validate requires one environment".to_owned())?;
     if args.next().is_some() {
-        return Err("validate accepts exactly four arguments".to_owned());
+        return Err("validate accepts exactly three arguments".to_owned());
     }
     let lane_bytes = read_direct_input(&lane_path, MAX_LANE_INPUT_BYTES)?;
     let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
     let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
-    let receipt = validate_lane_in_release_context(
-        &lane_bytes,
-        &policy_bytes,
-        &evidence_bytes,
-        &environment,
-    )?;
+    let receipt = validate_lane_in_release_context(&lane_bytes, &policy_bytes, &evidence_bytes)?;
     print_receipt(&receipt)
 }
 fn run() -> Result<(), String> {
@@ -3415,7 +4503,7 @@ fn run() -> Result<(), String> {
         .next()
         .and_then(|value| value.into_string().ok())
         .ok_or_else(|| {
-            "usage: sccp_release_evidence identity | validate-release <trust-policy-json> <evidence-json> <production|test-fixture> | validate-semantic-proof <proof-norito> <trust-policy-json> <evidence-json> <profile> production | validate <lane-json> <trust-policy-json> <evidence-json> <production|test-fixture>".to_owned()
+            "usage: sccp_release_evidence identity | validate-release <trust-policy-json> <evidence-json> | validate-semantic-proof <proof-norito> <trust-policy-json> <evidence-json> <profile> | validate <lane-json> <trust-policy-json> <evidence-json>".to_owned()
         })?;
     match command.as_str() {
         "identity" => {
@@ -3427,14 +4515,14 @@ fn run() -> Result<(), String> {
         "validate-release" => run_validate_release(&mut args),
         "validate-semantic-proof" => run_validate_semantic_proof(&mut args),
         "validate" => run_validate_lane(&mut args),
-        #[cfg(feature = "test-fixtures")]
+        #[cfg(any(test, feature = "test-fixtures"))]
         "emit-ethereum-fixture" => {
             if args.next().is_some() {
                 return Err("emit-ethereum-fixture accepts no arguments".to_owned());
             }
             emit_ethereum_fixture()
         }
-        #[cfg(feature = "test-fixtures")]
+        #[cfg(any(test, feature = "test-fixtures"))]
         "emit-unavailable-fixture" => {
             let profile = args
                 .next()
@@ -3559,7 +4647,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             lowercase_hex(&identity),
-            "8ed0a7bfbff79b302fe1193ca51a992b65b7ab136862ecc871efcce391449414"
+            "7984232f2642167733e7d4ad369d994f9d2b5721fe0a04819ffe854072c13f31"
         );
     }
     #[test]
@@ -3627,7 +4715,7 @@ mod tests {
         }
     }
     #[test]
-    fn production_release_profiles_require_ton_mainnet_but_exclude_testnets() {
+    fn production_release_profiles_are_the_exact_four_external_mainnets() {
         for supported in [
             SccpNetworkV1::EthereumMainnet,
             SccpNetworkV1::BscMainnet,
@@ -3641,11 +4729,11 @@ mod tests {
             "solana-testnet",
             "ton-testnet",
             "ethereum-sepolia",
+            "bsc-testnet",
             "tron-nile",
+            "tron-shasta",
         ] {
-            if let Some(profile) = SccpNetworkV1::from_profile_key(unsupported) {
-                assert!(!release_profile_supported(profile));
-            }
+            assert_eq!(SccpNetworkV1::from_profile_key(unsupported), None);
         }
     }
     #[test]
@@ -3701,6 +4789,42 @@ mod tests {
         assert!(parse_canonical_sorted_json(b"{\"b\":1,\"a\":2}\n", "json").is_err());
     }
     #[test]
+    fn named_release_inputs_reject_unknown_and_missing_required_fields() {
+        let policy = retired_policy_with_current_destination_build_shape();
+        let policy_json = norito::json::to_json(&policy).unwrap();
+        let unknown_policy = policy_json.replacen('{', "{\"unknown_policy_field\":0,", 1);
+        assert!(norito::json::from_str::<ReleaseTrustPolicyV1>(&unknown_policy).is_err());
+
+        let mut policy_value = norito::json::to_value(&policy).unwrap();
+        policy_value
+            .get_mut("proof_systems")
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|proofs| proofs.first_mut())
+            .and_then(|proof| proof.get_mut("audit_attestations"))
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|audits| audits.first_mut())
+            .and_then(norito::json::Value::as_object_mut)
+            .and_then(|audit| audit.remove("unresolved_findings"))
+            .expect("fixture audit must contain required findings");
+        let missing_findings = norito::json::to_json(&policy_value).unwrap();
+        assert!(norito::json::from_str::<ReleaseTrustPolicyV1>(&missing_findings).is_err());
+
+        let evidence = release_evidence_envelope();
+        let mut evidence_value = norito::json::to_value(&evidence).unwrap();
+        evidence_value
+            .get_mut("artifacts")
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|artifacts| artifacts.first_mut())
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("fixture evidence must contain an artifact")
+            .insert(
+                "unknown_artifact_field".to_owned(),
+                norito::json::parse_value("0").unwrap(),
+            );
+        let unknown_artifact = norito::json::to_json(&evidence_value).unwrap();
+        assert!(norito::json::from_str::<ReleaseEvidenceSignaturesV1>(&unknown_artifact).is_err());
+    }
+    #[test]
     fn sumeragi_v2_finality_anchor_policy_is_exact_and_role_separated() {
         fn matches_exact_anchor_schema(json: &str) -> bool {
             let Ok(value) = norito::json::parse_value(json) else {
@@ -3717,6 +4841,9 @@ mod tests {
             protocol_version: SUMERAGI_V2_PROTOCOL_VERSION,
             chain_id_hash_hex: "cf1cfc0f57b0bfa4c21882a9870317a1f4812f86533897095e3944be34c5bba7"
                 .to_owned(),
+            epoch: 1,
+            epoch_end_height: 10,
+            roster_commitment_hex: lowercase_hex(&[0x78; 32]),
             checkpoint_height: 5,
             checkpoint_block_hash_hex: lowercase_hex(&[0x73; 32]),
             checkpoint_context_id_hex: lowercase_hex(&[0x74; 32]),
@@ -3725,9 +4852,9 @@ mod tests {
         let validated = validate_sora_finality_anchor_policy(&anchor).unwrap();
         assert_eq!(
             lowercase_hex(&validated.anchor_hash),
-            "31328ad8005a0f33e6050e8ae96f012b3285f7f14737486dce34f972686862f5"
+            "e9b9a7ff38cde8cb071d473cf0c6570270118df418ad790959474daedea7a365"
         );
-        for mutation in 0..=10 {
+        for mutation in 0..=14 {
             let mut candidate = anchor.clone();
             match mutation {
                 0 => candidate.protocol_version = SUMERAGI_V2_PROTOCOL_VERSION - 1,
@@ -3762,6 +4889,10 @@ mod tests {
                         candidate.chain_id_hash_hex.clone();
                 }
                 10 => candidate.checkpoint_height = 0,
+                11 => candidate.epoch = 0,
+                12 => candidate.epoch_end_height = candidate.checkpoint_height - 1,
+                13 => candidate.roster_commitment_hex = lowercase_hex(&[0; 32]),
+                14 => candidate.roster_commitment_hex = candidate.chain_id_hash_hex.clone(),
                 _ => unreachable!(),
             }
             assert!(
@@ -3778,6 +4909,8 @@ mod tests {
                 &protocol_version_field,
                 &format!("\"protocol_version\":\"{SUMERAGI_V2_PROTOCOL_VERSION}\""),
             ),
+            json.replace("\"epoch\":1", "\"epoch\":true"),
+            json.replace("\"epoch_end_height\":10", "\"epoch_end_height\":\"10\""),
             json.replace("\"checkpoint_height\":5", "\"checkpoint_height\":true"),
         ] {
             assert!(
@@ -3792,8 +4925,21 @@ mod tests {
         ] {
             let injected = json.replacen('{', &format!("{{{legacy_field}"), 1);
             assert!(
-                !matches_exact_anchor_schema(&injected),
+                norito::json::from_str::<SoraFinalityAnchorPolicyV1>(&injected).is_err(),
                 "accepted retired validator-set field: {legacy_field}"
+            );
+        }
+        for required_field in ["epoch", "epoch_end_height", "roster_commitment_hex"] {
+            let mut value = norito::json::to_value(&anchor).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .remove(required_field)
+                .expect("required anchor field must exist");
+            let missing = norito::json::to_json(&value).unwrap();
+            assert!(
+                norito::json::from_str::<SoraFinalityAnchorPolicyV1>(&missing).is_err(),
+                "accepted missing finality anchor field: {required_field}"
             );
         }
     }
@@ -3817,42 +4963,185 @@ mod tests {
             assert_eq!(format!("{canonical}\n"), fixture);
         }
     }
+    fn retired_policy_with_current_destination_build_shape() -> ReleaseTrustPolicyV1 {
+        let mut document = norito::json::parse_value(include_str!(
+            "../../../../fixtures/sccp/release_evidence_v1/test-trust-policy.json"
+        ))
+        .expect("release trust-policy fixture must be JSON");
+        let policy = document
+            .as_object_mut()
+            .expect("release trust-policy fixture must be an object");
+        policy.insert(
+            "issued_at_unix_ms".to_owned(),
+            norito::json::parse_value("0").expect("zero must be JSON"),
+        );
+        policy.insert(
+            "expires_at_unix_ms".to_owned(),
+            norito::json::parse_value("0").expect("zero must be JSON"),
+        );
+        policy.insert(
+            "policy_root_sha256_hex".to_owned(),
+            norito::json::Value::String(String::new()),
+        );
+        for field in [
+            "offline_policy_root_signers",
+            "offline_policy_root_signatures",
+            "freshness_authorities",
+        ] {
+            policy.insert(field.to_owned(), norito::json::Value::Array(Vec::new()));
+        }
+        let proofs = document
+            .get_mut("proof_systems")
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("release trust-policy fixture must contain proof policies");
+        let auxiliary_roles = [
+            "replay_verifier_artifact_sha256_hex",
+            "replay_verifier_interface_sha256_hex",
+            "replay_verifier_runtime_hash_hex",
+            "mint_breaker_artifact_sha256_hex",
+            "mint_breaker_interface_sha256_hex",
+            "mint_breaker_runtime_hash_hex",
+            "ton_builder_policy_sha256_hex",
+            "ton_source_closure_sha256_hex",
+            "ton_output_lock_sha256_hex",
+            "validator_builder_policy_sha256_hex",
+            "validator_source_archive_sha256_hex",
+            "validator_dependency_inventory_sha256_hex",
+            "validator_cargo_metadata_closure_sha256_hex",
+            "validator_sbom_sha256_hex",
+            "validator_toolchain_inventory_sha256_hex",
+            "validator_sysroot_inventory_sha256_hex",
+            "validator_linker_sha256_hex",
+            "validator_build_recipe_sha256_hex",
+            "validator_build_environment_sha256_hex",
+            "validator_container_manifest_sha256_hex",
+            "validator_builder_report_sha256_hex",
+            "validator_executable_sha256_hex",
+            "validator_complete_build_closure_sha256_hex",
+            "validator_output_lock_sha256_hex",
+        ];
+        for (proof_index, proof) in proofs.iter_mut().enumerate() {
+            let proof = proof
+                .as_object_mut()
+                .expect("release proof policy must be an object");
+            proof.insert(
+                "anchor_circuit_id".to_owned(),
+                norito::json::Value::String(String::new()),
+            );
+            let anchor = proof
+                .get_mut("sora_finality_anchor")
+                .and_then(norito::json::Value::as_object_mut)
+                .expect("release proof policy must contain a SORA finality anchor");
+            anchor.insert(
+                "epoch".to_owned(),
+                norito::json::parse_value("1").expect("one must be JSON"),
+            );
+            anchor.insert(
+                "epoch_end_height".to_owned(),
+                norito::json::parse_value("2000").expect("epoch end must be JSON"),
+            );
+            anchor.insert(
+                "roster_commitment_hex".to_owned(),
+                norito::json::Value::String(lowercase_hex(&[0x78; 32])),
+            );
+            for role in [
+                "source_archive_sha256_hex",
+                "vendor_inventory_sha256_hex",
+                "toolchain_inventory_sha256_hex",
+                "sbom_sha256_hex",
+                "proving_key_sha256_hex",
+                "anchor_circuit_artifact_sha256_hex",
+                "anchor_proving_key_sha256_hex",
+                "anchor_verifying_key_sha256_hex",
+                "phase1_transcript_sha256_hex",
+                "phase2_transcript_sha256_hex",
+                "anchor_phase2_transcript_sha256_hex",
+                "anchor_witness_compiler_sha256_hex",
+                "anchor_prover_sha256_hex",
+                "fixed_key_verifier_sha256_hex",
+                "anchor_fixed_key_verifier_sha256_hex",
+                "message_kat_sha256_hex",
+                "anchor_kat_sha256_hex",
+            ] {
+                proof.insert(role.to_owned(), norito::json::Value::String(String::new()));
+            }
+            let audits = proof
+                .get_mut("audit_attestations")
+                .and_then(norito::json::Value::as_array_mut)
+                .expect("release proof policy must contain audit attestations");
+            for audit in audits {
+                let audit = audit
+                    .as_object_mut()
+                    .expect("release audit attestation must be an object");
+                audit.insert(
+                    "completed_at_unix_ms".to_owned(),
+                    norito::json::parse_value("0").expect("zero must be JSON"),
+                );
+                audit.insert(
+                    "unresolved_findings".to_owned(),
+                    norito::json::parse_value(r#"{"critical":0,"high":0,"medium":0}"#)
+                        .expect("zero unresolved findings must be JSON"),
+                );
+            }
+            let destination_build = proof
+                .get_mut("destination_build")
+                .and_then(norito::json::Value::as_object_mut)
+                .expect("release proof policy must contain a destination build");
+            for role in auxiliary_roles {
+                let digest = sha256(format!("retired-fixture:{proof_index}:{role}").as_bytes());
+                destination_build.insert(
+                    role.to_owned(),
+                    norito::json::Value::String(lowercase_hex(&digest)),
+                );
+            }
+        }
+        let json = norito::json::to_json(&document)
+            .expect("augmented retired trust policy must remain canonical JSON");
+        let mut policy: ReleaseTrustPolicyV1 = norito::json::from_str(&json)
+            .expect("augmented retired trust policy must retain the current typed JSON shape");
+        for proof in &mut policy.proof_systems {
+            while proof.audit_attestations.len() < CIRCUIT_AUDIT_ROLES.len() {
+                proof.audit_attestations.push(
+                    proof
+                        .audit_attestations
+                        .last()
+                        .expect("retired fixture must contain an audit attestation")
+                        .clone(),
+                );
+            }
+        }
+        policy
+    }
     fn release_proof_policy_with_string(
         proof_index: usize,
         field: &str,
         replacement: &str,
     ) -> ProofSystemPolicyV1 {
-        let mut document = norito::json::parse_value(include_str!(
-            "../../../../fixtures/sccp/release_evidence_v1/test-trust-policy.json"
-        ))
-        .expect("release trust-policy fixture must be JSON");
-        let proof = document
-            .get_mut("proof_systems")
-            .and_then(norito::json::Value::as_array_mut)
-            .and_then(|proofs| proofs.get_mut(proof_index))
-            .and_then(norito::json::Value::as_object_mut)
+        let mut policy = retired_policy_with_current_destination_build_shape();
+        let proof = policy
+            .proof_systems
+            .get_mut(proof_index)
             .expect("release trust-policy fixture must contain the selected proof policy");
-        let value = proof
+        let mut proof_value = norito::json::to_value(&*proof)
+            .expect("release proof policy must be representable as JSON");
+        let value = proof_value
             .get_mut(field)
             .unwrap_or_else(|| panic!("release proof policy must contain `{field}`"));
         *value = norito::json::Value::String(replacement.to_owned());
-        let json = norito::json::to_json(&document)
-            .expect("mutated release trust policy must remain canonical JSON");
-        norito::json::from_str::<ReleaseTrustPolicyV1>(&json)
-            .expect("mutated release trust policy must retain the typed JSON shape")
-            .proof_systems
-            .into_iter()
-            .nth(proof_index)
-            .expect("mutated release trust policy must retain the selected proof policy")
+        let json = norito::json::to_json(&proof_value)
+            .expect("mutated release proof policy must remain canonical JSON");
+        norito::json::from_str(&json)
+            .expect("mutated release proof policy must retain the typed JSON shape")
     }
     #[test]
     fn full_release_trust_policy_json_path_rejects_retired_v3_and_diagnostic_circuits() {
-        let baseline = norito::json::from_str::<ReleaseTrustPolicyV1>(include_str!(
-            "../../../../fixtures/sccp/release_evidence_v1/test-trust-policy.json"
-        ))
-        .expect("release trust-policy fixture must use the typed JSON schema");
-        let error = validate_release_trust_policy(&baseline, "test-fixture", &mut BTreeSet::new())
-            .expect_err("retired protocol-v3 fixture must fail current policy validation");
+        let baseline = retired_policy_with_current_destination_build_shape();
+        let error = validate_release_trust_policy(
+            &baseline,
+            ReleaseEnvironment::TestFixture,
+            &mut BTreeSet::new(),
+        )
+        .expect_err("retired protocol-v3 fixture must fail current policy validation");
         assert_eq!(
             error,
             "release trust policy has the wrong schema, mode, or cardinality"
@@ -3905,6 +5194,8 @@ mod tests {
         deployment.token_code_hash = keccak256(&[0x60, 0x00]);
         deployment.verifier_code_hash = keccak256(&[0x60, 0x01]);
         deployment.route_code_hash = keccak256(&[0x60, 0x02]);
+        deployment.replay_verifier_code_hash = keccak256(&[0x60, 0x03]);
+        deployment.mint_breaker_code_hash = keccak256(&[0x60, 0x04]);
         route.destination = SccpDestinationDeploymentV1::Evm(deployment);
         let route_configuration_hash = route
             .destination
@@ -3926,6 +5217,16 @@ mod tests {
             .expect("exact EVM readback route must remain governed and valid");
         (route, deployment)
     }
+    #[cfg(feature = "test-fixtures")]
+    fn empty_replay_readback(domain_hash: [u8; 32]) -> DestinationReplayForestReadbackV1 {
+        DestinationReplayForestReadbackV1 {
+            domain_hash,
+            shard: 0,
+            shard_root: sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1],
+            leaf_count: 0,
+            update_sequence: 0,
+        }
+    }
 
     #[cfg(feature = "test-fixtures")]
     fn exact_evm_destination_state(
@@ -3938,6 +5239,38 @@ mod tests {
             SccpNetworkV1::BscMainnet => 56,
             _ => panic!("exact EVM state fixture requires an EVM profile"),
         };
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact EVM destination route configuration must hash");
+        let source_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.source,
+                route.lane_id.target,
+                SccpReplayBoundaryV1::EvmSourceBurn,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Evm(deployment.route_address),
+            )
+            .expect("exact EVM source replay domain must hash"),
+        );
+        let destination_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.target,
+                route.lane_id.source,
+                SccpReplayBoundaryV1::EvmDestinationMint,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Evm(deployment.route_address),
+            )
+            .expect("exact EVM destination replay domain must hash"),
+        );
         EvmDestinationStateV1 {
             schema: "sccp-evm-destination-state-v1".to_owned(),
             profile,
@@ -3951,9 +5284,20 @@ mod tests {
             token_bridge_address: deployment.route_address,
             route_token_address: deployment.token_address,
             route_verifier_address: deployment.verifier_address,
+            route_replay_verifier_address: deployment.replay_verifier_address,
+            route_mint_breaker_address: deployment.mint_breaker_address,
+            mint_breaker_route_address: deployment.route_address,
             token_runtime_code_hex: "6000".to_owned(),
             verifier_runtime_code_hex: "6001".to_owned(),
             route_runtime_code_hex: "6002".to_owned(),
+            replay_verifier_runtime_code_hex: "6003".to_owned(),
+            mint_breaker_runtime_code_hex: "6004".to_owned(),
+            route_max_wrapped_supply: deployment.max_wrapped_supply,
+            token_total_supply: "0".to_owned(),
+            mint_breaker_vote_count: 0,
+            mint_breaker_minting_disabled: false,
+            source_replay_state,
+            destination_replay_state,
             verifier_key_hash: deployment.verifier_key_hash,
             semantic_proof_profile_hash: deployment
                 .outbound_proof_policy
@@ -3967,20 +5311,10 @@ mod tests {
             destination_binding_hash: route
                 .destination_binding_hash()
                 .expect("exact EVM destination binding must hash"),
-            route_configuration_hash: route
-                .destination
-                .route_configuration_hash(
-                    route.lane_id,
-                    &route.route_id,
-                    &route.asset_key,
-                    route.revision,
-                    route.settlement.payload_amount_scale,
-                )
-                .expect("exact EVM destination route configuration must hash"),
+            route_configuration_hash,
             governed_route_configuration_hash: route
                 .route_configuration_hash()
                 .expect("exact governed EVM route configuration must hash"),
-            max_wrapped_supply: deployment.max_wrapped_supply,
         }
     }
 
@@ -3997,10 +5331,13 @@ mod tests {
                 .expect("exact EVM destination state must encode canonically");
             let decoded: EvmDestinationStateV1 = norito::json::from_str(&canonical)
                 .expect("exact EVM u128 cap must roundtrip canonically");
-            assert_eq!(decoded.max_wrapped_supply, deployment.max_wrapped_supply);
+            assert_eq!(
+                decoded.route_max_wrapped_supply,
+                deployment.max_wrapped_supply
+            );
             for invalid in invalid_u128_field_encodings(
                 &canonical,
-                "max_wrapped_supply",
+                "route_max_wrapped_supply",
                 deployment.max_wrapped_supply,
             ) {
                 assert!(
@@ -4010,7 +5347,7 @@ mod tests {
             }
 
             let mut mismatched = state;
-            mismatched.max_wrapped_supply -= 1;
+            mismatched.route_max_wrapped_supply -= 1;
             assert!(validate_evm_destination_state(profile, &mismatched).is_err());
         }
     }
@@ -4043,15 +5380,48 @@ mod tests {
         let governed_route_configuration_hash = route
             .route_configuration_hash()
             .expect("exact governed EVM route configuration must hash");
+        let source_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.source,
+                route.lane_id.target,
+                SccpReplayBoundaryV1::EvmSourceBurn,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Evm(deployment.route_address),
+            )
+            .expect("exact EVM source replay domain must hash"),
+        );
+        let destination_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.target,
+                route.lane_id.source,
+                SccpReplayBoundaryV1::EvmDestinationMint,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Evm(deployment.route_address),
+            )
+            .expect("exact EVM destination replay domain must hash"),
+        );
         let readback =
             |semantic_proof_profile_hash, sora_finality_anchor_hash| EvmDestinationReadback {
                 deployment,
                 token_bridge_address: deployment.route_address,
                 route_token_address: deployment.token_address,
                 route_verifier_address: deployment.verifier_address,
+                route_replay_verifier_address: deployment.replay_verifier_address,
+                route_mint_breaker_address: deployment.mint_breaker_address,
+                mint_breaker_route_address: deployment.route_address,
                 token_runtime_code_hex: "6000",
                 verifier_runtime_code_hex: "6001",
                 route_runtime_code_hex: "6002",
+                replay_verifier_runtime_code_hex: "6003",
+                mint_breaker_runtime_code_hex: "6004",
+                route_max_wrapped_supply: deployment.max_wrapped_supply,
+                token_total_supply: "0",
+                mint_breaker_vote_count: 0,
+                mint_breaker_minting_disabled: false,
+                source_replay_state,
+                destination_replay_state,
                 verifier_key_hash: deployment.verifier_key_hash,
                 semantic_proof_profile_hash,
                 sora_finality_anchor_hash,
@@ -4060,16 +5430,13 @@ mod tests {
                 destination_binding_hash,
                 route_configuration_hash,
                 governed_route_configuration_hash,
-                max_wrapped_supply: deployment.max_wrapped_supply,
                 observed_at_unix_ms: 1,
                 finality_height: 1,
                 finality_block_hash: [0x91; 32],
             };
-        validate_destination_readback(
-            &route,
-            &readback(semantic_profile_hash, sora_finality_anchor_hash),
-        )
-        .expect("exact EVM destination readback must validate");
+        let baseline = readback(semantic_profile_hash, sora_finality_anchor_hash);
+        validate_destination_readback(&route, &baseline)
+            .expect("exact EVM destination readback must validate");
         let mut mutated_semantic_profile_hash = semantic_profile_hash;
         mutated_semantic_profile_hash[0] ^= 1;
         assert!(
@@ -4088,6 +5455,36 @@ mod tests {
             )
             .is_err()
         );
+        let mut invalid = baseline;
+        invalid.route_replay_verifier_address[0] ^= 1;
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.route_mint_breaker_address[0] ^= 1;
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.mint_breaker_route_address[0] ^= 1;
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.replay_verifier_runtime_code_hex = "6005";
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.mint_breaker_runtime_code_hex = "6005";
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.mint_breaker_vote_count = 1;
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.mint_breaker_minting_disabled = true;
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.source_replay_state.leaf_count = 1;
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.token_total_supply = "1";
+        assert!(validate_destination_readback(&route, &invalid).is_err());
+        let mut invalid = baseline;
+        invalid.route_max_wrapped_supply -= 1;
+        assert!(validate_destination_readback(&route, &invalid).is_err());
     }
     #[cfg(feature = "test-fixtures")]
     fn exact_tron_destination_readback_route()
@@ -4108,6 +5505,10 @@ mod tests {
             outbound_proof_policy: evm_deployment.outbound_proof_policy,
             route_address: evm_deployment.route_address,
             route_code_hash: evm_deployment.route_code_hash,
+            replay_verifier_address: evm_deployment.replay_verifier_address,
+            replay_verifier_code_hash: evm_deployment.replay_verifier_code_hash,
+            mint_breaker_address: evm_deployment.mint_breaker_address,
+            mint_breaker_code_hash: evm_deployment.mint_breaker_code_hash,
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
             max_wrapped_supply: route
                 .settlement
@@ -4167,6 +5568,28 @@ mod tests {
                 route.settlement.payload_amount_scale,
             )
             .expect("exact TRON destination route configuration must hash");
+        let source_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.source,
+                route.lane_id.target,
+                SccpReplayBoundaryV1::TronSourceBurn,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Tron(deployment.route_address),
+            )
+            .expect("exact TRON source replay domain must hash"),
+        );
+        let destination_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.target,
+                route.lane_id.source,
+                SccpReplayBoundaryV1::TronDestinationMint,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Tron(deployment.route_address),
+            )
+            .expect("exact TRON destination replay domain must hash"),
+        );
         let mut state = TronDestinationStateV1 {
             schema: "sccp-tron-destination-state-v1".to_owned(),
             profile: SccpNetworkV1::TronMainnet,
@@ -4180,9 +5603,20 @@ mod tests {
             token_bridge_address: deployment.route_address,
             route_token_address: deployment.token_address,
             route_verifier_address: deployment.verifier_address,
+            route_replay_verifier_address: deployment.replay_verifier_address,
+            route_mint_breaker_address: deployment.mint_breaker_address,
+            mint_breaker_route_address: deployment.route_address,
             token_runtime_code_hex: "6000".to_owned(),
             verifier_runtime_code_hex: "6001".to_owned(),
             route_runtime_code_hex: "6002".to_owned(),
+            replay_verifier_runtime_code_hex: "6003".to_owned(),
+            mint_breaker_runtime_code_hex: "6004".to_owned(),
+            route_max_wrapped_supply: deployment.max_wrapped_supply,
+            token_total_supply: "0".to_owned(),
+            mint_breaker_vote_count: 0,
+            mint_breaker_minting_disabled: false,
+            source_replay_state,
+            destination_replay_state,
             verifier_key_hash: deployment.verifier_key_hash,
             semantic_proof_profile_hash,
             sora_finality_anchor_hash,
@@ -4194,18 +5628,21 @@ mod tests {
             governed_route_configuration_hash: route
                 .route_configuration_hash()
                 .expect("exact governed TRON route configuration must hash"),
-            max_wrapped_supply: deployment.max_wrapped_supply,
         };
         validate_tron_destination_readback(&state, &route, &deployment)
             .expect("exact TRON destination readback must validate");
+        let baseline = state.clone();
         let canonical = norito::json::to_json(&state)
             .expect("exact TRON destination state must encode canonically");
         let decoded: TronDestinationStateV1 = norito::json::from_str(&canonical)
             .expect("exact TRON u128 cap must roundtrip canonically");
-        assert_eq!(decoded.max_wrapped_supply, deployment.max_wrapped_supply);
+        assert_eq!(
+            decoded.route_max_wrapped_supply,
+            deployment.max_wrapped_supply
+        );
         for invalid in invalid_u128_field_encodings(
             &canonical,
-            "max_wrapped_supply",
+            "route_max_wrapped_supply",
             deployment.max_wrapped_supply,
         ) {
             assert!(
@@ -4214,13 +5651,34 @@ mod tests {
             );
         }
         let mut mismatched_cap = state.clone();
-        mismatched_cap.max_wrapped_supply -= 1;
+        mismatched_cap.route_max_wrapped_supply -= 1;
         assert!(validate_tron_destination_readback(&mismatched_cap, &route, &deployment).is_err());
         state.semantic_proof_profile_hash[0] ^= 1;
         assert!(validate_tron_destination_readback(&state, &route, &deployment).is_err());
         state.semantic_proof_profile_hash = semantic_proof_profile_hash;
         state.sora_finality_anchor_hash[0] ^= 1;
         assert!(validate_tron_destination_readback(&state, &route, &deployment).is_err());
+        let mut invalid = baseline.clone();
+        invalid.route_replay_verifier_address[0] ^= 1;
+        assert!(validate_tron_destination_readback(&invalid, &route, &deployment).is_err());
+        let mut invalid = baseline.clone();
+        invalid.route_mint_breaker_address[0] ^= 1;
+        assert!(validate_tron_destination_readback(&invalid, &route, &deployment).is_err());
+        let mut invalid = baseline.clone();
+        invalid.mint_breaker_route_address[0] ^= 1;
+        assert!(validate_tron_destination_readback(&invalid, &route, &deployment).is_err());
+        let mut invalid = baseline.clone();
+        invalid.replay_verifier_runtime_code_hex = "6005".to_owned();
+        assert!(validate_tron_destination_readback(&invalid, &route, &deployment).is_err());
+        let mut invalid = baseline.clone();
+        invalid.mint_breaker_runtime_code_hex = "6005".to_owned();
+        assert!(validate_tron_destination_readback(&invalid, &route, &deployment).is_err());
+        let mut invalid = baseline.clone();
+        invalid.mint_breaker_vote_count = 1;
+        assert!(validate_tron_destination_readback(&invalid, &route, &deployment).is_err());
+        let mut invalid = baseline;
+        invalid.destination_replay_state.update_sequence = 1;
+        assert!(validate_tron_destination_readback(&invalid, &route, &deployment).is_err());
     }
     #[cfg(feature = "test-fixtures")]
     fn ton_test_verifying_key() -> SccpGroth16Bls12381VerifyingKeyV1 {
@@ -4319,6 +5777,10 @@ mod tests {
             verifier_key_hash: sccp_groth16_bls12381_verifying_key_hash_v1(&verifying_key)
                 .expect("valid test BLS12-381 verifying key"),
             proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
+            mint_breaker_guardian_keys: [
+                [0xa1; 32], [0xa2; 32], [0xa3; 32], [0xa4; 32], [0xa5; 32],
+            ]
+            .into(),
             outbound_proof_policy,
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
             max_wrapped_supply: route
@@ -4369,6 +5831,37 @@ mod tests {
             .outbound_proof_policy
             .sora_finality_anchor_hash()
             .expect("exact TON finality anchor must hash");
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact TON destination route configuration must hash");
+        let route_actor = SccpReplayActorV1::Ton(SccpTonAccountV1 {
+            workchain: deployment.route_address.workchain,
+            account: deployment.route_address.account,
+        });
+        let jetton_master_actor = SccpReplayActorV1::Ton(SccpTonAccountV1 {
+            workchain: deployment.jetton_master_address.workchain,
+            account: deployment.jetton_master_address.account,
+        });
+        let replay_state = |source_network, target_network, boundary, actor| {
+            empty_replay_readback(
+                replay_domain_hash(
+                    source_network,
+                    target_network,
+                    boundary,
+                    route.revision,
+                    route_configuration_hash,
+                    actor,
+                )
+                .expect("exact TON replay domain must hash"),
+            )
+        };
         let mut state = TonDestinationStateV1 {
             schema: "sccp-ton-destination-state-v1".to_owned(),
             profile: SccpNetworkV1::TonMainnet,
@@ -4382,6 +5875,8 @@ mod tests {
             route_revision: route.revision,
             jetton_master_address: deployment.jetton_master_address,
             route_address: deployment.route_address,
+            route_reported_jetton_master_address: deployment.jetton_master_address,
+            jetton_master_reported_route_address: deployment.route_address,
             jetton_master_code_boc_hex: lowercase_hex(&single_cell_code_boc(0x91)),
             jetton_wallet_code_boc_hex: lowercase_hex(&single_cell_code_boc(0x92)),
             route_code_boc_hex: lowercase_hex(&single_cell_code_boc(0x93)),
@@ -4390,16 +5885,46 @@ mod tests {
             route_initial_data_boc_hex: lowercase_hex(&single_cell_code_boc(0x8a)),
             jetton_master_storage_version: SCCP_V1_TON_STORAGE_VERSION,
             jetton_master_total_supply: "0".to_owned(),
-            jetton_master_mint_replay_entries: 0,
-            jetton_master_burn_replay_entries: 0,
+            route_reported_jetton_master_code_hash: deployment.jetton_master_code_hash,
+            route_reported_jetton_master_initial_data_hash: deployment
+                .jetton_master_initial_data_hash,
+            jetton_master_reported_code_hash: deployment.jetton_master_code_hash,
+            jetton_master_reported_initial_data_hash: deployment.jetton_master_initial_data_hash,
+            route_mint_breaker_guardian_keys: deployment.mint_breaker_guardian_keys,
+            jetton_master_mint_breaker_guardian_keys: deployment.mint_breaker_guardian_keys,
+            route_max_wrapped_supply: deployment.max_wrapped_supply,
+            jetton_master_max_wrapped_supply: deployment.max_wrapped_supply,
+            route_minting_disabled: false,
+            jetton_master_minting_disabled: false,
+            jetton_master_mintable: true,
+            route_pending_mint_count: 0,
+            route_pending_burn_count: 0,
+            jetton_master_pending_mint_count: 0,
+            jetton_master_mint_replay_state: replay_state(
+                route.lane_id.target,
+                route.lane_id.source,
+                SccpReplayBoundaryV1::TonMasterMint,
+                jetton_master_actor,
+            ),
+            jetton_master_burn_replay_state: replay_state(
+                route.lane_id.source,
+                route.lane_id.target,
+                SccpReplayBoundaryV1::TonMasterBurn,
+                jetton_master_actor,
+            ),
             route_storage_version: SCCP_V1_TON_STORAGE_VERSION,
-            route_refund_sequence: 0,
-            route_nonce_entries: 0,
-            route_inbound_replay_entries: 0,
-            route_outbound_replay_entries: 0,
-            route_pending_mint_entries: 0,
-            route_pending_burn_entries: 0,
-            route_pending_refund_entries: 0,
+            route_inbound_mint_replay_state: replay_state(
+                route.lane_id.target,
+                route.lane_id.source,
+                SccpReplayBoundaryV1::TonBridgeInboundMint,
+                route_actor,
+            ),
+            route_outbound_burn_replay_state: replay_state(
+                route.lane_id.source,
+                route.lane_id.target,
+                SccpReplayBoundaryV1::TonBridgeOutboundBurn,
+                route_actor,
+            ),
             verifier_circuit_hash: deployment.verifier_circuit_hash,
             proof_profile_commitment: deployment.proof_profile_commitment,
             verifier_key_hash: deployment.verifier_key_hash,
@@ -4409,21 +5934,11 @@ mod tests {
             destination_binding_hash: route
                 .destination_binding_hash()
                 .expect("exact TON destination binding must hash"),
-            route_configuration_hash: route
-                .destination
-                .route_configuration_hash(
-                    route.lane_id,
-                    &route.route_id,
-                    &route.asset_key,
-                    route.revision,
-                    route.settlement.payload_amount_scale,
-                )
-                .expect("exact TON destination route configuration must hash"),
+            route_configuration_hash,
+            jetton_master_route_configuration_hash: route_configuration_hash,
             governed_route_configuration_hash: route
                 .route_configuration_hash()
                 .expect("exact governed TON route configuration must hash"),
-            jetton_master_max_wrapped_supply: deployment.max_wrapped_supply,
-            route_max_wrapped_supply: deployment.max_wrapped_supply,
         };
         let encoded_state = norito::json::to_json(&state)
             .expect("TON canonical-zero destination state must encode");
@@ -4519,15 +6034,30 @@ mod tests {
             }};
         }
         assert_nonzero_initial_state_rejected!(jetton_master_total_supply, "1".to_owned());
-        assert_nonzero_initial_state_rejected!(jetton_master_mint_replay_entries, 1);
-        assert_nonzero_initial_state_rejected!(jetton_master_burn_replay_entries, 1);
-        assert_nonzero_initial_state_rejected!(route_refund_sequence, 1);
-        assert_nonzero_initial_state_rejected!(route_nonce_entries, 1);
-        assert_nonzero_initial_state_rejected!(route_inbound_replay_entries, 1);
-        assert_nonzero_initial_state_rejected!(route_outbound_replay_entries, 1);
-        assert_nonzero_initial_state_rejected!(route_pending_mint_entries, 1);
-        assert_nonzero_initial_state_rejected!(route_pending_burn_entries, 1);
-        assert_nonzero_initial_state_rejected!(route_pending_refund_entries, 1);
+        assert_nonzero_initial_state_rejected!(route_pending_mint_count, 1);
+        assert_nonzero_initial_state_rejected!(route_pending_burn_count, 1);
+        assert_nonzero_initial_state_rejected!(jetton_master_pending_mint_count, 1);
+        let mut invalid = state.clone();
+        invalid.route_inbound_mint_replay_state.leaf_count = 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.route_outbound_burn_replay_state.update_sequence = 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_mint_replay_state.shard = 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_burn_replay_state.shard_root[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.route_minting_disabled = true;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_minting_disabled = true;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_mintable = false;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
         let mut wrong_storage_version = state.clone();
         wrong_storage_version.route_storage_version = 2;
         assert!(
@@ -4543,6 +6073,33 @@ mod tests {
             )
             .is_err()
         );
+        let mut invalid = state.clone();
+        invalid.route_reported_jetton_master_address.account[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_reported_route_address.account[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.route_reported_jetton_master_code_hash[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_reported_initial_data_hash[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.route_mint_breaker_guardian_keys.guardian_0[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_mint_breaker_guardian_keys.guardian_4[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.route_max_wrapped_supply -= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_max_wrapped_supply = 1_u128 << 120;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
+        let mut invalid = state.clone();
+        invalid.jetton_master_route_configuration_hash[0] ^= 1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
         let mut reused_initial_data = state.clone();
         reused_initial_data.route_initial_data_boc_hex = reused_initial_data
             .jetton_master_initial_data_boc_hex
@@ -4572,7 +6129,7 @@ mod tests {
         state.global_id = 0;
         assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &state).is_err());
         state.global_id = SCCP_TON_MAINNET_GLOBAL_ID_V1;
-        assert!(validate_ton_destination_state(SccpNetworkV1::TonTestnet, &state).is_err());
+        assert!(validate_ton_destination_state(SccpNetworkV1::EthereumMainnet, &state).is_err());
     }
     fn validated_destination() -> ValidatedDestinationStateV1 {
         ValidatedDestinationStateV1 {
@@ -4591,6 +6148,8 @@ mod tests {
             token_runtime_hash: [6; 32],
             verifier_runtime_hash: [7; 32],
             route_runtime_hash: [8; 32],
+            replay_verifier_runtime_hash: Some([18; 32]),
+            mint_breaker_runtime_hash: Some([19; 32]),
         }
     }
     fn approved_proof_system() -> ApprovedProofSystemV1 {
@@ -4611,6 +6170,26 @@ mod tests {
             token_runtime_hash: [6; 32],
             verifier_runtime_hash: [7; 32],
             route_runtime_hash: [8; 32],
+            replay_verifier_runtime_hash: [18; 32],
+            mint_breaker_runtime_hash: [19; 32],
+            ton_builder_policy_sha256: [20; 32],
+            ton_source_closure_sha256: [21; 32],
+            ton_output_lock_sha256: [22; 32],
+            validator_builder_policy_sha256: [23; 32],
+            validator_source_archive_sha256: [24; 32],
+            validator_dependency_inventory_sha256: [25; 32],
+            validator_cargo_metadata_closure_sha256: [26; 32],
+            validator_sbom_sha256: [27; 32],
+            validator_toolchain_inventory_sha256: [28; 32],
+            validator_sysroot_inventory_sha256: [29; 32],
+            validator_linker_sha256: [30; 32],
+            validator_build_recipe_sha256: [31; 32],
+            validator_build_environment_sha256: [32; 32],
+            validator_container_manifest_sha256: [33; 32],
+            validator_builder_report_sha256: [34; 32],
+            validator_executable_sha256: [35; 32],
+            validator_complete_build_closure_sha256: [36; 32],
+            validator_output_lock_sha256: [37; 32],
         }
     }
     #[cfg(not(feature = "test-fixtures"))]
@@ -4624,6 +6203,9 @@ mod tests {
                 inbound_status: "unavailable".to_owned(),
                 outbound_status: "unavailable".to_owned(),
                 evidence_artifact_path: format!("artifacts/lanes/{profile}.json"),
+                lane_evidence_at_unix_ms: 0,
+                canary_at_unix_ms: 0,
+                destination_readback_at_unix_ms: 0,
             })
             .collect::<Vec<_>>();
         let phases = REQUIRED_PHASES
@@ -4652,6 +6234,8 @@ mod tests {
                 kind: kind.to_owned(),
                 sha256_hex: lowercase_hex(&[u8::try_from(index + 1).unwrap(); 32]),
                 size_bytes: 1,
+                declared_max_bytes: 0,
+                created_at_unix_ms: 0,
             })
             .collect();
         ReleaseEvidenceSignaturesV1 {
@@ -4671,6 +6255,8 @@ mod tests {
                 phases,
             },
             provenance: Vec::new(),
+            validator_built_at_unix_ms: 0,
+            contract_builds: Vec::new(),
         }
     }
     #[cfg(not(feature = "test-fixtures"))]
@@ -4683,6 +6269,12 @@ mod tests {
             destination_attestors: Vec::new(),
             circuit_auditors: Vec::new(),
             proof_systems: Vec::new(),
+            issued_at_unix_ms: 0,
+            expires_at_unix_ms: 0,
+            policy_root_sha256_hex: String::new(),
+            offline_policy_root_signers: Vec::new(),
+            offline_policy_root_signatures: Vec::new(),
+            freshness_authorities: Vec::new(),
         }
     }
     #[test]
@@ -4694,7 +6286,7 @@ mod tests {
             lowercase_hex(&FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256),
             "d7049de0f0b0ecb7ec4f64b885646ab99f85fcbab05dfaf710d3002f17632bb9"
         );
-        for mutation in 0..=13 {
+        for mutation in 0..=33 {
             let mut candidate = approved.clone();
             match mutation {
                 0 => candidate.circuit_id = "algebraic-smoke-v1".to_owned(),
@@ -4717,6 +6309,69 @@ mod tests {
                     candidate.circuit_artifact_sha256 = FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256;
                 }
                 13 => candidate.proof_curve = "bls12-381".to_owned(),
+                14 => candidate.replay_verifier_runtime_hash[0] ^= 1,
+                15 => candidate.mint_breaker_runtime_hash[0] ^= 1,
+                16 => candidate.ton_builder_policy_sha256 = [0; 32],
+                17 => {
+                    candidate.ton_source_closure_sha256 = candidate.ton_builder_policy_sha256;
+                }
+                18 => candidate.ton_output_lock_sha256 = candidate.ton_source_closure_sha256,
+                19 => candidate.validator_builder_policy_sha256 = [0; 32],
+                20 => {
+                    candidate.validator_source_archive_sha256 =
+                        candidate.validator_builder_policy_sha256;
+                }
+                21 => {
+                    candidate.validator_dependency_inventory_sha256 =
+                        candidate.validator_source_archive_sha256;
+                }
+                22 => {
+                    candidate.validator_cargo_metadata_closure_sha256 =
+                        candidate.validator_dependency_inventory_sha256;
+                }
+                23 => {
+                    candidate.validator_sbom_sha256 =
+                        candidate.validator_cargo_metadata_closure_sha256;
+                }
+                24 => {
+                    candidate.validator_toolchain_inventory_sha256 =
+                        candidate.validator_sbom_sha256;
+                }
+                25 => {
+                    candidate.validator_sysroot_inventory_sha256 =
+                        candidate.validator_toolchain_inventory_sha256;
+                }
+                26 => {
+                    candidate.validator_linker_sha256 =
+                        candidate.validator_sysroot_inventory_sha256;
+                }
+                27 => {
+                    candidate.validator_build_recipe_sha256 = candidate.validator_linker_sha256;
+                }
+                28 => {
+                    candidate.validator_build_environment_sha256 =
+                        candidate.validator_build_recipe_sha256;
+                }
+                29 => {
+                    candidate.validator_container_manifest_sha256 =
+                        candidate.validator_build_environment_sha256;
+                }
+                30 => {
+                    candidate.validator_builder_report_sha256 =
+                        candidate.validator_container_manifest_sha256;
+                }
+                31 => {
+                    candidate.validator_executable_sha256 =
+                        candidate.validator_builder_report_sha256;
+                }
+                32 => {
+                    candidate.validator_complete_build_closure_sha256 =
+                        candidate.validator_executable_sha256;
+                }
+                33 => {
+                    candidate.validator_output_lock_sha256 =
+                        candidate.validator_complete_build_closure_sha256;
+                }
                 _ => unreachable!(),
             }
             assert!(validate_approved_proof_system(&validated, &candidate).is_err());
@@ -4758,6 +6413,9 @@ mod tests {
                     source_profile: "sora-taira".to_owned(),
                     protocol_version: anchor.protocol_version,
                     chain_id_hash_hex: lowercase_hex(&anchor.chain_id_hash),
+                    epoch: anchor.epoch,
+                    epoch_end_height: anchor.epoch_end_height,
+                    roster_commitment_hex: lowercase_hex(&anchor.roster_commitment),
                     checkpoint_height: anchor.checkpoint_height,
                     checkpoint_block_hash_hex: lowercase_hex(&anchor.checkpoint_block_hash),
                     checkpoint_context_id_hex: lowercase_hex(&anchor.checkpoint_context_id),
@@ -4785,10 +6443,165 @@ mod tests {
                     route_artifact_sha256: filler(0xb9),
                     route_interface_sha256: filler(0xba),
                     route_runtime_hash: filler(0xbb),
+                    replay_verifier_artifact_sha256: filler(0xbc),
+                    replay_verifier_interface_sha256: filler(0xbd),
+                    replay_verifier_runtime_hash: filler(0xbe),
+                    mint_breaker_artifact_sha256: filler(0xbf),
+                    mint_breaker_interface_sha256: filler(0xc0),
+                    mint_breaker_runtime_hash: filler(0xc1),
+                    ton_builder_policy_sha256: filler(0xc2),
+                    ton_source_closure_sha256: filler(0xc3),
+                    ton_output_lock_sha256: filler(0xc4),
+                    validator_builder_policy_sha256: filler(0xc5),
+                    validator_source_archive_sha256: filler(0xc6),
+                    validator_dependency_inventory_sha256: filler(0xc7),
+                    validator_cargo_metadata_closure_sha256: filler(0xc8),
+                    validator_sbom_sha256: filler(0xc9),
+                    validator_toolchain_inventory_sha256: filler(0xca),
+                    validator_sysroot_inventory_sha256: filler(0xcb),
+                    validator_linker_sha256: filler(0xcc),
+                    validator_build_recipe_sha256: filler(0xcd),
+                    validator_build_environment_sha256: filler(0xce),
+                    validator_container_manifest_sha256: filler(0xcf),
+                    validator_builder_report_sha256: filler(0xd0),
+                    validator_executable_sha256: filler(0xd1),
+                    validator_complete_build_closure_sha256: filler(0xd2),
+                    validator_output_lock_sha256: filler(0xd3),
                 },
                 audit_attestations: Vec::new(),
+                anchor_circuit_id: String::new(),
+                source_archive_sha256_hex: String::new(),
+                vendor_inventory_sha256_hex: String::new(),
+                toolchain_inventory_sha256_hex: String::new(),
+                sbom_sha256_hex: String::new(),
+                proving_key_sha256_hex: String::new(),
+                anchor_circuit_artifact_sha256_hex: String::new(),
+                anchor_proving_key_sha256_hex: String::new(),
+                anchor_verifying_key_sha256_hex: String::new(),
+                phase1_transcript_sha256_hex: String::new(),
+                phase2_transcript_sha256_hex: String::new(),
+                anchor_phase2_transcript_sha256_hex: String::new(),
+                anchor_witness_compiler_sha256_hex: String::new(),
+                anchor_prover_sha256_hex: String::new(),
+                fixed_key_verifier_sha256_hex: String::new(),
+                anchor_fixed_key_verifier_sha256_hex: String::new(),
+                message_kat_sha256_hex: String::new(),
+                anchor_kat_sha256_hex: String::new(),
             },
         )
+    }
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn destination_build_policy_binds_distinct_nonzero_builder_commitments() {
+        let (_, baseline) = semantic_proof_policy_from_fixture();
+        let baseline_approved = approved_proof_system_from_policy(&baseline)
+            .expect("exact destination build policy must decode");
+        for mutation in 0..18 {
+            let mut candidate = baseline.clone();
+            let replacement = [0xe1 + mutation; 32];
+            match mutation {
+                0 => {
+                    candidate.destination_build.ton_builder_policy_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                1 => {
+                    candidate.destination_build.ton_source_closure_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                2 => {
+                    candidate.destination_build.ton_output_lock_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                3 => {
+                    candidate.destination_build.validator_builder_policy_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                4 => {
+                    candidate.destination_build.validator_source_archive_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                5 => {
+                    candidate
+                        .destination_build
+                        .validator_dependency_inventory_sha256 = lowercase_hex(&replacement);
+                }
+                6 => {
+                    candidate
+                        .destination_build
+                        .validator_cargo_metadata_closure_sha256 = lowercase_hex(&replacement);
+                }
+                7 => {
+                    candidate.destination_build.validator_sbom_sha256 = lowercase_hex(&replacement);
+                }
+                8 => {
+                    candidate
+                        .destination_build
+                        .validator_toolchain_inventory_sha256 = lowercase_hex(&replacement);
+                }
+                9 => {
+                    candidate
+                        .destination_build
+                        .validator_sysroot_inventory_sha256 = lowercase_hex(&replacement);
+                }
+                10 => {
+                    candidate.destination_build.validator_linker_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                11 => {
+                    candidate.destination_build.validator_build_recipe_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                12 => {
+                    candidate
+                        .destination_build
+                        .validator_build_environment_sha256 = lowercase_hex(&replacement);
+                }
+                13 => {
+                    candidate
+                        .destination_build
+                        .validator_container_manifest_sha256 = lowercase_hex(&replacement);
+                }
+                14 => {
+                    candidate.destination_build.validator_builder_report_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                15 => {
+                    candidate.destination_build.validator_executable_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                16 => {
+                    candidate
+                        .destination_build
+                        .validator_complete_build_closure_sha256 = lowercase_hex(&replacement);
+                }
+                17 => {
+                    candidate.destination_build.validator_output_lock_sha256 =
+                        lowercase_hex(&replacement);
+                }
+                _ => unreachable!(),
+            }
+            let approved = approved_proof_system_from_policy(&candidate)
+                .expect("mutated destination build policy must decode");
+            assert_ne!(
+                approved.destination_build_policy_sha256,
+                baseline_approved.destination_build_policy_sha256,
+                "builder receipt role {mutation} was not committed by the build-policy hash"
+            );
+        }
+        let mut zero = baseline.clone();
+        zero.destination_build.validator_builder_policy_sha256 = lowercase_hex(&[0; 32]);
+        assert!(parsed_destination_build_hash_roles(&zero.destination_build).is_err());
+        let mut aliased = baseline;
+        aliased.destination_build.validator_output_lock_sha256 = aliased
+            .destination_build
+            .validator_complete_build_closure_sha256
+            .clone();
+        let error = parsed_destination_build_hash_roles(&aliased.destination_build)
+            .expect_err("different builder receipt roles must not share a digest");
+        assert_eq!(
+            error,
+            "destination build hash roles must be pairwise distinct"
+        );
     }
     #[test]
     #[cfg(feature = "test-fixtures")]
@@ -4826,7 +6639,8 @@ mod tests {
     fn release_envelope_binds_exact_profiles_inventory_and_corridor() {
         let evidence = release_evidence_envelope();
         let policy = release_envelope_test_policy();
-        validate_release_evidence_envelope(&evidence, &policy, "test-fixture").unwrap();
+        validate_release_evidence_envelope(&evidence, &policy, ReleaseEnvironment::TestFixture)
+            .unwrap();
         validate_release_hub(&evidence).unwrap();
         let mut nexus = release_evidence_envelope();
         nexus.hub_profile = "sora-nexus".to_owned();
@@ -4845,14 +6659,12 @@ mod tests {
                 7 => {
                     let digest = lowercase_hex(&[0xee; 32]);
                     candidate.artifacts.push(ReleaseArtifactV1 {
-                        path: semantic_artifact_path(
-                            "honest-proof",
-                            &digest,
-                            "honest-proof.norito",
-                        ),
-                        kind: "honest-proof".to_owned(),
+                        path: semantic_artifact_path("message-kat", &digest, "message-kat.norito"),
+                        kind: "message-kat".to_owned(),
                         sha256_hex: digest,
                         size_bytes: 1,
+                        declared_max_bytes: 0,
+                        created_at_unix_ms: 0,
                     });
                     candidate
                         .artifacts
@@ -4862,30 +6674,32 @@ mod tests {
                 _ => unreachable!(),
             }
             assert!(
-                validate_release_evidence_envelope(&candidate, &policy, "test-fixture").is_err()
+                validate_release_evidence_envelope(
+                    &candidate,
+                    &policy,
+                    ReleaseEnvironment::TestFixture,
+                )
+                .is_err()
             );
         }
     }
     #[test]
     fn semantic_artifact_schema_has_exact_content_addressing_and_proof_bound() {
-        assert_eq!(SEMANTIC_ARTIFACT_ROLES.len(), 7);
+        assert_eq!(SEMANTIC_ARTIFACT_ROLES.len(), 21);
+        assert!(is_semantic_artifact_kind("message-kat"));
+        assert!(!is_semantic_artifact_kind("unknown"));
         assert_eq!(
-            semantic_artifact_role("honest-proof"),
-            Some(("honest-proof", "honest-proof.norito"))
-        );
-        assert_eq!(semantic_artifact_role("unknown"), None);
-        assert_eq!(
-            release_artifact_limit("honest-proof"),
+            release_artifact_limit("message-kat"),
             u64::try_from(SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).ok()
         );
         assert!(
-            release_artifact_limit("honest-proof").expect("honest proof kind")
-                < release_artifact_limit("honest-witness").expect("honest witness kind")
+            release_artifact_limit("message-kat").expect("message KAT kind")
+                < release_artifact_limit("proving-key").expect("proving key kind")
         );
         let digest = "ab".repeat(32);
         assert_eq!(
-            semantic_artifact_path("honest-proof", &digest, "honest-proof.norito"),
-            format!("artifacts/semantic/honest-proof/{digest}-honest-proof.norito")
+            semantic_artifact_path("message-kat", &digest, "message-kat.norito"),
+            format!("artifacts/semantic/message-kat/{digest}-message-kat.norito")
         );
     }
     #[test]

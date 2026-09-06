@@ -12,21 +12,52 @@ use crate::poly::ipa::strategy::GuardIPA;
 use crate::poly::query::{CommitmentReference, VerifierQuery};
 use crate::transcript::{EncodedChallenge, TranscriptRead};
 
-/// IPA multi-open verifier
+/// IPA multi-open verifier.
+///
+/// `QUERY_INSTANCE = false` selects the direct-instance transcript used by
+/// recursive circuits: public values are absorbed verbatim and their queried
+/// evaluations are reconstructed by the verifier, so they do not allocate an
+/// instance commitment or enter the IPA opening set. When `QUERY_INSTANCE` is
+/// true, each bit in `PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK` selects an
+/// instance column whose commitment is read from the proof. Other instance
+/// commitments retain the legacy verifier-computed behavior.
 #[derive(Debug)]
-pub struct VerifierIPA<'params, C: CurveAffine> {
+pub struct VerifierIPA<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool = true,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = 0,
+> {
     params: &'params ParamsIPA<C>,
 }
 
-impl<'params, C: CurveAffine> Verifier<'params, IPACommitmentScheme<C>>
-    for VerifierIPA<'params, C>
+/// Direct-instance IPA multi-open verifier.
+pub type VerifierIPADirect<'params, C> = VerifierIPA<'params, C, false, 0>;
+
+/// IPA multi-open verifier with a per-column proof-supplied instance
+/// commitment mask.
+pub type VerifierIPAHybrid<'params, C, const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64> =
+    VerifierIPA<'params, C, true, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>;
+
+impl<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64,
+> Verifier<'params, IPACommitmentScheme<C>>
+    for VerifierIPA<'params, C, QUERY_INSTANCE, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>
 {
     type Guard = GuardIPA<'params, C>;
     type MSMAccumulator = MSMIPA<'params, C>;
 
-    const QUERY_INSTANCE: bool = true;
+    const QUERY_INSTANCE: bool = QUERY_INSTANCE;
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK;
 
     fn new(params: &'params ParamsVerifierIPA<C>) -> Self {
+        assert!(
+            QUERY_INSTANCE || PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK == 0,
+            "proof-supplied instance commitments require QUERY_INSTANCE"
+        );
         Self { params }
     }
 

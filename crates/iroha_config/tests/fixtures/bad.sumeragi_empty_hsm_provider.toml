@@ -1,4 +1,0 @@
-extends = ["minimal_with_trusted_peers.toml"]
-
-[sumeragi.keys]
-allowed_hsm_providers = ["   "]

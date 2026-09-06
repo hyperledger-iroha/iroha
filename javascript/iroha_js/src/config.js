@@ -45,11 +45,6 @@ const ENV_KEYS = Object.freeze({
   authToken: "IROHA_TORII_AUTH_TOKEN",
 });
 
-const defaultEnv =
-  typeof process !== "undefined" && process && typeof process.env === "object"
-    ? process.env
-    : {};
-
 function coerceNumber(value, name) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -222,8 +217,9 @@ function applyRetryProfilePatch(target, patch) {
 }
 
 /**
- * Resolve Torii client configuration by merging defaults, a config object,
- * environment overrides, and explicit options.
+ * Resolve Torii client configuration by merging defaults, an optional
+ * environment fallback, a config object, and explicit options. Environment
+ * values are opt-in and never override config or explicit options.
  * @param {{
  *   config?: Record<string, unknown>;
  *   env?: Record<string, string | undefined>;
@@ -251,7 +247,7 @@ function applyRetryProfilePatch(target, patch) {
  * }}
  */
 export function resolveToriiClientConfig(input = {}) {
-  const { config, env = defaultEnv, overrides = {} } = input;
+  const { config, env = {}, overrides = {} } = input;
   const result = {
     timeoutMs: DEFAULT_TORII_CLIENT_CONFIG.timeoutMs,
     maxRetries: DEFAULT_TORII_CLIENT_CONFIG.maxRetries,
@@ -268,6 +264,13 @@ export function resolveToriiClientConfig(input = {}) {
   };
 
   const sources = [extractToriiClientSource(config), overrides];
+  const hasSourceOption = (name) =>
+    sources.some(
+      (source) =>
+        source &&
+        typeof source === "object" &&
+        Object.prototype.hasOwnProperty.call(source, name),
+    );
   const profileOverrides = new Map();
 
   const collectProfileOverrides = (container) => {
@@ -325,7 +328,10 @@ export function resolveToriiClientConfig(input = {}) {
       source.backoffMultiplier,
       "backoffMultiplier",
     );
-    if (backoffMultiplier !== null && backoffMultiplier >= 1) {
+    if (backoffMultiplier !== null) {
+      if (backoffMultiplier < 1) {
+        throw new RangeError("backoffMultiplier must be at least 1");
+      }
       result.backoffMultiplier = backoffMultiplier;
     }
     const maxBackoff = coercePositiveInt(
@@ -368,19 +374,19 @@ export function resolveToriiClientConfig(input = {}) {
     }
   }
 
-  if (ENV_KEYS.timeoutMs in env && env[ENV_KEYS.timeoutMs]) {
+  if (!hasSourceOption("timeoutMs") && ENV_KEYS.timeoutMs in env && env[ENV_KEYS.timeoutMs]) {
     const timeout = coercePositiveInt(env[ENV_KEYS.timeoutMs], "IROHA_TORII_TIMEOUT_MS", true);
     if (timeout !== null) {
       result.timeoutMs = timeout;
     }
   }
-  if (ENV_KEYS.maxRetries in env && env[ENV_KEYS.maxRetries]) {
+  if (!hasSourceOption("maxRetries") && ENV_KEYS.maxRetries in env && env[ENV_KEYS.maxRetries]) {
     const retries = coercePositiveInt(env[ENV_KEYS.maxRetries], "IROHA_TORII_MAX_RETRIES", true);
     if (retries !== null) {
       result.maxRetries = retries;
     }
   }
-  if (ENV_KEYS.backoffInitialMs in env && env[ENV_KEYS.backoffInitialMs]) {
+  if (!hasSourceOption("backoffInitialMs") && ENV_KEYS.backoffInitialMs in env && env[ENV_KEYS.backoffInitialMs]) {
     const backoffInitial = coercePositiveInt(
       env[ENV_KEYS.backoffInitialMs],
       "IROHA_TORII_BACKOFF_INITIAL_MS",
@@ -390,16 +396,19 @@ export function resolveToriiClientConfig(input = {}) {
       result.backoffInitialMs = backoffInitial;
     }
   }
-  if (ENV_KEYS.backoffMultiplier in env && env[ENV_KEYS.backoffMultiplier]) {
+  if (!hasSourceOption("backoffMultiplier") && ENV_KEYS.backoffMultiplier in env && env[ENV_KEYS.backoffMultiplier]) {
     const backoffMultiplier = coerceNumber(
       env[ENV_KEYS.backoffMultiplier],
       "IROHA_TORII_BACKOFF_MULTIPLIER",
     );
-    if (backoffMultiplier !== null && backoffMultiplier >= 1) {
+    if (backoffMultiplier !== null) {
+      if (backoffMultiplier < 1) {
+        throw new RangeError("IROHA_TORII_BACKOFF_MULTIPLIER must be at least 1");
+      }
       result.backoffMultiplier = backoffMultiplier;
     }
   }
-  if (ENV_KEYS.maxBackoffMs in env && env[ENV_KEYS.maxBackoffMs]) {
+  if (!hasSourceOption("maxBackoffMs") && ENV_KEYS.maxBackoffMs in env && env[ENV_KEYS.maxBackoffMs]) {
     const maxBackoff = coercePositiveInt(
       env[ENV_KEYS.maxBackoffMs],
       "IROHA_TORII_MAX_BACKOFF_MS",
@@ -409,7 +418,7 @@ export function resolveToriiClientConfig(input = {}) {
       result.maxBackoffMs = maxBackoff;
     }
   }
-  if (ENV_KEYS.retryStatuses in env && env[ENV_KEYS.retryStatuses]) {
+  if (!hasSourceOption("retryStatuses") && ENV_KEYS.retryStatuses in env && env[ENV_KEYS.retryStatuses]) {
     result.retryStatuses = toSetFromIterable(
       parseList(env[ENV_KEYS.retryStatuses], (value) =>
         coercePositiveInt(value, "IROHA_TORII_RETRY_STATUSES", true),
@@ -417,7 +426,7 @@ export function resolveToriiClientConfig(input = {}) {
       (entry) => entry,
     );
   }
-  if (ENV_KEYS.retryMethods in env && env[ENV_KEYS.retryMethods]) {
+  if (!hasSourceOption("retryMethods") && ENV_KEYS.retryMethods in env && env[ENV_KEYS.retryMethods]) {
     result.retryMethods = toSetFromIterable(
       parseList(env[ENV_KEYS.retryMethods], (value) =>
         value ? String(value).toUpperCase() : null,
@@ -425,10 +434,15 @@ export function resolveToriiClientConfig(input = {}) {
       (entry) => entry,
     );
   }
-  if (ENV_KEYS.apiToken in env && env[ENV_KEYS.apiToken]) {
+  if (
+    !hasSourceOption("apiToken") &&
+    pickApiToken(config) === null &&
+    ENV_KEYS.apiToken in env &&
+    env[ENV_KEYS.apiToken]
+  ) {
     result.apiToken = env[ENV_KEYS.apiToken] || null;
   }
-  if (ENV_KEYS.authToken in env && env[ENV_KEYS.authToken]) {
+  if (!hasSourceOption("authToken") && ENV_KEYS.authToken in env && env[ENV_KEYS.authToken]) {
     result.authToken = env[ENV_KEYS.authToken] || null;
   }
   const defaultOverride = profileOverrides.get("default");

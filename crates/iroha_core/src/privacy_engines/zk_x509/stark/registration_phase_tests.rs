@@ -1,4 +1,17 @@
 // Lexically included by `zk_x509::stark::tests` to preserve the existing libtest paths.
+fn test_stark_digest_v1(seed: u8) -> GoldilocksDigest384V1 {
+    GoldilocksDigest384V1::new([u64::from(seed); 6]).expect("test digest is canonical")
+}
+
+fn mutate_stark_digest_v1(digest: &mut GoldilocksDigest384V1) {
+    let mut words = digest.words();
+    words[0] = F::canonical(words[0])
+        .expect("digest lane is canonical")
+        .add(F::ONE)
+        .value();
+    *digest = GoldilocksDigest384V1::new(words).expect("mutated test digest is canonical");
+}
+
 #[test]
 fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let (statement, _, proof) = projection_fixture();
@@ -166,23 +179,23 @@ fn exact_wire_rejects_truncation_trailing_magic_version_and_counts() {
 #[test]
 fn every_committed_column_family_and_opening_family_is_bound() {
     let mut changed = decode_fixture();
-    changed.trace_groups[0].base_root[0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].base_root);
     assert_rejected(&changed);
     changed = decode_fixture();
-    changed.trace_groups[0].aux_root[0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].aux_root);
     assert_rejected(&changed);
     for lane in 0..SECURITY_LANES {
         changed = decode_fixture();
-        changed.composition_roots[lane][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.composition_roots[lane]);
         assert_rejected(&changed);
         changed = decode_fixture();
-        changed.fri_lanes[lane].roots[0][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.fri_lanes[lane].roots[0]);
         assert_rejected(&changed);
         changed = decode_fixture();
         changed.queries[0].composition_values[lane][0][0] ^= 1;
         assert_rejected(&changed);
         changed = decode_fixture();
-        changed.composition_frontiers[lane][0][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.composition_frontiers[lane][0]);
         assert_rejected(&changed);
         changed = decode_fixture();
         changed.queries[0].fri_lanes[lane].rounds[0].low[0] ^= 1;
@@ -191,7 +204,7 @@ fn every_committed_column_family_and_opening_family_is_bound() {
         changed.queries[0].fri_lanes[lane].rounds[0].high[0] ^= 1;
         assert_rejected(&changed);
         changed = decode_fixture();
-        changed.fri_lanes[lane].round_frontiers[0][0][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.fri_lanes[lane].round_frontiers[0][0]);
         assert_rejected(&changed);
     }
     for column in 0..IO_BASE_WIDTH {
@@ -211,10 +224,10 @@ fn every_committed_column_family_and_opening_family_is_bound() {
         assert_rejected(&changed);
     }
     changed = decode_fixture();
-    changed.trace_groups[0].base_frontier[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].base_frontier[0]);
     assert_rejected(&changed);
     changed = decode_fixture();
-    changed.trace_groups[0].aux_frontier[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].aux_frontier[0]);
     assert_rejected(&changed);
 }
 #[test]
@@ -281,23 +294,23 @@ fn every_deep_value_order_omission_and_replay_is_rejected() {
 #[test]
 fn every_projection_committed_column_and_opening_family_is_bound() {
     let mut changed = decode_projection_fixture();
-    changed.trace_groups[0].base_root[0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].base_root);
     assert_projection_rejected(&changed);
     changed = decode_projection_fixture();
-    changed.trace_groups[0].aux_root[0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].aux_root);
     assert_projection_rejected(&changed);
     for lane in 0..SECURITY_LANES {
         changed = decode_projection_fixture();
-        changed.composition_roots[lane][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.composition_roots[lane]);
         assert_projection_rejected(&changed);
         changed = decode_projection_fixture();
-        changed.fri_lanes[lane].roots[0][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.fri_lanes[lane].roots[0]);
         assert_projection_rejected(&changed);
         changed = decode_projection_fixture();
         changed.queries[0].composition_values[lane][0][0] ^= 1;
         assert_projection_rejected(&changed);
         changed = decode_projection_fixture();
-        changed.composition_frontiers[lane][0][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.composition_frontiers[lane][0]);
         assert_projection_rejected(&changed);
         changed = decode_projection_fixture();
         changed.queries[0].fri_lanes[lane].rounds[0].low[0] ^= 1;
@@ -306,7 +319,7 @@ fn every_projection_committed_column_and_opening_family_is_bound() {
         changed.queries[0].fri_lanes[lane].rounds[0].high[0] ^= 1;
         assert_projection_rejected(&changed);
         changed = decode_projection_fixture();
-        changed.fri_lanes[lane].round_frontiers[0][0][0] ^= 1;
+        mutate_stark_digest_v1(&mut changed.fri_lanes[lane].round_frontiers[0][0]);
         assert_projection_rejected(&changed);
     }
     for column in 0..ZK_X509_PROJECTION_BASE_WIDTH_V1 {
@@ -326,10 +339,10 @@ fn every_projection_committed_column_and_opening_family_is_bound() {
         assert_projection_rejected(&changed);
     }
     changed = decode_projection_fixture();
-    changed.trace_groups[0].base_frontier[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].base_frontier[0]);
     assert_projection_rejected(&changed);
     changed = decode_projection_fixture();
-    changed.trace_groups[0].aux_frontier[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].aux_frontier[0]);
     assert_projection_rejected(&changed);
 }
 #[test]
@@ -413,10 +426,10 @@ fn query_reordering_duplication_grinding_and_composition_mutations_reject() {
     changed.grinding_nonce ^= 1;
     assert_rejected(&changed);
     changed = decode_fixture();
-    changed.composition_roots[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.composition_roots[0]);
     assert_rejected(&changed);
     changed = decode_fixture();
-    changed.fri_lanes[0].roots[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.fri_lanes[0].roots[0]);
     assert_rejected(&changed);
 }
 #[test]
@@ -1878,8 +1891,8 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
 }
 #[test]
 fn main_base_commitment_session_mints_pre_aux_only_after_canonical_six_group_chronology() {
-    fn root(group: usize) -> [u8; 32] {
-        [u8::try_from(0x41 + group).expect("six groups"); 32]
+    fn root(group: usize) -> GoldilocksDigest384V1 {
+        test_stark_digest_v1(u8::try_from(0x41 + group).expect("six groups"))
     }
     let mut session = main_base_commitment_session_fixture_v1();
     let streamed = aggregate::StreamingRowCommitmentResultV1 {
@@ -1914,13 +1927,18 @@ fn main_base_commitment_session_mints_pre_aux_only_after_canonical_six_group_chr
         pre_aux.main_base_roots_for_test_v1(),
         core::array::from_fn(|index| root(index))
     );
-    derive_zk_x509_credential_pre_aux_binding_v1(pre_aux, [0xC1; 32], [0xD1; 32], [0xE1; 32])
-        .expect("X5B1 begins only from session-minted MAIN pre-aux");
+    derive_zk_x509_credential_pre_aux_binding_v1(
+        pre_aux,
+        test_stark_digest_v1(0xC1),
+        test_stark_digest_v1(0xD1),
+        test_stark_digest_v1(0xE1),
+    )
+    .expect("X5B1 begins only from session-minted MAIN pre-aux");
 }
 #[test]
 fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zero_and_excess() {
-    fn root(group: usize) -> [u8; 32] {
-        [u8::try_from(group + 1).expect("six groups"); 32]
+    fn root(group: usize) -> GoldilocksDigest384V1 {
+        test_stark_digest_v1(u8::try_from(group + 1).expect("six groups"))
     }
     for omitted_after in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
         let mut session = main_base_commitment_session_fixture_v1();
@@ -1940,13 +1958,13 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
     }
     let mut zero = main_base_commitment_session_fixture_v1();
     assert!(matches!(
-        zero.accept_base_root_v1(0, 5, [0_u8; 32]),
+        zero.accept_base_root_v1(0, 5, GoldilocksDigest384V1::default()),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     assert_eq!(zero.next_group, 0);
     assert_eq!(
         zero.roots,
-        [[0_u8; 32]; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1]
+        [GoldilocksDigest384V1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1]
     );
     assert_eq!(
         zero.recorded,
@@ -1954,7 +1972,7 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
     );
     let zero_streamed = aggregate::StreamingRowCommitmentResultV1 {
         commitment: aggregate::StreamingMerkleCommitmentV1 {
-            root: [0_u8; 32],
+            root: GoldilocksDigest384V1::default(),
             frontier: Vec::new(),
         },
         opened_rows: std::collections::BTreeMap::new(),
@@ -1997,7 +2015,7 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
             .expect("remaining canonical roots");
     }
     assert!(matches!(
-        session.accept_base_root_v1(FULL_PROFILE_TRACE_GROUPS_V1, 20, [0xFF; 32],),
+        session.accept_base_root_v1(FULL_PROFILE_TRACE_GROUPS_V1, 20, test_stark_digest_v1(0xFF),),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     session
@@ -2006,10 +2024,10 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
 }
 #[test]
 fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_state_tampering() {
-    fn group(root: [u8; 32]) -> TraceGroupProofV1 {
+    fn group(root: GoldilocksDigest384V1) -> TraceGroupProofV1 {
         TraceGroupProofV1 {
             base_root: root,
-            aux_root: [0_u8; 32],
+            aux_root: GoldilocksDigest384V1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }
@@ -2058,14 +2076,18 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let canonical_groups = (0..FULL_PROFILE_TRACE_GROUPS_V1)
-        .map(|index| group([u8::try_from(index + 1).expect("six groups"); 32]))
+        .map(|index| {
+            group(test_stark_digest_v1(
+                u8::try_from(index + 1).expect("six groups"),
+            ))
+        })
         .collect::<Vec<_>>();
     for wrong_count in [
         FULL_PROFILE_TRACE_GROUPS_V1 - 1,
         FULL_PROFILE_TRACE_GROUPS_V1 + 1,
     ] {
         let mut groups = canonical_groups.clone();
-        groups.resize(wrong_count, group([0xFF; 32]));
+        groups.resize(wrong_count, group(test_stark_digest_v1(0xFF)));
         let mut session = main_base_commitment_session_fixture_v1();
         assert!(matches!(
             session.accept_decoded_base_groups_v1(&groups),
@@ -2075,7 +2097,7 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     }
     for zero_at in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
         let mut groups = canonical_groups.clone();
-        groups[zero_at].base_root = [0_u8; 32];
+        groups[zero_at].base_root = GoldilocksDigest384V1::default();
         let mut session = main_base_commitment_session_fixture_v1();
         assert!(matches!(
             session.accept_decoded_base_groups_v1(&groups),
@@ -2083,7 +2105,8 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         ));
         assert_eq!(session.next_group, 0);
         assert_eq!(
-            session.roots, [[0_u8; 32]; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+            session.roots,
+            [GoldilocksDigest384V1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
             "decoded zero sentinel at group {zero_at} must fail transactionally"
         );
     }
@@ -2096,7 +2119,7 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         .expect("decoded canonical roots mint pre-aux");
     let mut partial = main_base_commitment_session_fixture_v1();
     partial
-        .accept_base_root_v1(0, 5, [0x11; 32])
+        .accept_base_root_v1(0, 5, test_stark_digest_v1(0x11))
         .expect("first root");
     assert!(matches!(
         partial.accept_decoded_base_groups_v1(&canonical_groups),
@@ -2105,13 +2128,13 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     let mut corrupted = main_base_commitment_session_fixture_v1();
     corrupted.recorded[0] = true;
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, [0x11; 32]),
+        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let mut corrupted = main_base_commitment_session_fixture_v1();
-    corrupted.roots[0] = [0x11; 32];
+    corrupted.roots[0] = test_stark_digest_v1(0x11);
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, [0x22; 32]),
+        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x22)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let mut corrupted = main_base_commitment_session_fixture_v1();
@@ -2130,19 +2153,19 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     let mut corrupted = main_base_commitment_session_fixture_v1();
     corrupted.consensus_context_digest = [0_u8; 32];
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, [0x11; 32]),
+        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let mut corrupted = main_base_commitment_session_fixture_v1();
     corrupted.main_profile_digest = [0_u8; 32];
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, [0x11; 32]),
+        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let mut corrupted = main_base_commitment_session_fixture_v1();
     corrupted.layout.trace_groups.swap(0, 1);
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, [0x11; 32]),
+        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
 }
@@ -2151,7 +2174,11 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
     fn commitment(seed: u8) -> aggregate::StreamingRowCommitmentResultV1 {
         aggregate::StreamingRowCommitmentResultV1 {
             commitment: aggregate::StreamingMerkleCommitmentV1 {
-                root: [seed; 32],
+                root: if seed == 0 {
+                    GoldilocksDigest384V1::default()
+                } else {
+                    test_stark_digest_v1(seed)
+                },
                 frontier: Vec::new(),
             },
             opened_rows: BTreeMap::new(),
@@ -2205,7 +2232,7 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     assert_eq!(groups.len(), 1, "aux cannot start before all six bases");
-    assert_eq!(groups[0].aux_root, [0_u8; 32]);
+    assert_eq!(groups[0].aux_root, GoldilocksDigest384V1::default());
     for group in 1..FULL_PROFILE_TRACE_GROUPS_V1 {
         record_main_group_commitment_v1(
             group,
@@ -2245,12 +2272,12 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         assert!(
             groups[..=group]
                 .iter()
-                .all(|recorded| recorded.aux_root != [0_u8; 32])
+                .all(|recorded| recorded.aux_root != GoldilocksDigest384V1::default())
         );
         assert!(
             groups[group + 1..]
                 .iter()
-                .all(|pending| pending.aux_root == [0_u8; 32])
+                .all(|pending| pending.aux_root == GoldilocksDigest384V1::default())
         );
     }
     let complete = groups.clone();
@@ -2272,6 +2299,7 @@ fn tiny_authenticated_main_polynomial_fixture_v1(
 ) -> aggregate::MaskedTracePolynomialSetV1 {
     let mut rng = StdRng::from_seed([seed; 32]);
     let (_, polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"iroha:test:zk-x509:main-scratch-leaf:v1",
         b"iroha:test:zk-x509:main-scratch-node:v1",
         usize::from(seed),
@@ -2545,8 +2573,8 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let base_roots = (0..FULL_PROFILE_TRACE_GROUPS_V1)
         .map(|index| TraceGroupProofV1 {
-            base_root: [u8::try_from(index + 1).expect("six roots"); 32],
-            aux_root: [u8::try_from(index + 0x41).expect("six roots"); 32],
+            base_root: test_stark_digest_v1(u8::try_from(index + 1).expect("six roots")),
+            aux_root: test_stark_digest_v1(u8::try_from(index + 0x41).expect("six roots")),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         })
@@ -2561,16 +2589,20 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
             .try_into()
             .expect("exact six MAIN roots"),
     );
-    let binding =
-        derive_zk_x509_credential_pre_aux_binding_v1(pre_aux, [0x91; 32], [0xA1; 32], [0xB1; 32])
-            .expect("canonical outer binding");
+    let binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        pre_aux,
+        test_stark_digest_v1(0x91),
+        test_stark_digest_v1(0xA1),
+        test_stark_digest_v1(0xB1),
+    )
+    .expect("canonical outer binding");
     let mut changed_pre_aux = pre_aux;
-    changed_pre_aux.main_base_roots_mut_for_test_v1()[5][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed_pre_aux.main_base_roots_mut_for_test_v1()[5]);
     let changed_binding = derive_zk_x509_credential_pre_aux_binding_v1(
         changed_pre_aux,
-        [0x91; 32],
-        [0xA1; 32],
-        [0xB1; 32],
+        test_stark_digest_v1(0x91),
+        test_stark_digest_v1(0xA1),
+        test_stark_digest_v1(0xB1),
     )
     .expect("binding under a hostile log19 root");
     let claims = main_log19_terminal_claims_fixture_v1();

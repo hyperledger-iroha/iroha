@@ -22,7 +22,6 @@ Checked the following IVM modules and confirmed their inline/docs comments match
 - `crates/ivm/src/instruction.rs`
 - `crates/ivm/src/encoding.rs`
 - `crates/ivm/src/iso20022.rs`
-- `crates/ivm/src/halo2.rs`
 - `crates/ivm/src/signature.rs`
 - `crates/ivm_abi/src/pointer_abi.rs`
 - `crates/ivm/src/ivm_cache.rs`

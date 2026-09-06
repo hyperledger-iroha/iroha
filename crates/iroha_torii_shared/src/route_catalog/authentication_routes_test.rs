@@ -45,6 +45,12 @@ const ACCOUNT_EXPENSIVE: RoutePolicyExpectation = RoutePolicyExpectation {
     effect: Some(RouteEffect::ExpensiveCompute),
     ..ACCOUNT_AUTHENTICATED
 };
+const DATASPACE_EXPENSIVE: RoutePolicyExpectation = RoutePolicyExpectation {
+    effect: Some(RouteEffect::ExpensiveCompute),
+    admission: Some(AdmissionPolicy::DataspaceVisible),
+    authentication: Some(AuthenticationPolicy::OptionalCanonicalAccountSignature),
+    ..EMPTY_POLICY
+};
 const ACCOUNT_MUTATION: RoutePolicyExpectation = RoutePolicyExpectation {
     effect: Some(RouteEffect::Mutation),
     ..ACCOUNT_AUTHENTICATED
@@ -169,28 +175,26 @@ macro_rules! named_route_policy_test {
 }
 
 named_route_policy_test!(
-    offline_receiver_lineage_requires_account_authentication_before_expensive_proof_work,
-    {
-        assert_route_policy(offline::RECIPIENT_LINEAGE, ACCOUNT_EXPENSIVE);
-    }
-);
-
-named_route_policy_test!(
     application_query_posts_authenticate_before_expensive_compute,
     {
         assert_route_policies(
             [
-                application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
-                application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
                 application_api::DOMAINS_QUERY_POST,
                 application_api::ACCOUNTS_QUERY_POST,
                 application_api::TRANSACTIONS_QUERY_POST,
-                application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
-                application_api::REPO_AGREEMENTS_QUERY_POST,
-                telemetry::ASSET_HOLDERS_QUERY,
                 application_api::ASSETS_DEFINITIONS_QUERY_POST,
                 application_api::NFTS_QUERY_POST,
                 application_api::RWAS_QUERY_POST,
+                application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
+                application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
+                telemetry::ASSET_HOLDERS_QUERY,
+            ],
+            DATASPACE_EXPENSIVE,
+        );
+        assert_route_policies(
+            [
+                application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
+                application_api::REPO_AGREEMENTS_QUERY_POST,
             ],
             ACCOUNT_EXPENSIVE,
         );
@@ -276,18 +280,6 @@ named_route_policy_test!(
                 ..OPERATOR_READ
             },
         );
-        assert_route_policy(
-            sorafs::STORAGE_FETCH,
-            RoutePolicyExpectation {
-                method: Some(HttpMethod::Post),
-                surface: Some(ApiSurface::Operator),
-                effect: Some(RouteEffect::ExpensiveCompute),
-                admission: Some(AdmissionPolicy::Operator),
-                authentication: Some(AuthenticationPolicy::OperatorSignature),
-                projections: Some(RouteProjections::NONE),
-                ..RoutePolicyExpectation::default()
-            },
-        );
         assert_route_policies(
             [sorafs::STORAGE_CAR, sorafs::STORAGE_CHUNK],
             RoutePolicyExpectation {
@@ -314,24 +306,147 @@ named_route_policy_test!(
                         .starts_with("application.soracloud_")
             })
             .collect::<Vec<_>>();
+        // Pin the current command identities and effects; a new POST must be reviewed explicitly.
+        // The retired model-host commands and HF deploy are replaced by shared-lease join.
+        let expected = std::collections::BTreeMap::from([
+            (
+                "application.soracloud_agent_autonomy_allow_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_deploy_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_lease_renew_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_message_ack_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_message_send_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_policy_revoke_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_restart_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_wallet_approve_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_agent_wallet_spend_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_apps_deploy_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_apps_upgrade_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_ciphertext_query_post",
+                RouteEffect::ReadOnly,
+            ),
+            (
+                "application.soracloud_decrypt_request_post",
+                RouteEffect::Mutation,
+            ),
+            ("application.soracloud_deploy_post", RouteEffect::Mutation),
+            (
+                "application.soracloud_fhe_job_run_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_health_access_request_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_hf_lease_leave_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_hf_lease_renew_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_hf_shared_lease_join_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_model_artifact_register_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_model_upload_register_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_model_weight_promote_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_model_weight_register_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_model_weight_rollback_post",
+                RouteEffect::Mutation,
+            ),
+            ("application.soracloud_rollback_post", RouteEffect::Mutation),
+            ("application.soracloud_rollout_post", RouteEffect::Mutation),
+            (
+                "application.soracloud_service_config_delete_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_service_config_set_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_service_secret_delete_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_service_secret_set_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_state_mutate_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_training_job_checkpoint_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_training_job_retry_post",
+                RouteEffect::Mutation,
+            ),
+            (
+                "application.soracloud_training_job_start_post",
+                RouteEffect::Mutation,
+            ),
+            ("application.soracloud_upgrade_post", RouteEffect::Mutation),
+        ]);
+        let actual = commands
+            .iter()
+            .map(|route| (route.stable_route_id(), route.effect()))
+            .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(
-            commands.len(),
-            38,
-            "every SoraCloud POST must be classified"
+            actual, expected,
+            "every current SoraCloud POST must have an explicit reviewed effect"
         );
         assert_route_policies(commands.iter().map(|route| **route), ACCOUNT_AUTHENTICATED);
-        for route in commands {
-            let expected_effect = match route.stable_route_id() {
-                "application.soracloud_ciphertext_query_post" => RouteEffect::ReadOnly,
-                _ => RouteEffect::Mutation,
-            };
-            assert_eq!(
-                route.effect(),
-                expected_effect,
-                "{} advertises the wrong strongest effect",
-                route.stable_route_id()
-            );
-        }
     }
 );
 
@@ -484,6 +599,27 @@ named_route_policy_test!(zk_compute_routes_require_exact_account_authentication,
 });
 
 named_route_policy_test!(
+    account_bootstrap_capabilities_are_public_without_changing_node_authentication,
+    {
+        assert_route_policies(
+            [application_api::ACCOUNTS_CAPABILITIES_GET],
+            RoutePolicyExpectation {
+                projections: Some(RouteProjections::OPENAPI_AND_SDK),
+                openapi: Some(true),
+                sdk: Some(true),
+                app_api_enabled: Some(true),
+                cataloged: Some(true),
+                ..PUBLIC_READ
+            },
+        );
+        assert_route_policies(
+            [runtime_governance::NODE_CAPABILITIES],
+            ACCOUNT_AUTHENTICATED,
+        );
+    }
+);
+
+named_route_policy_test!(
     state_backed_runtime_and_governance_routes_require_exact_account_authentication,
     {
         assert_route_policies(
@@ -521,7 +657,6 @@ named_route_policy_test!(
                 runtime_governance::GOV_PROTECTED_GET,
                 runtime_governance::GOV_UNLOCK_STATS,
                 runtime_governance::GOV_CONTRACT_GET,
-                runtime_governance::GOV_COUNCIL_CURRENT,
                 runtime_governance::GOV_CITIZENS_COUNT,
                 runtime_governance::GOV_CITIZEN_STATUS,
             ],

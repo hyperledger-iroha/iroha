@@ -227,7 +227,7 @@ class TransactionSubmissionCompatibilityTest {
         queue: PendingTransactionQueue? = null,
         retryPolicy: RetryPolicy = RetryPolicy.none(),
     ): HttpClientTransport =
-        HttpClientTransport.withExecutor(
+        HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))

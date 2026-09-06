@@ -453,11 +453,6 @@ pub const SCHEDULE_OPCODES: &[u8] = &[
     wide::crypto::SHA3BLOCK,
     wide::crypto::POSEIDON2,
     wide::crypto::POSEIDON6,
-    wide::crypto::PUBKGEN,
-    wide::crypto::VALCOM,
-    wide::crypto::ECADD,
-    wide::crypto::ECMUL_VAR,
-    wide::crypto::PAIRING,
     wide::crypto::AESENC,
     wide::crypto::AESDEC,
     wide::crypto::BLAKE2S,
@@ -543,10 +538,6 @@ pub fn cost_of(instr: u32) -> Option<u64> {
         wide::crypto::PARBEGIN | wide::crypto::PAREND => Some(0),
         wide::crypto::SHA256BLOCK | wide::crypto::SHA3BLOCK => Some(50),
         wide::crypto::POSEIDON2 | wide::crypto::POSEIDON6 => Some(10),
-        wide::crypto::PUBKGEN | wide::crypto::VALCOM => Some(50),
-        wide::crypto::ECADD => Some(20),
-        wide::crypto::ECMUL_VAR => Some(100),
-        wide::crypto::PAIRING => Some(500),
         wide::crypto::AESENC | wide::crypto::AESDEC => Some(30),
         wide::crypto::BLAKE2S => Some(40),
         wide::crypto::ED25519VERIFY => Some(1000),
@@ -594,8 +585,8 @@ pub fn cost_of_with_vector_len(instr: u32, vector_len: usize) -> Option<u64> {
     let wide_op = wide::opcode(instr);
     cost_from_parts(cost_of(instr), wide_op, vector_len)
 }
-const GAS_SCHEDULE_DOMAIN: &str = "iroha.ivm.gas-schedule.v3";
-const GAS_SCHEDULE_DESCRIPTOR_VERSION: u16 = 3;
+const GAS_SCHEDULE_DOMAIN: &str = "iroha.ivm.gas-schedule.v4";
+const GAS_SCHEDULE_DESCRIPTOR_VERSION: u16 = 4;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GasParameter {
     name: &'static str,

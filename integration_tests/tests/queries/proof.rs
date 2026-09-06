@@ -108,7 +108,7 @@ fn rejected_halo2_attachment_and_registration()
 fn rejected_stark_attachment_and_registration(
     label: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    let backend = "stark/fri/sha256-goldilocks";
+    let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
     let circuit_id = format!("{backend}:query-stark");
     let public_inputs = b"query-stark-public-inputs".to_vec();
     let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
@@ -119,7 +119,6 @@ fn rejected_stark_attachment_and_registration(
         fold_arity: 2,
         queries: 2,
         merkle_arity: 2,
-        hash_fn: iroha_core::zk_stark::STARK_HASH_SHA256_V1,
     };
     let vk_box = VerifyingKeyBox::new(
         backend.into(),
@@ -233,7 +232,7 @@ fn proof_query_scenarios() -> Result<()> {
         )?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
         let halo2 = retry_records_by_backend(&client, "halo2/ipa")?;
-        let stark = retry_records_by_backend(&client, "stark/fri/sha256-goldilocks")?;
+        let stark = retry_records_by_backend(&client, "stark/fri/poseidon-x7-goldilocks-6x64-v1")?;
         let halo2_backends = proof_record_backends(&halo2);
         let stark_backends = proof_record_backends(&stark);
         assert!(
@@ -248,13 +247,14 @@ fn proof_query_scenarios() -> Result<()> {
         );
         assert!(
             !stark.is_empty(),
-            "expected at least one stark/fri/sha256-goldilocks proof record"
+            "expected at least one stark/fri/poseidon-x7-goldilocks-6x64-v1 proof record"
         );
         assert!(
             stark
                 .iter()
-                .all(|record| record.id.backend.as_str() == "stark/fri/sha256-goldilocks"),
-            "backend query should only return stark/fri/sha256-goldilocks proof records, got {stark_backends:?}"
+                .all(|record| record.id.backend.as_str()
+                    == "stark/fri/poseidon-x7-goldilocks-6x64-v1"),
+            "backend query should only return stark/fri/poseidon-x7-goldilocks-6x64-v1 proof records, got {stark_backends:?}"
         );
         let nonexistent = client
             .query(FindProofRecordsByBackend::new("nonexistent".into()))

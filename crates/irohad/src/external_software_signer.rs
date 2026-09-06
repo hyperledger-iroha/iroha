@@ -7,12 +7,14 @@
 //! chain before reporting a mutating operation as successful.
 //!
 //! The broker adapter implements the existing native transaction signer traits,
-//! so replacing this software backend with a future HSM adapter does not change
+//! so replacing this software backend with another signing provider does not change
 //! Torii or runtime-provider registry interfaces.
 #[cfg(unix)]
 mod adapter;
 #[cfg(unix)]
 mod consensus_threshold;
+/// Independently authenticated hardware custody statements; not a production signer adapter.
+pub mod custody;
 mod envelope;
 #[cfg(unix)]
 mod journal;

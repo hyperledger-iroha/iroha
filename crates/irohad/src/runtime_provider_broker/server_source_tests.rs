@@ -2335,7 +2335,12 @@ fn bind_fake_broker() -> (
     EndpointPolicy,
     UnixListener,
 ) {
-    let directory = tempfile::tempdir().expect("create fake broker directory");
+    // Keep the pathname supplied to `bind(2)` short even when the caller has a
+    // deeply nested TMPDIR; macOS limits `sockaddr_un.sun_path` to 104 bytes.
+    let directory = tempfile::Builder::new()
+        .prefix(".iroha-rpb-")
+        .tempdir_in(".")
+        .expect("create short fake broker directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden fake broker directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");

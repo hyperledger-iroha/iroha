@@ -1,1 +1,204 @@
-{"activation_contract":{"active_lifecycle":"Active","mode":"governance","one_committed_transaction_per_protocol":true,"proposed_lifecycle":"Proposed"},"canary_contract":{"malformed_failure_code":"privacy-malformed-proof","per_wave":["positive","negative","replay"],"positive_query_scope":["public-torii","taira-validator-1","taira-validator-2","taira-validator-3","taira-validator-4"],"rejection_scope":["public-torii","taira-validator-1","taira-validator-2","taira-validator-3","taira-validator-4"],"replay_failure_code":"privacy-replay"},"cargo_lock_sha256":"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79","chain_id":"fc56984b-2be7-431d-840e-21514d1883f0","endpoints":["public-torii","taira-validator-1","taira-validator-2","taira-validator-3","taira-validator-4"],"halt_conditions":["state-or-hash-divergence","retained-protocol-unavailable","malformed-or-replayed-input-accepted","native-resource-ceiling-exceeded","restart-convergence-failed","receipt-or-candidate-binding-mismatch"],"intervals":{"notice_blocks":300,"observation_blocks":300},"legacy_policy":{"decoder_or_migration_fallback":false,"retired_labels":["zkat-policy-private-auth-v1","zk-ams-recursive-admission-v0","silent-threshold-anoncred-v0","zk-x509-onchain-identity-v0","jindo-lattice-pcs-zk-v0","sis-hints-anoncred-pq-v0","sis-with-hints","penumbra-masp-v1","miden-stark-note-v1","aztec-private-rollup-v1"]},"post_cutover_contract":{"authority_scope":"dedicated-no-governance-canary","bootstrap_authority_forbidden":true,"governance_permission_forbidden":true,"mode":"signed-write-and-privacy","privacy_protocol":"verange-transparent-range-v1","skip_write_canary_forbidden":true},"protocol_matrix_sha256":"f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38","protocols":[{"assurance":"unavailable","index":0,"label":"zk-ace-pq-authorization-v0","missing_evidence":["ZkAceNativeErrorV1::EngineUnavailable"],"release_status":"retained-required"},{"assurance":"available","index":1,"label":"anonymous-pgc-k-out-of-n-v1","missing_evidence":[],"release_status":"retained-required"},{"assurance":"available","index":2,"label":"verange-transparent-range-v1","missing_evidence":[],"release_status":"retained-required"},{"assurance":"unavailable","index":3,"label":"iroha-zk-ams-v1","missing_evidence":["ZkAmsMkheErrorV1::ReleaseUnavailable"],"release_status":"retained-required"},{"assurance":"unavailable","index":4,"label":"vega-existing-credential-zk-v0","missing_evidence":["MissingGovernedFigure9ProverArtifacts"],"release_status":"retained-required"},{"assurance":"unavailable","index":5,"label":"iroha-zk-x509-stark-p256-v0","missing_evidence":["ZkX509ProfileErrorV1::EngineIncomplete"],"release_status":"retained-required"},{"assurance":"available-experimental","index":6,"label":"iroha-jindo-polynomial-commitment-v0","missing_evidence":["MissingDistributionWideKnowledgeSoundnessEvidence"],"release_status":"retained-required"},{"assurance":"available","index":7,"label":"iroha-bootle-lantern-anoncred-v1","missing_evidence":[],"release_status":"retained-required"},{"assurance":"available","index":8,"label":"orchard-halo2-actions-v1","missing_evidence":[],"release_status":"retained-required"},{"assurance":"available","index":9,"label":"monero-fcmp-plus-plus-v1","missing_evidence":[],"release_status":"retained-required"},{"assurance":"available","index":10,"label":"iroha-ivm-private-note-stark-v1","missing_evidence":[],"release_status":"retained-required"},{"assurance":"available","index":11,"label":"pq-masp-stark-v0","missing_evidence":[],"release_status":"retained-required"}],"publication_contract":{"network_success_is_native_authority":false,"only_deployed_and_readmitted_oci_digest":true,"requires_rollout_status":"passed"},"resource_ceilings":{"max_address_space_bytes":1099511627776,"max_elapsed_millis":3600000,"max_peak_rss_bytes":68719476736,"max_transport_bytes":134217728,"max_work_units":100000000000,"zk_ams_evaluated_key_bytes":48452611616},"restart_contract":{"exact_sentinel_height_and_hash":true,"one_validator_per_wave":true,"peer_finality_scope":["public-torii","taira-validator-1","taira-validator-2","taira-validator-3","taira-validator-4"],"successor_finality_required":true},"rollback_contract":{"armed_before_first_wave":true,"legacy_fallback_forbidden":true,"restore_mode":"immutable-candidate-and-capability-set"},"schema":"iroha.taira.privacy_rollout_plan","schema_version":1,"waves":[{"index":1,"label":"wave-1","protocols":["zk-ace-pq-authorization-v0","anonymous-pgc-k-out-of-n-v1","verange-transparent-range-v1","iroha-bootle-lantern-anoncred-v1"]},{"index":2,"label":"wave-2","protocols":["orchard-halo2-actions-v1","monero-fcmp-plus-plus-v1","iroha-ivm-private-note-stark-v1","pq-masp-stark-v0"]},{"index":3,"label":"wave-3","protocols":["vega-existing-credential-zk-v0","iroha-jindo-polynomial-commitment-v0"]},{"index":4,"label":"wave-4","protocols":["iroha-zk-x509-stark-p256-v0","iroha-zk-ams-v1"]}]}
+{
+  "schema": "iroha.taira.privacy_rollout_plan.v1",
+  "schema_version": 1,
+  "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+  "cargo_lock_sha256": "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7",
+  "protocol_matrix_sha256": "5e6f7f5468f6834b5c9d0b1993a53a0c618a2aa12697b7703e853ba80071b386",
+  "wire_contract": {
+    "catalog_size": 12,
+    "catalog_commitment_le_hex": "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+    "proof_envelope_magic_hex": "4952485a4b31a55a"
+  },
+  "capability_gate": {
+    "authoritative_route": "/v1/privacy/capabilities",
+    "authenticated_committed_state_required": true,
+    "required_readiness": "production-qualified",
+    "all_exact12_rows_required": true,
+    "caller_asserted_readiness_forbidden": true
+  },
+  "activation_contract": {
+    "mode": "governance",
+    "proposed_lifecycle": "Proposed",
+    "active_lifecycle": "Active",
+    "one_committed_transaction_per_protocol": true
+  },
+  "canary_contract": {
+    "per_wave": [
+      "positive",
+      "negative",
+      "replay"
+    ],
+    "positive_query_scope": [
+      "public-torii",
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
+    ],
+    "rejection_scope": [
+      "public-torii",
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
+    ],
+    "malformed_failure_code": "privacy-malformed-proof",
+    "replay_failure_code": "privacy-replay"
+  },
+  "endpoints": [
+    "public-torii",
+    "taira-validator-1",
+    "taira-validator-2",
+    "taira-validator-3",
+    "taira-validator-4"
+  ],
+  "halt_conditions": [
+    "state-or-hash-divergence",
+    "exact12-protocol-not-production-qualified",
+    "malformed-or-replayed-input-accepted",
+    "native-resource-ceiling-exceeded",
+    "restart-convergence-failed",
+    "receipt-or-release-binding-mismatch"
+  ],
+  "intervals": {
+    "notice_blocks": 300,
+    "observation_blocks": 300
+  },
+  "post_cutover_contract": {
+    "mode": "signed-write-and-privacy",
+    "authority_scope": "dedicated-no-governance-canary",
+    "privacy_protocol": "verange-transparent-range-v1",
+    "bootstrap_authority_forbidden": true,
+    "governance_permission_forbidden": true,
+    "skip_write_canary_forbidden": true
+  },
+  "protocols": [
+    {
+      "index": 0,
+      "label": "zk-ace-pq-authorization-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 1,
+      "label": "anonymous-pgc-k-out-of-n-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 2,
+      "label": "verange-transparent-range-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 3,
+      "label": "iroha-zk-ams-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 4,
+      "label": "vega-existing-credential-zk-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 5,
+      "label": "iroha-zk-x509-stark-p256-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 6,
+      "label": "iroha-jindo-polynomial-commitment-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 7,
+      "label": "iroha-bootle-lantern-anoncred-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 8,
+      "label": "orchard-halo2-actions-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 9,
+      "label": "monero-fcmp-plus-plus-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 10,
+      "label": "iroha-ivm-private-note-stark-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 11,
+      "label": "pq-masp-stark-v1",
+      "security_model": "pq-qrom"
+    }
+  ],
+  "publication_contract": {
+    "requires_rollout_status": "passed",
+    "network_success_is_native_authority": false,
+    "only_deployed_and_readmitted_oci_digest": true
+  },
+  "resource_ceilings": {
+    "max_address_space_bytes": 1099511627776,
+    "max_elapsed_millis": 3600000,
+    "max_peak_rss_bytes": 68719476736,
+    "max_transport_bytes": 134217728,
+    "max_work_units": 100000000000,
+    "zk_ams_evaluated_key_bytes": 48452611616
+  },
+  "restart_contract": {
+    "one_validator_per_wave": true,
+    "exact_sentinel_height_and_hash": true,
+    "successor_finality_required": true,
+    "peer_finality_scope": [
+      "public-torii",
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
+    ]
+  },
+  "rollback_contract": {
+    "armed_before_first_wave": true,
+    "restore_mode": "immutable-release-and-capability-set"
+  },
+  "waves": [
+    {
+      "index": 1,
+      "label": "wave-1",
+      "protocols": [
+        "zk-ace-pq-authorization-v1",
+        "anonymous-pgc-k-out-of-n-v1",
+        "verange-transparent-range-v1",
+        "iroha-bootle-lantern-anoncred-v1"
+      ]
+    },
+    {
+      "index": 2,
+      "label": "wave-2",
+      "protocols": [
+        "orchard-halo2-actions-v1",
+        "monero-fcmp-plus-plus-v1",
+        "iroha-ivm-private-note-stark-v1",
+        "pq-masp-stark-v1"
+      ]
+    },
+    {
+      "index": 3,
+      "label": "wave-3",
+      "protocols": [
+        "vega-existing-credential-zk-v1",
+        "iroha-jindo-polynomial-commitment-v1"
+      ]
+    },
+    {
+      "index": 4,
+      "label": "wave-4",
+      "protocols": [
+        "iroha-zk-x509-stark-p256-v1",
+        "iroha-zk-ams-v1"
+      ]
+    }
+  ]
+}

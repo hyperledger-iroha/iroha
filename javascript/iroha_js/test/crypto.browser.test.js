@@ -14,6 +14,9 @@ import * as distBrowserFacade from "../dist/browser.js";
 import * as srcPrivacyCapabilities from "../src/privacyCapabilities.js";
 import * as distPrivacyCapabilities from "../dist/privacyCapabilities.js";
 
+const RETIRED_STATIC_CRYPTO_CAPABILITY_LIST =
+  ["SUPPORTED", "CRYPTO", "ALGORITHMS"].join("_");
+
 test("browser crypto bundle exposes Kaigi roster proof helper and omits retired ZK-ACE helpers", () => {
   assert.throws(
     () => buildKaigiRosterJoinProof({ seed: Buffer.from("seed") }),
@@ -31,29 +34,33 @@ test("browser crypto bundle exposes Kaigi roster proof helper and omits retired 
   }
 });
 
-test("browser crypto normalizes all algorithm labels but only signs Ed25519 locally", () => {
-  assert.ok(supportedCryptoAlgorithms().includes("ml-dsa"));
+test("browser crypto advertises only algorithms it can execute locally", () => {
+  assert.deepEqual(supportedCryptoAlgorithms(), ["ed25519"]);
+  for (const algorithm of supportedCryptoAlgorithms()) {
+    assert.equal(generateKeyPair({ algorithm }).algorithm, algorithm);
+  }
   assert.equal(normalizeCryptoAlgorithm("gost3410-2012-256-paramset-a"), "gost3410-2012-256-paramset-a");
   for (const [label, crypto] of [
     ["src", srcBrowserCrypto],
     ["dist", distBrowserCrypto],
   ]) {
-    for (const [algorithm, expected] of [
-      ["ed-25519", "ed25519"],
-      ["mldsa65", "ml-dsa"],
-      ["ML-DSA-65", "ml-dsa"],
-      ["ML_DSA_65", "ml-dsa"],
-      ["ML_DSA-65", "ml-dsa"],
-      ["GOST3410-2012-256-PARAMSET-A", "gost3410-2012-256-paramset-a"],
-    ]) {
-      assert.equal(
-        crypto.normalizeCryptoAlgorithm(algorithm),
-        expected,
-        `${label} keeps ${algorithm}`,
-      );
-    }
+    assert.equal(RETIRED_STATIC_CRYPTO_CAPABILITY_LIST in crypto, false, label);
+    assert.equal("_createCryptoApi" in crypto, false, label);
     for (const algorithm of [
+      null,
       "",
+      "ed",
+      "eddsa",
+      "ed-25519",
+      "secp",
+      "secpk1",
+      "mldsa65",
+      "ML-DSA-65",
+      "ML_DSA_65",
+      "ML_DSA-65",
+      "bls-small",
+      "GOST3410-2012-256-PARAMSET-A",
+      "gost256a",
       " ed25519",
       "ed25519 ",
       "\u00A0ed25519",
@@ -92,6 +99,14 @@ test("browser crypto normalizes all algorithm labels but only signs Ed25519 loca
     () => generateKeyPair({ seed: Buffer.alloc(16, 7) }),
     /seed must be exactly 32 bytes/,
   );
+  for (const crypto of [srcBrowserCrypto, distBrowserCrypto]) {
+    for (const seed of [null, "", 0, false]) {
+      assert.throws(
+        () => crypto.generateKeyPair({ seed }),
+        /seed must be a Buffer, string, or ArrayBuffer view|seed must be exactly 32 bytes/,
+      );
+    }
+  }
   assert.throws(
     () => generateKeyPair({ algorithm: "ml-dsa", seed: Buffer.alloc(32, 7) }),
     /generateKeyPair\(ml-dsa\) is unavailable in browser-only crypto builds/,
@@ -156,7 +171,7 @@ test("mapped browser crypto keeps the native-only local catalog fail closed", ()
   }
 });
 
-test("broad browser facade omits the native catalog and retains the live Torii parser subpath", () => {
+test("browser graphs expose no legacy JSON privacy capability surface", () => {
   for (const [label, browser] of [
     ["src", srcBrowserFacade],
     ["dist", distBrowserFacade],
@@ -173,14 +188,19 @@ test("broad browser facade omits the native catalog and retains the live Torii p
     ["dist", distPrivacyCapabilities],
   ]) {
     assert.equal(
-      typeof capabilities.getPrivacyCapabilitiesV1,
+      typeof capabilities.getPrivacyExact12CapabilityManifestV1,
       "function",
-      `${label} keeps the live Torii capability client`,
+      `${label} keeps the fail-closed native Exact12 entry point`,
     );
     assert.equal(
-      typeof capabilities.parsePrivacyCapabilitySnapshotV1,
-      "function",
-      `${label} keeps the authoritative snapshot parser`,
+      Object.hasOwn(capabilities, "getPrivacyCapabilitiesV1"),
+      false,
+      `${label} removes the legacy JSON fetch`,
+    );
+    assert.equal(
+      Object.hasOwn(capabilities, "parsePrivacyCapabilitySnapshotV1"),
+      false,
+      `${label} removes the legacy JSON parser`,
     );
   }
 });
@@ -204,6 +224,12 @@ test("browser crypto covers the package root crypto export surface", () => {
     [...browserCryptoSource.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/g)]
       .map((match) => match[1]),
   );
+  for (const match of browserCryptoSource.matchAll(/export\s+\{([\s\S]*?)\}\s*;/g)) {
+    for (const specifier of match[1].split(",")) {
+      const name = specifier.trim().split(/\s+as\s+/u).at(-1);
+      if (name) browserExports.add(name);
+    }
+  }
   assert.deepEqual(
     rootCryptoExports.filter((name) => !browserExports.has(name)),
     [],
@@ -214,7 +240,7 @@ test("browser package wiring omits the retired privacy catalog module", () => {
   const packageJson = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
-  assert.equal(packageJson.exports["./crypto"].browser, "./dist/crypto.browser.js");
+  assert.equal(packageJson.exports["./crypto"].browser, "./dist/public/crypto.browser.js");
   assert.equal(packageJson.browser["./dist/crypto.js"], "./dist/crypto.browser.js");
 
   for (const [label, relativePath] of [

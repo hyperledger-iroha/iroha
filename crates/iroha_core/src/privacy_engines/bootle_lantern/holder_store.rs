@@ -230,7 +230,7 @@ pub enum BootleLanternHolderExternalErrorV1 {
     /// A compare-and-swap may have committed and requires exact readback.
     Ambiguous,
 }
-/// Runtime-only KMS/PKCS#11 wrapper for per-object data-encryption keys.
+/// Runtime-only provider boundary for wrapping per-object data-encryption keys.
 pub trait BootleLanternHolderKeyWrapperV1: Send + Sync + core::fmt::Debug {
     /// Opaque, non-secret deployment handle.
     fn handle(&self) -> &str;

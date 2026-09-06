@@ -29,10 +29,9 @@ use iroha_core::{
 use iroha_data_model::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-        MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentNoResultKindV1, ProposalContentId,
-        ProposalKind, SccpRouteGovernanceProposal,
+        MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1, MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
+        ParliamentNoResultKindV1, ProposalContentId, ProposalKind, SccpRouteGovernanceProposal,
     },
-    isi::governance::CouncilDerivationKind,
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::{EntryPointKind, ManifestProvenance},
 };
@@ -43,8 +42,7 @@ use iroha_torii_shared::governance_proposal_api::{
     SccpRouteGovernanceProposalDraftResponseV1,
 };
 use iroha_torii_shared::parliament_api::{
-    PARLIAMENT_API_VERSION_V1, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
-    PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1,
+    PARLIAMENT_API_VERSION_V1, PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
     ParliamentAttemptDraftResponseV1, ParliamentAttemptReadResponseV1,
@@ -150,22 +148,16 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PlainBallotDto {
         Self::try_deserialize(archived).expect("PlainBallotDto should deserialize from JSON string")
     }
 }
-/// Response to ballot submission (both zk/plain)
+/// Successful result of drafting an unsigned standalone ballot transaction.
 #[derive(Debug, JsonSerialize)]
-pub struct BallotSubmitResponse {
-    pub ok: bool,
-    pub accepted: bool,
-    pub reason: Option<String>,
-    /// Optional transaction skeleton for clients to sign and submit
+pub struct BallotDraftResponse {
+    /// Confirms that Torii constructed, but did not submit, the transaction draft.
+    pub drafted: bool,
+    /// Single instruction skeleton for the caller to place in a locally signed transaction.
     pub tx_instructions: Vec<TxInstr>,
 }
-fn ballot_rejection(reason: &str) -> JsonBody<BallotSubmitResponse> {
-    JsonBody(BallotSubmitResponse {
-        ok: false,
-        accepted: false,
-        reason: Some(reason.to_string()),
-        tx_instructions: Vec::new(),
-    })
+fn ballot_input_error(reason: impl Into<String>) -> crate::Error {
+    crate::routing::conversion_error(reason.into())
 }
 fn lock_hints_incomplete(owner: bool, amount: bool, duration: bool) -> bool {
     let any = owner || amount || duration;
@@ -280,17 +272,11 @@ fn validate_governance_selector_v1(field: &str, value: &str) -> Result<(), Strin
 }
 
 fn is_stored_typed_proposal_fingerprint(state: &iroha_core::state::State, selector: &str) -> bool {
-    if selector.len() != 64
-        || !selector
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
+    let Some(proposal_id) =
+        iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
+    else {
         return false;
-    }
-    let mut proposal_id = [0_u8; 32];
-    if hex::decode_to_slice(selector, &mut proposal_id).is_err() {
-        return false;
-    }
+    };
     state
         .world_view()
         .governance_proposals()
@@ -391,14 +377,14 @@ pub struct ZkBallotV1BallotProofDto {
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` for a foreign network or invalid authority. Invalid payloads are
-/// reflected in the response body.
+/// Returns `crate::Error::Query` for a foreign network, invalid authority, or invalid ballot
+/// fields. No transaction is submitted by this endpoint.
 pub async fn handle_gov_ballot_zk_v1(
     state: Arc<iroha_core::state::State>,
     authenticated_account: &iroha_data_model::account::AccountId,
     telemetry: MaybeTelemetry,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1Dto>,
-) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+) -> Result<JsonBody<BallotDraftResponse>, crate::Error> {
     ensure_network_id_matches(state.as_ref(), &body.network_id)?;
     let authority_id = parse_authority_literal(
         state.as_ref(),
@@ -407,56 +393,42 @@ pub async fn handle_gov_ballot_zk_v1(
         CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY,
     )?;
     ensure_authenticated_authority(authenticated_account, &authority_id)?;
-    if let Err(reason) = reject_zk_v1_aliases_from_raw(raw.as_ref()) {
-        return Ok(ballot_rejection(&reason));
-    }
-    if let Err(reason) = validate_exact_nonempty_token("backend", &body.backend) {
-        return Ok(ballot_rejection(&reason));
-    }
-    if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
-        return Ok(ballot_rejection(&reason));
-    }
-    if let Err(reason) = reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id) {
-        return Ok(ballot_rejection(&reason));
-    }
-    // Minimal size check for b64
-    if base64::engine::general_purpose::STANDARD
+    reject_zk_v1_aliases_from_raw(raw.as_ref()).map_err(ballot_input_error)?;
+    validate_exact_nonempty_token("backend", &body.backend).map_err(ballot_input_error)?;
+    validate_governance_selector_v1("election_id", &body.election_id)
+        .map_err(ballot_input_error)?;
+    reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id)
+        .map_err(ballot_input_error)?;
+    let proof_envelope = base64::engine::general_purpose::STANDARD
         .decode(body.envelope_b64.as_bytes())
-        .map(|bytes| bytes.len())
-        .unwrap_or(0)
-        == 0
+        .map_err(|_| ballot_input_error("envelope_b64 must be non-empty canonical base64"))?;
+    if proof_envelope.is_empty()
+        || base64::engine::general_purpose::STANDARD.encode(&proof_envelope) != body.envelope_b64
     {
-        return Ok(JsonBody(BallotSubmitResponse {
-            ok: false,
-            accepted: false,
-            reason: Some("invalid proof envelope".to_string()),
-            tx_instructions: Vec::new(),
-        }));
+        return Err(ballot_input_error(
+            "envelope_b64 must be non-empty canonical base64",
+        ));
     }
     let has_owner = body.owner.is_some();
     let has_amount = body.amount.is_some();
     let has_duration = body.duration_blocks.is_some();
     if lock_hints_incomplete(has_owner, has_amount, has_duration) {
-        return Ok(ballot_rejection(
+        return Err(ballot_input_error(
             "lock hints must include owner, amount, duration_blocks",
         ));
     }
     if let Some(owner) = &body.owner {
-        if let Err(reason) = ensure_owner_canonical(owner) {
-            return Ok(ballot_rejection(&reason));
-        }
+        ensure_owner_canonical(owner).map_err(ballot_input_error)?;
         if owner != &authority_id.to_string() {
-            return Ok(ballot_rejection("owner must equal authority"));
+            return Err(ballot_input_error("owner must equal authority"));
         }
     }
-    if let Err(reason) = validate_optional_ballot_direction(body.direction.as_deref()) {
-        return Ok(ballot_rejection(&reason));
-    }
+    validate_optional_ballot_direction(body.direction.as_deref()).map_err(ballot_input_error)?;
     // Build public inputs JSON object with optional hints
     let mut pub_map = norito::json::Map::new();
     if let Some(rh) = &body.root_hint {
         let Some(canonical) = canonicalize_hex32_value(rh) else {
-            return Ok(ballot_rejection("root_hint must be 32-byte hex"));
+            return Err(ballot_input_error("root_hint must be 32-byte hex"));
         };
         pub_map.insert("root_hint".into(), norito::json::Value::from(canonical));
     }
@@ -483,7 +455,7 @@ pub async fn handle_gov_ballot_zk_v1(
     }
     if let Some(nullifier) = &body.nullifier {
         let Some(canonical) = canonicalize_hex32_value(nullifier) else {
-            return Ok(ballot_rejection("nullifier must be 32-byte hex"));
+            return Err(ballot_input_error("nullifier must be 32-byte hex"));
         };
         pub_map.insert("nullifier".into(), norito::json::Value::from(canonical));
     }
@@ -496,10 +468,8 @@ pub async fn handle_gov_ballot_zk_v1(
         public_inputs_json,
     };
     let tx_instructions = vec![tx_instr_from_box(instr.into())];
-    Ok(JsonBody(BallotSubmitResponse {
-        ok: true,
-        accepted: true,
-        reason: Some("build transaction skeleton".to_string()),
+    Ok(JsonBody(BallotDraftResponse {
+        drafted: true,
         tx_instructions,
     }))
 }
@@ -508,14 +478,14 @@ pub async fn handle_gov_ballot_zk_v1(
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` for a foreign network or invalid authority. Malformed payloads are
-/// reported via the response payload.
+/// Returns `crate::Error::Query` for a foreign network, invalid authority, or invalid ballot
+/// fields. No transaction is submitted by this endpoint.
 pub async fn handle_gov_ballot_zk_v1_ballotproof(
     state: Arc<iroha_core::state::State>,
     authenticated_account: &iroha_data_model::account::AccountId,
     telemetry: MaybeTelemetry,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1BallotProofDto>,
-) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+) -> Result<JsonBody<BallotDraftResponse>, crate::Error> {
     ensure_network_id_matches(state.as_ref(), &body.network_id)?;
     let authority_id = parse_authority_literal(
         state.as_ref(),
@@ -524,31 +494,22 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY,
     )?;
     ensure_authenticated_authority(authenticated_account, &authority_id)?;
-    if let Err(reason) = reject_zk_v1_ballotproof_aliases_from_raw(raw.as_ref()) {
-        return Ok(ballot_rejection(&reason));
-    }
-    if let Err(reason) = validate_exact_nonempty_token("backend", &body.ballot.backend) {
-        return Ok(ballot_rejection(&reason));
-    }
-    if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
-        return Ok(ballot_rejection(&reason));
-    }
-    if let Err(reason) = reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id) {
-        return Ok(ballot_rejection(&reason));
-    }
+    reject_zk_v1_ballotproof_aliases_from_raw(raw.as_ref()).map_err(ballot_input_error)?;
+    validate_exact_nonempty_token("backend", &body.ballot.backend).map_err(ballot_input_error)?;
+    validate_governance_selector_v1("election_id", &body.election_id)
+        .map_err(ballot_input_error)?;
+    reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id)
+        .map_err(ballot_input_error)?;
     if body.ballot.envelope_bytes.is_empty() {
-        return Ok(JsonBody(BallotSubmitResponse {
-            ok: false,
-            accepted: false,
-            reason: Some("invalid proof envelope".to_string()),
-            tx_instructions: Vec::new(),
-        }));
+        return Err(ballot_input_error(
+            "ballot.envelope_bytes must not be empty",
+        ));
     }
     let has_owner = body.ballot.owner.is_some();
     let has_amount = body.ballot.amount.is_some();
     let has_duration = body.ballot.duration_blocks.is_some();
     if lock_hints_incomplete(has_owner, has_amount, has_duration) {
-        return Ok(ballot_rejection(
+        return Err(ballot_input_error(
             "lock hints must include owner, amount, duration_blocks",
         ));
     }
@@ -558,11 +519,10 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         .as_ref()
         .is_some_and(|owner| owner != &authority_id)
     {
-        return Ok(ballot_rejection("owner must equal authority"));
+        return Err(ballot_input_error("owner must equal authority"));
     }
-    if let Err(reason) = validate_optional_ballot_direction(body.ballot.direction.as_deref()) {
-        return Ok(ballot_rejection(&reason));
-    }
+    validate_optional_ballot_direction(body.ballot.direction.as_deref())
+        .map_err(ballot_input_error)?;
     // Build public inputs JSON from optional hints in BallotProof
     let mut pub_map = norito::json::Map::new();
     if let Some(rh) = &body.ballot.root_hint {
@@ -608,26 +568,10 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         public_inputs_json,
     };
     let tx_instructions = vec![tx_instr_from_box(instr.into())];
-    Ok(JsonBody(BallotSubmitResponse {
-        ok: true,
-        accepted: true,
-        reason: Some("build transaction skeleton".to_string()),
+    Ok(JsonBody(BallotDraftResponse {
+        drafted: true,
         tx_instructions,
     }))
-}
-/// A single council member (account id string)
-#[derive(Debug, JsonSerialize)]
-pub struct CouncilMemberDto {
-    pub account_id: String,
-}
-/// Current council response (epoch + members)
-#[derive(Debug, JsonSerialize)]
-pub struct CouncilCurrentResponse {
-    pub epoch: u64,
-    pub members: Vec<CouncilMemberDto>,
-    pub alternates: Vec<CouncilMemberDto>,
-    pub candidate_count: usize,
-    pub derived_by: CouncilDerivationKind,
 }
 /// Citizenship status response for an account.
 #[derive(Debug, JsonSerialize)]
@@ -636,9 +580,6 @@ pub struct CitizenStatusResponse {
     pub is_citizen: bool,
     pub amount: Option<String>,
     pub bonded_height: Option<String>,
-    pub seats_in_epoch: Option<String>,
-    pub last_epoch_seen: Option<String>,
-    pub cooldown_until: Option<String>,
 }
 /// Exact citizen registry count response.
 #[derive(Debug, JsonSerialize)]
@@ -740,6 +681,18 @@ pub struct GovernanceCapabilitiesV1 {
     pub supported_routes: Vec<String>,
 }
 const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_ATTEMPT_TIMED_OVN_V1";
+const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 10] = [
+    "DEPLOY_CONTRACT",
+    "RUNTIME_UPGRADE",
+    "SCCP_ROUTE_GOVERNANCE",
+    "VALIDATION_FEE_POLICY",
+    "VALIDATION_FEE_PAYOUT_LIFECYCLE",
+    "MUSUBI_REGISTRY_GOVERNANCE",
+    "SORAFS_PROVIDER_GOVERNANCE",
+    "CONTRACT_LIFECYCLE_GOVERNANCE",
+    "CONTRACT_EMERGENCY_HOLD",
+    "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
+];
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///
 /// # Errors
@@ -805,15 +758,10 @@ pub async fn handle_gov_capabilities(
             policy_jury: gov.policy_jury_size.to_string(),
             confirmation_jury: gov.confirmation_jury_size.to_string(),
         },
-        supported_proposal_kinds: vec![
-            "DEPLOY_CONTRACT".to_owned(),
-            "MUSUBI_REGISTRY_GOVERNANCE".to_owned(),
-            "RUNTIME_UPGRADE".to_owned(),
-            "SCCP_ROUTE_GOVERNANCE".to_owned(),
-            "SORAFS_PROVIDER_GOVERNANCE".to_owned(),
-            "VALIDATION_FEE_PAYOUT_LIFECYCLE".to_owned(),
-            "VALIDATION_FEE_POLICY".to_owned(),
-        ],
+        supported_proposal_kinds: GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1
+            .iter()
+            .map(|kind| (*kind).to_owned())
+            .collect(),
         supported_routes: vec![
             "/v1/gov/capabilities".to_owned(),
             "/v1/gov/citizens/draft".to_owned(),
@@ -953,7 +901,7 @@ pub async fn handle_gov_parliament_attempt_read(
         })?;
     let state_payload = norito::core::to_bytes_bounded(
         attempt,
-        PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
+        MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1,
     )
     .map_err(|_| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -1495,7 +1443,7 @@ pub fn handle_gov_parliament_tle_release_context_read(
         })?)
         .into();
 
-    Ok(JsonBody(ParliamentTleReleaseContextResponseV1 {
+    let response = ParliamentTleReleaseContextResponseV1 {
         version: PARLIAMENT_API_VERSION_V1,
         current_height: context.finalized_height(),
         ballot_attempt_id,
@@ -1508,7 +1456,15 @@ pub fn handle_gov_parliament_tle_release_context_read(
         release_identity: project_parliament_timed_ovn_release_identity_v1(release_identity),
         identity_digest,
         identity_payload_hex: hex::encode(identity_payload),
-    }))
+    };
+    response
+        .validate_for_ballot(ballot_attempt_id)
+        .map_err(|reason| {
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+                reason.into(),
+            ))
+        })?;
+    Ok(JsonBody(response))
 }
 /// Strict citizen registration draft request.
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1595,15 +1551,6 @@ pub async fn handle_gov_citizen_status(
         bonded_height: record
             .as_ref()
             .map(|record| record.bonded_height.to_string()),
-        seats_in_epoch: record
-            .as_ref()
-            .map(|record| record.seats_in_epoch.to_string()),
-        last_epoch_seen: record
-            .as_ref()
-            .map(|record| record.last_epoch_seen.to_string()),
-        cooldown_until: record
-            .as_ref()
-            .map(|record| record.cooldown_until.to_string()),
     }))
 }
 // --- Unlock sweep stats (operator/audit) ---
@@ -1752,12 +1699,14 @@ fn build_signable_transaction_b64(
     base64::engine::general_purpose::STANDARD.encode(builder.encode_payload())
 }
 fn deploy_contract_proposal_kind(
+    proposal_operator: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hash: &[u8; 32],
     abi_hash: &[u8; 32],
     manifest_provenance: Option<ManifestProvenance>,
 ) -> ProposalKind {
     ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: proposal_operator.clone(),
         contract_address: contract_address.clone(),
         code_hash: ContractCodeHash::new(*code_hash),
         abi_hash: ContractAbiHash::new(*abi_hash),
@@ -2079,21 +2028,9 @@ pub async fn handle_gov_protected_set(
 ) -> Result<JsonBody<ProtectedNamespacesApplyResponse>, crate::Error> {
     use iroha_data_model::parameter::{CustomParameterId, Parameter, custom::CustomParameter};
     use std::str::FromStr as _;
-    let namespaces: Vec<String> = body
-        .namespaces
-        .into_iter()
-        .enumerate()
-        .map(|(index, namespace)| {
-            validate_exact_nonempty_token(&format!("namespaces[{index}]"), &namespace)?;
-            if !namespace.is_ascii() {
-                return Err(format!(
-                    "namespaces[{index}] must contain only ASCII characters"
-                ));
-            }
-            Ok(namespace)
-        })
-        .collect::<Result<_, String>>()
-        .map_err(|message| crate::routing::conversion_error(message.into()))?;
+    let namespaces = body.namespaces;
+    iroha_core::smartcontracts::code::validate_protected_contract_namespaces(&namespaces)
+        .map_err(|error| crate::routing::conversion_error(error.to_string()))?;
     let namespace_count = namespaces.len();
     let name = iroha_data_model::name::Name::from_str("gov_protected_namespaces").map_err(|e| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -2147,43 +2084,160 @@ pub struct ProtectedNamespacesGetResponse {
 /// GET /v1/gov/protected-namespaces — read current setting from custom parameters.
 ///
 /// # Errors
-/// This handler never returns an error; absent parameters yield `found = false`.
+/// Returns an internal query error when a present on-chain policy is malformed. Absent parameters
+/// yield `found = false`.
 pub async fn handle_gov_protected_get(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<ProtectedNamespacesGetResponse>, crate::Error> {
-    use iroha_data_model::{name::Name, parameter::CustomParameterId};
-    use std::str::FromStr as _;
     let world = state.world_view();
     let params = world.parameters();
-    let mut namespaces: Vec<String> = Vec::new();
-    let mut found = false;
-    if let Ok(name) = Name::from_str("gov_protected_namespaces") {
-        let id = CustomParameterId(name);
-        if let Some(custom) = params.custom().get(&id) {
-            found = true;
-            if let Ok(v) = custom.payload().try_into_any_norito::<Vec<String>>() {
-                namespaces = v;
-            }
-        }
-    }
+    let policy = iroha_core::smartcontracts::code::protected_contract_namespaces(params).map_err(
+        |error| {
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+                error.to_string(),
+            ))
+        },
+    )?;
+    let found = policy.is_some();
+    let namespaces = policy.unwrap_or_default();
     Ok(JsonBody(ProtectedNamespacesGetResponse {
         found,
         namespaces,
     }))
 }
 #[derive(Debug, JsonSerialize)]
+/// JSON projection of a retained Parliament emergency hold.
+pub struct GovernedContractEmergencyHoldV1 {
+    /// Lowercase incident-evidence digest.
+    pub incident_digest_hex: String,
+    /// Lowercase proposal content identifier.
+    pub proposal_content_id_hex: String,
+    /// Lowercase governance-attempt identifier.
+    pub governance_attempt_id_hex: String,
+    /// Human-readable containment reason.
+    pub reason: String,
+    /// Block at which containment was imposed.
+    pub imposed_at_height: u64,
+    /// First block at which execution is permitted again.
+    pub expires_at_height: u64,
+}
+#[derive(Debug, JsonSerialize)]
+/// Stable app-facing projection of the canonical contract lifecycle record.
+pub struct GovernedContractLifecycleV1 {
+    /// Exact persisted lifecycle schema version.
+    pub version: u16,
+    /// Immutable deployment kind: `direct` or `parliament`.
+    pub origin: String,
+    /// Direct deployer or Parliament proposer recorded as immutable provenance.
+    pub origin_account: String,
+    /// Parliament proposal content identifier, when governance deployed the contract.
+    pub origin_proposal_content_id_hex: Option<String>,
+    /// Parliament attempt identifier, when governance deployed the contract.
+    pub origin_governance_attempt_id_hex: Option<String>,
+    /// Canonical account id or the literal `parliament` for the current owner.
+    pub owner: String,
+    /// Canonical account id or `parliament` for an outstanding ownership offer.
+    pub pending_owner: Option<String>,
+    /// Whether an account owner has delegated activation and deactivation to Parliament.
+    pub parliament_delegated: bool,
+    /// Lowercase active artifact hash, or `None` while the contract is inactive.
+    pub active_code_hash_hex: Option<String>,
+    /// Non-zero compare-and-swap revision.
+    pub revision: u64,
+    /// Retained emergency-hold record, including after expiry.
+    pub emergency_hold: Option<GovernedContractEmergencyHoldV1>,
+}
+fn governed_contract_owner_label(
+    owner: &iroha_data_model::smart_contract::ContractLifecycleOwnerV1,
+) -> String {
+    match owner {
+        iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(account) => {
+            account.to_string()
+        }
+        iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament => {
+            "parliament".to_owned()
+        }
+    }
+}
+impl From<&iroha_data_model::smart_contract::ContractLifecycleControlV1>
+    for GovernedContractLifecycleV1
+{
+    fn from(lifecycle: &iroha_data_model::smart_contract::ContractLifecycleControlV1) -> Self {
+        use iroha_data_model::smart_contract::{
+            ContractDeploymentOriginV1, ContractParliamentDelegationV1,
+        };
+        let (
+            origin,
+            origin_account,
+            origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex,
+        ) = match &lifecycle.origin {
+            ContractDeploymentOriginV1::Direct(origin) => {
+                ("direct".to_owned(), origin.deployer.to_string(), None, None)
+            }
+            ContractDeploymentOriginV1::Parliament(origin) => (
+                "parliament".to_owned(),
+                origin.proposer.to_string(),
+                Some(hex::encode(origin.proposal_content_id)),
+                Some(hex::encode(origin.governance_attempt_id)),
+            ),
+        };
+        let emergency_hold =
+            lifecycle
+                .emergency_hold
+                .as_ref()
+                .map(|hold| GovernedContractEmergencyHoldV1 {
+                    incident_digest_hex: hex::encode(hold.incident_digest),
+                    proposal_content_id_hex: hex::encode(hold.proposal_content_id),
+                    governance_attempt_id_hex: hex::encode(hold.governance_attempt_id),
+                    reason: hold.reason.clone(),
+                    imposed_at_height: hold.imposed_at_height,
+                    expires_at_height: hold.expires_at_height,
+                });
+        Self {
+            version: lifecycle.version,
+            origin,
+            origin_account,
+            origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex,
+            owner: governed_contract_owner_label(&lifecycle.owner),
+            pending_owner: lifecycle
+                .pending_owner
+                .as_ref()
+                .map(governed_contract_owner_label),
+            parliament_delegated: lifecycle.parliament_delegation
+                == ContractParliamentDelegationV1::Lifecycle,
+            active_code_hash_hex: lifecycle
+                .active_code_hash
+                .map(<[u8; 32]>::from)
+                .map(hex::encode),
+            revision: lifecycle.revision,
+            emergency_hold,
+        }
+    }
+}
+#[derive(Debug, JsonSerialize)]
 /// Response for reading governance-managed contract binding state by canonical address.
 pub struct GovernedContractResponse {
-    /// Whether the contract is currently bound in state.
+    /// Whether a lifecycle record exists for this address, including inactive contracts.
     pub found: bool,
     /// Canonical public contract address queried.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
-    /// Consensus-persisted non-signing account authority for the active contract.
+    /// Consensus-persisted non-signing account authority retained for this lifecycle.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_subject_account: Option<String>,
     /// Dataspace alias derived from the contract address, when known.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub dataspace: Option<String>,
+    /// Whether code is currently active at this address.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    /// Complete revisioned ownership, delegation, active-code, and hold record.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<GovernedContractLifecycleV1>,
+    /// Whether the retained emergency hold contains execution at the queried height.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub emergency_hold_active: Option<bool>,
     /// Active code hash bound to the contract address, when present.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
@@ -2207,7 +2261,11 @@ fn is_canonical_public_entrypoint_name(name: &str) -> bool {
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
 }
-/// GET /v1/gov/contracts/{contract_address} — read the active governance binding for a contract.
+/// GET /v1/gov/contracts/{contract_address} — read a retained governance contract lifecycle.
+///
+/// Missing addresses return the closed missing shape. Found addresses return the complete retained
+/// lifecycle even while inactive; only active records perform independent artifact, manifest, ABI,
+/// subject-binding, and public-entrypoint verification.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the contract address is malformed or the dataspace alias
@@ -2242,17 +2300,34 @@ pub async fn handle_gov_contract_get(
             ))
         })?;
     let view = state.view();
-    let active_code_hash = view
-        .world()
-        .contract_instances()
-        .get(&contract_address)
-        .copied();
-    let Some(active_code_hash) = active_code_hash else {
+    let lifecycle =
+        iroha_core::smartcontracts::code::fetch_contract_lifecycle(view.world(), &contract_address)
+            .map_err(governed_contract_invariant)?;
+    let Some((contract_subject, lifecycle)) = lifecycle else {
         return Ok(JsonBody(GovernedContractResponse {
             found: false,
             contract_address,
             contract_subject_account: None,
             dataspace: Some(dataspace),
+            active: None,
+            lifecycle: None,
+            emergency_hold_active: None,
+            code_hash_hex: None,
+            abi_hash_hex: None,
+            public_entrypoints: None,
+        }));
+    };
+    let emergency_hold_active = lifecycle
+        .is_held_at(u64::try_from(view.height()).expect("supported state heights fit in u64"));
+    let Some(active_code_hash) = lifecycle.active_code_hash else {
+        return Ok(JsonBody(GovernedContractResponse {
+            found: true,
+            contract_address,
+            contract_subject_account: Some(contract_subject.to_string()),
+            dataspace: Some(dataspace),
+            active: Some(false),
+            lifecycle: Some((&lifecycle).into()),
+            emergency_hold_active: Some(emergency_hold_active),
             code_hash_hex: None,
             abi_hash_hex: None,
             public_entrypoints: None,
@@ -2349,6 +2424,9 @@ pub async fn handle_gov_contract_get(
         contract_address,
         contract_subject_account: Some(record.contract_subject.to_string()),
         dataspace: Some(dataspace),
+        active: Some(true),
+        lifecycle: Some((&lifecycle).into()),
+        emergency_hold_active: Some(emergency_hold_active),
         code_hash_hex: Some(hex::encode(code_hash_bytes)),
         abi_hash_hex: Some(hex::encode(abi_hash_bytes)),
         public_entrypoints: Some(public_entrypoints),
@@ -2399,6 +2477,7 @@ pub async fn handle_gov_propose_deploy(
     };
     let proposal_id = ProposalContentId::new(
         deploy_contract_proposal_kind(
+            &body.proposal_operator,
             &instr.contract_address,
             &code_hash_bytes,
             &abi_hash_bytes,
@@ -2514,7 +2593,7 @@ pub async fn handle_ministry_agenda_proposal_get(
         record,
     }))
 }
-/// POST /v1/gov/ballot/plain — accept a plain quadratic ballot and build an instruction skeleton.
+/// POST /v1/gov/ballots/plain — accept a plain quadratic ballot and build an instruction skeleton.
 ///
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
@@ -2525,7 +2604,7 @@ pub async fn handle_gov_ballot_plain(
     state: Arc<iroha_core::state::State>,
     authenticated_account: &iroha_data_model::account::AccountId,
     NoritoJson(body): NoritoJson<PlainBallotDto>,
-) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+) -> Result<JsonBody<BallotDraftResponse>, crate::Error> {
     handle_gov_ballot_plain_with_policy(
         state,
         authenticated_account,
@@ -2541,7 +2620,7 @@ pub async fn handle_gov_ballot_plain_with_policy(
     authenticated_account: &iroha_data_model::account::AccountId,
     NoritoJson(body): NoritoJson<PlainBallotDto>,
     telemetry: MaybeTelemetry,
-) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+) -> Result<JsonBody<BallotDraftResponse>, crate::Error> {
     ensure_network_id_matches(state.as_ref(), &body.network_id)?;
     let authority_id = parse_account_literal_from_state(
         state.as_ref(),
@@ -2588,51 +2667,9 @@ pub async fn handle_gov_ballot_plain_with_policy(
         },
     };
     let tx_instructions = vec![tx_instr_from_box(instr.into())];
-    Ok(JsonBody(BallotSubmitResponse {
-        ok: true,
-        accepted: true,
-        reason: Some("build transaction skeleton".to_string()),
+    Ok(JsonBody(BallotDraftResponse {
+        drafted: true,
         tx_instructions,
-    }))
-}
-/// GET /v1/gov/council/current — fetch the latest persisted council membership.
-///
-/// # Errors
-/// This handler never returns an error; empty councils are represented with an empty member list.
-pub async fn handle_gov_council_current(
-    state: Arc<iroha_core::state::State>,
-) -> Result<JsonBody<CouncilCurrentResponse>, crate::Error> {
-    let world = state.world_view();
-    if let Some((epoch, council)) = world.council().last_key_value() {
-        return Ok(JsonBody(CouncilCurrentResponse {
-            epoch: *epoch,
-            members: council
-                .members
-                .iter()
-                .map(|account| CouncilMemberDto {
-                    account_id: account.to_string(),
-                })
-                .collect(),
-            alternates: council
-                .alternates
-                .iter()
-                .map(|account| CouncilMemberDto {
-                    account_id: account.to_string(),
-                })
-                .collect(),
-            candidate_count: council.candidate_count as usize,
-            derived_by: council.derived_by,
-        }));
-    }
-    let height = state.committed_height() as u64;
-    let term_blocks = state.gov.parliament_term_blocks.max(1);
-    let epoch = height / term_blocks;
-    Ok(JsonBody(CouncilCurrentResponse {
-        epoch,
-        members: Vec::new(),
-        alternates: Vec::new(),
-        candidate_count: 0,
-        derived_by: CouncilDerivationKind::Manual,
     }))
 }
 #[cfg(test)]
@@ -2648,7 +2685,7 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            CouncilState, ElectionState, GovernanceLockCustody, GovernanceLockRecord,
+            ElectionState, GovernanceLockCustody, GovernanceLockRecord,
             GovernanceLocksForReferendum, GovernanceProposalRecord, GovernanceProposalStatus,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             State, World,
@@ -2674,6 +2711,25 @@ mod tests {
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
     #[test]
+    fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
+        assert_eq!(
+            GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1,
+            [
+                "DEPLOY_CONTRACT",
+                "RUNTIME_UPGRADE",
+                "SCCP_ROUTE_GOVERNANCE",
+                "VALIDATION_FEE_POLICY",
+                "VALIDATION_FEE_PAYOUT_LIFECYCLE",
+                "MUSUBI_REGISTRY_GOVERNANCE",
+                "SORAFS_PROVIDER_GOVERNANCE",
+                "CONTRACT_LIFECYCLE_GOVERNANCE",
+                "CONTRACT_EMERGENCY_HOLD",
+                "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
+            ]
+        );
+    }
+
+    #[test]
     fn casting_context_route_holds_heavy_admission_through_blocking_replay() {
         let route_source = include_str!("lib.rs");
         let handler = route_source
@@ -2690,13 +2746,18 @@ mod tests {
         let admission = handler
             .find("let replay_admission = acquire_query_admission(app.as_ref(), true).await?;")
             .expect("heavy admission gate");
+        let joined = handler
+            .find("crate::panic_recovery::join_recoverable(")
+            .expect("recoverable replay join boundary");
         let blocking = handler
-            .find("tokio::task::spawn_blocking(move ||")
-            .expect("blocking replay isolation");
+            .find("crate::panic_recovery::spawn_blocking_recoverable(")
+            .expect("reviewed blocking replay isolation");
         let retained = handler
             .find("let _replay_admission = replay_admission;")
             .expect("permit retained by physical replay task");
-        assert!(access < admission && admission < blocking && blocking < retained);
+        assert!(
+            access < admission && admission < joined && joined < blocking && blocking < retained
+        );
     }
 
     #[test]
@@ -2716,13 +2777,38 @@ mod tests {
         let admission = handler
             .find("let replay_admission = acquire_query_admission(app.as_ref(), true).await?;")
             .expect("heavy admission gate");
+        let joined = handler
+            .find("crate::panic_recovery::join_recoverable(")
+            .expect("recoverable replay join boundary");
         let blocking = handler
-            .find("tokio::task::spawn_blocking(move ||")
-            .expect("blocking replay isolation");
+            .find("crate::panic_recovery::spawn_blocking_recoverable(")
+            .expect("reviewed blocking replay isolation");
         let retained = handler
             .find("let _replay_admission = replay_admission;")
             .expect("permit retained by physical replay task");
-        assert!(access < admission && admission < blocking && blocking < retained);
+        assert!(
+            access < admission && admission < joined && joined < blocking && blocking < retained
+        );
+    }
+
+    #[test]
+    fn release_context_handler_validates_its_public_projection() {
+        let source = include_str!("gov.rs");
+        let handler = source
+            .split("pub fn handle_gov_parliament_tle_release_context_read")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("/// Strict citizen registration draft request.")
+                    .next()
+            })
+            .expect("release-context handler source");
+        let validation = handler
+            .find("validate_for_ballot(ballot_attempt_id)")
+            .expect("public response validation");
+        let returned = handler
+            .find("Ok(JsonBody(response))")
+            .expect("validated public response return");
+        assert!(validation < returned);
     }
 
     fn generic_lock_custody(state: &State) -> GovernanceLockCustody {
@@ -2796,6 +2882,7 @@ mod tests {
         let attempt_request = ParliamentAttemptDraftRequestV1 {
             version: PARLIAMENT_API_VERSION_V1,
             proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address: sample_contract_address(),
                 code_hash: ContractCodeHash::new([0x11; 32]),
                 abi_hash: ContractAbiHash::new([0x22; 32]),
@@ -2861,6 +2948,7 @@ mod tests {
         let request = |attempt_sequence| ParliamentAttemptDraftRequestV1 {
             version: PARLIAMENT_API_VERSION_V1,
             proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address: sample_contract_address(),
                 code_hash: ContractCodeHash::new([0x11; 32]),
                 abi_hash: ContractAbiHash::new([0x22; 32]),
@@ -2895,6 +2983,7 @@ mod tests {
 
         let proposal = |start_height, end_height| {
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                proposal_operator: ALICE_ID.clone(),
                 manifest: RuntimeUpgradeManifest {
                     name: "bounded Parliament runtime upgrade".to_owned(),
                     description: "Torii exact JSON integer guard".to_owned(),
@@ -2978,18 +3067,6 @@ mod tests {
         let citizen_handler = &citizen_tail[..citizen_end];
         assert!(citizen_handler.contains("world.citizens().len()"));
         assert!(!citizen_handler.contains("citizens().iter()"));
-        let council_start = source
-            .find("pub async fn handle_gov_council_current(")
-            .expect("current council handler");
-        let council_tail = &source[council_start..];
-        let council_end = council_tail
-            .find("#[cfg(test)]\nmod tests")
-            .expect("current council handler terminator");
-        let council_handler = &council_tail[..council_end];
-        assert!(council_handler.contains("world.council().last_key_value()"));
-        assert!(!council_handler.contains("world.council().iter()"));
-        assert!(!council_handler.contains(".max_by"));
-        assert!(!council_handler.contains(".max_by_key"));
     }
     #[test]
     fn optional_ballot_direction_is_closed() {
@@ -3096,6 +3173,7 @@ mod tests {
         proposer: &AccountId,
     ) -> String {
         let kind = deploy_contract_proposal_kind(
+            proposer,
             &sample_contract_address(),
             &[0x71; 32],
             &[0x72; 32],
@@ -3120,6 +3198,27 @@ mod tests {
             .commit_world_overlay_for_testing()
             .expect("commit typed proposal ballot guard fixture");
         hex::encode(proposal_id)
+    }
+    fn typed_proposal_selector_aliases(canonical: &str) -> [String; 5] {
+        let uppercase = canonical.to_ascii_uppercase();
+        let mixed = canonical
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index % 2 == 0 {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        [
+            canonical.to_owned(),
+            uppercase.clone(),
+            mixed,
+            format!("0x{canonical}"),
+            format!("0X{uppercase}"),
+        ]
     }
     struct GovHarness {
         state: Arc<State>,
@@ -3336,9 +3435,16 @@ seiyaku GovernedReadFixture {
         assert_eq!(code_hash, verified.code_hash);
         register_manifest(&harness.authority, signed_manifest, &mut transaction)
             .expect("register governed contract manifest");
+        transaction
+            .world_mut_for_testing()
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                harness.authority.clone(),
+            );
         activate_instance(
             &harness.authority,
             contract_address.clone(),
+            1,
             code_hash,
             &mut transaction,
         )
@@ -3607,49 +3713,11 @@ seiyaku GovernedReadFixture {
             .0;
         assert_eq!(response.total, "1");
     }
-    #[tokio::test]
-    async fn council_current_projects_latest_epoch_from_multi_epoch_history() {
-        let (state, _queue, _chain_id) = mk_basic_context();
-        let latest_member = AccountId::of(
-            checked_governance_ed25519_keypair(0xA4)
-                .public_key()
-                .clone(),
-        );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        for epoch in 0_u64..128 {
-            transaction.world.council_mut().insert(
-                epoch,
-                CouncilState {
-                    epoch,
-                    members: vec![if epoch == 127 {
-                        latest_member.clone()
-                    } else {
-                        ALICE_ID.clone()
-                    }],
-                    candidate_count: 1,
-                    ..CouncilState::default()
-                },
-            );
-        }
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit multi-epoch council history");
-        let response = handle_gov_council_current(state)
-            .await
-            .expect("current council response")
-            .0;
-        assert_eq!(response.epoch, 127);
-        assert_eq!(response.candidate_count, 1);
-        assert_eq!(response.members.len(), 1);
-        assert_eq!(response.members[0].account_id, latest_member.to_string());
-    }
     #[test]
     fn serde_shapes_compile() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let req = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -3698,6 +3766,43 @@ seiyaku GovernedReadFixture {
             .0;
         assert!(!after.found);
         assert!(after.namespaces.is_empty());
+    }
+    #[tokio::test]
+    async fn protected_namespaces_get_rejects_a_present_malformed_policy() {
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let id = iroha_data_model::parameter::CustomParameterId::new(
+            iroha_core::smartcontracts::code::PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+                .parse()
+                .expect("protected namespace parameter id"),
+        );
+        let parameter = iroha_data_model::parameter::custom::CustomParameter::new(
+            id,
+            iroha_primitives::json::Json::new("apps"),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .parameters_mut_for_testing()
+            .get_mut()
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(parameter));
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit malformed protected namespace fixture");
+
+        let error = handle_gov_protected_get(state)
+            .await
+            .expect_err("malformed persisted policy must not project as an empty policy");
+        assert!(
+            matches!(
+                &error,
+                crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+                    if message.contains("must be an array of strings")
+            ),
+            "unexpected malformed-policy error: {error:?}"
+        );
     }
     #[tokio::test]
     async fn protected_namespaces_rejects_noncanonical_tokens_before_drafting() {
@@ -3758,6 +3863,7 @@ seiyaku GovernedReadFixture {
                 .expect("derive proposal provenance fixture key");
         let provenance = mk_manifest_provenance(&provenance_key, [0x11; 32], canonical_abi);
         let dto = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -3771,6 +3877,7 @@ seiyaku GovernedReadFixture {
         let body = res.0;
         assert_eq!(body.tx_instructions.len(), 1);
         let expected_id = deploy_contract_proposal_kind(
+            &ALICE_ID,
             &sample_contract_address(),
             &code_hash_bytes,
             &canonical_abi,
@@ -3781,6 +3888,7 @@ seiyaku GovernedReadFixture {
         assert_ne!(
             expected_id,
             deploy_contract_proposal_kind(
+                &ALICE_ID,
                 &sample_contract_address(),
                 &code_hash_bytes,
                 &canonical_abi,
@@ -4012,6 +4120,7 @@ seiyaku GovernedReadFixture {
     fn propose_deploy_rejects_retired_lifecycle_controls_during_decode() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let dto = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -4037,6 +4146,7 @@ seiyaku GovernedReadFixture {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         for abi_version in [0, 2, u16::MAX] {
             let dto = DeployContractProposalDraftRequestV1 {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address: Some(sample_contract_address()),
                 contract_alias: None,
                 abi_version: AbiVersion::new(abi_version),
@@ -4057,6 +4167,7 @@ seiyaku GovernedReadFixture {
     async fn propose_deploy_rejects_mismatched_abi_hash() {
         let (state, _queue, _chain_id) = mk_basic_context();
         let dto = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -4249,8 +4360,7 @@ seiyaku GovernedReadFixture {
         .await
         .expect("handler ok");
         let body = res.0;
-        assert!(body.ok);
-        assert!(body.accepted);
+        assert!(body.drafted);
         assert!(body.tx_instructions.len() == 1);
     }
     #[tokio::test]
@@ -4259,29 +4369,31 @@ seiyaku GovernedReadFixture {
         let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let canonical = canonical_literal(ACCOUNT_AUTHORITY);
         let proposal_id = seed_typed_proposal_fingerprint_for_ballot_test(&state, &authenticated);
-        let dto = PlainBallotDto {
-            authority: canonical.clone(),
-            network_id: *state.network_id_ref(),
-            referendum_id: proposal_id,
-            owner: canonical,
-            amount: 100_u64.into(),
-            duration_blocks: "600".to_owned(),
-            direction: "Aye".to_owned(),
-        };
-        let error = handle_gov_ballot_plain_with_policy(
-            state,
-            &authenticated,
-            NoritoJson(dto),
-            MaybeTelemetry::disabled(),
-        )
-        .await
-        .expect_err("typed proposal must not enter the standalone plain ballot path");
-        assert!(
-            error
-                .to_string()
-                .contains("authenticated Parliament lifecycle"),
-            "unexpected error: {error:?}"
-        );
+        for selector in typed_proposal_selector_aliases(&proposal_id) {
+            let dto = PlainBallotDto {
+                authority: canonical.clone(),
+                network_id: *state.network_id_ref(),
+                referendum_id: selector.clone(),
+                owner: canonical.clone(),
+                amount: 100_u64.into(),
+                duration_blocks: "600".to_owned(),
+                direction: "Aye".to_owned(),
+            };
+            let error = handle_gov_ballot_plain_with_policy(
+                Arc::clone(&state),
+                &authenticated,
+                NoritoJson(dto),
+                MaybeTelemetry::disabled(),
+            )
+            .await
+            .expect_err("typed proposal alias must not enter the standalone plain ballot path");
+            assert!(
+                error
+                    .to_string()
+                    .contains("authenticated Parliament lifecycle"),
+                "unexpected error for {selector:?}: {error:?}"
+            );
+        }
     }
     #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
@@ -4307,8 +4419,7 @@ seiyaku GovernedReadFixture {
         )
         .await
         .expect("handler ok");
-        assert!(res.0.ok);
-        assert!(res.0.accepted);
+        assert!(res.0.drafted);
         assert_eq!(res.0.tx_instructions.len(), 1);
     }
     #[tokio::test]
@@ -4814,7 +4925,7 @@ seiyaku GovernedReadFixture {
         }
     }
     #[tokio::test]
-    async fn governed_contract_read_serializes_exact_inactive_shape() {
+    async fn governed_contract_read_serializes_exact_missing_shape() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -4854,6 +4965,87 @@ seiyaku GovernedReadFixture {
         );
     }
     #[tokio::test]
+    async fn governed_contract_read_retains_inactive_lifecycle_projection() {
+        let harness = mk_governance_harness(true);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &harness.authority,
+            94,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("inactive contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                harness.authority.clone(),
+            );
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit inactive lifecycle fixture");
+
+        let response = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect("inactive governed contract read");
+        let value = norito::json::to_value(&response.0).expect("serialize inactive response");
+        let object = value.as_object().expect("inactive response object");
+        assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(true)));
+        assert_eq!(
+            object.get("active"),
+            Some(&norito::json::Value::Bool(false))
+        );
+        assert_eq!(
+            object.get("emergency_hold_active"),
+            Some(&norito::json::Value::Bool(false))
+        );
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            [
+                "found",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "active",
+                "lifecycle",
+                "emergency_hold_active",
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert!(object.contains_key("contract_subject_account"));
+        let lifecycle = object
+            .get("lifecycle")
+            .and_then(norito::json::Value::as_object)
+            .expect("complete lifecycle projection");
+        assert_eq!(
+            lifecycle
+                .get("revision")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert!(lifecycle.contains_key("origin"));
+        assert!(lifecycle.contains_key("origin_account"));
+        assert!(lifecycle.contains_key("origin_proposal_content_id_hex"));
+        assert!(lifecycle.contains_key("origin_governance_attempt_id_hex"));
+        assert!(lifecycle.contains_key("owner"));
+        assert!(lifecycle.contains_key("pending_owner"));
+        assert!(lifecycle.contains_key("parliament_delegated"));
+        assert!(lifecycle.contains_key("active_code_hash_hex"));
+        assert!(lifecycle.contains_key("emergency_hold"));
+        assert!(!object.contains_key("code_hash_hex"));
+        assert!(!object.contains_key("abi_hash_hex"));
+        assert!(!object.contains_key("public_entrypoints"));
+    }
+    #[tokio::test]
     async fn governed_contract_read_verifies_real_artifact_and_exact_active_shape() {
         let harness = mk_governance_harness(true);
         let (contract_address, expected_code_hash) = install_governed_contract_for_test(&harness);
@@ -4872,6 +5064,9 @@ seiyaku GovernedReadFixture {
                 "contract_address",
                 "contract_subject_account",
                 "dataspace",
+                "active",
+                "lifecycle",
+                "emergency_hold_active",
                 "code_hash_hex",
                 "abi_hash_hex",
                 "public_entrypoints",
@@ -4880,6 +5075,7 @@ seiyaku GovernedReadFixture {
             .collect()
         );
         assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(true)));
+        assert_eq!(object.get("active"), Some(&norito::json::Value::Bool(true)));
         assert_eq!(
             object
                 .get("contract_address")
@@ -4976,6 +5172,7 @@ seiyaku GovernedReadFixture {
         let manifest_provenance =
             mk_manifest_provenance(&harness.authority_keypair, code_hash_bytes, abi_hash_bytes);
         let propose = DeployContractProposalDraftRequestV1 {
+            proposal_operator: harness.authority.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -5052,30 +5249,24 @@ seiyaku GovernedReadFixture {
         let b = resp.into_body().collect().await.unwrap().to_bytes();
         let v: norito::json::Value = norito::json::from_slice(&b).unwrap();
         assert_eq!(
-            v.get("ok").and_then(norito::json::Value::as_bool),
+            v.get("drafted").and_then(norito::json::Value::as_bool),
             Some(true)
         );
-        assert_eq!(
-            v.get("accepted").and_then(norito::json::Value::as_bool),
-            Some(true)
-        );
+        assert!(v.get("ok").is_none());
+        assert!(v.get("accepted").is_none());
+        assert!(v.get("reason").is_none());
         assert!(
             v.get("tx_instructions")
                 .and_then(|x| x.as_array())
                 .is_some()
         );
-    }
-    #[tokio::test]
-    async fn standalone_zk_ballot_rejects_stored_typed_proposal_fingerprint() {
-        let (state, _queue, _chain_id) = mk_basic_context();
-        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
-        let proposal_id = seed_typed_proposal_fingerprint_for_ballot_test(&state, &authenticated);
-        let dto = super::ZkBallotV1Dto {
+
+        let invalid_dto = super::ZkBallotV1Dto {
             authority: ACCOUNT_AUTHORITY.to_string(),
             network_id: *state.network_id_ref(),
-            election_id: proposal_id,
-            backend: "halo2/ipa".to_owned(),
-            envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64: String::new(),
             root_hint: None,
             owner: None,
             amount: None,
@@ -5083,28 +5274,60 @@ seiyaku GovernedReadFixture {
             direction: None,
             nullifier: None,
         };
-        let raw = norito::json::to_vec(&dto).expect("encode exact ZK ballot DTO");
-        let response = super::handle_gov_ballot_zk_v1(
-            state,
-            &authenticated,
-            MaybeTelemetry::disabled(),
-            crate::NoritoJsonWithBytes {
-                value: dto,
-                raw: raw.into(),
-            },
-        )
-        .await
-        .expect("typed-proposal collision is a deterministic ballot rejection")
-        .0;
-        assert!(!response.ok);
-        assert!(!response.accepted);
-        assert!(response.tx_instructions.is_empty());
-        assert!(
-            response
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("authenticated Parliament lifecycle"))
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/v1/gov/ballots/zk-v1")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                norito::json::to_vec(&norito::json::to_value(&invalid_dto).unwrap()).unwrap(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: crate::ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+        assert_eq!(error.code(), "query_validation_failed");
+        assert_eq!(
+            error.message(),
+            "envelope_b64 must be non-empty canonical base64"
         );
+    }
+    #[tokio::test]
+    async fn standalone_zk_ballot_rejects_stored_typed_proposal_fingerprint() {
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+        let proposal_id = seed_typed_proposal_fingerprint_for_ballot_test(&state, &authenticated);
+        for selector in typed_proposal_selector_aliases(&proposal_id) {
+            let dto = super::ZkBallotV1Dto {
+                authority: ACCOUNT_AUTHORITY.to_string(),
+                network_id: *state.network_id_ref(),
+                election_id: selector.clone(),
+                backend: "halo2/ipa".to_owned(),
+                envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+                root_hint: None,
+                owner: None,
+                amount: None,
+                duration_blocks: None,
+                direction: None,
+                nullifier: None,
+            };
+            let raw = norito::json::to_vec(&dto).expect("encode exact ZK ballot DTO");
+            let error = super::handle_gov_ballot_zk_v1(
+                Arc::clone(&state),
+                &authenticated,
+                MaybeTelemetry::disabled(),
+                crate::NoritoJsonWithBytes {
+                    value: dto,
+                    raw: raw.into(),
+                },
+            )
+            .await
+            .expect_err("typed-proposal alias collision must fail the ballot draft");
+            assert!(
+                conversion_message(error).contains("authenticated Parliament lifecycle"),
+                "selector {selector:?}"
+            );
+        }
     }
     #[tokio::test]
     async fn ballot_zk_v1_rejects_invalid_root_hint() {
@@ -5125,21 +5348,15 @@ seiyaku GovernedReadFixture {
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-        let res = super::handle_gov_ballot_zk_v1(
+        let error = super::handle_gov_ballot_zk_v1(
             state,
             &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
-        .expect("handler ok");
-        let body = res.0;
-        assert!(!body.ok);
-        assert!(!body.accepted);
-        assert_eq!(
-            body.reason.as_deref(),
-            Some("root_hint must be 32-byte hex")
-        );
+        .expect_err("invalid root hint must fail the ballot draft");
+        assert_eq!(conversion_message(error), "root_hint must be 32-byte hex");
     }
     #[tokio::test]
     async fn ballot_zk_v1_rejects_partial_lock_hints() {
@@ -5160,20 +5377,17 @@ seiyaku GovernedReadFixture {
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-        let res = super::handle_gov_ballot_zk_v1(
+        let error = super::handle_gov_ballot_zk_v1(
             state,
             &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
-        .expect("handler ok");
-        let body = res.0;
-        assert!(!body.ok);
-        assert!(!body.accepted);
+        .expect_err("partial lock hints must fail the ballot draft");
         assert_eq!(
-            body.reason.as_deref(),
-            Some("lock hints must include owner, amount, duration_blocks")
+            conversion_message(error),
+            "lock hints must include owner, amount, duration_blocks"
         );
     }
     include!("gov/ballot_v1_strictness_tests.rs");

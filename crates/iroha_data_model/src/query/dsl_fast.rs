@@ -522,6 +522,8 @@ impl<T> CompoundPredicate<T> {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::query::dsl::CompoundPredicateWire")]
 enum CompoundPredicateWire {
     Pass,
     Json(String),
@@ -2137,3 +2139,6 @@ pub mod prelude {
         SelectorMarker, SelectorTuple,
     };
 }
+
+#[cfg(test)]
+mod captured_dsl_fast_schema_tests;

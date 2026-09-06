@@ -529,6 +529,41 @@ pub(crate) struct KuraSafetyWalDirectoryAuthority {
     #[cfg(not(all(unix, not(target_os = "espidf"))))]
     _unsupported: (),
 }
+/// Move-only ownership of the exact opened Sumeragi-v2 body-store root.
+///
+/// Only [`Kura`] can mint this authority. Production consensus consumes it
+/// directly, so the `sumeragi_v2/bodies` ancestry cannot be reconstructed from
+/// a caller-controlled path.
+#[derive(Debug)]
+#[must_use = "the Kura-bound body-store directory authority must open one body store"]
+pub(crate) struct KuraV2BodyStoreDirectoryAuthority {
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    kura_identity: KuraInstanceIdentity,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: BoundProgressDirectory,
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    _unsupported: (),
+}
+/// Move-only ownership of one exact context's opened Certified-Serve payload directory.
+///
+/// Only [`Kura`] can mint this authority. The context-addressed path and every
+/// ancestor are derived below Kura's retained store-root descriptor, so
+/// production consensus never reconstructs this storage capability from a
+/// caller-controlled path.
+#[derive(Debug)]
+#[must_use = "the Kura-bound Certified-Serve directory authority must open one payload store"]
+pub(crate) struct KuraV2CertifiedServePayloadDirectoryAuthority {
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    kura_identity: KuraInstanceIdentity,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    context_id: HeightContextId,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    height: u64,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: BoundProgressDirectory,
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    _unsupported: (),
+}
 impl KuraSafetyWalDirectoryAuthority {
     /// Confirm that this authority was minted by the exact supplied live Kura.
     #[cfg(all(unix, not(target_os = "espidf")))]
@@ -541,6 +576,60 @@ impl KuraSafetyWalDirectoryAuthority {
         self.kura_identity
             .matches(kura)
             .then_some((self.directory.expected_path, self.directory.file))
+    }
+}
+impl KuraV2BodyStoreDirectoryAuthority {
+    /// Confirm that this authority was minted by the exact supplied live Kura.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn matches_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity.matches(kura)
+    }
+
+    /// Consume the authority only when its identity still names this live Kura.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn into_opened_directory_for(self, kura: &Kura) -> Option<(PathBuf, std::fs::File)> {
+        self.kura_identity
+            .matches(kura)
+            .then_some((self.directory.expected_path, self.directory.file))
+    }
+}
+impl KuraV2CertifiedServePayloadDirectoryAuthority {
+    /// Confirm that this authority was minted by the exact supplied live Kura.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn matches_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity.matches(kura)
+    }
+
+    /// Confirm that this authority names the exact supplied height context.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn matches_context(&self, context: &HeightContext) -> bool {
+        self.context_id == context.id() && self.height == context.height
+    }
+
+    /// Confirm that every retained coordinate and the linked directory remain exact.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn is_current_for(&self, kura: &Kura, context: &HeightContext) -> bool {
+        self.matches_kura(kura)
+            && self.matches_context(context)
+            && kura.bound_storage_directory_unchanged(&self.directory)
+    }
+
+    /// Consume the authority only while its Kura, context, and directory binding remain exact.
+    ///
+    /// The canonical path is the value authenticated when Kura minted the
+    /// authority. Returning it beside the retained descriptor lets the payload
+    /// store reject an ancestor redirected between mint and consumption.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn into_opened_directory_for(
+        self,
+        kura: &Kura,
+        context: &HeightContext,
+    ) -> Option<(PathBuf, PathBuf, std::fs::File)> {
+        self.is_current_for(kura, context).then_some((
+            self.directory.expected_path,
+            self.directory.canonical_path,
+            self.directory.file,
+        ))
     }
 }
 impl Kura {
@@ -613,7 +702,7 @@ impl Kura {
         &self,
     ) -> Result<KuraSafetyWalDirectoryAuthority> {
         if !self.instance_identity().matches(self)
-            || !self.bound_safety_wal_directory_unchanged(&self.store_root_directory)
+            || !self.bound_storage_directory_unchanged(&self.store_root_directory)
         {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -623,15 +712,15 @@ impl Kura {
                 self.store_root.clone(),
             ));
         }
-        let sumeragi_root = self.open_or_create_safety_wal_child_directory(
+        let sumeragi_root = self.open_or_create_bound_storage_child_directory(
             &self.store_root_directory,
             std::ffi::OsStr::new("sumeragi_v2"),
         )?;
-        let wal_directory = self.open_or_create_safety_wal_child_directory(
+        let wal_directory = self.open_or_create_bound_storage_child_directory(
             &sumeragi_root,
             std::ffi::OsStr::new("wal"),
         )?;
-        if !self.bound_safety_wal_directory_unchanged(&wal_directory) {
+        if !self.bound_storage_directory_unchanged(&wal_directory) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -645,14 +734,119 @@ impl Kura {
             directory: wal_directory,
         })
     }
+    /// Mint one opened `sumeragi_v2/bodies` directory owner from this live Kura root.
     #[cfg(all(unix, not(target_os = "espidf")))]
-    fn open_or_create_safety_wal_child_directory(
+    pub(crate) fn mint_v2_body_store_directory_authority(
+        &self,
+    ) -> Result<KuraV2BodyStoreDirectoryAuthority> {
+        if !self.instance_identity().matches(self)
+            || !self.bound_storage_directory_unchanged(&self.store_root_directory)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened Kura store-root identity changed before body-store binding",
+                ),
+                self.store_root.clone(),
+            ));
+        }
+        let sumeragi_root = self.open_or_create_bound_storage_child_directory(
+            &self.store_root_directory,
+            std::ffi::OsStr::new("sumeragi_v2"),
+        )?;
+        let body_directory = self.open_or_create_bound_storage_child_directory(
+            &sumeragi_root,
+            std::ffi::OsStr::new("bodies"),
+        )?;
+        if !self.bound_storage_directory_unchanged(&body_directory) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened body-store directory changed before authority mint",
+                ),
+                body_directory.expected_path,
+            ));
+        }
+        Ok(KuraV2BodyStoreDirectoryAuthority {
+            kura_identity: self.instance_identity(),
+            directory: body_directory,
+        })
+    }
+    /// Mint the exact opened Certified-Serve payload directory for one height context.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn mint_v2_certified_serve_payload_directory_authority(
+        &self,
+        context: &HeightContext,
+    ) -> Result<KuraV2CertifiedServePayloadDirectoryAuthority> {
+        let context_id = context.id();
+        let payload_path = self
+            .sumeragi_v2_storage_root()
+            .join("lifecycle-v1")
+            .join(hex::encode(context_id.0.as_ref()))
+            .join("certified-serve-payload-v1");
+        context.validate().map_err(|error| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("invalid height context for Certified-Serve storage: {error}"),
+                ),
+                payload_path.clone(),
+            )
+        })?;
+        if !self.instance_identity().matches(self)
+            || !self.bound_storage_directory_unchanged(&self.store_root_directory)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened Kura store-root identity changed before Certified-Serve binding",
+                ),
+                self.store_root.clone(),
+            ));
+        }
+        let sumeragi_root = self.open_or_create_bound_storage_child_directory(
+            &self.store_root_directory,
+            std::ffi::OsStr::new("sumeragi_v2"),
+        )?;
+        let lifecycle_root = self.open_or_create_bound_storage_child_directory(
+            &sumeragi_root,
+            std::ffi::OsStr::new("lifecycle-v1"),
+        )?;
+        let context_name = hex::encode(context_id.0.as_ref());
+        let context_directory = self.open_or_create_bound_storage_child_directory(
+            &lifecycle_root,
+            std::ffi::OsStr::new(&context_name),
+        )?;
+        let payload_directory = self.open_or_create_bound_storage_child_directory(
+            &context_directory,
+            std::ffi::OsStr::new("certified-serve-payload-v1"),
+        )?;
+        if payload_directory.expected_path != payload_path
+            || !self.bound_storage_directory_unchanged(&payload_directory)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened Certified-Serve payload directory changed before authority mint",
+                ),
+                payload_path,
+            ));
+        }
+        Ok(KuraV2CertifiedServePayloadDirectoryAuthority {
+            kura_identity: self.instance_identity(),
+            context_id,
+            height: context.height,
+            directory: payload_directory,
+        })
+    }
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_or_create_bound_storage_child_directory(
         &self,
         parent: &BoundProgressDirectory,
         name: &std::ffi::OsStr,
     ) -> Result<BoundProgressDirectory> {
         let expected_path = parent.expected_path.join(name);
-        if !self.bound_safety_wal_directory_unchanged(parent) {
+        if !self.bound_storage_directory_unchanged(parent) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -667,7 +861,7 @@ impl Kura {
         }
         let child =
             Self::open_bound_progress_child_directory(&self.store_root, parent, &expected_path)?;
-        if !self.bound_safety_wal_directory_unchanged(parent) {
+        if !self.bound_storage_directory_unchanged(parent) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -683,7 +877,7 @@ impl Kura {
         Ok(child)
     }
     #[cfg(all(unix, not(target_os = "espidf")))]
-    fn bound_safety_wal_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
+    fn bound_storage_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         let Ok(opened) = directory.file.metadata() else {
             return false;
@@ -725,6 +919,36 @@ impl Kura {
                 "descriptor-relative safety-WAL storage is unavailable",
             ),
             self.sumeragi_v2_storage_root().join("wal"),
+        ))
+    }
+    /// Reject production body-store minting without descriptor-relative ancestry.
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    pub(crate) fn mint_v2_body_store_directory_authority(
+        &self,
+    ) -> Result<KuraV2BodyStoreDirectoryAuthority> {
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "descriptor-relative Sumeragi body storage is unavailable",
+            ),
+            self.sumeragi_v2_storage_root().join("bodies"),
+        ))
+    }
+    /// Reject Certified-Serve authority minting without descriptor-relative ancestry.
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    pub(crate) fn mint_v2_certified_serve_payload_directory_authority(
+        &self,
+        context: &HeightContext,
+    ) -> Result<KuraV2CertifiedServePayloadDirectoryAuthority> {
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "descriptor-relative Certified-Serve payload storage is unavailable",
+            ),
+            self.sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(context.id().0.as_ref()))
+                .join("certified-serve-payload-v1"),
         ))
     }
 }

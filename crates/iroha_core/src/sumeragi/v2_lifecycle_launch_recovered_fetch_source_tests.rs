@@ -140,7 +140,7 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
             "drain_blocked_ordinary_lane_local_ingress(",
             "drain_lane_relay_ingress(",
             "drive_merge_sidecar_recovery(executor, services, &mut lane_work)",
-            "service_historical_recovery_tick(&mut lane_work)",
+            "service_historical_recovery_tick(&mut lane_work, services)",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()",
             "dispatch_lane_work_effects(",
@@ -170,7 +170,7 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
             "drain_blocked_ordinary_lane_local_ingress(",
             "drain_lane_relay_ingress(",
             "drive_merge_sidecar_recovery(executor, services, &mut lane_work)",
-            "service_historical_recovery_tick(&mut lane_work)",
+            "service_historical_recovery_tick(&mut lane_work, services)",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()",
             "dispatch_lane_work_effects(",
@@ -246,7 +246,10 @@ fn active_height_tail_bounds_executor_work_before_the_producer_point() {
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect();
-    assert_eq!(compact_executor_slice, "receiver,owner,executor,services,1");
+    assert_eq!(
+        compact_executor_slice,
+        "receiver,owner,executor,services,producer_claim.required_ready_ordinal(),1"
+    );
     let post_slice_suffix = source_region(
         post_drain_runtime,
         "let executor_slice = advance_executor(",
@@ -313,7 +316,7 @@ fn active_height_tail_bounds_executor_work_before_the_producer_point() {
     assert_source_tokens_in_order(
         runtime_turn,
         &[
-            "advance_executor(receiver, owner, executor, services, 1)?",
+            "producer_claim.required_ready_ordinal(),",
             "match executor_slice",
             "AdvanceExecutorSliceOutcomeV1::Idle",
             "AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}",

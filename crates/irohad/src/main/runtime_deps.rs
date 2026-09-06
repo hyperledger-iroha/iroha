@@ -5,18 +5,24 @@ use mv::storage::StorageReadOnly as _;
 /// Implementations of the moderation wrapper, privacy-cycle PRF provider, stream-token and native
 /// proof/repair/reserve/orderbook/moderation signers, moderation durable handoffs, evidence-viewer
 /// checkpoint authority, appeal-finance transaction signers, role-separated `PoTR` signers,
-/// exact-view billing queries, threshold/HSM signers, immutable publication, acknowledgement,
+/// exact-view billing queries, external or threshold signers, immutable publication, acknowledgement,
 /// sealed witness storage, authenticated Governance DAG publication/readback/head updates, sealed
 /// monotonic Governance DAG checkpoints, externally sealed reputation journal checkpoints, the
 /// Soracloud mutation/provenance signer, plus the reserved Musubi provider-attestation clock,
-/// approval signer, and authenticated
-/// inventory, are the reference-node boundaries for ledger access, PKCS#11, managed-KMS, and
-/// threshold services. Provider credentials, unwrapped keys, PRF shares, seeds, and outputs must
-/// stay inside those implementations and must never be sourced from `iroha_config`.
+/// approval signer, and authenticated inventory, are the reference-node boundaries for ledger
+/// access and deployment-owned signing or custody services. Provider implementation details are
+/// outside Iroha and are not product modes. Provider credentials, unwrapped keys, PRF shares,
+/// seeds, and outputs must stay inside those implementations and must never be sourced from
+/// `iroha_config`.
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
     sumeragi_global_beacon_partial_signer:
         Option<Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    kagemusha_mint_finality_authority: Option<
+        Arc<
+            iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+        >,
+    >,
     parliament_tle_partial_release_signer:
         Option<Arc<dyn iroha_core::tle_release::TlePartialReleaseSignerV1>>,
     bootle_lantern_issuance_provider_registry: Option<
@@ -274,7 +280,9 @@ fn validate_threshold_signer_startup_readiness_v1(
         )?;
     }
 
-    let active_tle_key_session_id = world.active_tle_key_session();
+    let next_height = committed_height.checked_add(1).unwrap_or(committed_height);
+    let active_tle_key_session_id =
+        world.selectable_tle_key_session_for_fresh_ballot_at(next_height);
     let required_tle_key_sessions = world
         .tle_key_sessions_required_for_runtime_custody_v1(committed_height)
         .map_err(|_| "committed Parliament state is invalid for TLE custody readiness")?;
@@ -353,6 +361,7 @@ impl IrohaRuntimeDeps {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sumeragi_global_beacon_partial_signer.is_none()
+            && self.kagemusha_mint_finality_authority.is_none()
             && self.parliament_tle_partial_release_signer.is_none()
             && self.bootle_lantern_issuance_provider_registry.is_none()
             && self.moderation_quarantine_key_wrapper.is_none()
@@ -441,6 +450,13 @@ impl IrohaRuntimeDeps {
         with_sumeragi_global_beacon_partial_signer(
             signer: Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
         ) => sumeragi_global_beacon_partial_signer;
+        /// Attach the separately provisioned Pasta authority for KAGEMUSHA
+        /// V1 top-up finality. The seed remains inside this runtime-owned object.
+        with_kagemusha_mint_finality_authority(
+            authority: Arc<
+                iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+            >,
+        ) => kagemusha_mint_finality_authority;
         /// Attach the runtime-only adaptive Parliament TLE signing-share owner.
         ///
         /// Private DKG components remain inside this provider. They are never
@@ -456,7 +472,7 @@ impl IrohaRuntimeDeps {
                 dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1,
             >,
         ) => bootle_lantern_issuance_provider_registry;
-        /// Attach the production PKCS#11/KMS wrapper for moderation quarantine object data keys.
+        /// Attach the deployment-owned wrapper for moderation quarantine object data keys.
         with_moderation_quarantine_key_wrapper(
             key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
         ) => moderation_quarantine_key_wrapper;
@@ -488,7 +504,7 @@ impl IrohaRuntimeDeps {
         with_sorafs_fenced_transparency_head_reader(
             reader: Arc<dyn sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1>,
         ) => sorafs_fenced_transparency_head_reader;
-        /// Attach the production HSM/KMS signer for the embedded `SoraFS` Governance DAG publisher.
+        /// Attach the production external signer for the embedded `SoraFS` Governance DAG publisher.
         with_sorafs_governance_dag_signer(
             signer: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>,
         ) => sorafs_governance_dag_signer;
@@ -507,7 +523,7 @@ impl IrohaRuntimeDeps {
         with_sorafs_governance_dag_checkpoint_store(
             checkpoint_store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>,
         ) => sorafs_governance_dag_checkpoint_store;
-        /// Attach the production HSM/KMS signer for `SoraFS` stream-token issuance.
+        /// Attach the production external signer for `SoraFS` stream-token issuance.
         with_sorafs_stream_token_signer(
             signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
         ) => sorafs_stream_token_signer;
@@ -516,12 +532,12 @@ impl IrohaRuntimeDeps {
         with_sorafs_stream_token_gateway_admission(
             provider: Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>,
         ) => sorafs_stream_token_gateway_admission;
-        /// Attach runtime-only HSM/KMS providers for appeal-finance lock,
+        /// Attach runtime-only external signers for appeal-finance lock,
         /// disbursement, and refund transactions.
         with_sorafs_appeal_finance_runtime_signers(
             signers: Arc<iroha_torii::SoraFsAppealFinanceRuntimeSignersV1>,
         ) => sorafs_appeal_finance_runtime_signers;
-        /// Attach the HSM/KMS-authenticated monotonic checkpoint boundary for the
+        /// Attach the signer-authenticated monotonic checkpoint boundary for the
         /// appeal-finance transaction forwarder.
         with_sorafs_appeal_finance_checkpoint_runtime(
             runtime: Arc<
@@ -564,7 +580,7 @@ impl IrohaRuntimeDeps {
         with_soracloud_runtime_mutation_signer(
             signer: Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
         ) => soracloud_runtime_mutation_signer;
-        /// Attach the runtime-only HSM/KMS signer for exact moderation native transaction envelopes.
+        /// Attach the runtime-only external signer for exact moderation native transaction envelopes.
         with_sorafs_moderation_transaction_signer(
             signer: Arc<
                 dyn iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1,
@@ -609,12 +625,12 @@ impl IrohaRuntimeDeps {
         with_sorafs_evidence_viewer_grants(
             boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>,
         ) => sorafs_evidence_viewer_grants;
-        /// Attach the HSM-backed signer for hash-chained evidence access receipts.
+        /// Attach the external signer for hash-chained evidence access receipts.
         with_sorafs_evidence_viewer_receipt_signer(
             signer: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>,
         ) => sorafs_evidence_viewer_receipt_signer;
         /// Attach the authenticated evidence erasure boundary. Its implementation
-        /// owns KMS/storage credentials and must honor stable operation IDs.
+        /// owns provider/storage credentials and must honor stable operation IDs.
         with_sorafs_evidence_viewer_erasure(
             boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>,
         ) => sorafs_evidence_viewer_erasure;
@@ -647,7 +663,7 @@ impl IrohaRuntimeDeps {
                 dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1,
             >,
         ) => sorafs_pop_credential_provider_registry;
-        /// Attach independently administered runtime HSM services for the `SoraFS`
+        /// Attach independently administered runtime signing services for the `SoraFS`
         /// `PoTR` gateway Ed25519 and provider ML-DSA-65 receipt roles.
         ///
         /// Torii binds these roles to its own authoritative finalized state after
@@ -705,7 +721,7 @@ impl IrohaRuntimeDeps {
         with_sorafs_hedging_billing_journal_verifier(
             verifier: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier>,
         ) => sorafs_hedging_billing_journal_verifier;
-        /// Attach the runtime-only HSM/KMS billing statement signer.
+        /// Attach the runtime-only billing statement signer.
         with_sorafs_billing_statement_signer(
             signer: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner>,
         ) => sorafs_billing_statement_signer;
@@ -728,7 +744,7 @@ impl IrohaRuntimeDeps {
         with_sorafs_provider_ingest_authenticated_source(
             source: Arc<dyn sorafs_provider_ingest_runtime::ProviderIngestAuthenticatedSourceRuntimeV1>,
         ) => sorafs_provider_ingest_authenticated_source;
-        /// Attach the governance-aware runtime HSM/KMS completion-signer resolver.
+        /// Attach the governance-aware runtime completion-signer resolver.
         with_sorafs_provider_ingest_signer_resolver(
             resolver: Arc<
                 dyn sorafs_provider_ingest_runtime::ProviderIngestGovernedSignerResolverRuntimeV1,
@@ -756,7 +772,7 @@ impl IrohaRuntimeDeps {
         with_sorafs_musubi_provider_attestation_clock_seal(
             seal: Arc<dyn sorafs_node::MusubiProviderAttestationClockSealV1>,
         ) => sorafs_musubi_provider_attestation_clock_seal;
-        /// Attach the approval-only HSM/KMS or threshold signer reserved for the
+        /// Attach the approval-only external or threshold signer reserved for the
         /// supervised Musubi provider-attestation journal.
         with_sorafs_musubi_provider_attestation_approval_signer(
             signer: Arc<dyn sorafs_node::MusubiProviderAttestationSignerV1>,
@@ -807,6 +823,17 @@ mod parliament_tle_release_tests {
     struct UnavailableSigner;
 
     impl iroha_core::tle_release::TlePartialReleaseSignerV1 for UnavailableSigner {
+        fn attest_partial_release_capability(
+            &self,
+            _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+            _expected_participant_index: u16,
+        ) -> Result<
+            iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+            iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1,
+        > {
+            Err(iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable)
+        }
+
         fn sign_partial_release(
             &self,
             _context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
@@ -1068,6 +1095,7 @@ mod parliament_tle_release_tests {
         .expect("install active TLE session");
 
         let proposal = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: AccountId::new(validator_keys[0].public_key().clone()),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("canonical contract address"),

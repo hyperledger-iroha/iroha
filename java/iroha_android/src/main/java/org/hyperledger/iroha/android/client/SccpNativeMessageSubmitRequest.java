@@ -7,44 +7,35 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 
-/** Exact native-proof request payload for {@code POST /v1/bridge/messages}. */
-public final class SccpNativeMessageSubmitRequest {
+/**
+ * Exact first-release native-proof request payload for {@code POST /v1/bridge/messages}.
+ *
+ * <p>Detached signed submission is outside this surface; only unsigned preparation is
+ * representable.
+ */
+final class SccpNativeMessageSubmitRequest {
   private final String authority;
   private final FeePaymentIntent feePayment;
-  private final String signatureB64;
-  private final String transactionPayloadB64;
   private final String nativeProofB64;
-  private final Long creationTimeMs;
+  private final String replayWitnessB64;
 
   public SccpNativeMessageSubmitRequest(
       final String authority,
       final String nativeProofB64,
-      final FeePaymentIntent feePayment,
-      final String signatureB64,
-      final String transactionPayloadB64,
-      final Long creationTimeMs) {
+      final String replayWitnessB64,
+      final FeePaymentIntent feePayment) {
     this.authority = SccpSubmitEncoding.requireCanonicalAuthority(authority, "authority");
     this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
-    this.signatureB64 = SccpSubmitEncoding.normalizeOptionalSignature(signatureB64);
-    this.transactionPayloadB64 =
-        SccpSubmitEncoding.normalizeOptionalTransactionPayload(
-            transactionPayloadB64, creationTimeMs, this.authority, this.feePayment);
     SccpSubmitEncoding.validateCanonicalNoritoBase64(
         nativeProofB64,
         "nativeProofB64",
         SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
         SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
     this.nativeProofB64 = nativeProofB64;
-    this.creationTimeMs = SccpSubmitEncoding.normalizeOptionalCreationTimeMs(creationTimeMs);
-    SccpSubmitEncoding.validateDetachedSigningState(
-        this.signatureB64, this.transactionPayloadB64, this.creationTimeMs);
-  }
-
-  public SccpNativeMessageSubmitRequest(
-      final String authority,
-      final String nativeProofB64,
-      final FeePaymentIntent feePayment) {
-    this(authority, nativeProofB64, feePayment, null, null, null);
+    SccpSubmitEncoding.validateCanonicalReplayWitnessBase64(
+        replayWitnessB64,
+        "replayWitnessB64");
+    this.replayWitnessB64 = replayWitnessB64;
   }
 
   public String authority() {
@@ -55,20 +46,12 @@ public final class SccpNativeMessageSubmitRequest {
     return nativeProofB64;
   }
 
+  public String replayWitnessB64() {
+    return replayWitnessB64;
+  }
+
   public FeePaymentIntent feePayment() {
     return feePayment;
-  }
-
-  public String signatureB64() {
-    return signatureB64;
-  }
-
-  public String transactionPayloadB64() {
-    return transactionPayloadB64;
-  }
-
-  public Long creationTimeMs() {
-    return creationTimeMs;
   }
 
   /** Return the exact Torii JSON shape; settlement selectors are unrepresentable. */
@@ -77,11 +60,7 @@ public final class SccpNativeMessageSubmitRequest {
     json.put("authority", authority);
     json.put("fee_payment", feePayment.toJsonMap());
     json.put("native_proof_b64", nativeProofB64);
-    if (signatureB64 != null) json.put("signature_b64", signatureB64);
-    if (transactionPayloadB64 != null) {
-      json.put("transaction_payload_b64", transactionPayloadB64);
-    }
-    if (creationTimeMs != null) json.put("creation_time_ms", creationTimeMs);
+    json.put("replay_witness_b64", replayWitnessB64);
     return Collections.unmodifiableMap(json);
   }
 

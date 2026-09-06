@@ -107,7 +107,7 @@ fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker
     ));
 
     let validator_key =
-        iroha_crypto::KeyPair::from_seed(vec![0xB9; 32], iroha_crypto::Algorithm::Ed25519);
+        iroha_crypto::KeyPair::from_seed(vec![0xB9; 32], iroha_crypto::Algorithm::BlsNormal);
     let binding_hash = fixture.binding.canonical_hash();
     let preimage =
         crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(binding_hash, 0)

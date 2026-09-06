@@ -6,8 +6,6 @@ mod kotodama_documentation_examples;
 mod metal_fallback;
 #[path = "../metal_sha256.rs"]
 mod metal_sha256;
-#[path = "../mint_circuit.rs"]
-mod mint_circuit;
 #[path = "../mixed_hardware_consensus.rs"]
 mod mixed_hardware_consensus;
 #[path = "../mock_wsv.rs"]
@@ -20,8 +18,6 @@ mod nop;
 mod norito_nft_decode;
 #[path = "../nullifier.rs"]
 mod nullifier;
-#[path = "../nullifier_computation.rs"]
-mod nullifier_computation;
 #[path = "../numeric_syscalls.rs"]
 mod numeric_syscalls;
 #[path = "../numeric_v1_sdk_fixture.rs"]
@@ -42,8 +38,6 @@ mod op_semantics_rv;
 mod opcode_validation;
 #[path = "../oversize_program.rs"]
 mod oversize_program;
-#[path = "../pairing_circuit.rs"]
-mod pairing_circuit;
 #[path = "../parallel.rs"]
 mod parallel;
 #[path = "../pointer_abi_tests.rs"]

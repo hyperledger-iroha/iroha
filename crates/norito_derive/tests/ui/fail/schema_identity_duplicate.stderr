@@ -1,0 +1,5 @@
+error: duplicate schema identity declaration
+ --> tests/ui/fail/schema_identity_duplicate.rs:3:38
+  |
+3 | #[norito_schema(name = "example::A", name = "example::B")]
+  |                                      ^^^^

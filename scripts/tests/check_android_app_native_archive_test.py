@@ -61,7 +61,6 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
             "cargo_locked": True,
             "privacy_production_enabled": True,
             "cargo_features": ["privacy-production-enabled"],
-            "kagemusha_production_authorization_sha256": None,
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
                 "android_ndk_revision": ANDROID_NDK_BASE_REVISION,

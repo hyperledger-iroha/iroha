@@ -33,7 +33,7 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 struct FaucetTestContext {
-    app: axum::Router,
+    app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
     chain_id: iroha_data_model::ChainId,
@@ -258,9 +258,12 @@ fn build_faucet_test_context_with_registration(
         state.clone(),
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
+    )
+    .expect("valid Torii faucet fixture");
     FaucetTestContext {
-        app: torii.api_router_for_tests(),
+        app: torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
         state,
         queue,
         chain_id,
@@ -502,6 +505,7 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         .asset(&authority_asset_id)
         .expect("authority faucet asset");
     assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_faucet_registers_missing_account_before_transfer() {
@@ -654,6 +658,7 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         1,
         "post-onboarding faucet preparation must not be interchangeable with registration"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
@@ -705,6 +710,7 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
         .asset(&authority_asset_id)
         .expect("authority faucet asset");
     assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_faucet_allows_repeated_claims_for_same_account() {
@@ -760,6 +766,7 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
         .map(|asset| asset.value().as_ref().to_string())
         .unwrap_or_else(|_| "0".to_owned());
     assert_eq!(authority_balance, "0");
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_faucet_accepts_alias_selector_config() {
@@ -811,6 +818,7 @@ async fn accounts_faucet_accepts_alias_selector_config() {
         .asset(&authority_asset_id)
         .expect("authority faucet asset");
     assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
+    app.shutdown().await;
 }
 
 #[tokio::test]
@@ -857,6 +865,7 @@ async fn faucet_prepared_envelope_survives_pow_anchor_aging() {
         .expect("aged faucet submit response");
     let _submitted = expect_status(submitted, StatusCode::ACCEPTED).await;
     assert_eq!(context.queue.active_len(), 1);
+    context.app.shutdown().await;
 }
 
 #[tokio::test]
@@ -992,6 +1001,7 @@ async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_re
         "25000",
         "exact replay must not charge or transfer twice"
     );
+    context.app.shutdown().await;
 }
 
 #[tokio::test]
@@ -1078,6 +1088,7 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
             .expect("canonical puzzle network id");
     assert_eq!(&puzzle_network_id, state.network_id_ref());
     assert!(!object.contains_key("chain_id"));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_faucet_rejects_missing_pow_when_required() {
@@ -1086,6 +1097,7 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_faucet_envelope(&app, body).await;
     let _resp = expect_status(resp, StatusCode::BAD_REQUEST).await;
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
@@ -1147,4 +1159,5 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
         queue.all_transactions(&state_view).count()
     };
     assert!(queued > 0);
+    app.shutdown().await;
 }

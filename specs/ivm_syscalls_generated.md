@@ -97,7 +97,7 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_VRF_VERIFY | 0x66 |  |
 | SYSCALL_VRF_VERIFY_BATCH | 0x67 |  |
 | SYSCALL_VRF_EPOCH_SEED | 0x7E |  |
-| SYSCALL_PROVE_EXECUTION | 0xF4 |  |
+| SYSCALL_EXECUTION_SUMMARY | 0xF4 |  |
 | SYSCALL_GROW_HEAP | 0xF5 |  |
 | SYSCALL_VERIFY_PROOF | 0xF6 |  |
 | SYSCALL_GET_MERKLE_PATH | 0xF7 |  |

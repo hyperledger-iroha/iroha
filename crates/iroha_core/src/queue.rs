@@ -41,8 +41,9 @@ use crate::{
     },
     prelude::*,
     state::{
-        QueuePlanAdmissionRegistryMatch, State, StateReadOnly, StateReadOnlyWithTransactions,
-        TransactionsReadOnly, WorldReadOnly, queue_plan_admission_registry_match,
+        QueuePlanAdmissionRegistryMatch, QueuePlanBindingApplicationEvidence, State, StateReadOnly,
+        StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly,
+        queue_plan_admission_registry_match,
     },
     sumeragi::{
         lane_planner::AutonomousLaneReservationSelectionAuthorization,
@@ -126,6 +127,10 @@ use iroha_data_model::{
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
         InstructionBox,
+        kagemusha_v1::{
+            KagemushaOperationKindV1, KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1,
+            RedeemKagemushaV1, TopUpKagemushaV1,
+        },
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
@@ -136,14 +141,14 @@ use iroha_data_model::{
     name::Name,
     peer::PeerId,
     transaction::{
-        Executable, ExecutableBatchItem, TransactionAdmissionIntent, TransactionEntrypoint,
-        error::TransactionRejectionReason, signed::TransactionPayload,
+        Executable, ExecutableBatchItem, SignedTransaction, TransactionAdmissionIntent,
+        TransactionEntrypoint, signed::TransactionPayload,
     },
 };
 use iroha_logger::{trace, warn};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::NexusLaneTeuBuckets;
+use iroha_torii_shared::status::NexusLaneTeuBuckets;
 #[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
 pub use journal::QUEUE_PLAN_JOURNAL_VERSION;
@@ -198,6 +203,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 type EntrypointHash = HashOf<TransactionEntrypoint>;
+type PendingKagemushaOperationKey = [u8; 32];
 type QueuePlanJournalRemoval = (HashOf<TransactionEntrypoint>, Hash, Hash);
 #[cfg(test)]
 fn queue_test_network_id() -> iroha_data_model::NetworkId {
@@ -652,7 +658,18 @@ pub fn queue_plan_journal_record_claim_digest(
     )
     .claim_digest()
 }
-/// Failure to capture a bounded, authoritative queue-plan admission context.
+/// Relationship between a supplied QueuePlan admission context and the local
+/// canonical frontier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueuePlanAdmissionContextDisposition {
+    /// The supplied context is the exact current admission generation.
+    Current,
+    /// The supplied context is structurally valid but its canonical frontier
+    /// has not arrived locally yet, and its embedded authority matches the
+    /// exact current source authority.
+    Future,
+}
+/// Failure to capture or validate a bounded, authoritative queue-plan admission context.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum QueuePlanAdmissionContextError {
     /// Routing plan is no longer valid for the contiguous next proposal height.
@@ -3616,6 +3633,407 @@ static GOV_APPROVERS_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
 });
 static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> =
     LazyLock::new(|| Name::from_str("contract_address").expect("static contract metadata key"));
+
+#[derive(Clone, Copy)]
+enum KagemushaOperationRequestV1<'request> {
+    TopUp(&'request KagemushaTopUpRequestV1),
+    Redemption(&'request KagemushaRedemptionRequestV1),
+}
+
+impl KagemushaOperationRequestV1<'_> {
+    const fn kind(self) -> KagemushaOperationKindV1 {
+        match self {
+            Self::TopUp(_) => KagemushaOperationKindV1::TopUp,
+            Self::Redemption(_) => KagemushaOperationKindV1::Redemption,
+        }
+    }
+
+    const fn operation_id(self) -> [u8; 32] {
+        match self {
+            Self::TopUp(request) => request.operation_id,
+            Self::Redemption(request) => request.operation_id,
+        }
+    }
+
+    fn validate(self) -> Result<(), String> {
+        match self {
+            Self::TopUp(request) => request.validate_shape(),
+            Self::Redemption(request) => request.validate_shape(),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    fn canonical_digest(self) -> Result<[u8; 32], String> {
+        match self {
+            Self::TopUp(request) => request.canonical_digest(),
+            Self::Redemption(request) => request.canonical_digest(),
+        }
+        .map_err(|error| error.to_string())
+    }
+}
+
+fn kagemusha_operation_request_v1(
+    instruction: &InstructionBox,
+) -> Option<KagemushaOperationRequestV1<'_>> {
+    let instruction = instruction.as_any();
+    if let Some(top_up) = instruction.downcast_ref::<TopUpKagemushaV1>() {
+        Some(KagemushaOperationRequestV1::TopUp(top_up.request()))
+    } else {
+        instruction
+            .downcast_ref::<RedeemKagemushaV1>()
+            .map(|redeem| KagemushaOperationRequestV1::Redemption(redeem.request()))
+    }
+}
+
+fn executable_contains_kagemusha_operation_v1(executable: &Executable) -> bool {
+    executable
+        .explicit_instructions()
+        .any(|instruction| kagemusha_operation_request_v1(instruction).is_some())
+        || matches!(
+            executable,
+            Executable::IvmProved(proved)
+                if proved
+                    .overlay
+                    .iter()
+                    .any(|instruction| kagemusha_operation_request_v1(instruction).is_some())
+        )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingKagemushaOperationBinding {
+    /// Outer transaction authority retained for status attribution.
+    authority: AccountId,
+    operation_id: [u8; 32],
+    kind: KagemushaOperationKindV1,
+    canonical_request_digest: [u8; 32],
+    entrypoint_hash: EntrypointHash,
+    signed_transaction_hash: HashOf<SignedTransaction>,
+}
+
+impl PendingKagemushaOperationBinding {
+    fn key(&self) -> PendingKagemushaOperationKey {
+        self.operation_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PendingKagemushaOperationClaimError {
+    OperationIdClaimed {
+        existing_entrypoint_hash: EntrypointHash,
+    },
+    EntrypointClaimed {
+        existing_key: PendingKagemushaOperationKey,
+    },
+    Inconsistent {
+        entrypoint_hash: EntrypointHash,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingKagemushaOperationIndexError {
+    entrypoint_hash: EntrypointHash,
+    reason: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PendingKagemushaOperationIndex {
+    by_key: BTreeMap<PendingKagemushaOperationKey, PendingKagemushaOperationBinding>,
+    key_by_entrypoint: BTreeMap<EntrypointHash, PendingKagemushaOperationKey>,
+}
+
+impl PendingKagemushaOperationIndex {
+    fn validate_binding_identity(
+        binding: &PendingKagemushaOperationBinding,
+    ) -> Result<(), PendingKagemushaOperationIndexError> {
+        if binding.operation_id == [0; 32]
+            || binding.canonical_request_digest == [0; 32]
+            || binding.signed_transaction_hash.as_ref() == &[0; Hash::LENGTH]
+        {
+            return Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash: binding.entrypoint_hash,
+                reason: "pending Kagemusha V1 binding has a zero immutable identity".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    fn binding(&self, operation_id: [u8; 32]) -> Option<&PendingKagemushaOperationBinding> {
+        self.by_key.get(&operation_id)
+    }
+
+    fn entrypoint_for(&self, operation_id: [u8; 32]) -> Option<EntrypointHash> {
+        self.binding(operation_id)
+            .map(|binding| binding.entrypoint_hash)
+    }
+
+    fn validate_cardinality(&self) -> Result<(), PendingKagemushaOperationIndexError> {
+        if self.by_key.len() == self.key_by_entrypoint.len() {
+            return Ok(());
+        }
+        let entrypoint_hash = self
+            .key_by_entrypoint
+            .keys()
+            .next()
+            .copied()
+            .or_else(|| {
+                self.by_key
+                    .values()
+                    .next()
+                    .map(|binding| binding.entrypoint_hash)
+            })
+            .expect("unequal non-negative index cardinalities cannot both be zero");
+        Err(PendingKagemushaOperationIndexError {
+            entrypoint_hash,
+            reason: format!(
+                "Kagemusha V1 pending-operation index cardinality differs: {} forward owners and {} reverse owners",
+                self.by_key.len(),
+                self.key_by_entrypoint.len()
+            ),
+        })
+    }
+
+    fn validate_forward_owner(
+        &self,
+        key: &PendingKagemushaOperationKey,
+        binding: &PendingKagemushaOperationBinding,
+    ) -> Result<(), PendingKagemushaOperationIndexError> {
+        Self::validate_binding_identity(binding)?;
+        if binding.key() != *key {
+            return Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash: binding.entrypoint_hash,
+                reason: format!(
+                    "forward operation key {:?} disagrees with its binding key {:?}",
+                    key, binding.operation_id
+                ),
+            });
+        }
+        match self.key_by_entrypoint.get(&binding.entrypoint_hash) {
+            Some(reverse_key) if reverse_key == key => Ok(()),
+            Some(reverse_key) => Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash: binding.entrypoint_hash,
+                reason: format!(
+                    "forward operation {:?} points to {}, whose reverse owner is operation {:?}",
+                    key, binding.entrypoint_hash, reverse_key
+                ),
+            }),
+            None => Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash: binding.entrypoint_hash,
+                reason: format!(
+                    "forward operation {:?} points to {}, which has no reverse owner",
+                    key, binding.entrypoint_hash
+                ),
+            }),
+        }
+    }
+
+    fn validate_reverse_owner(
+        &self,
+        entrypoint_hash: EntrypointHash,
+        key: &PendingKagemushaOperationKey,
+    ) -> Result<(), PendingKagemushaOperationIndexError> {
+        match self.by_key.get(key) {
+            Some(binding) if binding.entrypoint_hash == entrypoint_hash => {
+                self.validate_forward_owner(key, binding)
+            }
+            Some(binding) => Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash,
+                reason: format!(
+                    "reverse entry {entrypoint_hash} names operation {:?}, whose forward owner is {}",
+                    key, binding.entrypoint_hash
+                ),
+            }),
+            None => Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash,
+                reason: format!(
+                    "reverse entry {entrypoint_hash} names operation {:?}, which has no forward owner",
+                    key
+                ),
+            }),
+        }
+    }
+
+    /// Validate the complete index once at a cold reconstruction boundary.
+    ///
+    /// Hot admission, removal, and status lookup preserve the same invariant
+    /// inductively with cardinality plus exact reciprocal-owner checks. Scanning
+    /// every unrelated owner while holding Queue's mutation lock would make a
+    /// public status miss linear in the global pending-operation population.
+    fn validate_bijection(&self) -> Result<(), PendingKagemushaOperationIndexError> {
+        self.validate_cardinality()?;
+        for (key, binding) in &self.by_key {
+            self.validate_forward_owner(key, binding)?;
+        }
+        for (entrypoint_hash, key) in &self.key_by_entrypoint {
+            self.validate_reverse_owner(*entrypoint_hash, key)?;
+        }
+        Ok(())
+    }
+
+    fn checked_binding(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<Option<&PendingKagemushaOperationBinding>, PendingKagemushaOperationIndexError>
+    {
+        self.validate_cardinality()?;
+        let key = operation_id;
+        let Some(binding) = self.by_key.get(&key) else {
+            return Ok(None);
+        };
+        self.validate_forward_owner(&key, binding)?;
+        Ok(Some(binding))
+    }
+
+    fn validate_claim(
+        &self,
+        binding: &PendingKagemushaOperationBinding,
+    ) -> Result<(), PendingKagemushaOperationClaimError> {
+        let inconsistent = |error: PendingKagemushaOperationIndexError| {
+            PendingKagemushaOperationClaimError::Inconsistent {
+                entrypoint_hash: error.entrypoint_hash,
+                reason: error.reason,
+            }
+        };
+        self.validate_cardinality().map_err(&inconsistent)?;
+        Self::validate_binding_identity(binding).map_err(&inconsistent)?;
+        let key = binding.key();
+        if let Some(existing) = self.by_key.get(&key) {
+            self.validate_forward_owner(&key, existing)
+                .map_err(&inconsistent)?;
+            return Err(PendingKagemushaOperationClaimError::OperationIdClaimed {
+                existing_entrypoint_hash: existing.entrypoint_hash,
+            });
+        }
+        if let Some(existing_key) = self.key_by_entrypoint.get(&binding.entrypoint_hash) {
+            self.validate_reverse_owner(binding.entrypoint_hash, existing_key)
+                .map_err(&inconsistent)?;
+            return Err(PendingKagemushaOperationClaimError::EntrypointClaimed {
+                existing_key: existing_key.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn claim(
+        &mut self,
+        binding: PendingKagemushaOperationBinding,
+    ) -> Result<(), PendingKagemushaOperationClaimError> {
+        self.validate_claim(&binding)?;
+        let key = binding.key();
+        self.key_by_entrypoint
+            .insert(binding.entrypoint_hash, key.clone());
+        self.by_key.insert(key, binding);
+        Ok(())
+    }
+
+    fn remove_entrypoint(
+        &mut self,
+        hash: &EntrypointHash,
+    ) -> Result<(), PendingKagemushaOperationIndexError> {
+        self.validate_cardinality()?;
+        let Some(key) = self.key_by_entrypoint.get(hash).cloned() else {
+            return Ok(());
+        };
+        self.validate_reverse_owner(*hash, &key)?;
+        self.key_by_entrypoint.remove(hash);
+        self.by_key.remove(&key);
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.by_key.clear();
+        self.key_by_entrypoint.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_key.is_empty() && self.key_by_entrypoint.is_empty()
+    }
+}
+
+/// One globally indexed pending Kagemusha V1 operation.
+#[derive(Clone, Debug)]
+pub struct PendingKagemushaOperation {
+    binding: PendingKagemushaOperationBinding,
+    transaction: Arc<CheckedTransaction<'static>>,
+}
+
+impl PendingKagemushaOperation {
+    /// Return the outer transaction authority that submitted the operation.
+    #[must_use]
+    pub fn authority(&self) -> &AccountId {
+        &self.binding.authority
+    }
+
+    /// Return the signed operation identifier.
+    #[must_use]
+    pub const fn operation_id(&self) -> [u8; 32] {
+        self.binding.operation_id
+    }
+
+    /// Return whether this is a top-up or redemption.
+    #[must_use]
+    pub const fn kind(&self) -> KagemushaOperationKindV1 {
+        self.binding.kind
+    }
+
+    /// Return the canonical digest of the complete authorized request.
+    #[must_use]
+    pub const fn canonical_request_digest(&self) -> [u8; 32] {
+        self.binding.canonical_request_digest
+    }
+
+    /// Return the canonical transaction-entrypoint hash.
+    #[must_use]
+    pub const fn entrypoint_hash(&self) -> HashOf<TransactionEntrypoint> {
+        self.binding.entrypoint_hash
+    }
+
+    /// Return the exact signed-transaction identity.
+    #[must_use]
+    pub const fn signed_transaction_hash(&self) -> HashOf<SignedTransaction> {
+        self.binding.signed_transaction_hash
+    }
+
+    /// Borrow the exact external transaction without cloning its proof-heavy request.
+    #[must_use]
+    pub fn signed_transaction(&self) -> &SignedTransaction {
+        match self.transaction.as_accepted().entrypoint() {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::SealedReveal(_)
+            | TransactionEntrypoint::Time(_) => {
+                unreachable!("indexed Kagemusha V1 operation must retain its external carrier")
+            }
+        }
+    }
+}
+
+/// Failure to resolve one pending Kagemusha V1 operation from a coherent Queue snapshot.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum PendingKagemushaOperationLookupError {
+    /// The supplied operation identifier is zero.
+    #[error("Kagemusha V1 pending-operation lookup requires a non-zero operation id")]
+    InvalidOperationId,
+    /// Queue ownership is not safe to inspect until startup or fault recovery completes.
+    #[error("Kagemusha V1 pending-operation lookup is unavailable: {reason}")]
+    Unavailable {
+        /// Closed reason for the unavailable lookup.
+        reason: String,
+    },
+    /// The matching operation is crossing its pending-plan durability boundary.
+    #[error("Kagemusha V1 pending operation {entrypoint_hash} is crossing a durability boundary")]
+    DurabilityTransition {
+        /// Exact entrypoint whose transition must finish before retry.
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    },
+    /// Forward, reverse, or transaction ownership no longer agrees.
+    #[error("Kagemusha V1 pending-operation index is inconsistent: {reason}")]
+    Inconsistent {
+        /// Closed identity-consistency failure reason.
+        reason: String,
+    },
+}
+
 /// Lockfree queue for transactions
 ///
 /// Multiple producers, single consumer. Sumeragi must serialize transaction popping and guard
@@ -3638,6 +4056,11 @@ pub struct Queue {
     /// Stored behind `Arc` to avoid deep cloning heavy transactions
     /// (including instruction payloads) during queue operations.
     txs: DashMap<EntrypointHash, Arc<CheckedTransaction<'static>>>,
+    /// Complete pending Kagemusha V1 operation identity, maintained atomically with `txs`.
+    ///
+    /// Every mutation is serialized by `push_remove_lock`; the inner mutex provides interior
+    /// mutability without introducing an independent mutation order.
+    pending_kagemusha_operations: parking_lot::Mutex<PendingKagemushaOperationIndex>,
     /// Cached count of transactions tracked by `txs`.
     active_count: AtomicUsize,
     /// Durable reservation owners whose transaction payload has not yet been
@@ -3984,10 +4407,10 @@ pub(crate) enum QueuePlanGossipAdmission {
     /// Exact quorum certificate authenticating this transaction and immutable routing plan.
     Certified(Arc<Vec<u8>>),
 }
-// TODO: Commit QueuePlanSynced admission intent in transaction-author-signed,
-// consensus-visible data. Certificate gossip closes honest handoff reordering,
-// but an optional transport attachment cannot prevent a Byzantine relay from
-// stripping that intent and presenting the same signed transaction as ordinary.
+// QueuePlanSynced admission intent is transaction-author-signed and consensus-visible.
+// Both gossip receive paths reject that intent without its quorum certificate;
+// candidate selection and block admission enforce the same autonomous-owner boundary.
+// Stripping the transport certificate cannot downgrade the signed admission intent.
 /// Process-local candidate fence; dropping it releases only its exact queued hashes.
 pub(crate) struct GlobalQueueSelectionLease {
     queue: Weak<Queue>,
@@ -4130,6 +4553,7 @@ struct QueueDurabilityObserverLockHandoff {
 struct PreparedQueueAdmission {
     checked: CheckedTransaction<'static>,
     hash: EntrypointHash,
+    kagemusha_operation: Option<PendingKagemushaOperationBinding>,
     routing_decision: RoutingDecision,
     routing_plan: RoutingPlan,
     encoded_len: usize,
@@ -4160,6 +4584,7 @@ struct PreparedQueuePlanReplay {
     next_fifo_ordinal: u64,
     fee_reservations: FeeAdmissionReservationStore,
     per_user_increments: HashMap<AccountId, usize>,
+    pending_kagemusha_operations: PendingKagemushaOperationIndex,
 }
 struct QueuePlanReplayReservationShape {
     durable_owned_hashes: HashSet<EntrypointHash>,
@@ -4578,6 +5003,23 @@ pub enum Error {
     MaximumTransactionsPerUser,
     /// The transaction is already in the queue
     IsInQueue,
+    /// Kagemusha V1 operation carrier is not canonical: {reason}
+    KagemushaV1OperationCarrierRejected {
+        /// Closed carrier-shape or request-validation reason.
+        reason: String,
+    },
+    /// Kagemusha V1 operation {operation_id:?} is already pending as {existing_entrypoint_hash}
+    KagemushaV1OperationIdConflict {
+        /// Globally unique Kagemusha V1 operation identifier.
+        operation_id: [u8; 32],
+        /// Existing exact transaction-entrypoint owner.
+        existing_entrypoint_hash: HashOf<TransactionEntrypoint>,
+    },
+    /// Kagemusha V1 pending-operation index is inconsistent: {reason}
+    KagemushaV1OperationIndexInconsistent {
+        /// Closed forward/reverse ownership mismatch.
+        reason: String,
+    },
     /// Transaction authority is not registered: {authority}
     UnregisteredAuthority {
         /// Authority that was absent from the committed world state.
@@ -4617,13 +5059,6 @@ pub enum Error {
         code: FeeRejectionCode,
         /// Reason describing why the transaction could not cover the Nexus fee bound.
         reason: String,
-    },
-    /// Confidential policy admission rejected the transaction before queueing: {detail} ({reason})
-    ConfidentialPolicyAdmissionRejected {
-        /// Reason describing why the confidential policy rejected the transaction.
-        reason: TransactionRejectionReason,
-        /// Human-readable confidential policy rejection detail.
-        detail: String,
     },
     /// Nexus fee admission encountered invalid node configuration [{code}]: {reason}
     NexusFeeAdmissionConfigInvalid {
@@ -4915,10 +5350,6 @@ trait QueueAdmissionStateAccess {
         authority: &AccountId,
         lane_alias: &str,
     ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error>;
-    fn validate_confidential_policy_admission(
-        &mut self,
-        executable: &Executable,
-    ) -> Result<(), Error>;
 }
 struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
@@ -4926,14 +5357,6 @@ struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     pipeline: &'view Pipeline,
     next_block_height: u64,
     ledger_time_ms: u64,
-}
-fn transaction_rejection_detail(reason: &TransactionRejectionReason) -> String {
-    match reason {
-        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
-            detail,
-        )) => detail.clone(),
-        _ => reason.to_string(),
-    }
 }
 impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
     const fn new<'view>(
@@ -5003,22 +5426,105 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
             self.ledger_time_ms,
         )
     }
-    fn validate_confidential_policy_admission(
-        &mut self,
-        executable: &Executable,
-    ) -> Result<(), Error> {
-        crate::tx::validate_confidential_policy_admission_for_world(
-            executable,
-            self.world,
-            self.next_block_height,
-        )
-        .map_err(|reason| Error::ConfidentialPolicyAdmissionRejected {
-            detail: transaction_rejection_detail(&reason),
-            reason,
-        })
-    }
 }
 impl Queue {
+    fn classify_pending_kagemusha_operation(
+        checked: &CheckedTransaction<'static>,
+    ) -> Result<Option<PendingKagemushaOperationBinding>, Error> {
+        let accepted = checked.as_accepted();
+        let TransactionEntrypoint::External(transaction) = accepted.entrypoint() else {
+            let contains_operation = match accepted.entrypoint() {
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    executable_contains_kagemusha_operation_v1(
+                        reveal.signed_transaction().instructions(),
+                    )
+                }
+                TransactionEntrypoint::Time(time) => time
+                    .instructions
+                    .iter()
+                    .any(|instruction| kagemusha_operation_request_v1(instruction).is_some()),
+                TransactionEntrypoint::SealedCommitment(_) => false,
+                TransactionEntrypoint::External(_) => unreachable!(),
+            };
+            return if contains_operation {
+                Err(Error::KagemushaV1OperationCarrierRejected {
+                    reason:
+                        "Kagemusha V1 operations require one direct external signed transaction"
+                            .to_owned(),
+                })
+            } else {
+                Ok(None)
+            };
+        };
+        crate::tx::validate_kagemusha_top_up_admission_invariants_v1(transaction).map_err(
+            |reason| Error::KagemushaV1OperationCarrierRejected {
+                reason: reason.to_owned(),
+            },
+        )?;
+        if !executable_contains_kagemusha_operation_v1(transaction.instructions()) {
+            return Ok(None);
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err(Error::KagemushaV1OperationCarrierRejected {
+                reason: "Kagemusha V1 operations cannot be carried by proved or overlay execution"
+                    .to_owned(),
+            });
+        };
+        let [instruction] = instructions.as_ref() else {
+            return Err(Error::KagemushaV1OperationCarrierRejected {
+                reason: "an Kagemusha V1 operation must be the only instruction in its signed transaction"
+                    .to_owned(),
+            });
+        };
+        let request = kagemusha_operation_request_v1(instruction).ok_or_else(|| {
+            Error::KagemushaV1OperationCarrierRejected {
+                reason: "Kagemusha V1 carrier shape changed during classification".to_owned(),
+            }
+        })?;
+        request
+            .validate()
+            .map_err(|reason| Error::KagemushaV1OperationCarrierRejected { reason })?;
+        let canonical_request_digest = request
+            .canonical_digest()
+            .map_err(|reason| Error::KagemushaV1OperationCarrierRejected { reason })?;
+        Ok(Some(PendingKagemushaOperationBinding {
+            authority: transaction.authority().clone(),
+            operation_id: request.operation_id(),
+            kind: request.kind(),
+            canonical_request_digest,
+            entrypoint_hash: accepted.hash_as_entrypoint(),
+            signed_transaction_hash: transaction.hash(),
+        }))
+    }
+
+    fn latch_pending_kagemusha_operation_index_fault(&self, hash: EntrypointHash, reason: &str) {
+        if !self
+            .accepted_work_validation_fault
+            .swap(true, Ordering::AcqRel)
+        {
+            iroha_logger::error!(
+                tx = %hash,
+                stage = "pending_kagemusha_operation_index",
+                reason,
+                "pending Kagemusha V1 operation index lost exact Queue ownership; disabled admission and transaction selection until restart recovery"
+            );
+        }
+    }
+
+    /// Remove an operation claim with its transaction while holding `push_remove_lock`.
+    fn remove_pending_kagemusha_operation_locked(&self, hash: EntrypointHash) {
+        if let Err(error) = self
+            .pending_kagemusha_operations
+            .lock()
+            .remove_entrypoint(&hash)
+        {
+            self.latch_pending_kagemusha_operation_index_fault(
+                error.entrypoint_hash,
+                &error.reason,
+            );
+        }
+    }
+
     fn collect_lane_privacy_proofs(tx: &CheckedTransaction<'_>) -> Vec<LanePrivacyProof> {
         tx.external()
             .into_iter()
@@ -5712,7 +6218,7 @@ impl Queue {
             if excluded_entrypoint_hashes.contains(&tx.as_accepted().hash_as_entrypoint()) {
                 continue;
             }
-            if routing_state_view.transactions.get(&hash).is_some() {
+            if tx.is_in_blockchain(&routing_state_view) {
                 continue;
             }
             let routing_plan = match self.immutable_queued_routing_plan_in_view(
@@ -10807,6 +11313,7 @@ impl Queue {
     /// Caller must hold `push_remove_lock`.
     fn ensure_plan_journal_replay_startup_shape_locked(&self) -> std::io::Result<()> {
         let materialized_shape_is_empty = self.txs.is_empty()
+            && self.pending_kagemusha_operations.lock().is_empty()
             && self.materialized_active_len() == 0
             && self.materialized_retained_bytes() == 0
             && self.tx_hashes.is_empty()
@@ -11026,7 +11533,103 @@ impl Queue {
             }
             let has_materialized_owner = self.txs.contains_key(&hash);
             let has_durable_reservation_owner = reservation_owner.is_present();
-            let state_committed = state_view.transactions.get(&hash).is_some();
+            let state_committed = accepted.has_committed_replay_identity(state_view);
+            let carrier_committed = state_view.has_entrypoint(entrypoint_hash);
+            let global_binding = recorded_global_admission_identity
+                .is_some()
+                .then(|| {
+                    claim.global_admission_binding().map_err(|reason| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
+                        ))
+                    })
+                })
+                .transpose()?;
+            let global_registry_match = if let Some(binding) = global_binding.as_ref() {
+                let expected_network_id_digest =
+                    crate::torii_proxy::queue_plan_admission_network_id_digest(
+                        state_view.network_id(),
+                    );
+                if binding.network_id_digest != expected_network_id_digest {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} belongs to another network; retaining its durable record"
+                    )));
+                }
+                Some(
+                    if state_committed {
+                        State::queue_plan_admission_registry_match_in_view(
+                            state_view,
+                            binding.entrypoint_hash.clone(),
+                            binding.canonical_hash(),
+                        )
+                    } else {
+                        queue_plan_admission_registry_match(
+                            state_view,
+                            binding.entrypoint_hash.clone(),
+                            binding.canonical_hash(),
+                        )
+                    }
+                    .map_err(|reason| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
+                        ))
+                    })?,
+                )
+            } else {
+                None
+            };
+            if state_committed
+                && matches!(
+                    global_registry_match,
+                    Some(
+                        QueuePlanAdmissionRegistryMatch::Absent
+                            | QueuePlanAdmissionRegistryMatch::Conflict
+                    )
+                )
+            {
+                if has_materialized_owner || has_durable_reservation_owner {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} is a committed replay duplicate without its exact canonical admission owner while queue or reservation ownership remains live"
+                    )));
+                }
+                if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
+                    summary.tombstoned_conflicting_global_admission = summary
+                        .tombstoned_conflicting_global_admission
+                        .saturating_add(1);
+                } else {
+                    summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
+                }
+                terminal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
+                continue;
+            }
+            if state_committed && let Some(binding) = global_binding.as_ref() {
+                debug_assert_eq!(
+                    global_registry_match,
+                    Some(QueuePlanAdmissionRegistryMatch::Exact)
+                );
+                let expected_evidence = if carrier_committed {
+                    QueuePlanBindingApplicationEvidence::AppliedDirect
+                } else {
+                    QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias
+                };
+                match State::queue_plan_binding_application_evidence_in_view(state_view, &binding) {
+                    Ok(evidence) if evidence == expected_evidence => {}
+                    Ok(_) => {
+                        return Err(invalid(format!(
+                            "queue-plan journal transaction {hash} lacks exact canonical replay-terminal evidence; retaining its durable record"
+                        )));
+                    }
+                    Err(reason) => {
+                        return Err(invalid(format!(
+                            "queue-plan journal transaction {hash} cannot authenticate replay-terminal canonical State; retaining its durable record: {reason}"
+                        )));
+                    }
+                }
+            }
             // A release terminal outcome can become Complete only after Queue
             // durably forgets its release owner. The post-Complete crash image
             // therefore reaches this branch with the QueuePlan record as its
@@ -11050,48 +11653,13 @@ impl Queue {
             // has already been authenticated above; current fee, registry,
             // manifest, and route policy must not reject accepted work after
             // canonical application.
-            let (global_registry_match, canonical_pending_handoff) = if state_committed {
-                (None, false)
-            } else if recorded_global_admission_identity.is_some() {
-                let binding =
-                    crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
-                        &QueuePlanDurableAdmissionV1 {
-                            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
-                            context: recorded_admission_context.clone(),
-                            global_admission_identity: recorded_global_admission_identity,
-                            routing_plan: recorded_routing_plan.clone(),
-                            entrypoint_hash,
-                            signed_transaction_hash: recorded_signed_transaction_hash,
-                            enqueue_timestamp_ms,
-                            journal_record_digest: recorded_journal_digest,
-                        },
-                    )
-                    .map_err(|reason| {
-                        invalid(format!(
-                            "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
-                        ))
-                    })?;
-                let expected_network_id_digest =
-                    crate::torii_proxy::queue_plan_admission_network_id_digest(
-                        state_view.network_id(),
-                    );
-                if binding.network_id_digest != expected_network_id_digest {
-                    return Err(invalid(format!(
-                        "queue-plan journal transaction {hash} belongs to another network; retaining its durable record"
-                    )));
-                }
-                let registry_match = queue_plan_admission_registry_match(
-                    state_view,
-                    binding.entrypoint_hash.clone(),
-                    binding.canonical_hash(),
-                )
-                .map_err(|reason| {
-                    invalid(format!(
-                        "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
-                    ))
-                })?;
-                if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
-                    let canonical_binding = State::queue_plan_pending_binding_in_view(
+            let canonical_pending_handoff = if !state_committed
+                && global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Exact)
+            {
+                let binding = global_binding
+                    .as_ref()
+                    .expect("exact global registry match has an admission binding");
+                let canonical_binding = State::queue_plan_pending_binding_in_view(
                         state_view,
                         binding.entrypoint_hash.clone(),
                     )
@@ -11105,18 +11673,14 @@ impl Queue {
                             "queue-plan journal transaction {hash} has an exact registry owner without a pending application obligation"
                         ))
                     })?;
-                    if canonical_binding != binding {
-                        return Err(invalid(format!(
-                            "queue-plan journal transaction {hash} differs from its full canonical pending binding"
-                        )));
-                    }
+                if canonical_binding != *binding {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} differs from its full canonical pending binding"
+                    )));
                 }
-                (
-                    Some(registry_match),
-                    registry_match == QueuePlanAdmissionRegistryMatch::Exact,
-                )
+                true
             } else {
-                (None, false)
+                false
             };
             if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
                 if has_materialized_owner || has_durable_reservation_owner {
@@ -11193,6 +11757,12 @@ impl Queue {
             let checked = CheckedTransaction::new_unchecked(accepted);
             let enforce_pending_limits = !state_committed;
             let mut admission = if state_committed {
+                let kagemusha_operation = Self::classify_pending_kagemusha_operation(&checked)
+                    .map_err(|error| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} has an invalid Kagemusha V1 operation carrier; retaining its durable record: {error}"
+                        ))
+                    })?;
                 let proposal_gas_cost =
                     Self::compute_proposal_gas_cost(checked.as_accepted()).map_err(|error| {
                         invalid(format!(
@@ -11206,6 +11776,7 @@ impl Queue {
                     routing_plan: recorded_routing_plan,
                     checked,
                     hash,
+                    kagemusha_operation,
                     enqueued_at_ms: enqueue_timestamp_ms,
                     admission_context: None,
                     global_admission_identity: None,
@@ -11282,6 +11853,7 @@ impl Queue {
         let mut projected_retained = self.retained_bytes();
         let mut per_user_increments = HashMap::<AccountId, usize>::new();
         let mut projected_fee_reservations = self.fee_admission_reservations.lock().clone();
+        let mut projected_pending_kagemusha_operations = PendingKagemushaOperationIndex::default();
         for (
             admission,
             _claim,
@@ -11291,6 +11863,15 @@ impl Queue {
             enforce_pending_limits,
         ) in &pending_admissions
         {
+            if let Some(binding) = admission.kagemusha_operation.clone() {
+                projected_pending_kagemusha_operations
+                    .claim(binding)
+                    .map_err(|error| {
+                        invalid(format!(
+                            "queue-plan journal replay contains conflicting Kagemusha V1 operation ownership: {error:?}"
+                        ))
+                    })?;
+            }
             let capacity_slots = usize::from(!*replaces_missing_payload);
             projected_active = projected_active
                 .checked_add(capacity_slots)
@@ -11556,6 +12137,14 @@ impl Queue {
                 journal_record_digest: replayed.claim.journal_record_digest,
             })
             .collect();
+        projected_pending_kagemusha_operations
+            .validate_bijection()
+            .map_err(|error| {
+                invalid(format!(
+                    "queue-plan journal replay produced an inconsistent Kagemusha V1 operation index: {}",
+                    error.reason
+                ))
+            })?;
         summary.replayed = admissions.len();
         Ok(PreparedQueuePlanReplay {
             summary,
@@ -11567,6 +12156,7 @@ impl Queue {
             next_fifo_ordinal,
             fee_reservations: projected_fee_reservations,
             per_user_increments,
+            pending_kagemusha_operations: projected_pending_kagemusha_operations,
         })
     }
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -11587,8 +12177,10 @@ impl Queue {
             next_fifo_ordinal,
             fee_reservations,
             per_user_increments,
+            pending_kagemusha_operations,
         } = replay;
         *self.fee_admission_reservations.lock() = fee_reservations;
+        *self.pending_kagemusha_operations.lock() = pending_kagemusha_operations;
         *self.next_fifo_ordinal.lock() = next_fifo_ordinal;
         let mut notifications = Vec::with_capacity(admissions.len());
         for replayed in admissions {
@@ -11602,6 +12194,7 @@ impl Queue {
             let PreparedQueueAdmission {
                 checked,
                 hash,
+                kagemusha_operation: _,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -12014,6 +12607,24 @@ impl Queue {
         &self,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<bool, LaneQueueReservationError> {
+        self.reject_exact_queue_plan_admission_claim_inner(binding, false)
+    }
+    /// Durably release an exact replay-terminal QueuePlan owner which never entered a lane.
+    ///
+    /// Canonical State must first resolve the owner's pending obligation through a committed
+    /// signed replay alias. This Queue-side boundary then refuses to race any selected, popped,
+    /// reserved, or terminalizing lifecycle owner; those remain under the Kura corridor.
+    fn reject_unreserved_replay_terminal_queue_plan_admission_claim(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    ) -> Result<bool, LaneQueueReservationError> {
+        self.reject_exact_queue_plan_admission_claim_inner(binding, true)
+    }
+    fn reject_exact_queue_plan_admission_claim_inner(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+        require_unreserved_replay_terminal_owner: bool,
+    ) -> Result<bool, LaneQueueReservationError> {
         binding
             .validate_structure()
             .map_err(LaneQueueReservationError::InvalidIdentity)?;
@@ -12047,6 +12658,39 @@ impl Queue {
                 // A delayed losing certificate must not delete a later admission for the same
                 // entrypoint, including an ABA replacement with the same routing-plan digest.
                 return Ok(false);
+            }
+            if require_unreserved_replay_terminal_owner {
+                let reservation_owned = {
+                    let reservations = self.lane_reservations.lock();
+                    reservations.live_by_entrypoint.contains_key(&hash)
+                        || reservations
+                            .commit_barriers
+                            .iter()
+                            .any(|key| key.entrypoint_hash == hash)
+                        || reservations
+                            .plan_tombstoned
+                            .iter()
+                            .any(|key| key.entrypoint_hash == hash)
+                        || reservations.release_barriers.iter().any(|barrier| {
+                            barrier
+                                .ordered_keys
+                                .iter()
+                                .any(|key| key.entrypoint_hash == hash)
+                        })
+                        || reservations.completed_releases.iter().any(|completion| {
+                            completion
+                                .ordered_records
+                                .iter()
+                                .any(|record| record.key.entrypoint_hash == hash)
+                        })
+                };
+                if reservation_owned
+                    || self.global_selection_owners.lock().contains_key(&hash)
+                    || self.inflight_guards.load(Ordering::Acquire) != 0
+                    || self.selection_attempts.load(Ordering::Acquire) != 0
+                {
+                    return Ok(false);
+                }
             }
             let transaction = self
                 .txs
@@ -13115,6 +13759,9 @@ impl Queue {
                 routing_policy: RwLock::new(LaneRoutingPolicy::default()),
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
+                pending_kagemusha_operations: parking_lot::Mutex::new(
+                    PendingKagemushaOperationIndex::default(),
+                ),
                 active_count: AtomicUsize::new(0),
                 missing_reservation_payload_count: AtomicUsize::new(0),
                 removed_hashes: DashMap::new(),
@@ -13595,6 +14242,135 @@ impl Queue {
             relay_lease_remaining,
         })
     }
+    /// Resolve one pending Kagemusha V1 operation from an exact Queue ownership snapshot.
+    ///
+    /// Operation identifiers are globally unique across authorities. A transaction crossing its
+    /// journal durability boundary is reported as unavailable instead of being misclassified as
+    /// absent.
+    ///
+    /// # Errors
+    /// Returns a typed unavailable or consistency failure while Queue ownership cannot safely
+    /// support an authoritative pending result.
+    pub fn pending_kagemusha_operation(
+        &self,
+        state_view: &StateView<'_>,
+        operation_id: [u8; 32],
+    ) -> Result<Option<PendingKagemushaOperation>, PendingKagemushaOperationLookupError> {
+        if operation_id == [0; 32] {
+            return Err(PendingKagemushaOperationLookupError::InvalidOperationId);
+        }
+        let unavailable_reason = || {
+            if self.lane_reservation_startup_reconciliation_pending() {
+                Some("startup reservation ownership is still being reconciled")
+            } else if self.transaction_selection_durability_faulted() {
+                Some("Queue ownership requires restart recovery")
+            } else {
+                None
+            }
+        };
+        if let Some(reason) = unavailable_reason() {
+            return Err(PendingKagemushaOperationLookupError::Unavailable {
+                reason: reason.to_owned(),
+            });
+        }
+
+        let queue_guard = self.push_remove_lock.lock();
+        if let Some(reason) = unavailable_reason() {
+            return Err(PendingKagemushaOperationLookupError::Unavailable {
+                reason: reason.to_owned(),
+            });
+        }
+        let binding = {
+            let index = self.pending_kagemusha_operations.lock();
+            index
+                .checked_binding(operation_id)
+                .map(|binding| binding.cloned())
+        };
+        let binding = match binding {
+            Ok(Some(binding)) => binding,
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                self.latch_pending_kagemusha_operation_index_fault(
+                    error.entrypoint_hash,
+                    &error.reason,
+                );
+                return Err(PendingKagemushaOperationLookupError::Inconsistent {
+                    reason: error.reason,
+                });
+            }
+        };
+        let transaction = self
+            .txs
+            .get(&binding.entrypoint_hash)
+            .map(|entry| Arc::clone(entry.value()));
+        let Some(transaction) = transaction else {
+            let reason = format!(
+                "operation key points to absent transaction {}",
+                binding.entrypoint_hash
+            );
+            self.latch_pending_kagemusha_operation_index_fault(binding.entrypoint_hash, &reason);
+            return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+        };
+        let exact_binding = match Self::classify_pending_kagemusha_operation(transaction.as_ref()) {
+            Ok(Some(exact_binding)) => exact_binding,
+            Ok(None) => {
+                let reason = format!(
+                    "operation key points to a non-Kagemusha-V1 transaction {}",
+                    binding.entrypoint_hash
+                );
+                self.latch_pending_kagemusha_operation_index_fault(
+                    binding.entrypoint_hash,
+                    &reason,
+                );
+                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+            }
+            Err(error) => {
+                let reason = format!(
+                    "operation key points to invalid Kagemusha V1 transaction {}: {error}",
+                    binding.entrypoint_hash
+                );
+                self.latch_pending_kagemusha_operation_index_fault(
+                    binding.entrypoint_hash,
+                    &reason,
+                );
+                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+            }
+        };
+        if exact_binding != binding {
+            let reason = format!(
+                "operation key disagrees with immutable transaction {}",
+                binding.entrypoint_hash
+            );
+            self.latch_pending_kagemusha_operation_index_fault(binding.entrypoint_hash, &reason);
+            return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+        }
+        if self.durability_transition_active(&binding.entrypoint_hash) {
+            return Err(PendingKagemushaOperationLookupError::DurabilityTransition {
+                entrypoint_hash: binding.entrypoint_hash,
+            });
+        }
+        let pending = match self
+            .pending_status_with_stable_durability_owner(transaction.as_ref(), state_view)
+        {
+            Ok(pending) => pending,
+            Err(reason) => {
+                self.latch_pending_kagemusha_operation_index_fault(
+                    binding.entrypoint_hash,
+                    &reason,
+                );
+                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+            }
+        };
+        drop(queue_guard);
+        if !pending {
+            return Ok(None);
+        }
+        Ok(Some(PendingKagemushaOperation {
+            binding,
+            transaction,
+        }))
+    }
+
     /// Returns all pending transactions.
     pub fn all_transactions<'state>(
         &'state self,
@@ -14580,6 +15356,125 @@ impl Queue {
             authority_height,
         )
     }
+    pub(crate) fn classify_plan_admission_context_in_view(
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+        admission_context: &QueuePlanAdmissionContextV1,
+    ) -> Result<QueuePlanAdmissionContextDisposition, QueuePlanAdmissionContextError> {
+        admission_context
+            .validate_for_routing_plan(routing_plan)
+            .map_err(|reason| QueuePlanAdmissionContextError::NonCanonical { reason })?;
+        let current_authority_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+        let current_plan = resolve_routing_plan_for_queue_admission(
+            routing_plan.clone(),
+            state_view.nexus(),
+            current_authority_height,
+        )?;
+        if &current_plan != routing_plan {
+            return Err(QueuePlanAdmissionContextError::NonCanonical {
+                reason: "supplied routing plan differs from the exact current plan".to_owned(),
+            });
+        }
+        let future = admission_context.authority_height > current_authority_height;
+        if admission_context.authority_height < current_authority_height {
+            return Err(QueuePlanAdmissionContextError::NonCanonical {
+                reason: "first-time historical admission requires rebinding at the current canonical frontier"
+                    .to_owned(),
+            });
+        }
+        let current_proposal_height = current_authority_height.checked_add(1).ok_or_else(|| {
+            QueuePlanAdmissionContextError::NonCanonical {
+                reason: "current authority height overflows its proposal height".to_owned(),
+            }
+        })?;
+        if !future {
+            let exact_predecessor = if admission_context.authority_height == 0 {
+                None
+            } else {
+                let predecessor_index =
+                    usize::try_from(admission_context.authority_height.saturating_sub(1)).map_err(
+                        |_| QueuePlanAdmissionContextError::MissingPredecessor {
+                            authority_height: admission_context.authority_height,
+                        },
+                    )?;
+                Some(
+                    state_view
+                        .block_hashes()
+                        .get(predecessor_index)
+                        .copied()
+                        .ok_or(QueuePlanAdmissionContextError::MissingPredecessor {
+                            authority_height: admission_context.authority_height,
+                        })?,
+                )
+            };
+            if exact_predecessor != admission_context.predecessor_block_hash {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: "supplied predecessor differs from canonical history".to_owned(),
+                });
+            }
+        }
+        for bound in &admission_context.route_incarnations {
+            // A future predecessor is not locally available yet, so authenticate
+            // the certificate's source against the exact current route authority.
+            // This prevents an embedded self-declared roster from manufacturing
+            // an apparently quorum-certified Future that consumes durable Kura
+            // capacity before catch-up.
+            let source_proposal_height = if future {
+                current_proposal_height
+            } else {
+                admission_context.proposal_height
+            };
+            if state_view
+                .lane_incarnation_at_height(bound.leg.route.lane_id, source_proposal_height)
+                != Some(bound.lane_incarnation)
+            {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: format!(
+                        "lane {} dataspace {} incarnation is not canonical at source proposal height {}",
+                        bound.leg.route.lane_id,
+                        bound.leg.route.dataspace_id,
+                        source_proposal_height
+                    ),
+                });
+            }
+            if state_view
+                .lane_incarnation_at_height(bound.leg.route.lane_id, current_proposal_height)
+                != Some(bound.lane_incarnation)
+            {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: format!(
+                        "lane {} dataspace {} admission incarnation is no longer active",
+                        bound.leg.route.lane_id, bound.leg.route.dataspace_id
+                    ),
+                });
+            }
+            let validator_set = queue_plan_authoritative_peers_in_view_at_height(
+                state_view,
+                bound.leg.route,
+                source_proposal_height,
+            )
+            .map_err(|_| QueuePlanAdmissionContextError::MissingAuthority {
+                lane_id: bound.leg.route.lane_id,
+                dataspace_id: bound.leg.route.dataspace_id,
+                proposal_height: source_proposal_height,
+            })?;
+            if validator_set != bound.validator_set {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: format!(
+                        "lane {} dataspace {} validator set differs from canonical source authority at proposal height {}",
+                        bound.leg.route.lane_id,
+                        bound.leg.route.dataspace_id,
+                        source_proposal_height
+                    ),
+                });
+            }
+        }
+        Ok(if future {
+            QueuePlanAdmissionContextDisposition::Future
+        } else {
+            QueuePlanAdmissionContextDisposition::Current
+        })
+    }
     /// Capture the exact active route incarnations for a precomputed admission plan.
     ///
     /// The lifecycle admission guard is held while the plan is revalidated against
@@ -14603,6 +15498,29 @@ impl Queue {
             state_view_height_for_routing(&state_view),
         )?;
         Self::queue_plan_admission_context_in_view(&state_view, &routing_plan)
+    }
+    /// Classify an ingress-supplied context against one coherent local state view.
+    ///
+    /// A first-time historical context is rejected because current WSV cannot
+    /// reconstruct an immutable old committee after authority churn. Exact
+    /// already-owned durable retries are handled before this classifier. A
+    /// future context is reported only when its embedded roster and incarnation
+    /// match the exact current authority source, without mutating queue ownership.
+    ///
+    /// # Errors
+    /// Returns an error when the routing plan is inactive, the context is
+    /// historical, or any authority, roster, or incarnation binding is not
+    /// canonical at the current source frontier.
+    pub fn classify_plan_admission_context_with_state(
+        &self,
+        state: &State,
+        routing_plan: &RoutingPlan,
+        admission_context: &QueuePlanAdmissionContextV1,
+    ) -> Result<QueuePlanAdmissionContextDisposition, QueuePlanAdmissionContextError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        Self::classify_plan_admission_context_in_view(&state_view, routing_plan, admission_context)
     }
     /// Sample the queue time source once for a synthetic global admission binding.
     ///
@@ -14646,7 +15564,7 @@ impl Queue {
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let hash = tx.hash_as_entrypoint();
-        if state_view.transactions.get(&hash).is_some() {
+        if tx.has_committed_replay_identity(&state_view) {
             return Ok(None);
         }
         let _queue_guard = self.push_remove_lock.lock();
@@ -14726,7 +15644,7 @@ impl Queue {
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let tx_hash = tx.hash_as_entrypoint();
-        if state_view.transactions.get(&tx_hash).is_some() {
+        if tx.has_committed_replay_identity(&state_view) {
             return false;
         }
         let _queue_guard = self.push_remove_lock.lock();
@@ -14842,13 +15760,13 @@ impl Queue {
             return false;
         };
         let tx = entry.value().as_ref();
-        if state.has_committed_entrypoint(hash) {
+        let state_view = state.view();
+        if tx.is_in_blockchain(&state_view) {
             return false;
         }
         if !self.is_expired(tx.as_accepted()) {
             return true;
         }
-        let state_view = state.view();
         match self.global_admission_registry_match_for_hash(hash, &state_view) {
             Ok(Some((
                 _,
@@ -15023,7 +15941,7 @@ impl Queue {
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let tx_hash = tx.hash_as_entrypoint();
-        if state_view.transactions.get(&tx_hash).is_some() {
+        if tx.has_committed_replay_identity(&state_view) {
             return Err(Failure {
                 tx: tx.into(),
                 err: Error::InBlockchain,
@@ -15470,16 +16388,32 @@ impl Queue {
                 Some(expected_context.clone())
             } else {
                 match expected_admission_context {
-                    Some(expected_context)
-                        if current_context.as_ref() == Some(expected_context) => {}
-                    Some(_) => {
-                        return Err(Failure {
-                            tx: tx.into(),
-                            err: Error::UnresolvedRoute {
-                                reason: "queue-plan admission context no longer matches the active lane/authority generation".to_owned(),
-                            },
-                        });
-                    }
+                    Some(expected_context) => match Self::classify_plan_admission_context_in_view(
+                        &state_view,
+                        &routing_plan,
+                        expected_context,
+                    ) {
+                        Ok(QueuePlanAdmissionContextDisposition::Current) => {}
+                        Ok(QueuePlanAdmissionContextDisposition::Future) => {
+                            return Err(Failure {
+                                tx: tx.into(),
+                                err: Error::UnresolvedRoute {
+                                    reason: "queue-plan admission context is ahead of the local canonical frontier"
+                                        .to_owned(),
+                                },
+                            });
+                        }
+                        Err(error) => {
+                            return Err(Failure {
+                                tx: tx.into(),
+                                err: Error::UnresolvedRoute {
+                                    reason: format!(
+                                        "queue-plan admission context no longer matches canonical history or the active lane/authority generation: {error}"
+                                    ),
+                                },
+                            });
+                        }
+                    },
                     None => {
                         return Err(Failure {
                             tx: tx.into(),
@@ -15489,7 +16423,7 @@ impl Queue {
                         });
                     }
                 }
-                current_context
+                expected_admission_context.cloned()
             }
         } else {
             debug_assert!(expected_admission_context.is_none());
@@ -15669,6 +16603,11 @@ impl Queue {
                 err,
             });
         }
+        let kagemusha_operation =
+            Self::classify_pending_kagemusha_operation(&checked).map_err(|err| Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err,
+            })?;
         let routing_decision = routing_plan.coordinator_route();
         if preparation_mode == QueueAdmissionPreparationMode::CanonicalPendingHandoff {
             let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted())
@@ -15685,6 +16624,7 @@ impl Queue {
             return Ok(PreparedQueueAdmission {
                 checked,
                 hash,
+                kagemusha_operation,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -15731,15 +16671,6 @@ impl Queue {
         } else {
             None
         };
-        if let Some(transaction) = checked.as_accepted().external()
-            && let Err(err) =
-                state_access.validate_confidential_policy_admission(transaction.instructions())
-        {
-            return Err(Failure {
-                tx: Box::new(checked.as_accepted().clone()),
-                err,
-            });
-        }
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
         let manifest_authority_eligible_lanes =
@@ -16075,6 +17006,7 @@ impl Queue {
         Ok(PreparedQueueAdmission {
             checked,
             hash,
+            kagemusha_operation,
             routing_decision,
             routing_plan,
             encoded_len,
@@ -16107,6 +17039,7 @@ impl Queue {
             let PreparedQueueAdmission {
                 checked,
                 hash,
+                kagemusha_operation,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -16125,9 +17058,20 @@ impl Queue {
             let authority = checked.as_ref().authority_opt().cloned();
             let queue_guard = loop {
                 let queue_guard = self.push_remove_lock.lock();
-                if self.durability_transition_active(&hash) {
+                let transitioning_hash = if self.durability_transition_active(&hash) {
+                    Some(hash)
+                } else {
+                    kagemusha_operation.as_ref().and_then(|binding| {
+                        let owner = self
+                            .pending_kagemusha_operations
+                            .lock()
+                            .entrypoint_for(binding.operation_id);
+                        owner.filter(|owner| self.durability_transition_active(owner))
+                    })
+                };
+                if let Some(transitioning_hash) = transitioning_hash {
                     drop(queue_guard);
-                    self.wait_for_durability_transitions(&[hash]);
+                    self.wait_for_durability_transitions(&[transitioning_hash]);
                     continue;
                 }
                 break queue_guard;
@@ -16167,6 +17111,55 @@ impl Queue {
                     err: Error::IsInQueue,
                 });
                 break;
+            }
+            if let Some(binding) = kagemusha_operation.as_ref() {
+                let claim = self
+                    .pending_kagemusha_operations
+                    .lock()
+                    .validate_claim(binding);
+                match claim {
+                    Ok(()) => {}
+                    Err(PendingKagemushaOperationClaimError::OperationIdClaimed {
+                        existing_entrypoint_hash,
+                    }) => {
+                        failure = Some(Failure {
+                            tx: checked.as_accepted().clone().into(),
+                            err: Error::KagemushaV1OperationIdConflict {
+                                operation_id: binding.operation_id,
+                                existing_entrypoint_hash,
+                            },
+                        });
+                        break;
+                    }
+                    Err(PendingKagemushaOperationClaimError::EntrypointClaimed {
+                        existing_key,
+                    }) => {
+                        let reason = format!(
+                            "entrypoint {hash} is already bound to Kagemusha V1 operation {:?}",
+                            existing_key
+                        );
+                        self.latch_pending_kagemusha_operation_index_fault(hash, &reason);
+                        failure = Some(Failure {
+                            tx: checked.as_accepted().clone().into(),
+                            err: Error::KagemushaV1OperationIndexInconsistent { reason },
+                        });
+                        break;
+                    }
+                    Err(PendingKagemushaOperationClaimError::Inconsistent {
+                        entrypoint_hash,
+                        reason,
+                    }) => {
+                        self.latch_pending_kagemusha_operation_index_fault(
+                            entrypoint_hash,
+                            &reason,
+                        );
+                        failure = Some(Failure {
+                            tx: checked.as_accepted().clone().into(),
+                            err: Error::KagemushaV1OperationIndexInconsistent { reason },
+                        });
+                        break;
+                    }
+                }
             }
             let restored_reservation =
                 match self.restored_reservation_matches_admission(hash, &checked, &routing_plan) {
@@ -16240,6 +17233,12 @@ impl Queue {
             let transition = self
                 .begin_durability_transition_locked([hash])
                 .expect("duplicate checks serialize exact admission transitions");
+            if let Some(binding) = kagemusha_operation {
+                self.pending_kagemusha_operations
+                    .lock()
+                    .claim(binding)
+                    .expect("operation claim was validated under the same Queue mutation lock");
+            }
             let tx_arc = Arc::new(checked);
             self.txs.insert(hash, Arc::clone(&tx_arc));
             self.track_active_transaction();
@@ -16308,6 +17307,7 @@ impl Queue {
                         "queue admission failed before durable acknowledgement"
                     );
                     self.txs.remove(&hash);
+                    self.remove_pending_kagemusha_operation_locked(hash);
                     self.untrack_active_transaction();
                     if fee_reserved {
                         self.fee_admission_reservations.lock().release(&hash);
@@ -16752,8 +17752,7 @@ impl Queue {
                 tx = %tx.hash_as_entrypoint(),
                 "Pushing to the queue in batch"
             );
-            let hash = tx.hash_as_entrypoint();
-            if state_view.transactions.get(&hash).is_some() {
+            if tx.has_committed_replay_identity(&state_view) {
                 precheck_failure = Some(Failure {
                     tx: tx.into(),
                     err: Error::InBlockchain,
@@ -16862,7 +17861,8 @@ impl Queue {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(tx.entrypoint());
         let hash = tx.hash_as_entrypoint();
-        if state.has_committed_entrypoint(hash) {
+        let state_view = state.view();
+        if tx.has_committed_replay_identity(&state_view) {
             return Err(Failure {
                 tx: Box::new(tx),
                 err: Error::InBlockchain,
@@ -16875,7 +17875,6 @@ impl Queue {
                 err: Error::Expired,
             });
         }
-        let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let routing_plan = match self.resolve_precomputed_routing_plan_with_view(
             checked.as_accepted(),
@@ -16926,9 +17925,15 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = self.validation_timestamp_ms(checked.as_accepted());
+        let kagemusha_operation =
+            Self::classify_pending_kagemusha_operation(&checked).map_err(|err| Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err,
+            })?;
         let prepared = PreparedQueueAdmission {
             checked,
             hash,
+            kagemusha_operation,
             routing_decision,
             routing_plan,
             encoded_len,
@@ -17034,6 +18039,7 @@ impl Queue {
                 }
                 self.removed_hashes.remove(&hash);
             }
+            self.pending_kagemusha_operations.lock().clear();
             while self.tx_gossip.pop().is_some() {}
             self.fee_admission_reservations
                 .lock()
@@ -17201,6 +18207,7 @@ impl Queue {
                         continue;
                     }
                     let removed = self.txs.remove(&hash).map(|(_, removed_tx)| {
+                        self.remove_pending_kagemusha_operation_locked(hash);
                         self.fee_admission_reservations.lock().release(&hash);
                         self.untrack_active_transaction();
                         self.untrack_expiry_hash(&hash);
@@ -19155,6 +20162,7 @@ impl Queue {
                 continue;
             }
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
+                self.remove_pending_kagemusha_operation_locked(hash);
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_active_transaction();
                 let (routing, _removed_plan, journal_removal) =
@@ -19275,6 +20283,7 @@ impl Queue {
     ) {
         let hash = tx.hash_as_entrypoint();
         if self.txs.remove(&hash).is_some() {
+            self.remove_pending_kagemusha_operation_locked(hash);
             // Execution has materialized the authoritative vault/counter debit;
             // the in-memory queue hold is no longer needed.
             self.fee_admission_reservations.lock().release(&hash);
@@ -19718,6 +20727,88 @@ impl Queue {
             &BTreeMap::new(),
         )
     }
+    /// Remove queue owners whose carrier or signed replay alias is committed.
+    ///
+    /// Sealed reveals can have distinct carrier hashes while enclosing the same signed
+    /// transaction. Once an authenticated reveal commits that signed alias, every ordinary
+    /// sibling owner is terminal even though its outer hash is absent from the carrier block.
+    /// Ordinary siblings are removed directly. A globally bound direct or sibling owner is
+    /// removed only after canonical State resolves its exact pending obligation and Queue proves
+    /// that no lane, Kura-terminal, selection, or popped-guard owner exists.
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    pub(crate) fn remove_state_committed_replay_owners_preserving_globally_bound(
+        &self,
+        state_view: &StateView<'_>,
+        telemetry: Option<&StateTelemetry>,
+    ) -> Result<usize, LaneQueueReservationError> {
+        let hashes = self
+            .txs
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .value()
+                    .has_committed_replay_identity(state_view)
+                    .then_some(*entry.key())
+            })
+            .collect::<Vec<_>>();
+        let mut removed = self.remove_committed_hashes_inner(
+            hashes,
+            telemetry,
+            CommittedHashCleanupMode::PreserveGloballyBoundOwners,
+            &BTreeMap::new(),
+        );
+        let mut replay_terminal_bindings = Vec::new();
+        for entry in &self.txs {
+            let accepted = entry.value().as_accepted();
+            let carrier_hash = accepted.hash_as_entrypoint();
+            if !self.has_globally_bound_durable_claim(carrier_hash) {
+                continue;
+            }
+            let expected_evidence = if state_view.has_entrypoint(carrier_hash) {
+                QueuePlanBindingApplicationEvidence::AppliedDirect
+            } else if let TransactionEntrypoint::SealedReveal(reveal) = accepted.entrypoint()
+                && state_view.has_entrypoint(reveal.signed_transaction().hash_as_entrypoint())
+            {
+                QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias
+            } else {
+                continue;
+            };
+            let claim = self.durable_plan_claims.get(&carrier_hash).ok_or(
+                LaneQueueReservationError::ReconciliationMissingDurableClaim { hash: carrier_hash },
+            )?;
+            let binding = claim
+                .global_admission_binding()
+                .map_err(LaneQueueReservationError::InvalidIdentity)?;
+            let registry_match = State::queue_plan_admission_registry_match_in_view(
+                state_view,
+                binding.entrypoint_hash.clone(),
+                binding.canonical_hash(),
+            )
+            .map_err(LaneQueueReservationError::InvalidIdentity)?;
+            if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
+                match State::queue_plan_binding_application_evidence_in_view(state_view, &binding) {
+                    Ok(evidence) if evidence == expected_evidence => {}
+                    Ok(_) => continue,
+                    Err(reason) => {
+                        return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                            "replay-terminal QueuePlan owner has invalid canonical application state: {reason}"
+                        )));
+                    }
+                }
+            }
+            // Absent and conflicting registry projections prove this exact
+            // durable claim never became the canonical admission owner. Exact
+            // committed replay membership above therefore terminalizes it as
+            // a losing duplicate without fabricating Applied* State evidence.
+            replay_terminal_bindings.push(binding);
+        }
+        for binding in replay_terminal_bindings {
+            removed = removed.saturating_add(usize::from(
+                self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?,
+            ));
+        }
+        Ok(removed)
+    }
     /// Remove committed ordinary owners while retaining globally bound QueuePlan custody.
     ///
     /// A globally bound owner can still be the Queue half of an autonomous
@@ -19887,6 +20978,7 @@ impl Queue {
                     .get(&hash)
                     .and_then(|plan| self.exact_plan_journal_removal(hash, plan.value().digest()));
                 let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
+                self.remove_pending_kagemusha_operation_locked(hash);
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_expiry_hash(&hash);
                 let _ = self.routing_plans.remove(&hash);
@@ -20712,8 +21804,8 @@ pub mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox},
         runtime::RuntimeUpgradeManifest,
         transaction::signed::{
-            SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
-            compute_sealed_transaction_commitment,
+            SealedTransactionCommitmentPayload, SealedTransactionReveal,
+            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
         },
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
@@ -20769,6 +21861,143 @@ pub mod tests {
                 })
                 .collect(),
         }
+    }
+    fn pending_kagemusha_binding_for_test(
+        authority: AccountId,
+        operation_id: [u8; 32],
+        hash_seed: u8,
+    ) -> PendingKagemushaOperationBinding {
+        PendingKagemushaOperationBinding {
+            authority,
+            operation_id,
+            kind: KagemushaOperationKindV1::TopUp,
+            canonical_request_digest: Hash::new([hash_seed, 1]).into(),
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new([hash_seed])),
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::new([hash_seed, 2])),
+        }
+    }
+    #[test]
+    fn pending_kagemusha_index_uses_global_operation_ids_and_exact_reverse_owner() {
+        let (first_authority, _) = gen_account_in("pending-kagemusha-first");
+        let (second_authority, _) = gen_account_in("pending-kagemusha-second");
+        let operation_id = [0xA5; 32];
+        let first = pending_kagemusha_binding_for_test(first_authority.clone(), operation_id, 1);
+        let conflicting = pending_kagemusha_binding_for_test(first_authority, operation_id, 2);
+        let foreign = pending_kagemusha_binding_for_test(second_authority, operation_id, 3);
+        let mut index = PendingKagemushaOperationIndex::default();
+
+        index.claim(first.clone()).expect("claim first operation");
+        assert!(matches!(
+            index.claim(conflicting.clone()),
+            Err(PendingKagemushaOperationClaimError::OperationIdClaimed {
+                existing_entrypoint_hash
+            }) if existing_entrypoint_hash == first.entrypoint_hash
+        ));
+        assert!(matches!(
+            index.claim(foreign.clone()),
+            Err(PendingKagemushaOperationClaimError::OperationIdClaimed {
+                existing_entrypoint_hash
+            }) if existing_entrypoint_hash == first.entrypoint_hash
+        ));
+        assert_eq!(
+            index.entrypoint_for(operation_id),
+            Some(first.entrypoint_hash)
+        );
+
+        index
+            .remove_entrypoint(&first.entrypoint_hash)
+            .expect("remove exact forward and reverse owner");
+        index
+            .claim(foreign.clone())
+            .expect("operation id becomes available after exact removal");
+        assert_eq!(
+            index.entrypoint_for(operation_id),
+            Some(foreign.entrypoint_hash)
+        );
+    }
+    #[test]
+    fn pending_kagemusha_index_rejects_reverse_only_operation_owner() {
+        let (authority, _) = gen_account_in("pending-kagemusha-reverse-only");
+        let operation_id = [0xA6; 32];
+        let orphan = pending_kagemusha_binding_for_test(authority.clone(), operation_id, 4);
+        let replacement = pending_kagemusha_binding_for_test(authority, operation_id, 5);
+        let mut index = PendingKagemushaOperationIndex::default();
+        index
+            .key_by_entrypoint
+            .insert(orphan.entrypoint_hash, orphan.key());
+
+        assert!(matches!(
+            index.validate_claim(&replacement),
+            Err(PendingKagemushaOperationClaimError::Inconsistent {
+                entrypoint_hash,
+                ..
+            }) if entrypoint_hash == orphan.entrypoint_hash
+        ));
+        assert!(matches!(
+            index.checked_binding(operation_id),
+            Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash,
+                ..
+            }) if entrypoint_hash == orphan.entrypoint_hash
+        ));
+    }
+    #[test]
+    fn pending_kagemusha_index_rejects_forward_only_owner_on_removal() {
+        let (authority, _) = gen_account_in("pending-kagemusha-forward-only");
+        let operation_id = [0xA7; 32];
+        let orphan = pending_kagemusha_binding_for_test(authority, operation_id, 6);
+        let mut index = PendingKagemushaOperationIndex::default();
+        index.by_key.insert(orphan.key(), orphan.clone());
+
+        assert!(matches!(
+            index.remove_entrypoint(&orphan.entrypoint_hash),
+            Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash,
+                ..
+            }) if entrypoint_hash == orphan.entrypoint_hash
+        ));
+    }
+    #[test]
+    fn pending_kagemusha_index_rejects_zero_immutable_identity() {
+        let (authority, _) = gen_account_in("pending-kagemusha-zero");
+        let operation_id = [0xA8; 32];
+        let mut malformed = pending_kagemusha_binding_for_test(authority, operation_id, 9);
+        malformed.canonical_request_digest = [0; 32];
+        let index = PendingKagemushaOperationIndex::default();
+        assert!(matches!(
+            index.validate_claim(&malformed),
+            Err(PendingKagemushaOperationClaimError::Inconsistent { .. })
+        ));
+
+        let (authority, _) = gen_account_in("pending-kagemusha-zero-operation");
+        let mut malformed = pending_kagemusha_binding_for_test(authority, [0; 32], 10);
+        malformed.signed_transaction_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
+        assert!(matches!(
+            index.validate_claim(&malformed),
+            Err(PendingKagemushaOperationClaimError::Inconsistent { .. })
+        ));
+    }
+    #[test]
+    fn pending_kagemusha_cold_replay_validation_rejects_balanced_cross_wiring() {
+        let (first_authority, _) = gen_account_in("pending-kagemusha-cross-first");
+        let (second_authority, _) = gen_account_in("pending-kagemusha-cross-second");
+        let first = pending_kagemusha_binding_for_test(first_authority, [0xA9; 32], 7);
+        let second = pending_kagemusha_binding_for_test(second_authority, [0xAA; 32], 8);
+        let mut index = PendingKagemushaOperationIndex::default();
+        index.by_key.insert(first.key(), first.clone());
+        index.by_key.insert(second.key(), second.clone());
+        index
+            .key_by_entrypoint
+            .insert(first.entrypoint_hash, second.key());
+        index
+            .key_by_entrypoint
+            .insert(second.entrypoint_hash, first.key());
+
+        assert!(matches!(
+            index.validate_bijection(),
+            Err(PendingKagemushaOperationIndexError { .. })
+        ));
     }
     #[test]
     fn execution_context_routing_plan_reconstruction_is_exact_and_canonical() {
@@ -21113,6 +22342,46 @@ pub mod tests {
             .install_queue_plan_pending_binding_for_test(binding)
             .expect("install complete QueuePlan registry owner evidence");
     }
+    fn commit_globally_bound_fixture_directly(fixture: &GloballyBoundGuardFixture) {
+        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+        resolve_globally_bound_fixture_pending_obligation(fixture);
+        commit_globally_bound_fixture_membership_only(fixture);
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(
+                &fixture.state.view(),
+                &fixture.binding,
+            )
+            .expect("read direct QueuePlan terminal evidence"),
+            QueuePlanBindingApplicationEvidence::AppliedDirect,
+        );
+    }
+    fn resolve_globally_bound_fixture_pending_obligation(fixture: &GloballyBoundGuardFixture) {
+        let signer = checked_random_queue_keypair();
+        let block = crate::block::BlockBuilder::new(vec![fixture.transaction.clone()])
+            .chain(0, None)
+            .sign(signer.private_key())
+            .unpack(|_| {});
+        let block: iroha_data_model::block::SignedBlock = block.into();
+        {
+            let mut state_block = fixture.state.block(block.header());
+            state_block
+                .resolve_queue_plan_pending_obligations_from_block(&block)
+                .expect("direct carrier resolves its exact QueuePlan obligation");
+            state_block
+                .commit_world_overlay_for_testing()
+                .expect("publish direct QueuePlan terminal state");
+        }
+    }
+    fn commit_globally_bound_fixture_membership_only(fixture: &GloballyBoundGuardFixture) {
+        let mut transactions = fixture.state.transactions.block();
+        transactions.insert_block_with_single_tx(
+            fixture.transaction.hash_as_entrypoint(),
+            nonzero!(1_usize),
+        );
+        transactions
+            .commit()
+            .expect("commit exact transaction membership without QueuePlan marker staging");
+    }
     fn admit_globally_certified_reservation_transaction_for_test(
         queue: &Queue,
         state: &State,
@@ -21213,11 +22482,33 @@ pub mod tests {
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
                 .expect("future-created autoscale lane catalog");
         let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-        let mut state = State::new(
+        let kura_config = KuraConfig {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            // The authenticated temporary constructor replaces this placeholder.
+            store_dir: WithOrigin::inline(PathBuf::new()),
+            max_disk_usage_bytes: kura_defaults::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: kura_defaults::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: kura_defaults::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: kura_defaults::FSYNC_INTERVAL,
+            lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+            replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
+        };
+        let kura = Kura::new_temporary_with_configured_lane_catalog(
+            &kura_config,
+            &lane_config,
+            &lane_catalog,
+        )
+        .expect("initialize authenticated future-created autoscale Kura");
+        let mut state = State::try_new(
             world_with_test_domains(),
-            Kura::blank_kura_for_testing_with_lane_config(&lane_config),
+            kura,
             LiveQueryStore::start_test(),
-        );
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("initialize authenticated future-created autoscale State");
         let mut nexus = state.nexus_snapshot();
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
@@ -23049,6 +24340,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         // Without additional approvals the quorum rule must reject the transaction.
@@ -23207,6 +24499,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         let mut metadata = Metadata::default();
@@ -23286,6 +24579,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         let mut metadata = Metadata::default();
@@ -23383,6 +24677,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         // Metadata with a governed contract address is accepted for protected contract ops.
@@ -23546,6 +24841,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         // Missing metadata must reject when touching a protected namespace.
@@ -23749,6 +25045,7 @@ pub mod tests {
             .expect("contract address");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: instruction_contract_address,
+            expected_revision: 1,
             code_hash,
         });
         let mut metadata = Metadata::default();
@@ -24179,6 +25476,62 @@ pub mod tests {
         assert_eq!(queue.active_len(), 1);
     }
     #[test]
+    fn committed_sealed_signed_alias_releases_ordinary_sibling_carriers() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let (authority, keypair) = gen_account_in("sealed-queue-cleanup");
+        let signed = TransactionBuilder::new(
+            state.network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed queue cleanup".into())])
+        .sign(keypair.private_key());
+        let deadline = 9;
+        let carriers = [[0x51; 32], [0x52; 32]].map(|salt| {
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+                TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+                    compute_sealed_transaction_commitment(
+                        &state.network_id,
+                        &signed,
+                        salt,
+                        deadline,
+                    ),
+                    signed.clone(),
+                    salt,
+                )),
+            ))
+        });
+        register_accepted_tx_authority_for_queue_test(&mut state, &carriers[0]);
+        for carrier in carriers {
+            queue
+                .push(carrier, state.view())
+                .expect("distinct reveal carriers may be pending before either alias commits");
+        }
+        assert_eq!(queue.active_len(), 2);
+        {
+            let mut transactions = state.transactions.block();
+            transactions
+                .insert_block_with_single_tx(signed.hash_as_entrypoint(), nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("commit authenticated signed reveal alias");
+        }
+
+        let removed = queue
+            .remove_state_committed_replay_owners_preserving_globally_bound(&state.view(), None)
+            .expect("remove committed replay siblings");
+
+        assert_eq!(removed, 2);
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.retained_bytes(), 0);
+    }
+    #[test]
     fn retained_byte_budget_rejects_before_count_capacity_and_releases_on_remove() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -24554,6 +25907,164 @@ pub mod tests {
                 .claim_digest()
                 .expect("digest persisted V1 record"),
             claim.journal_record_digest
+        );
+    }
+    #[test]
+    fn strict_durable_claim_rejects_unowned_history_and_defers_authenticated_future() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-claim-frontier-v1.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        install_single_validator_topology_for_queue_test(&mut state, 0x96);
+        let (_queue_time_handle, queue_time_source) =
+            TimeSource::new_mock(Duration::from_millis(911));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &queue_time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install frontier claim journal");
+        seed_committed_height_for_queue_test(&state, 1);
+        let (_historical_time_handle, historical_time_source) =
+            TimeSource::new_mock(Duration::from_millis(731));
+        let historical_tx = accepted_tx_by_someone(&historical_time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &historical_tx);
+        let plan = queue
+            .route_plan_with_state(&historical_tx, &state)
+            .expect("resolve frontier route");
+        let historical_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture canonical historical context");
+        assert_eq!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &historical_context,)
+                .expect("classify current context"),
+            QueuePlanAdmissionContextDisposition::Current
+        );
+
+        seed_committed_height_for_queue_test(&state, 3);
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &historical_context,)
+                .is_err(),
+            "current WSV cannot authenticate a first-time historical authority roster"
+        );
+        let historical_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                historical_tx,
+                &state,
+                plan.clone(),
+                &historical_context,
+            )
+            .expect_err("an unowned historical context must be rebound at the current frontier");
+        assert!(matches!(
+            historical_error.err,
+            Error::UnresolvedRoute { ref reason }
+                if reason.contains("historical admission requires rebinding")
+        ));
+        assert_eq!(queue.active_len(), 0);
+
+        let journal_len_after_historical_rejection = std::fs::metadata(&journal_path)
+            .expect("frontier journal metadata after historical rejection")
+            .len();
+        let (_invalid_time_handle, invalid_time_source) =
+            TimeSource::new_mock(Duration::from_millis(732));
+        let invalid_tx = accepted_tx_by_someone(&invalid_time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &invalid_tx);
+        let mut invalid_history = historical_context.clone();
+        invalid_history.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"noncanonical historical predecessor",
+        )));
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &invalid_history)
+                .is_err()
+        );
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                invalid_tx,
+                &state,
+                plan.clone(),
+                &invalid_history,
+            )
+            .expect_err("noncanonical history must fail before durable ownership");
+
+        let (_future_time_handle, future_time_source) =
+            TimeSource::new_mock(Duration::from_millis(733));
+        let future_tx = accepted_tx_by_someone(&future_time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &future_tx);
+        let mut future_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture current context before moving it into the future");
+        future_context.authority_height = future_context
+            .authority_height
+            .checked_add(1)
+            .expect("future authority height");
+        future_context.proposal_height = future_context
+            .proposal_height
+            .checked_add(1)
+            .expect("future proposal height");
+        future_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"unarrived canonical predecessor",
+        )));
+        assert_eq!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &future_context)
+                .expect("classify structurally valid future context"),
+            QueuePlanAdmissionContextDisposition::Future
+        );
+        let mut self_declared_future = future_context.clone();
+        let coordinator = self_declared_future
+            .route_incarnations
+            .first_mut()
+            .expect("single-route future context has a coordinator");
+        coordinator.validator_set.truncate(1);
+        coordinator.validator_count = 1;
+        coordinator.durability_threshold = 1;
+        coordinator.validator_set_hash = HashOf::new(&coordinator.validator_set);
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &self_declared_future,)
+                .is_err(),
+            "a future context cannot reduce the locally authoritative roster"
+        );
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                future_tx.clone(),
+                &state,
+                plan.clone(),
+                &self_declared_future,
+            )
+            .expect_err("self-declared future authority must not acquire durable ownership");
+        let future_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                future_tx,
+                &state,
+                plan,
+                &future_context,
+            )
+            .expect_err("future context must wait for canonical catch-up");
+        assert!(matches!(
+            future_error.err,
+            Error::UnresolvedRoute { ref reason }
+                if reason.contains("ahead of the local canonical frontier")
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("frontier journal metadata after rejected contexts")
+                .len(),
+            journal_len_after_historical_rejection,
+            "invalid and future contexts must not append queue ownership"
         );
     }
     #[test]
@@ -25620,8 +27131,9 @@ pub mod tests {
             .expect("stale-incarnation journal metadata")
             .len();
         {
-            // This queue-only ABA test intentionally changes just the authoritative in-memory
-            // routing/incarnation state; Kura geometry and marker replacement are out of scope.
+            // This queue-only ABA test changes the authoritative routing/incarnation state.
+            // Keep the test Kura's marker projection synchronized so the fixture remains a
+            // valid State even though the assertion concerns only durable queue claims.
             let nexus = state.nexus.get_mut();
             let mut lanes = nexus.lane_catalog.lanes().to_vec();
             lanes[0].alias = "recreated-single-lane".to_owned();
@@ -25630,7 +27142,7 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
-        state.reseed_static_lane_incarnations();
+        state.reseed_static_lane_incarnations_for_tests();
         let current_context = make_queue()
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture recreated incarnation context");
@@ -27867,6 +29379,320 @@ pub mod tests {
         drop(guard);
         fixture.assert_restored_fifo_owner_with_order(&[hash, follower_hash]);
     }
+    #[test]
+    fn globally_bound_direct_commit_releases_unreserved_runtime_owner() {
+        let fixture = globally_bound_guard_fixture();
+        commit_globally_bound_fixture_directly(&fixture);
+
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("direct terminal cleanup must be exact and durable"),
+            1,
+        );
+        fixture.assert_terminally_removed();
+    }
+    #[test]
+    fn globally_bound_commit_before_marker_staging_releases_runtime_owner() {
+        let fixture = globally_bound_guard_fixture();
+        assert_eq!(
+            fixture
+                .state
+                .queue_plan_admission_binding_registry_match(&fixture.binding)
+                .expect("read absent pre-staging QueuePlan registry"),
+            QueuePlanAdmissionRegistryMatch::Absent,
+        );
+        commit_globally_bound_fixture_membership_only(&fixture);
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(
+                &fixture.state.view(),
+                &fixture.binding,
+            )
+            .expect("read absent crash-window application evidence"),
+            QueuePlanBindingApplicationEvidence::Absent,
+        );
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("committed replay membership terminalizes the unstaged losing owner"),
+            1,
+        );
+        fixture.assert_terminally_removed();
+    }
+    #[test]
+    fn globally_bound_committed_conflict_tombstones_during_startup_replay() {
+        let fixture = globally_bound_guard_fixture();
+        let routing_plan = fixture
+            .binding
+            .routing_plan()
+            .expect("fixture binding routing plan");
+        let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            fixture.state.network_id_ref(),
+            fixture.transaction.entrypoint(),
+            &routing_plan,
+            fixture.binding.admission_context.clone(),
+            fixture.binding.enqueue_timestamp_ms.saturating_add(1),
+        )
+        .expect("build canonical conflicting QueuePlan owner");
+        install_queue_plan_registry_value_for_test(&fixture.state, &conflicting_binding);
+        assert_eq!(
+            fixture
+                .state
+                .queue_plan_admission_binding_registry_match(&fixture.binding)
+                .expect("read losing QueuePlan registry projection"),
+            QueuePlanAdmissionRegistryMatch::Conflict,
+        );
+        resolve_globally_bound_fixture_pending_obligation(&fixture);
+        commit_globally_bound_fixture_membership_only(&fixture);
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(
+                &fixture.state.view(),
+                &conflicting_binding,
+            )
+            .expect("read winning QueuePlan terminal evidence"),
+            QueuePlanBindingApplicationEvidence::AppliedDirect,
+        );
+        let journal_path = fixture._dir.path().join("global_guard_queue_plan.norito");
+        let GloballyBoundGuardFixture {
+            state,
+            queue,
+            time_handle,
+            _dir: dir,
+            ..
+        } = fixture;
+        drop(queue);
+        let replay_time_source = time_handle.source();
+        let replay_queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &replay_time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install losing conflict journal"),
+            1,
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("startup tombstones a committed losing QueuePlan conflict");
+        assert_eq!(summary.tombstoned_conflicting_global_admission, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(replay_queue.active_len(), 0);
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("losing conflict journal")
+                .live_record_count()
+                .expect("count losing conflict records"),
+            0,
+        );
+        drop(dir);
+    }
+    #[test]
+    fn globally_bound_sealed_sibling_is_tombstoned_after_direct_signed_commit() {
+        let dir = tempfile::tempdir().expect("sealed sibling journal directory");
+        let journal_path = dir.path().join("sealed_sibling_queue_plan.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        install_single_validator_topology_for_queue_test(&mut state, 0xD3);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install sealed sibling queue-plan journal");
+
+        let direct = accepted_queue_plan_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &direct);
+        let TransactionEntrypoint::External(signed) = direct.entrypoint() else {
+            panic!("QueuePlan fixture must be a direct external transaction")
+        };
+        let salt = [0xD4; 32];
+        let sealed = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+                compute_sealed_transaction_commitment(&state.network_id, signed, salt, 9),
+                signed.clone(),
+                salt,
+            )),
+        ));
+        assert_ne!(direct.hash_as_entrypoint(), sealed.hash_as_entrypoint());
+
+        let direct_plan = queue
+            .route_plan_with_state(&direct, &state)
+            .expect("route direct signed carrier");
+        let direct_context = queue
+            .plan_admission_context_with_state(&state, &direct_plan)
+            .expect("capture direct carrier admission context");
+        let direct_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            state.network_id_ref(),
+            direct.entrypoint(),
+            &direct_plan,
+            direct_context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build direct carrier QueuePlan binding");
+        install_queue_plan_registry_value_for_test(&state, &direct_binding);
+        let sealed_binding = admit_globally_certified_reservation_transaction_for_test(
+            &queue,
+            &state,
+            sealed.clone(),
+        );
+        assert_eq!(queue.active_len(), 1);
+
+        let signer = checked_random_queue_keypair();
+        let block = crate::block::BlockBuilder::new(vec![direct.clone()])
+            .chain(0, None)
+            .sign(signer.private_key())
+            .unpack(|_| {});
+        let block: iroha_data_model::block::SignedBlock = block.into();
+        {
+            let mut state_block = state.block(block.header());
+            state_block
+                .resolve_queue_plan_pending_obligations_from_block(&block)
+                .expect("direct signed carrier terminalizes its sealed QueuePlan sibling");
+            state_block
+                .commit_world_overlay_for_testing()
+                .expect("publish sealed sibling replay-terminal evidence");
+        }
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(direct.hash_as_entrypoint(), nonzero!(1_usize));
+        transactions
+            .commit()
+            .expect("commit direct signed transaction membership");
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(&state.view(), &sealed_binding,)
+                .expect("authenticate sealed sibling terminal evidence"),
+            QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias,
+        );
+        let restart_journal_path = dir.path().join("sealed_sibling_restart_queue_plan.norito");
+        fs::copy(&journal_path, &restart_journal_path)
+            .expect("snapshot the durable pre-cleanup journal for restart replay");
+
+        assert_eq!(
+            queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &state.view(),
+                    None,
+                )
+                .expect("retire exact sealed sibling QueuePlan owner"),
+            1,
+        );
+        let sealed_hash = sealed.hash_as_entrypoint();
+        assert_eq!(queue.active_len(), 0);
+        assert!(!queue.txs.contains_key(&sealed_hash));
+        assert!(!queue.routing_plans.contains_key(&sealed_hash));
+        assert!(!queue.durable_plan_claims.contains_key(&sealed_hash));
+        assert!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed sealed sibling journal")
+                .replay()
+                .expect("replay sealed sibling terminal journal")
+                .is_empty(),
+            "runtime cleanup must durably tombstone the sealed sibling journal claim"
+        );
+
+        let replay_queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&restart_journal_path, 1024 * 1024, true)
+                .expect("install retained sealed sibling journal"),
+            1,
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("startup authenticates and tombstones the replay-terminal sealed sibling");
+        assert_eq!(summary.tombstoned_committed, 1);
+        assert_eq!(replay_queue.active_len(), 0);
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed sealed sibling restart journal")
+                .live_record_count()
+                .expect("count sealed sibling restart journal records"),
+            0,
+        );
+    }
+    #[test]
+    fn globally_bound_direct_commit_tombstones_owner_during_startup_replay() {
+        let fixture = globally_bound_guard_fixture();
+        commit_globally_bound_fixture_directly(&fixture);
+        let journal_path = fixture._dir.path().join("global_guard_queue_plan.norito");
+        let GloballyBoundGuardFixture {
+            state,
+            queue,
+            time_handle,
+            _dir: dir,
+            ..
+        } = fixture;
+        drop(queue);
+        let replay_time_source = time_handle.source();
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &replay_time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install retained direct-owner journal"),
+            1,
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("startup must authenticate and tombstone direct terminal owner");
+        assert_eq!(summary.tombstoned_committed, 1);
+        assert_eq!(replay_queue.active_len(), 0);
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("startup replay journal")
+                .live_record_count()
+                .expect("count startup replay records"),
+            0,
+        );
+        drop(dir);
+    }
     include!("queue/global_guard_claim_conflict_tests.rs");
     #[test]
     fn globally_bound_guard_drop_is_terminally_idempotent_across_remove_and_clear_orderings() {
@@ -28626,6 +30452,7 @@ pub mod tests {
     include!("queue/transaction_guard_return_tests.rs");
     include!("queue/queue_metadata_and_admission_tests.rs");
     include!("queue/instruction_and_state_routing_tests.rs");
+    include!("queue/kagemusha_top_up_admission_tests.rs");
     include!("queue/routing_batch_admission_tests.rs");
     include!("queue/config_factory_test_support.rs");
     fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {

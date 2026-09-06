@@ -1,4 +1,17 @@
 #[test]
+fn overlay_limit_rejection_is_fee_exempt_but_gas_accountable() {
+    let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+        "overlay exceeds max instructions: 2 > 1".to_owned(),
+    ));
+    assert!(super::valid::rejected_live_batch_gas_is_accountable(
+        7, &rejection
+    ));
+    assert!(!super::valid::rejected_live_batch_fees_are_chargeable(
+        7, &rejection
+    ));
+}
+
+#[test]
 fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()

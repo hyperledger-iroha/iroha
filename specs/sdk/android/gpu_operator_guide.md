@@ -1,75 +1,66 @@
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Android CUDA Backend Operator Guide
+# Kotlin/JVM CUDA bridge contract and qualification
 
-This guide closes the AND10 deliverable for the Android SDK by documenting how
-to enable the JNI-backed CUDA helpers, surface Kotlin-friendly APIs, and run a
-repeatable smoke test on devices with native acceleration.
+`kotlin/core-jvm` owns `org.hyperledger.iroha.sdk.gpu.CudaAccelerators`
+for both Kotlin and Java callers. Each operation accepts one ordered batch:
+`poseidon2`, `poseidon6`, `bn254Add`, `bn254Sub` and `bn254Mul`.
+A single calculation is a one-element batch. Poseidon rows contain two or six
+unsigned JVM-long bit patterns; BN254 rows contain four little-endian limbs
+strictly below the field modulus. Inputs and successful outputs are copied,
+and batches are bounded to 65,536 elements before native-buffer allocation.
 
-## Enabling the native backend
-
-- Ship the `libconnect_norito_bridge` binary alongside your application or add
-  it to `java.library.path`/`LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` so the JVM can
-  load the JNI bridge.
-- Run the process with `-Diroha.cuda.enableNative=true`. The default remains
-  `false` to avoid noisy linker warnings in CI or environments without CUDA.
-- Gate UI/telemetry on `CudaAcceleratorsKotlin.isAvailable()` and
-  `CudaAcceleratorsKotlin.isDisabled()` so you can surface missing-drivers vs
-  crash-recovery states deterministically.
-
-When the flag is absent or the bridge fails to load, the SDK keeps the
-deterministic no-op backend active and all CUDA helpers return `null` (see the
-Kotlin facade below).
-
-## Kotlin/Java API surface
-
-`CudaAcceleratorsKotlin` mirrors the existing Java facade but returns nullable
-types for idiomatic Kotlin call sites:
+Construct an explicitly disabled context with `CudaAccelerators.disabled()`,
+inject an application-owned `Backend`, or call `loadNative(absoluteLibraryPath)`.
+Native library loading errors remain visible. `status` distinguishes `READY`,
+`UNAVAILABLE` and `DISABLED`; a null computation means the backend did not compute
+that batch. The SDK does not replace it with a zero value or a CPU result.
+Native contexts share the loaded bridge's device state; selecting an injected
+or disabled context does not replace another context's backend.
 
 ```kotlin
-import org.hyperledger.iroha.android.gpu.CudaAcceleratorsKotlin
+import org.hyperledger.iroha.sdk.gpu.CudaAccelerators
 
-val hash: Long? = CudaAcceleratorsKotlin.poseidon2OrNull(1L, 2L)
-if (hash == null) {
-    // Native backend unavailable; fall back to CPU path or skip acceleration.
-} else {
-    println("poseidon2 hash = $hash")
-}
+val accelerator = CudaAccelerators.loadNative(configuredAbsoluteBridgePath)
+val hashes: LongArray? = accelerator.poseidon2(arrayOf(longArrayOf(1L, 2L)))
 ```
 
-Batch helpers (`poseidon2BatchOrNull`, `poseidon6BatchOrNull`) and BN254
-operations (`bn254AddOrNull`, `bn254SubOrNull`, `bn254MulOrNull`) follow the
-same pattern and clone their outputs for safety.
+The canonical JNI exports and array conversion belong to
+`crates/connect_norito_bridge/src/platform_jni/gpu.rs`.
+No Java-package exports or scalar/batch duplicate entry points are retained.
+The native bridge must be rebuilt with the Kotlin declarations from the same
+source revision; old libraries fail symbol resolution.
 
-## CUDA smoke test on real devices
+## Test entry points
 
-Run the manual smoke harness on a CUDA-capable device once the native bridge is
-present. The ordinary JVM suite does not select this hardware-only class. The
-nightly CUDA lane and operator invocation select it explicitly, and the harness
-fails if the flag, bridge, driver, backend, or any CUDA result is unavailable:
+Run Java API contract tests without CUDA:
 
-```bash
-cargo build --locked -p connect_norito_bridge --features cuda
-java_out="$(mktemp -d)"
-javac --release 8 -Xlint:all,-options -Werror -d "$java_out" \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/gpu/CudaAccelerators.java \
-  java/iroha_android/src/test/java/org/hyperledger/iroha/android/gpu/CudaAcceleratorsNativeSmokeTests.java
-java -ea \
-  -Diroha.cuda.enableNative=true \
-  -Djava.library.path="$PWD/target/debug" \
-  -cp "$java_out" \
-  org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests
+```sh
+cd kotlin
+./gradlew :core-jvm:test --tests '*CudaAcceleratorsJavaConsumerTest' --console=plain
 ```
 
-Expected outcome:
+The ordinary JVM suite also runs `CudaAcceleratorsNativeBindingTest` against
+its configured host bridge. That test resolves all seven JNI declarations with
+empty batches. It establishes binding execution, not GPU numerical conformance.
 
-- The test prints `CUDA backend returned results successfully` and exits zero
-  when the bridge loads and the backend reports availability.
-- Any empty CUDA optional signals a driver/library mismatch; rerun with verbose
-  JVM logging to capture the underlying linker/driver message.
+On a CUDA-capable runner, build the bridge and run the dedicated hardware task
+from the repository root:
 
-The harness exercises Poseidon permutations and BN254 helpers to confirm the
-JNI wiring works on the target device without requiring dedicated Android
-instrumentation.
+```sh
+cargo build --locked -p connect_norito_bridge --lib --features cuda
+IROHA_NATIVE_LIBRARY_PATH="$PWD/target/debug" \
+  kotlin/gradlew -p kotlin :core-jvm:cudaHardwareTest --console=plain
+```
+
+`IROHA_NATIVE_LIBRARY_PATH` is a test artifact location, not a production
+backend-selection switch. The task requires an absolute directory and runs
+every time. Its five tests compare Poseidon outputs with the IVM CPU goldens
+and all three BN254 operations with independent `BigInteger` modular arithmetic,
+including multi-element and one-element batches. Missing libraries, devices,
+READY status or results fail the task. Ordinary JVM runs exclude the hardware
+tag. `.github/workflows/nightly_cuda.yml` builds and selects this task.
+
+The current local macOS checkpoint has no CUDA device qualification. Compiling
+the hardware tests, passing injected-backend tests or resolving host JNI symbols
+does not establish hardware execution, Android support or release provenance.

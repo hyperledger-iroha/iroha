@@ -305,7 +305,7 @@ mod tests {
     }
     impl PorFinalizedReplayArchiveV1 for IdleReplayArchive {
         fn runtime_handle(&self) -> &'static str {
-            "hsm://sorafs/por-replay-archive/worker"
+            "provider://sorafs/por-replay-archive/worker"
         }
         fn binding(
             &self,
@@ -360,7 +360,7 @@ mod tests {
         )
         .expect("archive binding");
         let policy = PorReplayArchivePolicyV1::try_new(
-            "hsm://sorafs/por-replay-archive/worker",
+            "provider://sorafs/por-replay-archive/worker",
             binding,
             Duration::from_secs(1),
             1,

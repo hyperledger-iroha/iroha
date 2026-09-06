@@ -18,17 +18,13 @@ import java.util.concurrent.CompletableFuture
  * [TransportResponse.finalUri] and [TransportResponse.redirected] provenance; those callers reject
  * responses with missing, redirected, or mismatched provenance.
  */
-interface HttpTransportExecutor : TransportExecutor {
+interface HttpTransportExecutor : TransportExecutor, AutoCloseable {
 
     override fun execute(request: TransportRequest): CompletableFuture<TransportResponse>
 
-    /** Returns true when this executor can surface an underlying HTTP client for reuse. */
-    fun supportsClientUnwrap(): Boolean = false
-
     /**
-     * Cancels in-flight requests and releases any underlying resources when supported by the transport.
-     *
-     * Default implementation is a no-op so executors without lifecycle hooks are unaffected.
+     * Permanently closes this executor's calls and open streams. Borrowed scheduling/client
+     * resources remain owned by the application. Stateless implementations have nothing to close.
      */
-    fun invalidateAndCancel() {}
+    override fun close() {}
 }

@@ -8,10 +8,14 @@ import { fileURLToPath } from "node:url";
 import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
+import * as packageKagemushaExports from "../dist/kagemusha.js";
 import * as packageTransactionExports from "../dist/transaction.js";
+import * as packageCryptoExports from "../dist/public/crypto.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
 import * as packagePrivacyCapabilitiesExports from "../dist/privacyCapabilities.js";
 import * as packageSccpExports from "../dist/sccp.js";
+import { _createCryptoApi } from "../dist/crypto.js";
+import { createNativeRuntime } from "../dist/nativeRuntime.js";
 import {
   findForbiddenBrowserInputs,
   hasForbiddenGlobalBufferMutation,
@@ -19,6 +23,8 @@ import {
 
 const packageRootUrl = new URL("../", import.meta.url);
 const packageRootPath = fileURLToPath(packageRootUrl);
+const RETIRED_STATIC_CRYPTO_CAPABILITY_LIST =
+  ["SUPPORTED", "CRYPTO", "ALGORITHMS"].join("_");
 
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -38,22 +44,10 @@ const {
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
-  isPrivacyNativeAvailable,
-  privacyCompiledProfileCatalogV1,
 } = packageExports;
 
-function withNativeBinding(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return fn();
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
-  }
+function withCryptoApi(binding, fn) {
+  return fn(_createCryptoApi(createNativeRuntime(binding)));
 }
 
 function privacyNoritoFrame(schemaByte) {
@@ -245,6 +239,8 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "buildTransaction",
     "buildCancelAssetLockInstruction",
     "buildSetAssetTransferAvailabilityInstruction",
+    "buildSetAssetTransferBlacklistInstruction",
+    "buildSetAssetTransferControlInstruction",
     "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
     "encodeCancelAssetLockV1",
     "decodeCancelAssetLockV1",
@@ -373,6 +369,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
   assert.deepEqual(Object.keys(packageJson.exports).sort(), [
     ".",
     "./address",
+    "./atomic-private-settlement",
     "./blake2b",
     "./bootle-lantern-issuance",
     "./browser",
@@ -382,6 +379,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./crypto",
     "./instruction-builders",
     "./ivm-artifact",
+    "./kagemusha",
     "./kotodama-compiler",
     "./nexus-app",
     "./norito",
@@ -397,11 +395,31 @@ test("package publishes the exact general-purpose subpath inventory", () => {
   ]);
 });
 
+test("package publishes KAGEMUSHA through one unversioned browser-safe subpath", () => {
+  assert.deepEqual(packageJson.exports["./kagemusha"], {
+    browser: "./dist/kagemusha.js",
+    import: "./dist/kagemusha.js",
+    types: "./kagemusha.d.ts",
+  });
+  assert.equal(packageExports.Kagemusha, packageKagemushaExports.Kagemusha);
+  assert.equal(packageExports.Kagemusha.wireVersion, 1);
+  assert.equal(Object.hasOwn(packageExports, ["Kagemusha", "V1"].join("")), false);
+  assert.equal(Object.hasOwn(packageJson.exports, ["./kagemusha", "-v1"].join("")), false);
+});
+
 test("package publishes the typed Sumeragi parser through its lazy subpath", () => {
   assert.deepEqual(packageJson.exports["./sumeragi-typed"], {
     browser: "./dist/sumeragiTyped.js",
     import: "./dist/sumeragiTyped.js",
     types: "./sumeragi-typed.d.ts",
+  });
+});
+
+test("package publishes the atomic private settlement client through one browser-safe subpath", () => {
+  assert.deepEqual(packageJson.exports["./atomic-private-settlement"], {
+    browser: "./dist/atomicPrivateSettlement.js",
+    import: "./dist/atomicPrivateSettlement.js",
+    types: "./atomic-private-settlement.d.ts",
   });
 });
 
@@ -414,14 +432,10 @@ test("package privacy capability policy is isolated behind its explicit subpath"
   const optionalExports = [
     "compiledProfileCatalogV1",
     "decodePrivacyExact12CapabilityManifestV1",
-    "getPrivacyCapabilitiesV1",
     "getPrivacyExact12CapabilityManifestV1",
-    "parsePrivacyCapabilitySnapshotV1",
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
-    "PrivacyCapabilitySnapshotError",
     "PrivacyExact12CapabilityManifestError",
     "PrivacyExact12CapabilityManifestV1",
     "requirePrivacyExact12CapabilityAdmissionV1",
@@ -449,7 +463,7 @@ test("package privacy capability policy is isolated behind its explicit subpath"
   );
 });
 
-test("package SCCP exports expose the exact Solana-aware inventory", () => {
+test("package SCCP exports expose the exact four-mainnet inventory", () => {
   assert.deepEqual(
     Object.fromEntries(
       Object.entries(packageSccpExports)
@@ -459,9 +473,9 @@ test("package SCCP exports expose the exact Solana-aware inventory", () => {
     {
       SCCP_DOMAIN_BSC: 2,
       SCCP_DOMAIN_ETH: 1,
-      SCCP_DOMAIN_SOLANA: 3,
       SCCP_DOMAIN_SORA: 0,
-      SCCP_DOMAIN_TRON: 5,
+      SCCP_DOMAIN_TON: 4,
+      SCCP_DOMAIN_TRON: 3,
     },
   );
   assert.deepEqual(
@@ -471,35 +485,31 @@ test("package SCCP exports expose the exact Solana-aware inventory", () => {
         .sort(([left], [right]) => left.localeCompare(right)),
     ),
     {
-      SCCP_CODEC_CANONICAL_TEXT: 1,
-      SCCP_CODEC_EVM_ADDRESS20: 2,
-      SCCP_CODEC_SOLANA_PUBKEY32: 6,
-      SCCP_CODEC_TRON_ADDRESS21: 5,
+      SCCP_CODEC_CANONICAL_TEXT: 0,
+      SCCP_CODEC_EVM_ADDRESS20: 1,
+      SCCP_CODEC_TON_ACCOUNT36: 3,
+      SCCP_CODEC_TRON_ADDRESS21: 2,
     },
   );
-  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["1", "2", "5", "6"]);
+  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["0", "1", "2", "3"]);
   assert.deepEqual(Object.keys(packageSccpExports.SCCP_NETWORK_PROFILES), [
     "sora-taira",
     "ethereum-mainnet",
-    "ethereum-sepolia",
     "bsc-mainnet",
-    "bsc-testnet",
     "tron-mainnet",
-    "tron-nile",
-    "tron-shasta",
-    "solana-testnet",
+    "ton-mainnet",
   ]);
-  assert.deepEqual(packageSccpExports.SCCP_NETWORK_PROFILES["solana-testnet"], {
-    profile: "solana-testnet",
-    tag: 13,
-    domain: packageSccpExports.SCCP_DOMAIN_SOLANA,
+  assert.deepEqual(packageSccpExports.SCCP_NETWORK_PROFILES["ton-mainnet"], {
+    profile: "ton-mainnet",
+    tag: 0x44,
+    domain: packageSccpExports.SCCP_DOMAIN_TON,
     sora: false,
-    genesisHash: packageSccpExports.SCCP_SOLANA_TESTNET_GENESIS_HASH,
+    globalId: -239,
   });
   assert.deepEqual(packageSccpExports.SCCP_PAYLOAD_KINDS, ["transfer"]);
   for (const name of [
-    "SCCP_DOMAIN_SOLANA",
-    "SCCP_CODEC_SOLANA_PUBKEY32",
+    "SCCP_DOMAIN_TON",
+    "SCCP_CODEC_TON_ACCOUNT36",
     "SCCP_NETWORK_PROFILES",
   ]) {
     assert.equal(packageExports[name], packageSccpExports[name], `${name} root/subpath parity`);
@@ -514,7 +524,13 @@ test("package SCCP exports expose TON while rejecting diagnostic helper surfaces
     "sccpBuildTonMessageBundleSourceProofWithDeployment",
     "sccpTonFixtureValidatorSetHash",
     "SCCP_DOMAIN_SOL",
+    "SCCP_DOMAIN_SOLANA",
+    "SCCP_CODEC_SOLANA_PUBKEY32",
     "SCCP_CODEC_SOLANA_BASE58",
+    "SCCP_SOLANA_TESTNET_GENESIS_HASH",
+    "deriveSccpSolanaDestinationHashesV1",
+    "deriveSccpSolanaNativeVerifierConfigHashV1",
+    "deriveSccpSolanaSourceIdentityHashesV1",
     "SCCP_CODEC_SORA_ASSET_ID",
     "normalizeSccpProofManifests",
     "normalizeSccpSourceAdapterEngineDeployment",
@@ -573,7 +589,9 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/connect.browser.js",
       "dist/contractAddress.js",
       "dist/crc64Xz.js",
+      "dist/cryptoAlgorithms.js",
       "dist/curveRegistry.js",
+      "dist/domainId.js",
       "dist/ed25519Strict.js",
       "dist/entrypointSchema.js",
       "dist/governanceSelector.js",
@@ -582,6 +600,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/kotodamaIdentifiers.js",
       "dist/multisig.js",
       "dist/native.browser.js",
+      "dist/nativeRuntime.js",
       "dist/networkId.js",
       "dist/nexusApp.js",
       "dist/norito.js",
@@ -589,7 +608,6 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/noritoGovernanceBoundary.js",
       "dist/normalizers.js",
       "dist/numericV1.js",
-      "dist/ordering.js",
       "dist/privacyExact12Network.js",
       "dist/proofAttachment.js",
       "dist/strictLosslessJson.js",
@@ -715,17 +733,28 @@ test("package dist entrypoint exports only the canonical local privacy catalog b
     256 * 1024,
   );
   assert.equal(Number.isInteger(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION), true);
+  for (const surface of [
+    packageExports,
+    packageExports.Crypto,
+    packageCryptoExports,
+  ]) {
+    assert.equal("_createCryptoApi" in surface, false);
+    assert.equal(RETIRED_STATIC_CRYPTO_CAPABILITY_LIST in surface, false);
+  }
+  assert.equal("_createTransactionApi" in packageExports, false);
+  assert.equal("_createNoritoInstructionApi" in packageExports, false);
+  assert.equal("_createNoritoInstructionApi" in packageExports.Norito, false);
 });
 
 test("package dist privacy native availability clears probed local catalog output", () => {
   const acceptedOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return acceptedOutput;
       },
     }),
-    () => assert.equal(isPrivacyNativeAvailable(), true),
+    (crypto) => assert.equal(crypto.isPrivacyNativeAvailable(), true),
   );
   assert.deepEqual(
     acceptedOutput,
@@ -734,7 +763,7 @@ test("package dist privacy native availability clears probed local catalog outpu
 
   const rejectedOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   rejectedOutput[0] = 0x00;
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return rejectedOutput;
@@ -743,7 +772,7 @@ test("package dist privacy native availability clears probed local catalog outpu
         return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
       },
     }),
-    () => assert.equal(isPrivacyNativeAvailable(), false),
+    (crypto) => assert.equal(crypto.isPrivacyNativeAvailable(), false),
   );
   assert.deepEqual(
     rejectedOutput,
@@ -760,10 +789,10 @@ test("package dist privacy availability admits the local compiled-profile catalo
     },
   });
 
-  withNativeBinding(binding, () => {
-    assert.equal(isPrivacyNativeAvailable(), true);
+  withCryptoApi(binding, (crypto) => {
+    assert.equal(crypto.isPrivacyNativeAvailable(), true);
     assert.deepEqual(
-      privacyCompiledProfileCatalogV1(),
+      crypto.privacyCompiledProfileCatalogV1(),
       PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE,
     );
   });
@@ -781,19 +810,19 @@ test("package dist privacy availability admits the local compiled-profile catalo
 
 test("package dist privacy compiled-profile catalog wrapper sanitizes native exceptions", () => {
   const witness = "package-dist-private-witness-never-echo";
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         throw new Error("native panic included " + witness);
       },
     }),
-    () => {
-      const error = captureThrown(() => privacyCompiledProfileCatalogV1());
+    (crypto) => {
+      const error = captureThrown(() => crypto.privacyCompiledProfileCatalogV1());
       assert.equal(error.message, "native privacyCompiledProfileCatalogV1 failed");
       assert.equal(error.cause, undefined);
       assert.equal(String(error).includes(witness), false);
       assert.equal(String(error.stack).includes(witness), false);
-      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.equal(crypto.isPrivacyNativeAvailable(), false);
     },
   );
 });
@@ -806,7 +835,7 @@ test("package dist privacy compiled-profile catalog bridge rejects invalid ABI v
     Number.MAX_SAFE_INTEGER,
   ]) {
     let dispatched = false;
-    withNativeBinding(
+    withCryptoApi(
       completePrivacyCompiledProfileCatalogBinding({
         connectNoritoBridgeAbiVersion() {
           return abiVersion;
@@ -816,10 +845,10 @@ test("package dist privacy compiled-profile catalog bridge rejects invalid ABI v
           return Uint8Array.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
         },
       }),
-      () => {
-        assert.equal(isPrivacyNativeAvailable(), false);
+      (crypto) => {
+        assert.equal(crypto.isPrivacyNativeAvailable(), false);
         assert.throws(
-          () => privacyCompiledProfileCatalogV1(),
+          () => crypto.privacyCompiledProfileCatalogV1(),
           /requires the iroha_js_host native binding built with privacy FFI support/u,
         );
       },
@@ -839,7 +868,7 @@ test("package dist privacy compiled-profile catalog wrapper respects sliced nati
   ]);
   let published;
 
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return new DataView(
@@ -849,8 +878,8 @@ test("package dist privacy compiled-profile catalog wrapper respects sliced nati
         );
       },
     }),
-    () => {
-      published = privacyCompiledProfileCatalogV1();
+    (crypto) => {
+      published = crypto.privacyCompiledProfileCatalogV1();
     },
   );
 
@@ -863,25 +892,25 @@ test("package dist privacy compiled-profile catalog wrapper respects sliced nati
 
 test("package dist privacy compiled-profile catalog wrapper accepts maximum Norito header padding", () => {
   const paddedArchive = privacyNoritoFrameWithPadding(0x50, 64);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return Buffer.from(paddedArchive);
       },
     }),
-    () => assert.deepEqual(privacyCompiledProfileCatalogV1(), paddedArchive),
+    (crypto) => assert.deepEqual(crypto.privacyCompiledProfileCatalogV1(), paddedArchive),
   );
 });
 
 test("package dist privacy compiled-profile catalog wrapper accepts complete field-bitset flags", () => {
   const flaggedArchive = privacyNoritoFrameWithFlags(0x50, 0x26);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return Buffer.from(flaggedArchive);
       },
     }),
-    () => assert.deepEqual(privacyCompiledProfileCatalogV1(), flaggedArchive),
+    (crypto) => assert.deepEqual(crypto.privacyCompiledProfileCatalogV1(), flaggedArchive),
   );
 });
 
@@ -889,14 +918,14 @@ test("package dist privacy compiled-profile catalog wrapper defensively copies n
   const nativeOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   let published;
 
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return nativeOutput;
       },
     }),
-    () => {
-      published = privacyCompiledProfileCatalogV1();
+    (crypto) => {
+      published = crypto.privacyCompiledProfileCatalogV1();
     },
   );
 
@@ -908,7 +937,7 @@ test("package dist privacy compiled-profile catalog wrapper defensively copies n
   assert.equal(published[1], PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE[1]);
 });
 
-test("package declarations expose readonly snapshot metadata without retired privacy types", () => {
+test("package declarations expose the Exact12 manifest without retired privacy types", () => {
   const rootDeclarations = readFileSync(
     new URL("../index.d.ts", import.meta.url),
     "utf8",
@@ -938,13 +967,34 @@ test("package declarations expose readonly snapshot metadata without retired pri
     assert.doesNotMatch(rootDeclarations, retiredPattern);
     assert.doesNotMatch(optionalDeclarations, retiredPattern);
   }
+  for (const retiredPattern of [
+    /\bPrivacyCapabilitySnapshotV1\b/u,
+    /\bPrivacyCapabilitySnapshotError\b/u,
+    /\bparsePrivacyCapabilitySnapshotV1\b/u,
+    /\bgetPrivacyCapabilitiesV1\b/u,
+    /\bPRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1\b/u,
+  ]) {
+    assert.doesNotMatch(optionalDeclarations, retiredPattern);
+  }
   assert.match(
     optionalDeclarations,
-    /export interface PrivacyCapabilitySnapshotV1\s*\{[\s\S]*readonly version:\s*1;[\s\S]*readonly committed_height:\s*PrivacyU64V1;[\s\S]*readonly consensus_policy:\s*PrivacyConsensusPolicyV1;[\s\S]*readonly protocols:\s*readonly PrivacyCapabilityRowV1\[\];/u,
+    /export interface PrivacyExact12CapabilityRowV1\s*\{[\s\S]*readonly protocol_id:\s*PrivacyProtocolTagV1;[\s\S]*readonly operation_schema:[\s\S]*readonly execution_mode:[\s\S]*readonly privacy_feature_mask:\s*number;[\s\S]*readonly compiled_profile:\s*PrivacyCompiledProfileResultV1;[\s\S]*readonly readiness:\s*PrivacyCapabilityReadinessV1;[\s\S]*readonly activation:\s*PrivacyProtocolActivationRecordV1 \| null;/u,
   );
   assert.match(
     optionalDeclarations,
-    /export declare class PrivacyCapabilitySnapshotError extends TypeError\s*\{[\s\S]*readonly path:\s*string;/u,
+    /readiness:\s*"production-qualified";\s*detail:\s*null/u,
+  );
+  assert.doesNotMatch(
+    optionalDeclarations,
+    /\bPrivacyProtocolProductionQualificationV1\b|\bproduction_qualification\b/u,
+  );
+  assert.match(
+    optionalDeclarations,
+    /readonly qualification:\s*PrivacyExact12QualificationRecordV1 \| null;/u,
+  );
+  assert.doesNotMatch(
+    optionalDeclarations,
+    /\b(?:available-experimental|activation_state|limitation|assurance)\b/u,
   );
   assert.match(
     rootDeclarations,
@@ -952,7 +1002,7 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
   assert.match(
     rootDeclarations,
-    /network readiness requires `getPrivacyCapabilitiesV1` and a[\s\S]*fresh committed Torii response/u,
+    /network readiness requires the native-validated Exact12[\s\S]*authenticated Torii state/u,
   );
   assert.doesNotMatch(
     readFileSync(new URL("../browser.d.ts", import.meta.url), "utf8"),
@@ -964,13 +1014,13 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
   assert.match(
     rootDeclarations,
-    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-roster-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-execution-v1"\s*\| "halo2\/pasta\/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri"\s*\| "stark\/fri\/sha256-goldilocks"\s*\| "stark\/fri\/poseidon2-goldilocks"\s*\| "stark\/fri\/sha256_goldilocks\.v1";/u,
+    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-roster-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-execution-v1"\s*\| "halo2\/pasta\/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri\/poseidon-x7-goldilocks-6x64-v1";/u,
   );
 });
 
 test("package dist privacy compiled-profile catalog wrapper rejects malformed Norito output archives", () => {
   for (const malformedArchive of malformedPrivacyNativeOutputArchives(0x50)) {
-    withNativeBinding(
+    withCryptoApi(
       completePrivacyCompiledProfileCatalogBinding({
         privacyCompiledProfileCatalogV1() {
           return Buffer.from(malformedArchive);
@@ -979,9 +1029,9 @@ test("package dist privacy compiled-profile catalog wrapper rejects malformed No
           return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
         },
       }),
-      () => {
+      (crypto) => {
         assert.throws(
-          () => privacyCompiledProfileCatalogV1(),
+          () => crypto.privacyCompiledProfileCatalogV1(),
           /native privacyCompiledProfileCatalogV1 returned an invalid typed privacy compiled-profile catalog/u,
         );
       },
@@ -994,15 +1044,15 @@ test("package dist privacy compiled-profile catalog wrapper rejects oversized na
     PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1,
     0x7f,
   );
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return oversized;
       },
     }),
-    () => {
+    (crypto) => {
       assert.throws(
-        () => privacyCompiledProfileCatalogV1(),
+        () => crypto.privacyCompiledProfileCatalogV1(),
         /native privacyCompiledProfileCatalogV1 returned oversized output/u,
       );
     },
@@ -1023,21 +1073,21 @@ test("package dist privacy native availability rejects every unsafe local catalo
     ),
   ];
   for (const privacyCompiledProfileCatalogOverride of overrides) {
-    withNativeBinding(
+    withCryptoApi(
       completePrivacyCompiledProfileCatalogBinding({
         privacyCompiledProfileCatalogV1: privacyCompiledProfileCatalogOverride,
         privacyValidateCompiledProfileCatalogV1() {
           return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
         },
       }),
-      () => assert.equal(isPrivacyNativeAvailable(), false),
+      (crypto) => assert.equal(crypto.isPrivacyNativeAvailable(), false),
     );
   }
 });
 
 test("package dist privacy compiled-profile catalog wrapper rejects wrong result schemas", () => {
   const wrongSchemaArchive = privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return Buffer.from(wrongSchemaArchive);
@@ -1046,10 +1096,10 @@ test("package dist privacy compiled-profile catalog wrapper rejects wrong result
         return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
       },
     }),
-    () => {
-      assert.equal(isPrivacyNativeAvailable(), false);
+    (crypto) => {
+      assert.equal(crypto.isPrivacyNativeAvailable(), false);
       assert.throws(
-        () => privacyCompiledProfileCatalogV1(),
+        () => crypto.privacyCompiledProfileCatalogV1(),
         /native privacyCompiledProfileCatalogV1 returned an invalid typed privacy compiled-profile catalog/u,
       );
     },

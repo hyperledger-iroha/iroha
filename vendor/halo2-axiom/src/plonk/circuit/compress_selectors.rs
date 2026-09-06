@@ -31,6 +31,102 @@ pub struct SelectorAssignment<F> {
     pub expression: Expression<F>,
 }
 
+/// Computes the exact deterministic selector-combination plan without materializing any field
+/// polynomials. Each inner vector contains indices into `selectors`.
+fn plan(selectors: &[SelectorDescription], max_degree: usize) -> Vec<Vec<usize>> {
+    if selectors.is_empty() {
+        return vec![];
+    }
+
+    // The length of all provided selectors must be the same.
+    let n = selectors[0].activations.len();
+    assert!(
+        selectors
+            .iter()
+            .all(|selector| selector.activations.len() == n)
+    );
+
+    // Complex selectors (and unused selectors) cannot participate in a combination.
+    let mut combinations = selectors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, selector)| (selector.max_degree == 0).then_some(vec![index]))
+        .collect::<Vec<_>>();
+    let simple = selectors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, selector)| (selector.max_degree != 0).then_some(index))
+        .collect::<Vec<_>>();
+
+    // Compute the lower-triangular exclusion matrix for simple selectors. Two selectors that are
+    // active on the same row cannot share a fixed column.
+    let mut exclusion_matrix = (0..simple.len())
+        .map(|i| vec![false; i])
+        .collect::<Vec<_>>();
+    for (i, &selector_index) in simple.iter().enumerate() {
+        let rows = &selectors[selector_index].activations;
+        for (j, &other_index) in simple.iter().enumerate().take(i) {
+            if rows
+                .iter()
+                .zip(selectors[other_index].activations.iter())
+                .any(|(left, right)| left & right)
+            {
+                exclusion_matrix[i][j] = true;
+            }
+        }
+    }
+
+    let mut added = vec![false; simple.len()];
+    for (i, &selector_index) in simple.iter().enumerate() {
+        if added[i] {
+            continue;
+        }
+        added[i] = true;
+        let selector = &selectors[selector_index];
+        assert!(selector.max_degree <= max_degree);
+        // Omit the virtual selector's own degree; it is replaced by the combination expression.
+        let mut d = selector.max_degree - 1;
+        let mut combination = vec![selector_index];
+        let mut combination_added = vec![i];
+
+        'try_selectors: for (j, &candidate_index) in simple.iter().enumerate().skip(i + 1) {
+            if d + combination.len() == max_degree {
+                break 'try_selectors;
+            }
+            if added[j] {
+                continue 'try_selectors;
+            }
+            for &member in &combination_added {
+                if exclusion_matrix[j][member] {
+                    continue 'try_selectors;
+                }
+            }
+
+            let candidate = &selectors[candidate_index];
+            let new_d = std::cmp::max(d, candidate.max_degree - 1);
+            if new_d + combination.len() + 1 > max_degree {
+                continue 'try_selectors;
+            }
+
+            d = new_d;
+            combination.push(candidate_index);
+            combination_added.push(j);
+            added[j] = true;
+        }
+        combinations.push(combination);
+    }
+
+    combinations
+}
+
+/// Returns the exact number of fixed columns that [`process`] will materialize.
+///
+/// Unlike [`process`], this retains selector assignments in their bit-packed representation and
+/// therefore lets callers enforce resource limits before allocating degree-sized field vectors.
+pub fn combination_count(selectors: &[SelectorDescription], max_degree: usize) -> usize {
+    plan(selectors, max_degree).len()
+}
+
 /// This function takes a vector that defines each selector as well as a closure
 /// used to allocate new fixed columns, and returns the assignment of each
 /// combination as well as details about each selector assignment.
@@ -49,133 +145,20 @@ pub struct SelectorAssignment<F> {
 ///
 /// This function is completely deterministic.
 pub fn process<F: Field, E>(
-    mut selectors: Vec<SelectorDescription>,
+    selectors: Vec<SelectorDescription>,
     max_degree: usize,
     mut allocate_fixed_column: E,
 ) -> (Vec<Vec<F>>, Vec<SelectorAssignment<F>>)
 where
     E: FnMut() -> Expression<F>,
 {
-    if selectors.is_empty() {
-        // There is nothing to optimize.
-        return (vec![], vec![]);
-    }
-
-    // The length of all provided selectors must be the same.
-    let n = selectors[0].activations.len();
-    assert!(selectors.iter().all(|a| a.activations.len() == n));
-
+    let combinations = plan(&selectors, max_degree);
+    let n = selectors
+        .first()
+        .map_or(0, |selector| selector.activations.len());
     let mut combination_assignments = vec![];
     let mut selector_assignments = vec![];
-
-    // All provided selectors of degree 0 are assumed to be either concrete
-    // selectors or do not appear in a gate. Let's address these first.
-    selectors.retain(|selector| {
-        if selector.max_degree == 0 {
-            // This is a complex selector, or a selector that does not appear in any
-            // gate constraint.
-            let expression = allocate_fixed_column();
-
-            let combination_assignment = selector
-                .activations
-                .iter()
-                .map(|b| if *b { F::ONE } else { F::ZERO })
-                .collect::<Vec<_>>();
-            let combination_index = combination_assignments.len();
-            combination_assignments.push(combination_assignment);
-            selector_assignments.push(SelectorAssignment {
-                selector: selector.selector,
-                combination_index,
-                expression,
-            });
-
-            false
-        } else {
-            true
-        }
-    });
-
-    // All of the remaining `selectors` are simple. Let's try to combine them.
-    // First, we compute the exclusion matrix that has (j, k) = true if selector
-    // j and selector k conflict -- that is, they are both enabled on the same
-    // row. This matrix is symmetric and the diagonal entries are false, so we
-    // only need to store the lower triangular entries.
-    let mut exclusion_matrix = (0..selectors.len())
-        .map(|i| vec![false; i])
-        .collect::<Vec<_>>();
-
-    for (i, rows) in selectors
-        .iter()
-        .map(|selector| &selector.activations)
-        .enumerate()
-    {
-        // Loop over the selectors previous to this one
-        for (j, other_selector) in selectors.iter().enumerate().take(i) {
-            // Look at what selectors are active at the same row
-            if rows
-                .iter()
-                .zip(other_selector.activations.iter())
-                .any(|(l, r)| l & r)
-            {
-                // Mark them as incompatible
-                exclusion_matrix[i][j] = true;
-            }
-        }
-    }
-
-    // Simple selectors that we've added to combinations already.
-    let mut added = vec![false; selectors.len()];
-
-    for (i, selector) in selectors.iter().enumerate() {
-        if added[i] {
-            continue;
-        }
-        added[i] = true;
-        assert!(selector.max_degree <= max_degree);
-        // This is used to keep track of the largest degree gate involved in the
-        // combination so far. We subtract by one to omit the virtual selector
-        // which will be substituted by the caller with the expression we give
-        // them.
-        let mut d = selector.max_degree - 1;
-        let mut combination = vec![selector];
-        let mut combination_added = vec![i];
-
-        // Try to find other selectors that can join this one.
-        'try_selectors: for (j, selector) in selectors.iter().enumerate().skip(i + 1) {
-            if d + combination.len() == max_degree {
-                // Short circuit; nothing can be added to this
-                // combination.
-                break 'try_selectors;
-            }
-
-            // Skip selectors that have been added to previous combinations
-            if added[j] {
-                continue 'try_selectors;
-            }
-
-            // Is this selector excluded from co-existing in the same
-            // combination with any of the other selectors so far?
-            for &i in combination_added.iter() {
-                if exclusion_matrix[j][i] {
-                    continue 'try_selectors;
-                }
-            }
-
-            // Can the new selector join the combination? Reminder: we use
-            // selector.max_degree - 1 to omit the influence of the virtual
-            // selector on the degree, as it will be substituted.
-            let new_d = std::cmp::max(d, selector.max_degree - 1);
-            if new_d + combination.len() + 1 > max_degree {
-                // Guess not.
-                continue 'try_selectors;
-            }
-
-            d = new_d;
-            combination.push(selector);
-            combination_added.push(j);
-            added[j] = true;
-        }
-
+    for combination in combinations {
         // Now, compute the selector and combination assignments.
         let mut combination_assignment = vec![F::ZERO; n];
         let combination_len = combination.len();
@@ -183,7 +166,8 @@ where
         let query = allocate_fixed_column();
 
         let mut assigned_root = F::ONE;
-        selector_assignments.extend(combination.into_iter().map(|selector| {
+        selector_assignments.extend(combination.into_iter().map(|selector_index| {
+            let selector = &selectors[selector_index];
             // Compute the expression for substitution. This produces an expression of the
             // form
             //     q * Prod[i = 1..=combination_len, i != assigned_root](i - q)
@@ -288,6 +272,11 @@ mod tests {
                     query += 1;
                     tmp
                 });
+            assert_eq!(
+                combination_count(&selectors, max_degree),
+                combination_assignments.len(),
+                "count-only planning must exactly match materialization"
+            );
 
             {
                 let mut selectors_seen = vec![];

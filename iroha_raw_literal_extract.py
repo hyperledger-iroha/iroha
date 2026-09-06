@@ -101,7 +101,6 @@ mochi/mochi-core/src/torii.rs 8274-8292 1b886b3cfa18
 mochi/mochi-core/src/torii.rs 8322-8329 6184db554e44
 crates/norito/src/core/simd_crc64.rs 1401-1428 7380a0aafddb
 xtask/tests/sm_wycheproof_sync.rs 16-42 05c00d71ff5e
-crates/iroha_kagami/src/kagemusha/taira.rs 1207-1232 bbc583778e53
 crates/iroha_kagami/src/wizard.rs 197-222 49e0255ae4fa
 xtask/src/soranet_gateway_pq.rs 526-550 c319b527497b
 crates/sorafs_car/src/trustless.rs 492-516 c319b527497b
@@ -151,7 +150,6 @@ META = {
     "mochi/mochi-core/src/torii.rs": ("fixtures", "torii-responses", "json", "test-http-fixture"),
     "crates/norito/src/core/simd_crc64.rs": ("fixtures", "crc64", "c", "test-c-source-fixture"),
     "xtask/tests/sm_wycheproof_sync.rs": ("fixtures", "sm-wycheproof", "json.in", "test-json-template"),
-    "crates/iroha_kagami/src/kagemusha/taira.rs": ("fixtures", "kagemusha-taira", "json", "test-json-fixture"),
     "crates/iroha_kagami/src/wizard.rs": ("templates", "wizard", "toml.in", "generated-config-template"),
     "xtask/src/soranet_gateway_pq.rs": ("fixtures", "soranet-gateway-pq", "toml", "test-toml-fixture"),
     "crates/sorafs_car/src/trustless.rs": ("fixtures", "trustless-gateway", "toml", "test-toml-fixture"),

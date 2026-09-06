@@ -55,6 +55,8 @@ string_id!(RepoAgreementId);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::repo::RepoCashLeg")]
 pub struct RepoCashLeg {
     /// Asset definition used for the cash consideration.
     pub asset_definition_id: AssetDefinitionId,
@@ -74,6 +76,8 @@ impl RepoCashLeg {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::repo::RepoCollateralLeg")]
 pub struct RepoCollateralLeg {
     /// Asset definition pledged as collateral.
     pub asset_definition_id: AssetDefinitionId,
@@ -98,6 +102,8 @@ impl RepoCollateralLeg {
 )]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[getset(get_copy = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::repo::RepoGovernance")]
 pub struct RepoGovernance {
     /// Haircut applied to the collateral leg, measured in basis points.
     pub haircut_bps: u16,
@@ -121,6 +127,8 @@ impl RepoGovernance {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::repo::RepoAgreement")]
 pub struct RepoAgreement {
     /// Stable identifier assigned to this agreement.
     pub id: RepoAgreementId,
@@ -411,3 +419,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_repo_schema_tests;

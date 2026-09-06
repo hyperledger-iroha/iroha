@@ -28,6 +28,13 @@ function releaseSpecBuffer(route) {
   );
 }
 
+function releaseSpecWithDuplicateResponse(route) {
+  return Buffer.from(
+    `{"openapi":"3.1.0","info":{"title":"Torii duplicate","version":"1.0.0"},"paths":{"${route}":{"get":{"responses":{"408":{"description":"first"},"4\\u00308":{"description":"second"}}}}},"components":{"schemas":{"Fixture":{"type":"object"}}}}`,
+    'utf8',
+  );
+}
+
 test('checkOpenApiSignatures validates signed entries', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-'));
   const staticDir = join(tempRoot, 'static', 'openapi');
@@ -206,6 +213,50 @@ test('checkOpenApiSignatures rejects a signed empty OpenAPI stub', async () => {
         versionsFile: join(staticDir, 'versions.json'),
       }),
     /empty\/stub specifications are forbidden/i,
+  );
+});
+
+test('checkOpenApiSignatures rejects signed specs with duplicate members', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-duplicate-spec-'));
+  const staticDir = join(tempRoot, 'static', 'openapi');
+  await mkdir(staticDir, {recursive: true});
+
+  const spec = releaseSpecWithDuplicateResponse('/v1/duplicate');
+  const sha256 = sha256Hex(spec);
+  const signature = signPayload(spec);
+  await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
+  await writeAsset(join(staticDir, 'torii.json'), spec);
+  await writeJson(
+    join(staticDir, 'manifest.json'),
+    buildManifest({
+      path: 'torii.json',
+      payload: spec,
+      sha256,
+      signature,
+    }),
+  );
+  await writeJson(join(staticDir, 'versions.json'), {
+    versions: [],
+    generatedAt: new Date().toISOString(),
+    entries: [
+      buildVersionEntry({
+        label: 'latest',
+        path: 'torii.json',
+        payload: spec,
+        sha256,
+        manifestPath: 'manifest.json',
+        signature,
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      checkOpenApiSignatures({
+        staticDir,
+        versionsFile: join(staticDir, 'versions.json'),
+      }),
+    /duplicate JSON member "408"/i,
   );
 });
 

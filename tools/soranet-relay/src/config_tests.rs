@@ -1,7 +1,7 @@
 // Test body included from the parent module to keep its production source budget bounded.
 use super::*;
 use crate::{
-    incentive_log::IncentiveLogError,
+    incentive_log::{INCENTIVE_MAX_TRUSTED_VERIFIERS_V1, IncentiveLogError},
     incentives::{
         INCENTIVE_DEFAULT_ACTIVE_EPOCHS, INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH,
         INCENTIVE_MAX_ACTIVE_EPOCHS_V1, INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1,
@@ -10,6 +10,8 @@ use crate::{
 };
 use hex::FromHex;
 use iroha_crypto::KeyPair;
+use iroha_data_model::account::AccountId;
+use std::collections::BTreeSet;
 use tempfile::{NamedTempFile, TempDir};
 macro_rules! config_fixture {
     ($name:literal) => {
@@ -1150,6 +1152,34 @@ fn constant_rate_capability_rejects_strict_mode_without_silent_downgrade() {
     assert_eq!(best_effort.capability().mode, ConstantRateMode::BestEffort);
 }
 #[test]
+fn strict_constant_rate_requires_core_profile_before_dependency_requalification() {
+    for profile in [ConstantRateProfileName::Home, ConstantRateProfileName::Null] {
+        let json = format!(
+            r#"{{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "pow": {{ "difficulty": 18 }},
+                "constant_rate_capability": {{ "enabled": true, "strict": true }},
+                "constant_rate_profile": "{}"
+            }}"#,
+            profile.as_str()
+        );
+        let error = RelayConfig::load(write_config(&json))
+            .expect_err("a non-Core strict profile must fail before dependency qualification");
+        match error {
+            ConfigError::ConstantRateCapability(message) => {
+                assert!(
+                    message.contains("constant_rate_profile `core`"),
+                    "{message}"
+                );
+                assert!(message.contains("5 ms"), "{message}");
+                assert!(message.contains(profile.as_str()), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+#[test]
 fn constant_rate_capability_returns_none_when_disabled() {
     let json = config_fixture!("disabled_constant_rate.json");
     let path = write_config(json);
@@ -1158,6 +1188,8 @@ fn constant_rate_capability_returns_none_when_disabled() {
 }
 #[test]
 fn incentive_log_defaults_when_enabled() {
+    let verifier = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+        .expect("derive trusted incentive verifier");
     let mut cfg = RelayConfig {
         mode: RelayMode::Entry,
         listen: "127.0.0.1:0".to_owned(),
@@ -1174,6 +1206,7 @@ fn incentive_log_defaults_when_enabled() {
             spool_dir: None,
             max_active_epochs: 0,
             max_measurements_per_epoch: 0,
+            trusted_verifier_ids: BTreeSet::from([AccountId::new(verifier.public_key().clone())]),
         }),
         exit_routing: ExitRoutingConfig::default(),
         vpn: None,
@@ -1203,6 +1236,7 @@ fn incentive_memory_geometry_accepts_exact_aggregate_and_rejects_max_plus_one() 
         max_active_epochs: INCENTIVE_MAX_ACTIVE_EPOCHS_V1,
         max_measurements_per_epoch: INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1
             / INCENTIVE_MAX_ACTIVE_EPOCHS_V1,
+        trusted_verifier_ids: BTreeSet::new(),
     };
     exact.validate().expect("exact aggregate limit");
     let mut overflow = IncentiveLogConfig {
@@ -1212,6 +1246,55 @@ fn incentive_memory_geometry_accepts_exact_aggregate_and_rejects_max_plus_one() 
     assert!(matches!(
         overflow.validate(),
         Err(IncentiveLogError::Config(message)) if message.contains("aggregate")
+    ));
+}
+#[test]
+fn enabled_incentive_ingestion_rejects_an_empty_verifier_roster() {
+    let mut incentives = IncentiveLogConfig {
+        enable: true,
+        spool_dir: None,
+        max_active_epochs: 1,
+        max_measurements_per_epoch: 1,
+        trusted_verifier_ids: BTreeSet::new(),
+    };
+    assert!(matches!(
+        incentives.validate(),
+        Err(IncentiveLogError::Config(message))
+            if message.contains("trusted_verifier_ids") && message.contains("at least one")
+    ));
+}
+
+#[test]
+fn incentive_verifier_roster_accepts_sixty_four_and_rejects_sixty_five() {
+    let verifier_id = |index: usize| {
+        let seed = u8::try_from(index + 1).expect("fixture verifier index fits one byte");
+        let verifier = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic incentive verifier");
+        AccountId::new(verifier.public_key().clone())
+    };
+    let trusted_verifier_ids = (0..INCENTIVE_MAX_TRUSTED_VERIFIERS_V1)
+        .map(verifier_id)
+        .collect();
+    let mut exact = IncentiveLogConfig {
+        enable: true,
+        spool_dir: None,
+        max_active_epochs: 1,
+        max_measurements_per_epoch: 1,
+        trusted_verifier_ids,
+    };
+    exact.validate().expect("the exact verifier-roster limit");
+
+    let mut overflow = exact;
+    assert!(
+        overflow
+            .trusted_verifier_ids
+            .insert(verifier_id(INCENTIVE_MAX_TRUSTED_VERIFIERS_V1))
+    );
+    assert!(matches!(
+        overflow.validate(),
+        Err(IncentiveLogError::Config(message))
+            if message.contains("trusted_verifier_ids")
+                && message.contains("first-release limit is 64")
     ));
 }
 #[test]

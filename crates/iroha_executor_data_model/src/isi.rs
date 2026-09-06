@@ -575,6 +575,28 @@ pub mod multisig {
             self.transaction_ttl_ms.json_serialize(out);
             out.push('}');
         }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            out.begin_container()?;
+            out.push('{')?;
+            json::write_json_string_to("signatories", out)?;
+            out.push(':')?;
+            self.signatories.json_serialize_to(out)?;
+            out.push(',')?;
+            json::write_json_string_to("quorum", out)?;
+            out.push(':')?;
+            self.quorum.json_serialize_to(out)?;
+            out.push(',')?;
+            json::write_json_string_to("transaction_ttl_ms", out)?;
+            out.push(':')?;
+            self.transaction_ttl_ms.json_serialize_to(out)?;
+            out.push('}')?;
+            out.end_container();
+            Ok(())
+        }
     }
     impl JsonDeserialize for MultisigSpec {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -657,6 +679,36 @@ pub mod multisig {
             out.push(':');
             self.is_relayed.json_serialize(out);
             out.push('}');
+        }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            out.begin_container()?;
+            out.push('{')?;
+            json::write_json_string_to("instructions", out)?;
+            out.push(':')?;
+            self.instructions.json_serialize_to(out)?;
+            out.push(',')?;
+            json::write_json_string_to("proposed_at_ms", out)?;
+            out.push(':')?;
+            self.proposed_at_ms.json_serialize_to(out)?;
+            out.push(',')?;
+            json::write_json_string_to("expires_at_ms", out)?;
+            out.push(':')?;
+            self.expires_at_ms.json_serialize_to(out)?;
+            out.push(',')?;
+            json::write_json_string_to("approvals", out)?;
+            out.push(':')?;
+            self.approvals.json_serialize_to(out)?;
+            out.push(',')?;
+            json::write_json_string_to("is_relayed", out)?;
+            out.push(':')?;
+            self.is_relayed.json_serialize_to(out)?;
+            out.push('}')?;
+            out.end_container();
+            Ok(())
         }
     }
     impl JsonDeserialize for MultisigProposalValue {
@@ -791,6 +843,32 @@ pub mod multisig {
             assert_eq!(account, expected);
             assert!(KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err());
         }
+
+        #[test]
+        fn multisig_metadata_values_support_bounded_json() {
+            let spec = sample_spec();
+            let encoded_spec = Json::try_new(spec.clone()).expect("bounded multisig spec JSON");
+            assert_eq!(
+                MultisigSpec::try_from(&encoded_spec).expect("decode bounded multisig spec JSON"),
+                spec
+            );
+
+            let proposal = MultisigProposalValue::new(
+                vec![sample_instruction_box()],
+                1,
+                2,
+                BTreeSet::from([fixture_account(4)]),
+                Some(false),
+            );
+            let encoded_proposal =
+                Json::try_new(proposal.clone()).expect("bounded multisig proposal JSON");
+            assert_eq!(
+                MultisigProposalValue::try_from(&encoded_proposal)
+                    .expect("decode bounded multisig proposal JSON"),
+                proposal
+            );
+        }
+
         #[test]
         fn try_from_instruction_box_roundtrip() {
             let instruction_box = sample_instruction_box();

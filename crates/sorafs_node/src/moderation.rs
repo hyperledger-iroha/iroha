@@ -60,7 +60,6 @@ pub(crate) const MODERATION_QUARANTINE_OBJECT_CHUNK_BYTES_V1: u32 = 64 * 1024;
 pub(crate) const MODERATION_QUARANTINE_OBJECT_MAX_PAYLOAD_BYTES_V1: u64 = 32 * 1024 * 1024;
 const MODERATION_QUARANTINE_OBJECT_MAX_CHUNKS_V1: usize = 512;
 const MODERATION_QUARANTINE_OBJECT_MAX_CONTENT_TYPE_BYTES_V1: usize = 256;
-const MODERATION_QUARANTINE_OBJECT_MAX_KEY_HANDLE_BYTES_V1: usize = 512;
 const MODERATION_QUARANTINE_OBJECT_MAX_WRAPPED_DEK_BYTES_V1: usize = 64 * 1024;
 const MODERATION_QUARANTINE_OBJECT_AEAD_TAG_BYTES_V1: usize = 16;
 /// Local registry record for an admitted moderation reproducibility manifest.
@@ -1245,16 +1244,16 @@ pub enum ModerationQuarantineObjectError {
         /// Quarantine id as lowercase hex.
         quarantine_id_hex: String,
     },
-    /// A runtime-only PKCS#11/KMS wrapping provider is unavailable.
+    /// A runtime-only wrapping-key provider is unavailable.
     #[error("moderation quarantine object key wrapper is unavailable")]
     KeyWrapperUnavailable,
-    /// The runtime-only PKCS#11/KMS provider failed its exact public binding.
+    /// The runtime-only wrapping-key provider failed its exact public binding.
     #[error("moderation quarantine object key wrapper qualification failed")]
     KeyWrapperUnqualified,
-    /// The configured PKCS#11/KMS wrapping operation failed closed.
+    /// The configured wrapping-key operation failed closed.
     #[error("moderation quarantine object key operation failed for `{key_id}`: {failure}")]
     KeyWrapping {
-        /// Opaque, non-secret PKCS#11/KMS key handle.
+        /// Opaque, non-secret wrapping-key handle.
         key_id: String,
         /// Stable payload-free provider failure class.
         failure: ModerationQuarantineKeyOperationErrorV1,
@@ -3091,11 +3090,12 @@ impl ModerationQuarantineKeyProviderBindingV1 {
 }
 /// Runtime-only adapter for wrapping per-object data-encryption keys.
 ///
-/// Production implementations are expected to call PKCS#11 or a KMS and keep all key material
-/// outside the process configuration and durable object envelope. Implementations must authenticate
-/// `context_digest` during both wrap and unwrap so a wrapped DEK cannot be replayed onto another
-/// object. `qualification` must fail for unavailable, revoked, stale, substituted, or test-marked
-/// adapters, and its revision or digest must change whenever the public adapter/key policy changes.
+/// Production implementations may use zeroizing software custody, a remote service, or optional
+/// hardware-backed custody. They must keep key material outside process configuration and the
+/// durable object envelope. Implementations must authenticate `context_digest` during both wrap and
+/// unwrap so a wrapped DEK cannot be replayed onto another object. `qualification` must fail for
+/// unavailable, revoked, stale, substituted, or test-marked adapters, and its revision or digest
+/// must change whenever the public adapter/key policy changes.
 ///
 /// Wrapping is treated as mutating for retry purposes. An implementation must not retry after
 /// dispatch when it cannot prove whether the provider completed the request; it returns
@@ -3118,7 +3118,7 @@ pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
         ModerationQuarantineKeyProviderQualificationV1,
         ModerationQuarantineKeyProviderReadinessErrorV1,
     >;
-    /// Return the active non-secret PKCS#11/KMS wrapping-key handle.
+    /// Return the active non-secret production wrapping-key handle.
     fn active_key_id(&self) -> &str;
     /// Wrap one freshly generated 256-bit DEK for durable storage.
     fn wrap_dek(
@@ -3202,7 +3202,7 @@ pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
     pub content_type: Option<String>,
     /// Reserved V1 field; validation requires `None`.
     pub notes: Option<String>,
-    /// Opaque non-secret PKCS#11/KMS key handle.
+    /// Opaque non-secret production wrapping-key handle.
     pub wrapping_key_id: String,
     /// Provider-produced, context-bound wrapped per-object DEK.
     pub wrapped_dek: Vec<u8>,
@@ -4081,18 +4081,8 @@ fn clean_wrapping_key_id(key_id: &str) -> Result<String, ModerationQuarantineObj
     Ok(key_id.to_owned())
 }
 fn validate_wrapping_key_id_text(key_id: &str) -> Result<(), String> {
-    if key_id.is_empty()
-        || key_id.len() > MODERATION_QUARANTINE_OBJECT_MAX_KEY_HANDLE_BYTES_V1
-        || key_id.trim() != key_id
-        || key_id.chars().any(char::is_control)
-        || !(key_id.starts_with("pkcs11:") || key_id.starts_with("kms:"))
-    {
-        return Err(format!(
-            "wrapping key id must be a canonical `pkcs11:` or `kms:` handle of at most {} printable bytes",
-            MODERATION_QUARANTINE_OBJECT_MAX_KEY_HANDLE_BYTES_V1
-        ));
-    }
-    Ok(())
+    validate_production_runtime_handle(key_id)
+        .map_err(|_| "wrapping key id must be a canonical production runtime handle".to_owned())
 }
 fn validate_wrapped_dek(wrapped_dek: &[u8]) -> Result<(), ModerationQuarantineObjectError> {
     if wrapped_dek.is_empty()

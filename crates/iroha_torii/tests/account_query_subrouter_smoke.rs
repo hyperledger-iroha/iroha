@@ -92,4 +92,5 @@ async fn account_query_subrouter_exposes_endpoints() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
+    app.shutdown().await;
 }

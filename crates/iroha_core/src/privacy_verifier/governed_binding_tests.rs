@@ -16,10 +16,10 @@ fn every_governed_envelope_binding_fails_closed_when_tampered() {
         }),
         ("statement-digest", |value| value.statement_digest.0[0] ^= 1),
         ("proof-system", |value| {
-            value.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
+            value.proof_system_id = PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64
         }),
         ("engine", |value| {
-            value.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri
+            value.engine_id = PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64
         }),
     ];
     for (label, mutate) in mutations {

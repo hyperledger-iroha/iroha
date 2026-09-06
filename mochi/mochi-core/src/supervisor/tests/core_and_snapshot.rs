@@ -342,7 +342,7 @@ fn copy_dir_recursive_enforces_injected_tree_limits_and_cleans_partial_output() 
         );
     }
 }
-const KAGAMI_STUB_NPOS_PARAMETERS: &str = r#","parameters":{"custom":{"sumeragi_npos_parameters":{"id":"sumeragi_npos_parameters","payload":{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"4D5FC075E21E35B005F84FB9A3810B339776C77DC1027BEA6A14CB2D300C9AC9","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":259200}}}}"#;
+const KAGAMI_STUB_NPOS_PARAMETERS: &str = r#","parameters":{"custom":{"sumeragi_npos_parameters":{"id":"sumeragi_npos_parameters","payload":{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"4D5FC075E21E35B005F84FB9A3810B339776C77DC1027BEA6A14CB2D300C9AC9","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600}}}}"#;
 
 fn kagami_stub_manifest_json(
     chain_id: &str,

@@ -1,10 +1,8 @@
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import { networkIdBytes } from "./networkId.js";
-
-function resolveNativeBinding() {
-  // Allow tests to inject a fake binding.
-  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
-}
 
 function requireRecord(value, context) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -303,17 +301,20 @@ function normalizeNativeProofResult(value, context, includeOutputCommitments) {
 /**
  * Build a confidential transfer v2 proof envelope.
  */
-export function buildConfidentialTransferProofV2({
-  networkId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  outputs,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
+function buildConfidentialTransferProofV2WithRuntime(
+  nativeRuntime,
+  {
+    networkId,
+    assetDefinitionId,
+    spendKey,
+    treeCommitments,
+    inputs,
+    outputs,
+    rootHintHex,
+    verifyingKey,
+  },
+) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (
     !native ||
     typeof native.buildConfidentialTransferProofV2 !== "function"
@@ -373,17 +374,20 @@ export function buildConfidentialTransferProofV2({
 /**
  * Build a confidential unshield v2 proof envelope.
  */
-export function buildConfidentialUnshieldProofV2({
-  networkId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  publicAmount,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
+function buildConfidentialUnshieldProofV2WithRuntime(
+  nativeRuntime,
+  {
+    networkId,
+    assetDefinitionId,
+    spendKey,
+    treeCommitments,
+    inputs,
+    publicAmount,
+    rootHintHex,
+    verifyingKey,
+  },
+) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (
     !native ||
     typeof native.buildConfidentialUnshieldProofV2 !== "function"
@@ -438,18 +442,21 @@ export function buildConfidentialUnshieldProofV2({
 /**
  * Build a confidential unshield v3 proof envelope with optional private change.
  */
-export function buildConfidentialUnshieldProofV3({
-  networkId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  outputs,
-  publicAmount,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
+function buildConfidentialUnshieldProofV3WithRuntime(
+  nativeRuntime,
+  {
+    networkId,
+    assetDefinitionId,
+    spendKey,
+    treeCommitments,
+    inputs,
+    outputs,
+    publicAmount,
+    rootHintHex,
+    verifyingKey,
+  },
+) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (
     !native ||
     typeof native.buildConfidentialUnshieldProofV3 !== "function"
@@ -500,5 +507,38 @@ export function buildConfidentialUnshieldProofV3({
     result,
     "buildConfidentialUnshieldProofV3 result",
     true,
+  );
+}
+
+/** @internal Create confidential proof builders bound to one immutable runtime. */
+export function createConfidentialProofBuilders(nativeRuntime) {
+  return Object.freeze({
+    buildConfidentialTransferProofV2: (input) =>
+      buildConfidentialTransferProofV2WithRuntime(nativeRuntime, input),
+    buildConfidentialUnshieldProofV2: (input) =>
+      buildConfidentialUnshieldProofV2WithRuntime(nativeRuntime, input),
+    buildConfidentialUnshieldProofV3: (input) =>
+      buildConfidentialUnshieldProofV3WithRuntime(nativeRuntime, input),
+  });
+}
+
+const DEFAULT_CONFIDENTIAL_PROOF_BUILDERS =
+  createConfidentialProofBuilders(defaultNativeRuntime);
+
+export function buildConfidentialTransferProofV2(input) {
+  return DEFAULT_CONFIDENTIAL_PROOF_BUILDERS.buildConfidentialTransferProofV2(
+    input,
+  );
+}
+
+export function buildConfidentialUnshieldProofV2(input) {
+  return DEFAULT_CONFIDENTIAL_PROOF_BUILDERS.buildConfidentialUnshieldProofV2(
+    input,
+  );
+}
+
+export function buildConfidentialUnshieldProofV3(input) {
+  return DEFAULT_CONFIDENTIAL_PROOF_BUILDERS.buildConfidentialUnshieldProofV3(
+    input,
   );
 }

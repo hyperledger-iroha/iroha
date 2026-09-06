@@ -1,0 +1,14 @@
+[
+  {
+    "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000600000000000000c0e2ced730bf29bf00020000007fff",
+    "frame_name": "iroha.numeric.IntValueV1"
+  },
+  {
+    "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe182852400070000000000000003d9b4c0c4c24c4600020000007fff02",
+    "frame_name": "iroha.numeric.DecimalValueV1"
+  },
+  {
+    "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee3000700000000000000d75060453b22ec8c0002000000810002",
+    "frame_name": "iroha.numeric.QuantityValueV1"
+  }
+]

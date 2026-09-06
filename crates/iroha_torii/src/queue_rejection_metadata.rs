@@ -5,16 +5,20 @@ impl Error {
             | queue::Error::LatencySaturated
             | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Expired => StatusCode::BAD_REQUEST,
+            queue::Error::KagemushaV1OperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
+            queue::Error::KagemushaV1OperationIdConflict { .. } => StatusCode::CONFLICT,
+            queue::Error::KagemushaV1OperationIndexInconsistent { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             queue::Error::UnregisteredAuthority { .. } => StatusCode::FORBIDDEN,
             queue::Error::Governance(_) => StatusCode::INTERNAL_SERVER_ERROR,
             queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
             queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
             queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => StatusCode::SERVICE_UNAVAILABLE,
             queue::Error::PlanJournalDurabilityRejected { .. }
             | queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
@@ -37,6 +41,10 @@ impl Error {
                 "transaction_expired",
                 "transaction expired before admission",
             ),
+            queue::Error::KagemushaV1OperationCarrierRejected { .. } => (
+                "kagemusha_v1_operation_carrier_rejected",
+                "KAGEMUSHA V1 operation carrier failed canonical admission",
+            ),
             queue::Error::UnresolvedRoute { .. } => (
                 "queue_unresolved_route",
                 "transaction route could not be resolved",
@@ -48,6 +56,14 @@ impl Error {
             queue::Error::IsInQueue => (
                 "already_enqueued",
                 "transaction already present in the queue",
+            ),
+            queue::Error::KagemushaV1OperationIdConflict { .. } => (
+                "kagemusha_v1_operation_id_conflict",
+                "KAGEMUSHA V1 operation identifier is already pending",
+            ),
+            queue::Error::KagemushaV1OperationIndexInconsistent { .. } => (
+                "kagemusha_v1_operation_index_inconsistent",
+                "KAGEMUSHA V1 pending-operation index requires recovery",
             ),
             queue::Error::UnregisteredAuthority { .. } => (
                 "unregistered_authority",
@@ -73,10 +89,6 @@ impl Error {
                 "queue_nexus_fee_rejected",
                 "transaction cannot cover the Nexus fee admission bound",
             ),
-            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => (
-                "queue_confidential_policy_rejected",
-                "confidential policy rejected the transaction",
-            ),
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => (
                 "queue_nexus_fee_config_invalid",
                 "node Nexus fee configuration is invalid",
@@ -93,10 +105,9 @@ impl Error {
     }
     fn queue_error_envelope(
         err: &queue::Error,
-        backpressure: queue::BackpressureState,
+        backpressure: Option<queue::BackpressureState>,
     ) -> ErrorEnvelope {
         let (code, message) = Self::queue_error_summary(err);
-        let saturated = backpressure.is_saturated();
         let retry_after_seconds = match err {
             queue::Error::Full
             | queue::Error::LatencySaturated
@@ -143,15 +154,18 @@ impl Error {
         };
         ErrorEnvelope::new(code, message).with_details(ErrorDetails {
             reject_code: Some(reject_code.to_owned()),
-            queue: Some(QueueErrorSnapshot {
-                state: if saturated {
-                    "saturated".to_owned()
-                } else {
-                    "healthy".to_owned()
-                },
-                queued: backpressure.queued() as u64,
-                capacity: backpressure.capacity().get() as u64,
-                saturated,
+            queue: backpressure.map(|backpressure| {
+                let saturated = backpressure.is_saturated();
+                QueueErrorSnapshot {
+                    state: if saturated {
+                        "saturated".to_owned()
+                    } else {
+                        "healthy".to_owned()
+                    },
+                    queued: backpressure.queued() as u64,
+                    capacity: backpressure.capacity().get() as u64,
+                    saturated,
+                }
             }),
             retry_after_seconds,
             fee,
@@ -177,6 +191,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "authority reached per-user queue capacity".to_owned(),
         ),
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
+        queue::Error::KagemushaV1OperationCarrierRejected { reason } => (
+            "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
+            format!("KAGEMUSHA V1 operation carrier failed canonical admission: {reason}"),
+        ),
         queue::Error::UnresolvedRoute { reason } => (
             "PRTRY:ROUTE_UNRESOLVED",
             format!("transaction route could not be resolved: {reason}"),
@@ -188,6 +206,20 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::IsInQueue => (
             "PRTRY:ALREADY_ENQUEUED",
             "transaction already present in the queue".to_owned(),
+        ),
+        queue::Error::KagemushaV1OperationIdConflict {
+            operation_id,
+            existing_entrypoint_hash,
+        } => (
+            "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
+            format!(
+                "KAGEMUSHA V1 operation {} is already pending as entrypoint {existing_entrypoint_hash}",
+                hex::encode(operation_id)
+            ),
+        ),
+        queue::Error::KagemushaV1OperationIndexInconsistent { reason } => (
+            "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
+            format!("KAGEMUSHA V1 pending-operation index requires recovery: {reason}"),
         ),
         queue::Error::UnregisteredAuthority { authority } => (
             "PRTRY:UNREGISTERED_AUTHORITY",
@@ -215,10 +247,6 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
                 "transaction rejected by Nexus fee admission: {}",
                 code.as_str()
             ),
-        ),
-        queue::Error::ConfidentialPolicyAdmissionRejected { detail, .. } => (
-            "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
-            format!("transaction rejected by confidential policy admission: {detail}"),
         ),
         queue::Error::NexusFeeAdmissionConfigInvalid { code, .. } => (
             "PRTRY:NEXUS_FEE_ADMISSION_CONFIG_INVALID",

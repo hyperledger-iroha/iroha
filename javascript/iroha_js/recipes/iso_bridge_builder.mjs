@@ -16,7 +16,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { buildPacs008Message, buildPacs009Message, ToriiClient } from "../src/index.js";
+import { buildPacs008Message, buildPacs009Message, ToriiClient } from "../dist/index.js";
 
 const TORII_URL = process.env.TORII_URL ?? "http://localhost:8080";
 const ISO_KIND = (process.env.ISO_KIND ?? "pacs.008").toLowerCase();

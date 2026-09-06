@@ -82,15 +82,18 @@ export function validatePackPaths(metadata) {
   }
   for (const required of [
     "package.json",
+    "atomic-private-settlement.d.ts",
     "index.d.ts",
     "ivm-artifact.d.ts",
+    "kagemusha.d.ts",
     "kotodama-compiler.d.ts",
     "privacy-capabilities.d.ts",
     "repo-agreement.d.ts",
     "sumeragi-typed.d.ts",
-    "src/index.js",
     "dist/index.js",
+    "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
+    "dist/kagemusha.js",
     "dist/kotodamaCompiler/browser.js",
     "dist/kotodamaCompiler/index.js",
     "dist/nexusApp.js",
@@ -103,13 +106,15 @@ export function validatePackPaths(metadata) {
     "nexus-app.d.ts",
     "recipes/iso_bridge_builder.mjs",
     "recipes/nexus_app_transfer.mjs",
-    "scripts/build-dist.mjs",
   ]) {
     if (!paths.has(required)) {
       throw new Error(`package smoke missing required tar entry: ${required}`);
     }
   }
   for (const path of paths) {
+    if (path.startsWith("src/") || path.startsWith("scripts/")) {
+      throw new Error(`package smoke found unpublished development path: ${path}`);
+    }
     if (path.startsWith("recipes/") && !ALLOWED_RECIPE_PATHS.has(path)) {
       throw new Error(`package smoke found forbidden non-portable recipe: ${path}`);
     }
@@ -176,6 +181,7 @@ async function main() {
       'import * as sdk from "@iroha/iroha-js";',
       'import * as canonical from "@iroha/iroha-js/canonical-request";',
       'import * as artifact from "@iroha/iroha-js/ivm-artifact";',
+      'import * as kagemusha from "@iroha/iroha-js/kagemusha";',
       'import * as codec from "@iroha/iroha-js/transaction-codec";',
       'import * as nexus from "@iroha/iroha-js/nexus-app";',
       'import * as compiler from "@iroha/iroha-js/kotodama-compiler";',
@@ -190,12 +196,23 @@ async function main() {
       '  ["buildBrowserTransferPayload", codec.buildBrowserTransferPayload],',
       '  ["NexusAppClient", nexus.NexusAppClient],',
       '  ["KotodamaCompilerClient", compiler.KotodamaCompilerClient],',
-      '  ["getPrivacyCapabilitiesV1", privacy.getPrivacyCapabilitiesV1],',
-      '  ["parsePrivacyCapabilitySnapshotV1", privacy.parsePrivacyCapabilitySnapshotV1],',
+      '  ["decodePrivacyExact12CapabilityManifestV1", privacy.decodePrivacyExact12CapabilityManifestV1],',
+      '  ["getPrivacyExact12CapabilityManifestV1", privacy.getPrivacyExact12CapabilityManifestV1],',
       '  ["parseSumeragiStatusPayload", sumeragi.parseSumeragiStatusPayload],',
       "];",
       "for (const [name, value] of checks) {",
       '  if (typeof value !== "function") throw new Error(`missing packed export: ${name}`);',
+      "}",
+      'if (JSON.stringify(sdk.supportedCryptoAlgorithms()) !== JSON.stringify(["ed25519"])) {',
+      '  throw new Error("clean packed install must advertise only portable Ed25519");',
+      "}",
+      "try {",
+      '  sdk.generateKeyPair({ algorithm: "sm2" });',
+      '  throw new Error("native-only crypto unexpectedly succeeded");',
+      "} catch (error) {",
+      '  if (error?.code !== "ERR_IROHA_NATIVE_BINDING" || !String(error.message).includes("IROHA_JS_NATIVE_DIR")) {',
+      '    throw new Error(`packed native setup error is not actionable: ${error?.message ?? error}`);',
+      "  }",
       "}",
       'if (!Object.isFrozen(sdk.TAIRA_TESTNET_PROFILE) ||',
       '    sdk.TAIRA_TESTNET_PROFILE.toriiBaseUrl !== "https://taira.sora.org" ||',
@@ -212,7 +229,13 @@ async function main() {
       "if (sdk.computeIvmArtifactHashes !== artifact.computeIvmArtifactHashes) {",
       '  throw new Error("root and ivm-artifact subpath exports differ");',
       "}",
-      'for (const name of ["getPrivacyCapabilitiesV1", "parsePrivacyCapabilitySnapshotV1"]) {',
+      "if (sdk.Kagemusha !== kagemusha.Kagemusha || sdk.Kagemusha.wireVersion !== 1) {",
+      '  throw new Error("root and kagemusha subpath exports differ");',
+      "}",
+      'if (Object.hasOwn(sdk, ["Kagemusha", "V1"].join(""))) {',
+      '  throw new Error("root leaks the retired versioned KAGEMUSHA facade");',
+      "}",
+      'for (const name of ["getPrivacyCapabilitiesV1", "parsePrivacyCapabilitySnapshotV1", "decodePrivacyExact12CapabilityManifestV1", "getPrivacyExact12CapabilityManifestV1"]) {',
       '  if (Object.hasOwn(sdk, name)) throw new Error(`root leaks optional privacy export: ${name}`);',
       "}",
       'if (Object.hasOwn(sdk.ToriiClient.prototype, "getPrivacyCapabilitiesV1") ||',
@@ -222,6 +245,10 @@ async function main() {
     ].join("\n");
     await run(process.execPath, ["--input-type=module", "--eval", smokeProgram], {
       cwd: consumerRoot,
+      env: {
+        ...process.env,
+        IROHA_JS_NATIVE_DIR: join(tempRoot, "missing-native"),
+      },
     });
     await run(
       process.execPath,

@@ -13,12 +13,13 @@ constraint usage.  A notable example is `AddCarryCircuit` which verifies a
 check. The Halo2 gadget expresses this as a compact custom-gate shape so the
 operation avoids separate range checks for each bit.
 
-## Parallel Verification
+## Parallel Diagnostic Checks
 
-`zk::verify_trace` builds a global rayon thread pool to evaluate constraints in
-parallel.  The thread count can be adjusted with the `IVM_PROVER_THREADS`
-environment variable which helps improve proving throughput on multi‑core
-machines.
+`zk::check_diagnostic_trace` uses the prover rayon pool to evaluate recorded
+constraints and register authentication paths in parallel. The helper is not a
+proof verifier: it does not check VM transition semantics, trace completeness,
+or memory-event membership. The thread count can be adjusted with the
+`IVM_PROVER_THREADS` environment variable for local proving diagnostics.
 
 ## Compact Trace Representation
 
@@ -29,13 +30,13 @@ that changed between cycles and reconstructs the full trace on demand. The VM's
 zero-knowledge padding is enabled. This avoids redundant data while keeping the
 current APIs stable.
 
-## Incremental Merkle Proofs
+## Incremental Merkle Diagnostics
 
-Zero‑knowledge mode now records Merkle authentication paths for every register
-and memory access.  `MemEvent` and the new `RegEvent` include the path and the
-resulting root so the prover can verify inclusion without recomputing the entire
-tree after each operation.  During execution the VM updates the internal Merkle
-trees incrementally and stores proofs as operations occur.  In addition a
-`StepLog` records the register and memory Merkle roots after every cycle so an
-external circuit can follow the execution without materialising the full state.
-`verify_trace` checks these proofs in parallel alongside regular constraints.
+Zero‑knowledge trace collection records Merkle authentication paths for register
+accesses. `RegEvent` includes the complete register leaf, path, and fixed-size
+register-tree root, so `check_diagnostic_trace` can authenticate it. `MemEvent`
+records only the accessed value plus a path/root snapshot; because it lacks the
+complete 32-byte leaf and an authenticated leaf count, it is diagnostic material
+and not an independently verifiable membership proof. `StepLog` records register
+and memory roots for downstream off-chain tooling without claiming to prove the
+execution.

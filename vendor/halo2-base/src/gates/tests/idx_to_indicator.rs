@@ -1,16 +1,16 @@
 use crate::ff::Field;
-use crate::gates::circuit::{CircuitBuilderStage, builder::RangeCircuitBuilder};
+use crate::gates::circuit::{builder::RangeCircuitBuilder, CircuitBuilderStage};
 use crate::{
-    QuantumCell::Witness,
     gates::{GateChip, GateInstructions},
     halo2_proofs::{
         halo2curves::bn256::Fr, plonk::keygen_pk, plonk::keygen_vk,
         poly::kzg::commitment::ParamsKZG,
     },
     utils::testing::{check_proof, gen_proof},
+    QuantumCell::Witness,
 };
 use itertools::Itertools;
-use rand::{Rng, rngs::OsRng, thread_rng};
+use rand::{rngs::OsRng, thread_rng, Rng};
 use test_log::test;
 
 // soundness checks for `idx_to_indicator` function

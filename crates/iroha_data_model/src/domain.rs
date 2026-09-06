@@ -37,6 +37,8 @@ mod model {
     #[display("{name}.{dataspace}")]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::domain::model::DomainId")]
     pub struct DomainId {
         /// Domain label unique only within its parent dataspace.
         pub name: Name,

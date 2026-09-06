@@ -1,6 +1,0 @@
-profile verification intentionally not recorded for this sample fixture
-
-Public Nexus genesis must bind xor#universal to the operator-supplied canonical
-XOR asset definition id. Regenerate this bundle with:
-
-cargo xtask kagami-profiles --profile iroha3-nexus --nexus-xor-asset-definition-id <BASE58>

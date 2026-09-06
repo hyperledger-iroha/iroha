@@ -9,8 +9,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{
-        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus, State,
-        World, WorldReadOnly,
+        GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, State, World, WorldReadOnly,
     },
 };
 use iroha_data_model::{
@@ -32,10 +32,7 @@ fn referendum_open_and_close_by_height() {
     let account: Account =
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], []);
-    let mut state = State::new_for_testing(world, kura, query_handle);
-    let mut cfg = state.gov.clone();
-    cfg.parliament_term_blocks = 100;
-    state.set_gov(cfg);
+    let state = State::new_for_testing(world, kura, query_handle);
     // Block H=1: create a proposed referendum with explicit [2,3] window.
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let rid = "standalone-window".to_owned();
@@ -48,7 +45,7 @@ fn referendum_open_and_close_by_height() {
                 h_start: 2,
                 h_end: 3,
                 status: GovernanceReferendumStatus::Proposed,
-                mode: GovernanceReferendumMode::Plain,
+                mode: iroha_core::state::GovernanceReferendumMode::Plain,
             },
         );
         stx1.apply();
@@ -81,6 +78,12 @@ fn referendum_open_and_close_by_height() {
     }
     // Block H=2: opens.
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let custody = GovernanceLockCustody {
+        escrowed: false,
+        asset_definition_id: state.gov.voting_asset_id.clone(),
+        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+    };
     {
         let mut sblock2 = state.block(header2);
         let has_opened_event_at_h2 = sblock2.world.take_external_events().iter().any(|event| {
@@ -92,9 +95,28 @@ fn referendum_open_and_close_by_height() {
                         iroha_data_model::events::data::DataEvent::Governance(
                             GovernanceEvent::ReferendumOpened(_)
                         )
-                    )
+                )
             )
         });
+        let mut transaction = sblock2.transaction();
+        let mut locks = GovernanceLocksForReferendum::default();
+        locks.locks.insert(
+            iroha_test_samples::ALICE_ID.clone(),
+            GovernanceLockRecord {
+                owner: iroha_test_samples::ALICE_ID.clone(),
+                amount: 0_u64.into(),
+                slashed: 0_u64.into(),
+                expiry_height: 100,
+                direction: 0,
+                duration_blocks: 98,
+                custody,
+            },
+        );
+        transaction
+            .world
+            .governance_locks_mut()
+            .insert(rid.clone(), locks);
+        transaction.apply();
         sblock2
             .commit_empty_block_for_testing()
             .expect("commit block at H=2");
@@ -136,7 +158,8 @@ fn referendum_open_and_close_by_height() {
     // Block H=4: closes at h_end + 1.
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut sblock4 = state.block(header4);
-    let has_closed_event_at_h4 = sblock4.world.take_external_events().iter().any(|event| {
+    let events_at_h4 = sblock4.world.take_external_events();
+    let has_closed_event_at_h4 = events_at_h4.iter().any(|event| {
         matches!(
             event,
             iroha_data_model::events::EventBox::Data(payload)
@@ -148,15 +171,63 @@ fn referendum_open_and_close_by_height() {
                 )
         )
     });
+    let decision = events_at_h4
+        .iter()
+        .find_map(|event| match event.as_data_event() {
+            Some(iroha_data_model::events::data::DataEvent::Governance(
+                GovernanceEvent::ReferendumDecided(decision),
+            )) => Some(decision),
+            _ => None,
+        });
+    let decision = decision.expect("standalone close must emit its exact referendum decision");
+    assert_eq!(decision.referendum_id, rid);
+    assert_eq!(
+        (decision.approve, decision.reject, decision.abstain),
+        (0, 0, 0)
+    );
+    assert!(
+        !decision.approved,
+        "a nonzero approval threshold cannot approve an empty decisive tally"
+    );
+    assert!(
+        !events_at_h4.iter().any(|event| matches!(
+            event.as_data_event(),
+            Some(iroha_data_model::events::data::DataEvent::Governance(
+                GovernanceEvent::ProposalRejected(_)
+            ))
+        )),
+        "standalone closure must never masquerade as a typed proposal decision"
+    );
     sblock4
         .commit_empty_block_for_testing()
         .expect("commit block at H=4");
-    let status_closed_at_h4 = state
-        .view()
+    assert!(has_closed_event_at_h4);
+    let view = state.view();
+    let closed = view
         .world()
         .governance_referenda()
         .get(&rid)
-        .is_some_and(|record| record.status == GovernanceReferendumStatus::Closed);
-    assert!(status_closed_at_h4);
-    assert!(has_closed_event_at_h4 || status_closed_at_h4);
+        .copied()
+        .expect("the outstanding lock must retain the closed referendum");
+    assert_eq!(closed.status, GovernanceReferendumStatus::Closed);
+    assert_eq!(
+        closed.mode,
+        iroha_core::state::GovernanceReferendumMode::Plain
+    );
+    drop(view);
+    // The canonical decision is emitted at closure. Its retained Closed state must prevent
+    // subsequent heights from recalculating or emitting another decision for this referendum.
+    let mut next = state.block(BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0));
+    assert!(
+        !next
+            .world
+            .take_external_events()
+            .iter()
+            .any(|event| matches!(
+                event.as_data_event(),
+                Some(iroha_data_model::events::data::DataEvent::Governance(
+                    GovernanceEvent::ReferendumDecided(decision)
+                )) if decision.referendum_id == rid
+            ))
+    );
 }

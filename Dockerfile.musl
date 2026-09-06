@@ -73,7 +73,6 @@ COPY --from=builder $TARGET_DIR/sorafs_governance_dag $BIN_PATH
 COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
 COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
 COPY --from=builder $TARGET_DIR/attachment_sanitizer $BIN_PATH
-COPY defaults/genesis.json $CONFIG_DIR
 COPY defaults/client.toml $CONFIG_DIR
 USER $USER
 CMD ["iroha3d"]

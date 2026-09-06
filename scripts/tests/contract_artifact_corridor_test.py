@@ -316,6 +316,14 @@ def test_source_policy_requires_abi_encoder_v2_only_for_typed_deployments() -> N
         )
 
 
+def test_compiler_lock_covers_shared_replay_forest_import_for_both_targets() -> None:
+    config = corridor.load_corridor_config()
+    replay_forest = "contracts/evm/sccp/SccpSha256ReplayForest.sol"
+    assert replay_forest in config.sources["evm"]
+    assert replay_forest in config.sources["tron"]
+    assert replay_forest in corridor.ABI_ENCODER_V2_SOURCES
+
+
 @pytest.mark.parametrize(
     ("target", "field", "replacement"),
     (
@@ -769,9 +777,12 @@ def test_tvm_smoke_probes_chain_before_real_deployment_and_covers_adversarial_st
     assert "validateNativeVectors" in source
     assert "independentPayloadHash" in source
     assert "decodeSccpTransferLog" in source
-    assert "[0, 1, 127, 128, 129, 255, 256, 257, 511]" in source
-    assert "TRON_MAINNET_PROFILE = 10" in source
+    assert "rejectFunctions(bridge" in source
+    assert '"sccpPayloadHash"' in source
+    assert "TRON_MAINNET_PROFILE = 0x43" in source
     assert "TRON_MAINNET_CHAIN_ID = 0x2b6653dcn" in source
+    assert "REPLAY_NETWORK_TRON = 0x43" in source
+    assert "REPLAY_PRINCIPAL_TRON = 2" in source
     probe = source.index("await assertMainnetChainId(endpoint);")
     account_read = source.index('fetchJson(endpoint, "/admin/accounts-json")')
     valid_deploy = source.index("const verifier = await deploy(")
@@ -783,7 +794,7 @@ def test_tvm_smoke_probes_chain_before_real_deployment_and_covers_adversarial_st
     assert "contracts/tron/sccp/TairaXorSccpBridge.sol:TairaXorSccpBridge" in source
     for required_case in (
         "wrong-chain verifier",
-        "wrong-chain bridge",
+        "retired-profile bridge",
         "forged EXTCODEHASH policy",
         "unauthorized direct token mint",
         "hostile invalid BN254 proof",

@@ -92,6 +92,8 @@ pub const REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_DIGEST_DOMAIN_V1: &[u8]
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionTargetV1")]
 pub struct ReputationFinalizedArchiveRetentionTargetV1 {
     /// One-based finalized block height.
     pub height: u64,
@@ -139,6 +141,8 @@ impl ReputationFinalizedArchiveRetentionTargetV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionRequestV1")]
 pub struct ReputationFinalizedArchiveRetentionRequestV1 {
     /// Schema version.
     pub version: u16,
@@ -391,6 +395,8 @@ pub enum ReputationFinalizedArchiveRetentionRequestErrorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1")]
 pub struct ReputationJournalSourceIdV1(pub [u8; 32]);
 impl ReputationJournalSourceIdV1 {
     /// Reserved inert identity.
@@ -436,6 +442,8 @@ impl ReputationJournalSourceIdV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1")]
 pub struct ReputationJournalEventIdV1(pub [u8; 32]);
 impl ReputationJournalEventIdV1 {
     /// Reserved inert identity used only while deriving the canonical id.
@@ -456,6 +464,8 @@ impl ReputationJournalEventIdV1 {
     feature = "json",
     norito(tag = "source", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalSourceKindV1")]
 pub enum ReputationJournalSourceKindV1 {
     /// Terminal proof-of-retrievability outcomes.
     Por,
@@ -470,6 +480,8 @@ pub enum ReputationJournalSourceKindV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyV1")]
 pub struct ReputationJournalAuthorityPolicyV1 {
     /// Schema version.
     pub version: u16,
@@ -549,6 +561,8 @@ impl ReputationJournalAuthorityPolicyV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1")]
 pub struct ReputationJournalAuthorityPolicyRecordV1 {
     /// Canonical governed policy.
     pub policy: ReputationJournalAuthorityPolicyV1,
@@ -605,6 +619,8 @@ impl ReputationJournalAuthorityPolicyRecordV1 {
     feature = "json",
     norito(tag = "kind", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalFailureKindV1")]
 pub enum PorTerminalFailureKindV1 {
     /// No proof arrived before the governed deadline.
     DeadlineExpired,
@@ -630,6 +646,8 @@ impl PorTerminalFailureKindV1 {
     feature = "json",
     norito(tag = "kind", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalExcludedKindV1")]
 pub enum PorTerminalExcludedKindV1 {
     /// Governance revoked provider admission while the challenge was active.
     AdmissionRevoked,
@@ -646,6 +664,8 @@ pub enum PorTerminalExcludedKindV1 {
     feature = "json",
     norito(tag = "status", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalStatusV1")]
 pub enum PorTerminalStatusV1 {
     /// The original provider proof verified before the deadline.
     Verified,
@@ -683,6 +703,8 @@ impl PorTerminalStatusV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalOutcomeV1")]
 pub struct PorTerminalOutcomeV1 {
     /// Native BLAKE3-256 challenge identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -839,6 +861,8 @@ impl PorTerminalOutcomeV1 {
     feature = "json",
     norito(tag = "kind", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeKindV1")]
 pub enum ProviderDisputeKindV1 {
     /// Provider failed replication-order requirements.
     ReplicationShortfall,
@@ -857,6 +881,8 @@ pub enum ProviderDisputeKindV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeResolutionV1")]
 pub struct ProviderDisputeResolutionV1 {
     /// Existing capacity-governance outcome vocabulary.
     pub outcome: CapacityDisputeOutcome,
@@ -878,6 +904,8 @@ pub struct ProviderDisputeResolutionV1 {
     feature = "json",
     norito(tag = "status", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeStatusV1")]
 pub enum ProviderDisputeStatusV1 {
     /// Dispute became active at `submitted_at_unix_ms`.
     Opened,
@@ -893,6 +921,8 @@ pub enum ProviderDisputeStatusV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeEventV1")]
 pub struct ProviderDisputeEventV1 {
     /// Existing capacity-dispute identity.
     pub dispute_id: CapacityDisputeId,
@@ -947,6 +977,8 @@ impl ProviderDisputeEventV1 {
     feature = "json",
     norito(tag = "kind", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenViolationKindV1")]
 pub enum StreamTokenViolationKindV1 {
     /// An authenticated token was used after its expiry.
     Expired,
@@ -981,6 +1013,8 @@ pub enum StreamTokenViolationKindV1 {
     feature = "json",
     norito(tag = "kind", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenExcludedKindV1")]
 pub enum StreamTokenExcludedKindV1 {
     /// No stream token was supplied.
     MissingToken,
@@ -1006,6 +1040,8 @@ impl StreamTokenExcludedKindV1 {
     feature = "json",
     norito(tag = "status", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenValidationStatusV1")]
 pub enum StreamTokenValidationStatusV1 {
     /// The token was admitted for the requested provider-bound stream.
     Accepted,
@@ -1146,6 +1182,8 @@ pub fn derive_stream_token_gateway_id_v1(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenExactHeaderDigestV1")]
 pub struct StreamTokenExactHeaderDigestV1([u8; 32]);
 impl StreamTokenExactHeaderDigestV1 {
     /// Commit to the exact header bytes, including empty or malformed text.
@@ -1186,6 +1224,8 @@ impl StreamTokenExactHeaderDigestV1 {
         deny_unknown_fields
     )
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenPresentationV1")]
 pub enum StreamTokenPresentationV1 {
     /// The request did not carry a stream-token header.
     Missing,
@@ -1219,6 +1259,8 @@ impl StreamTokenPresentationV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenCarRangeV1")]
 pub struct StreamTokenCarRangeV1 {
     /// Inclusive first requested byte.
     pub start: u64,
@@ -1267,6 +1309,8 @@ impl StreamTokenCarRangeV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenChunkRequestV1")]
 pub struct StreamTokenChunkRequestV1 {
     /// Exact BLAKE3 chunk digest resolved below the manifest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1316,6 +1360,8 @@ impl StreamTokenChunkRequestV1 {
         deny_unknown_fields
     )
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenRequestRouteV1")]
 pub enum StreamTokenRequestRouteV1 {
     /// Canonical inclusive CAR byte range.
     CarRange(StreamTokenCarRangeV1),
@@ -1367,6 +1413,8 @@ impl StreamTokenRequestRouteV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenValidationRequestContextV1")]
 pub struct StreamTokenValidationRequestContextV1 {
     version: u8,
     provider_id: ProviderId,
@@ -1541,6 +1589,8 @@ impl StreamTokenValidationRequestContextV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenValidationBindingV1")]
 pub struct StreamTokenValidationBindingV1 {
     /// Stable authenticated identity of the regional gateway.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1597,6 +1647,8 @@ impl StreamTokenValidationBindingV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1")]
 pub struct StreamTokenValidationOutcomeV1 {
     /// Durable gateway sequence and request-context binding.
     pub binding: StreamTokenValidationBindingV1,
@@ -1644,6 +1696,8 @@ impl StreamTokenValidationOutcomeV1 {
     feature = "json",
     norito(tag = "kind", content = "payload", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalPayloadV1")]
 pub enum ReputationJournalPayloadV1 {
     /// Terminal proof-of-retrievability projection.
     PorTerminal(PorTerminalOutcomeV1),
@@ -1700,6 +1754,8 @@ impl ReputationJournalPayloadV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalEntryV1")]
 pub struct ReputationJournalEntryV1 {
     /// Entry schema version.
     pub version: u16,
@@ -1893,6 +1949,8 @@ impl ReputationJournalEntryV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalSourceHeadV1")]
 pub struct ReputationJournalSourceHeadV1 {
     /// Source family permanently bound to the source id.
     pub source_kind: ReputationJournalSourceKindV1,
@@ -1940,6 +1998,8 @@ impl ReputationJournalSourceHeadV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalCommittedEventRecordV1")]
 pub struct ReputationJournalCommittedEventRecordV1 {
     /// One-based global journal sequence.
     pub sequence: u64,
@@ -1979,6 +2039,8 @@ impl ReputationJournalCommittedEventRecordV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedCursorV1")]
 pub struct ReputationJournalFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -2012,6 +2074,8 @@ impl ReputationJournalFinalizedCursorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventCursorV1")]
 pub struct ReputationJournalFinalizedEventCursorV1 {
     /// Monotonic journal sequence beginning at one.
     pub sequence: u64,
@@ -2042,6 +2106,8 @@ impl ReputationJournalFinalizedEventCursorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventV1")]
 pub struct ReputationJournalFinalizedEventV1 {
     /// Monotonic journal sequence beginning at one.
     pub sequence: u64,
@@ -2105,6 +2171,8 @@ impl ReputationJournalFinalizedEventV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventPageV1")]
 pub struct ReputationJournalFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ReputationJournalFinalizedCursorV1,
@@ -4307,3 +4375,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_reputation_schema_tests;

@@ -18,6 +18,7 @@ use crate::{
         PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
         PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
         PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
+        PrivacyZkAceIdentityCommitmentV1, PrivacyZkAceReplayNullifierV1,
         VegaExistingCredentialStatementV1, ZkAcePqAuthorizationStatementV1,
     },
     transaction::{
@@ -585,13 +586,13 @@ const fn privacy_test_bytes(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
 fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
-    let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
+    let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
     let parameter_id = PrivacyParameterIdV1::new(privacy_test_bytes(1));
     let parameter_digest = PrivacyParameterDigestV1::new(privacy_test_bytes(2));
     let verifier_digest = PrivacyVerifierDigestV1::new(privacy_test_bytes(3));
     let statement_schema_digest = PrivacyStatementSchemaDigestV1::new(privacy_test_bytes(4));
     let engine_manifest_digest = PrivacyEngineManifestDigestV1::new(privacy_test_bytes(5));
-    let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
+    let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
         IrohaJindoPolynomialCommitmentStatementV1 {
             context: PrivacyStatementContextV1 {
                 network_id: test_network_id(0x30),
@@ -623,6 +624,8 @@ fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
         },
     );
     SubmitPrivacyProofV1::new(PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id,
         proof_system_id: PrivacyProofSystemIdV1::JindoPolynomialCommitment,
         engine_id: protocol_id.expected_engine(),
@@ -633,7 +636,7 @@ fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
         engine_manifest_digest,
         statement_digest: PrivacyStatementDigestV1::new([0; 32]),
         statement,
-        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(vec![
+        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(vec![
             0xA5, 0x5A, 1,
         ])),
     })
@@ -657,16 +660,16 @@ fn draft_zk_ace_privacy_payload() -> TransactionPayload {
     mutate_direct_privacy_submission(&mut payload, |submission| {
         let context = *submission.envelope.statement.context();
         let authority = privacy_test_authority();
-        submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-        submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+        submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+        submission.envelope.proof_system_id =
+            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
         submission.envelope.engine_id =
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.expected_engine();
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.expected_engine();
         submission.envelope.statement =
-            PrivacyStatementV1::ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1 {
+            PrivacyStatementV1::ZkAcePqAuthorizationV1(ZkAcePqAuthorizationStatementV1 {
                 context,
-                identity_commitment: crate::privacy::PrivacyCommitmentV1::new(privacy_test_bytes(
-                    0x71,
-                )),
+                identity_commitment: PrivacyZkAceIdentityCommitmentV1::new([0x71; 6])
+                    .expect("small fixture words are canonical"),
                 policy_id: PrivacyPolicyIdV1::new(privacy_test_bytes(0x72)),
                 policy_digest: PrivacyPolicyDigestV1::new(privacy_test_bytes(0x73)),
                 source: authority.clone(),
@@ -675,11 +678,12 @@ fn draft_zk_ace_privacy_payload() -> TransactionPayload {
                 public_balance_scope: crate::asset::AssetBalanceScope::Global,
                 amount: 7,
                 authorization_epoch: 1,
-                replay_nullifier: PrivacyNullifierV1::new(privacy_test_bytes(0x74)),
+                replay_nullifier: PrivacyZkAceReplayNullifierV1::new([0x74; 6])
+                    .expect("small fixture words are canonical"),
             });
         submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
         submission.envelope.proof =
-            PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(vec![0xA5, 0x5A]));
+            PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(vec![0xA5, 0x5A]));
     });
     payload
 }
@@ -687,13 +691,13 @@ fn draft_vega_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     mutate_direct_privacy_submission(&mut payload, |submission| {
         let context = *submission.envelope.statement.context();
-        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
         submission.envelope.protocol_id = protocol_id;
         submission.envelope.proof_system_id =
             PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
         submission.envelope.engine_id = protocol_id.expected_engine();
         submission.envelope.statement =
-            PrivacyStatementV1::VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1 {
+            PrivacyStatementV1::VegaExistingCredentialZkV1(VegaExistingCredentialStatementV1 {
                 context,
                 issuer_id: PrivacyIssuerIdV1::new(privacy_test_bytes(0x81)),
                 issuer_record_epoch: 1,
@@ -726,7 +730,7 @@ fn draft_vega_privacy_payload() -> TransactionPayload {
             });
         submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
         submission.envelope.proof =
-            PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(vec![0xA5, 0x5A]));
+            PrivacyProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(vec![0xA5, 0x5A]));
     });
     payload
 }
@@ -736,7 +740,8 @@ fn draft_ivm_private_note_privacy_payload() -> TransactionPayload {
         let context = *submission.envelope.statement.context();
         let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         submission.envelope.protocol_id = protocol_id;
-        submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+        submission.envelope.proof_system_id =
+            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
         submission.envelope.engine_id = protocol_id.expected_engine();
         let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
             context,
@@ -1250,12 +1255,13 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
         .expect("derive ZK-ACE draft intent");
     let mut changed_nullifier = payload.clone();
     mutate_direct_privacy_submission(&mut changed_nullifier, |submission| {
-        let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+        let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) =
             &mut submission.envelope.statement
         else {
             panic!("ZK-ACE fixture statement");
         };
-        statement.replay_nullifier = PrivacyNullifierV1::new(privacy_test_bytes(0x75));
+        statement.replay_nullifier = PrivacyZkAceReplayNullifierV1::new([0x75; 6])
+            .expect("small fixture words are canonical");
     });
     assert_eq!(
         changed_nullifier
@@ -1265,7 +1271,7 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
     );
     let mut changed_amount = payload.clone();
     mutate_direct_privacy_submission(&mut changed_amount, |submission| {
-        let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+        let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) =
             &mut submission.envelope.statement
         else {
             panic!("ZK-ACE fixture statement");
@@ -1280,7 +1286,7 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
     );
     let mut changed_scope = payload.clone();
     mutate_direct_privacy_submission(&mut changed_scope, |submission| {
-        let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+        let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) =
             &mut submission.envelope.statement
         else {
             panic!("ZK-ACE fixture statement");
@@ -1327,7 +1333,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
     );
     let mut changed_hdev = payload.clone();
     mutate_direct_privacy_submission(&mut changed_hdev, |submission| {
-        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+        let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) =
             &mut submission.envelope.statement
         else {
             panic!("Vega fixture statement");
@@ -1355,7 +1361,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
     for mutate in independent_mutations {
         let mut changed = payload.clone();
         mutate_direct_privacy_submission(&mut changed, |submission| {
-            let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+            let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) =
                 &mut submission.envelope.statement
             else {
                 panic!("Vega fixture statement");
@@ -1371,7 +1377,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
     }
     let mut finalized = payload;
     mutate_direct_privacy_submission(&mut finalized, |submission| {
-        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+        let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) =
             &mut submission.envelope.statement
         else {
             panic!("Vega fixture statement");
@@ -1588,17 +1594,18 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
         };
     }
     assert_submission_bound!("protocol tag", |submission: &mut SubmitPrivacyProofV1| {
-        submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
     });
     assert_submission_bound!(
         "proof-system tag",
         |submission: &mut SubmitPrivacyProofV1| {
-            submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+            submission.envelope.proof_system_id =
+                PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
         }
     );
     assert_submission_bound!("engine tag", |submission: &mut SubmitPrivacyProofV1| {
         submission.envelope.engine_id =
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.expected_engine();
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.expected_engine();
     });
     assert_submission_bound!(
         "envelope parameter id",
@@ -1638,7 +1645,7 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
         "proof variant tag",
         |submission: &mut SubmitPrivacyProofV1| {
             submission.envelope.proof =
-                PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(vec![0xA5]));
+                PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(vec![0xA5]));
         }
     );
     assert_submission_bound!(
@@ -1696,7 +1703,7 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
     assert_submission_bound!(
         "statement polynomial commitment",
         |submission: &mut SubmitPrivacyProofV1| {
-            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
+            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
                 &mut submission.envelope.statement
             else {
                 unreachable!()
@@ -1707,7 +1714,7 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
     assert_submission_bound!(
         "statement query point",
         |submission: &mut SubmitPrivacyProofV1| {
-            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
+            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
                 &mut submission.envelope.statement
             else {
                 unreachable!()
@@ -1718,7 +1725,7 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
     assert_submission_bound!(
         "statement claimed evaluation",
         |submission: &mut SubmitPrivacyProofV1| {
-            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
+            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
                 &mut submission.envelope.statement
             else {
                 unreachable!()

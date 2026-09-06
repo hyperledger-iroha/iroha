@@ -21,7 +21,7 @@ fn decision_retirement_releases_queued_leader_wire_runtime_owner() {
         runtime.leader_wire_runtime_receipts.get(&ordinal),
         Some(&fixture.receipt)
     );
-    let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"leader-wire Decision state root"),
         Hash::new(b"leader-wire Decision event root"),
         Hash::new(b"leader-wire Decision reject root"),
@@ -425,6 +425,176 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
         )),
         Ok(super::super::FairV2IngressPushDisposition::Coalesced)
     ));
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn ordinary_step_skips_future_prepare_qc_to_install_ahead_tc() {
+    let directory = TempDir::new().expect("temporary ahead-TC runtime directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let blocked_prepare = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC3,
+        wire::GlobalPhase::Prepare,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(blocked_prepare),
+        ))
+        .expect("enqueue the future PrepareQC FIFO head");
+    let now = Instant::now();
+    runtime.arm_live_clocks(now).expect("arm ahead-TC runtime");
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let retained = runtime
+        .take_last_scheduler_ownership()
+        .expect("future PrepareQC retry retains scheduler ownership");
+    assert_eq!(
+        retained.selected,
+        RuntimeSelectedOwnerKind::FifoRetryRetained
+    );
+    assert_eq!(retained.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    assert_eq!(runtime.round_tag().view(), 0);
+    assert_eq!(runtime.queued_commands(), 1);
+
+    let ahead_timeout = signed_runtime_timeout_certificate_for_view(&context, &keys, 1);
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(ahead_timeout.clone()),
+        ))
+        .expect("enqueue a TC which installs the blocked PrepareQC view");
+    runtime.schedule.fifo_owed = true;
+    runtime.ingress.next_class = CommandClass::Progress;
+
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now)
+        .expect("ordinary Progress service selects the ahead TC")
+    else {
+        panic!("ahead TC unexpectedly idled")
+    };
+    assert!(matches!(
+        effects.as_slice(),
+        [AdapterEffect::EnterView {
+            tag,
+            certificate,
+            ..
+        }] if tag.view() == 2 && certificate == &ahead_timeout
+    ));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("ahead TC retains scheduler ownership");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgress
+    );
+    assert!(scheduler.view_blocked_progress_authorization.is_some());
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+        panic!("ahead TC owns one exact authenticated candidate")
+    };
+    assert_eq!(
+        candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::OrdinaryViewProgress
+    );
+    assert_eq!(scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("consume the ahead TC EnterView ownership");
+    assert_eq!(runtime.round_tag().view(), 2);
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc() {
+    let directory = TempDir::new().expect("temporary higher-CommitQC runtime directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let blocked_prepare = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC4,
+        wire::GlobalPhase::Prepare,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(blocked_prepare),
+        ))
+        .expect("enqueue the future PrepareQC FIFO head");
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm higher-CommitQC runtime");
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let retained = runtime
+        .take_last_scheduler_ownership()
+        .expect("future PrepareQC retry retains scheduler ownership");
+    assert_eq!(
+        retained.selected,
+        RuntimeSelectedOwnerKind::FifoRetryRetained
+    );
+    assert_eq!(retained.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+
+    let decision = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC4,
+        wire::GlobalPhase::Commit,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        ))
+        .expect("enqueue the higher-view terminal CommitQC");
+    runtime.schedule.fifo_owed = true;
+    runtime.ingress.next_class = CommandClass::Progress;
+
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now)
+        .expect("ordinary Progress service selects the terminal CommitQC")
+    else {
+        panic!("higher-view CommitQC unexpectedly idled")
+    };
+    assert!(matches!(
+        effects.as_slice(),
+        [AdapterEffect::FetchBody {
+            certificate: Some(certificate),
+            ..
+        }] if certificate == &decision
+    ));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("terminal CommitQC retains scheduler ownership");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgress
+    );
+    assert!(scheduler.view_blocked_progress_authorization.is_some());
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+        panic!("terminal CommitQC owns one exact authenticated candidate")
+    };
+    assert_eq!(
+        candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::OrdinaryViewProgress
+    );
+    assert_eq!(scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("consume the terminal CommitQC fetch ownership");
+    assert_eq!(runtime.queued_commands(), 1);
     assert!(!runtime.fail_closed);
 }
 
@@ -1314,7 +1484,7 @@ fn decision_commitment_mismatch_fails_closed_before_retirement() {
         HashOf::new(&manifest),
     );
     let validated = ValidatedBodyReceipt::for_test(durable.clone());
-    let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"decision mismatch parent state"),
         Hash::new(b"decision mismatch post state"),
         Hash::new(b"decision mismatch ordinary writes"),
@@ -1498,7 +1668,7 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             runtime.can_admit_network_message(&signed_vote),
             "the retained fair-ingress {phase:?} vote becomes drainable after validation"
         );
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting early vote parent state"),
             Hash::new(b"conflicting early vote post state"),
             Hash::new(b"conflicting early vote ordinary writes"),
@@ -1580,7 +1750,8 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
     let original = signed_runtime_proposal(&context, &keys, 1);
     let second = signed_runtime_proposal(&context, &keys, 2);
     let third = signed_runtime_proposal(&context, &keys, 3);
-    let authenticated_peer = super::super::authenticated_peer_for_test();
+    let transport_key = KeyPair::random();
+    let authenticated_peer = PeerId::new(transport_key.public_key().clone());
     let enqueue_network = |runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
                            message: wire::ConsensusMessageV2| {
         let ownership = fair_runtime_ownership(
@@ -1599,12 +1770,17 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         );
         runtime.can_admit_network_message_with_ingress_ownership(message, &ownership)
     };
-    let transport = match &original.payload {
-        wire::ConsensusMessageV2Payload::Proposal(proposal) => wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadManifest(proposal.manifest.clone()),
-        ),
-        _ => unreachable!("fixture is a proposal"),
-    };
+    let transport = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+        wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"runtime retransmission orphan chunk",
+            )),
+            index: 0,
+            bytes: Vec::new(),
+            sender: 0,
+            signature: vec![1],
+        },
+    ));
     let owner_tag = enqueue_network(&mut runtime, original.clone())
         .expect("first authenticated proposal owns one normal slot");
     assert_eq!(runtime.queued_commands(), 1);

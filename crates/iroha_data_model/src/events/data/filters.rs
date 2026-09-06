@@ -168,12 +168,15 @@ mod model {
     }
     #[cfg(feature = "governance")]
     /// An event filter for [`super::governance::GovernanceEvent`] values.
+    ///
+    /// Scope selectors are intersected. Because proposal and referendum event
+    /// families are disjoint, setting both selectors matches no events.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct GovernanceEventFilter {
-        /// If specified, matches only events for this proposal id (`Proposal*` variants)
+        /// If specified, matches only proposal-family events that carry this proposal id.
         pub(super) proposal_id: Option<[u8; 32]>,
-        /// If specified, matches only events for this referendum id (`LockUpdated` variant)
+        /// If specified, matches only referendum-family events that carry this referendum id.
         pub(super) referendum_id: Option<String>,
         /// Matches only events from this set
         pub(super) event_set: super::governance::GovernanceEventSet,
@@ -192,6 +195,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct DomainEventFilter {
         /// If specified matches only events originating from this domain
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::DomainId>,
         /// Matches only event from this set
         pub(super) event_set: DomainEventSet,
@@ -201,6 +205,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AccountEventFilter {
         /// If specified matches only events originating from this account
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::AccountId>,
         /// Matches only event from this set
         pub(super) event_set: AccountEventSet,
@@ -210,12 +215,16 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetEventFilter {
         /// If specified matches only events originating from this asset
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::AssetId>,
         /// If specified matches only events for assets belonging to this asset definition
+        #[getset(get = "pub")]
         pub(super) asset_definition_matcher: Option<super::AssetDefinitionId>,
         /// If specified matches only transfer events debiting this account.
+        #[getset(get = "pub")]
         pub(super) transfer_source_account_matcher: Option<super::AccountId>,
         /// If specified matches only transfer events crediting this account.
+        #[getset(get = "pub")]
         pub(super) transfer_destination_account_matcher: Option<super::AccountId>,
         /// Matches only event from this set
         pub(super) event_set: AssetEventSet,
@@ -225,6 +234,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionEventFilter {
         /// If specified matches only events originating from this asset definition
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::AssetDefinitionId>,
         /// Matches only event from this set
         pub(super) event_set: AssetDefinitionEventSet,
@@ -234,6 +244,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct NftEventFilter {
         /// If specified matches only events originating from this NFT
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<NftId>,
         /// Matches only event from this set
         pub(super) event_set: NftEventSet,
@@ -243,6 +254,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct RwaEventFilter {
         /// If specified matches only events originating from this RWA lot.
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<RwaId>,
         /// Matches only events from this set.
         pub(super) event_set: RwaEventSet,
@@ -252,6 +264,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TriggerEventFilter {
         /// If specified matches only events originating from this trigger
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::TriggerId>,
         /// Matches only event from this set
         pub(super) event_set: TriggerEventSet,
@@ -1423,13 +1436,17 @@ impl GovernanceEventFilter {
         self.event_set = set;
         self
     }
-    /// Filter by proposal id (applies to Proposal* variants only).
+    /// Restrict the filter to proposal-family events carrying `id`.
+    ///
+    /// Events without a proposal id, including referendum-family events, do not match.
     #[must_use]
     pub fn for_proposal(mut self, id: [u8; 32]) -> Self {
         self.proposal_id = Some(id);
         self
     }
-    /// Filter by referendum id (applies to `LockUpdated` only).
+    /// Restrict the filter to referendum-family events carrying `rid`.
+    ///
+    /// Events without a referendum id, including proposal-family events, do not match.
     #[must_use]
     pub fn for_referendum(mut self, rid: String) -> Self {
         self.referendum_id = Some(rid);
@@ -1440,6 +1457,74 @@ impl GovernanceEventFilter {
 impl Default for GovernanceEventFilter {
     fn default() -> Self {
         Self::new()
+    }
+}
+impl DataEventFilter {
+    /// Replace every exact account selector that refers to `old` with `new`.
+    ///
+    /// Account controller changes replace the canonical [`AccountId`] while
+    /// preserving the logical account. Trigger filters are durable state, so
+    /// leaving an old selector behind would silently disable the trigger after
+    /// a legitimate controller migration.
+    pub fn replace_account_id(&mut self, old: &AccountId, new: &AccountId) -> bool {
+        if old == new {
+            return false;
+        }
+        let mut updated = false;
+        let replace_selector = |selector: &mut Option<AccountId>| {
+            if selector.as_ref() == Some(old) {
+                *selector = Some(new.clone());
+                true
+            } else {
+                false
+            }
+        };
+        match self {
+            Self::Account(filter) => {
+                updated |= replace_selector(&mut filter.id_matcher);
+            }
+            Self::Asset(filter) => {
+                if let Some(asset_id) = filter.id_matcher.as_ref()
+                    && asset_id.account() == old
+                {
+                    filter.id_matcher = Some(crate::asset::AssetId::with_scope(
+                        asset_id.definition().clone(),
+                        new.clone(),
+                        *asset_id.scope(),
+                    ));
+                    updated = true;
+                }
+                updated |= replace_selector(&mut filter.transfer_source_account_matcher);
+                updated |= replace_selector(&mut filter.transfer_destination_account_matcher);
+            }
+            Self::Escrow(filter) => {
+                updated |= replace_selector(&mut filter.seller_matcher);
+                updated |= replace_selector(&mut filter.buyer_matcher);
+            }
+            Self::Any
+            | Self::Peer(_)
+            | Self::Domain(_)
+            | Self::AssetDefinition(_)
+            | Self::Nft(_)
+            | Self::Rwa(_)
+            | Self::Trigger(_)
+            | Self::Role(_)
+            | Self::Configuration(_)
+            | Self::Executor(_)
+            | Self::Proof(_)
+            | Self::VerifyingKey(_)
+            | Self::RuntimeUpgrade(_)
+            | Self::Soradns(_)
+            | Self::Sorafs(_)
+            | Self::Musubi(_)
+            | Self::SpaceDirectory(_)
+            | Self::Oracle(_)
+            | Self::Social(_)
+            | Self::Bridge(_) => {}
+            #[cfg(feature = "governance")]
+            Self::Governance(_) => {}
+        }
+        updated
     }
 }
 #[cfg(feature = "transparent_api")]
@@ -1547,53 +1632,41 @@ fn governance_matches(
     if !filter.event_set.matches(event) {
         return false;
     }
-    let proposal_matches =
-        |candidate: &[u8; 32]| filter.proposal_id.as_ref().is_none_or(|id| candidate == id);
-    let referendum_matches = |candidate: &str| {
-        filter
-            .referendum_id
-            .as_ref()
-            .is_none_or(|rid| candidate == rid)
+    let proposal_matches = |candidate: &[u8; 32]| {
+        filter.referendum_id.is_none()
+            && filter.proposal_id.as_ref().is_none_or(|id| candidate == id)
     };
+    let referendum_matches = |candidate: &str| {
+        filter.proposal_id.is_none()
+            && filter
+                .referendum_id
+                .as_ref()
+                .is_none_or(|rid| candidate == rid)
+    };
+    let unscoped_matches = filter.proposal_id.is_none() && filter.referendum_id.is_none();
     match event {
         GovernanceEvent::ProposalSubmitted(p) => proposal_matches(&p.id),
+        GovernanceEvent::ProposalRejected(p) => proposal_matches(&p.id),
         GovernanceEvent::ProposalEnacted(p) => proposal_matches(&p.id),
         GovernanceEvent::LockCreated(lock) => referendum_matches(&lock.referendum_id),
         GovernanceEvent::LockExtended(lock) => referendum_matches(&lock.referendum_id),
-        GovernanceEvent::ProposalApproved(_)
-        | GovernanceEvent::ProposalRejected(_)
-        | GovernanceEvent::BallotAccepted(_)
-        | GovernanceEvent::BallotRejected(_)
-        | GovernanceEvent::ReferendumOpened(_)
-        | GovernanceEvent::ReferendumClosed(_)
-        | GovernanceEvent::LockUnlocked(_)
-        | GovernanceEvent::CitizenRegistered(_)
+        GovernanceEvent::BallotAccepted(ballot) => referendum_matches(&ballot.referendum_id),
+        GovernanceEvent::BallotRejected(ballot) => referendum_matches(&ballot.referendum_id),
+        GovernanceEvent::ReferendumOpened(referendum) => referendum_matches(&referendum.id),
+        GovernanceEvent::ReferendumClosed(referendum) => referendum_matches(&referendum.id),
+        GovernanceEvent::LockUnlocked(lock) => referendum_matches(&lock.referendum_id),
+        GovernanceEvent::LockSlashed(lock) => referendum_matches(&lock.referendum_id),
+        GovernanceEvent::LockRestituted(lock) => referendum_matches(&lock.referendum_id),
+        GovernanceEvent::ReferendumDecided(decision) => referendum_matches(&decision.referendum_id),
+        GovernanceEvent::CitizenRegistered(_)
         | GovernanceEvent::CitizenRevoked(_)
-        | GovernanceEvent::CitizenServiceRecorded(_)
-        | GovernanceEvent::CouncilPersisted(_)
-        | GovernanceEvent::ParliamentSelected(_)
-        | GovernanceEvent::ParliamentBodyTransitioned(_)
-        | GovernanceEvent::ParliamentBallotTransitioned(_)
-        | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
-        | GovernanceEvent::ParliamentConcentrationWarning(_) => true,
-        GovernanceEvent::ParliamentAttemptTransitioned(ev) => {
-            proposal_matches(ev.proposal_content_id.as_bytes())
-        }
+        | GovernanceEvent::ThresholdKeyLifecycleApplied(_) => unscoped_matches,
         GovernanceEvent::ParliamentAttemptCreated(ev) => {
             proposal_matches(ev.proposal_content_id.as_bytes())
         }
         GovernanceEvent::ParliamentLifecycleTransitionApplied(ev) => {
             proposal_matches(ev.proposal_content_id.as_bytes())
         }
-        GovernanceEvent::ParliamentAggregateFinalized(ev) => {
-            proposal_matches(ev.proposal_content_id.as_bytes())
-        }
-        GovernanceEvent::ParliamentCertificateIssued(ev) => {
-            proposal_matches(ev.proposal_content_id.as_bytes())
-        }
-        GovernanceEvent::ParliamentApprovalRecorded(ev) => proposal_matches(&ev.proposal_id),
-        GovernanceEvent::LockSlashed(ev) => referendum_matches(&ev.referendum_id),
-        GovernanceEvent::LockRestituted(ev) => referendum_matches(&ev.referendum_id),
     }
 }
 pub mod prelude {
@@ -1623,6 +1696,108 @@ mod tests {
                 .0,
         )
     }
+
+    #[test]
+    fn data_event_filter_rekeys_every_exact_account_selector() {
+        let old = checked_random_account_id();
+        let new = checked_random_account_id();
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("rekey_filter", "universal").expect("valid domain id"),
+            "asset".parse().expect("valid asset name"),
+        );
+
+        let mut account =
+            DataEventFilter::Account(AccountEventFilter::new().for_account(old.clone()));
+        assert!(account.replace_account_id(&old, &new));
+        let DataEventFilter::Account(account) = account else {
+            unreachable!("fixture remains an account filter")
+        };
+        assert_eq!(account.id_matcher, Some(new.clone()));
+
+        let mut asset = DataEventFilter::Asset(
+            AssetEventFilter::new()
+                .for_asset(AssetId::new(definition, old.clone()))
+                .for_transfer_source_account(old.clone())
+                .for_transfer_destination_account(old.clone()),
+        );
+        assert!(asset.replace_account_id(&old, &new));
+        let DataEventFilter::Asset(asset) = asset else {
+            unreachable!("fixture remains an asset filter")
+        };
+        assert_eq!(asset.id_matcher.as_ref().map(AssetId::account), Some(&new));
+        assert_eq!(asset.transfer_source_account_matcher, Some(new.clone()));
+        assert_eq!(
+            asset.transfer_destination_account_matcher,
+            Some(new.clone())
+        );
+
+        let mut escrow = DataEventFilter::Escrow(
+            EscrowEventFilter::new()
+                .for_seller(old.clone())
+                .for_buyer(old.clone()),
+        );
+        assert!(escrow.replace_account_id(&old, &new));
+        let DataEventFilter::Escrow(escrow) = escrow else {
+            unreachable!("fixture remains an escrow filter")
+        };
+        assert_eq!(escrow.seller_matcher, Some(new.clone()));
+        assert_eq!(escrow.buyer_matcher, Some(new));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_scopes_match_only_their_id_bearing_event_family() {
+        use crate::events::data::governance::{
+            GovernanceCitizenRegistered, GovernanceEvent, GovernanceProposalRejected,
+            GovernanceReferendumOpened,
+        };
+
+        let proposal_id = [0x11; 32];
+        let other_proposal_id = [0x12; 32];
+        let referendum_id = "referendum-11".to_owned();
+        let other_referendum_id = "referendum-12".to_owned();
+        let matching_proposal =
+            GovernanceEvent::ProposalRejected(GovernanceProposalRejected { id: proposal_id });
+        let other_proposal = GovernanceEvent::ProposalRejected(GovernanceProposalRejected {
+            id: other_proposal_id,
+        });
+        let matching_referendum = GovernanceEvent::ReferendumOpened(GovernanceReferendumOpened {
+            id: referendum_id.clone(),
+            h_start: 10,
+            h_end: 20,
+        });
+        let other_referendum = GovernanceEvent::ReferendumOpened(GovernanceReferendumOpened {
+            id: other_referendum_id,
+            h_start: 10,
+            h_end: 20,
+        });
+        let unscoped = GovernanceEvent::CitizenRegistered(GovernanceCitizenRegistered {
+            owner: checked_random_account_id(),
+            amount: Quantity::from(1_u32),
+        });
+
+        let proposal_filter = GovernanceEventFilter::new().for_proposal(proposal_id);
+        assert!(governance_matches(&proposal_filter, &matching_proposal));
+        assert!(!governance_matches(&proposal_filter, &other_proposal));
+        assert!(!governance_matches(&proposal_filter, &matching_referendum));
+        assert!(!governance_matches(&proposal_filter, &unscoped));
+
+        let referendum_filter = GovernanceEventFilter::new().for_referendum(referendum_id.clone());
+        assert!(governance_matches(&referendum_filter, &matching_referendum));
+        assert!(!governance_matches(&referendum_filter, &other_referendum));
+        assert!(!governance_matches(&referendum_filter, &matching_proposal));
+        assert!(!governance_matches(&referendum_filter, &unscoped));
+
+        let disjoint_filter = GovernanceEventFilter::new()
+            .for_proposal(proposal_id)
+            .for_referendum(referendum_id);
+        assert!(!governance_matches(&disjoint_filter, &matching_proposal));
+        assert!(!governance_matches(&disjoint_filter, &matching_referendum));
+        assert!(!governance_matches(&disjoint_filter, &unscoped));
+
+        assert!(governance_matches(&GovernanceEventFilter::new(), &unscoped));
+    }
+
     #[test]
     #[cfg(feature = "transparent_api")]
     fn entity_scope() {

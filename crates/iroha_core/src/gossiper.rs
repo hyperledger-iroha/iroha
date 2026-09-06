@@ -6,8 +6,8 @@ use crate::{
         resolve_routing_decision, resolve_routing_plan_against_catalogs,
     },
     state::{
-        PendingQueuePlanAdmissionDisposition, State, StatelessValidationContext,
-        TransactionsReadOnly,
+        PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome, State,
+        StatelessValidationContext, TransactionsReadOnly,
     },
     tx::{
         AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
@@ -124,7 +124,8 @@ fn validate_queue_plan_gossip_certificate(
     if !matches!(
         disposition,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
-            | PendingQueuePlanAdmissionDisposition::Exact
+            | PendingQueuePlanAdmissionDisposition::ExactPending
+            | PendingQueuePlanAdmissionDisposition::Applied
     ) {
         return Err(format!(
             "QueuePlan gossip certificate is not live at the local frontier: {disposition:?}"
@@ -136,21 +137,11 @@ fn validate_queue_plan_gossip_certificate(
         PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
             QueuePlanGossipCertificateDisposition::EligibleAbsent
         }
-        PendingQueuePlanAdmissionDisposition::Exact => {
-            match state
-                .queue_plan_pending_binding_for_entrypoint(binding.entrypoint_hash.clone())?
-            {
-                Some(canonical_binding) if canonical_binding == binding => {
-                    QueuePlanGossipCertificateDisposition::ExactPending
-                }
-                Some(_) => {
-                    return Err(
-                        "QueuePlan gossip certificate differs from the full canonical pending binding"
-                            .to_owned(),
-                    );
-                }
-                None => QueuePlanGossipCertificateDisposition::Applied,
-            }
+        PendingQueuePlanAdmissionDisposition::ExactPending => {
+            QueuePlanGossipCertificateDisposition::ExactPending
+        }
+        PendingQueuePlanAdmissionDisposition::Applied => {
+            QueuePlanGossipCertificateDisposition::Applied
         }
         PendingQueuePlanAdmissionDisposition::Future
         | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
@@ -159,6 +150,32 @@ fn validate_queue_plan_gossip_certificate(
         }
     };
     Ok((binding, disposition))
+}
+fn persist_queue_plan_gossip_certificate(
+    state: &State,
+    certificate: &[u8],
+    expected_binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+) -> Result<bool, String> {
+    let outcome = state
+        .persist_classified_queue_plan_admission(certificate)
+        .map_err(|error| format!("QueuePlan gossip persistence failed: {error}"))?;
+    let (admission, enqueue) = match outcome {
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable { admission, .. } => (admission, true),
+        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => (admission, false),
+        PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+            admission,
+            disposition,
+        } => {
+            return Err(format!(
+                "QueuePlan gossip became non-live before persistence: {disposition:?}; binding={}",
+                admission.binding_hash
+            ));
+        }
+    };
+    if admission.certificate.binding != *expected_binding {
+        return Err("QueuePlan gossip binding changed during durable persistence".to_owned());
+    }
+    Ok(enqueue)
 }
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
@@ -1863,7 +1880,7 @@ impl TransactionGossiper {
                     continue;
                 };
                 if prepared.single_ed25519_key.is_some()
-                    && cache.get_ok(&prepared.signed_hash, cache_now_ms)
+                    && cache.get_ok(&prepared.stateless_cache_key, cache_now_ms)
                 {
                     candidate.ed25519_prechecked = true;
                 }
@@ -2122,12 +2139,16 @@ impl TransactionGossiper {
                         let Some(certificate) = candidate.queue_plan_certificate.as_deref() else {
                             unreachable!("validated QueuePlan gossip retains its certificate")
                         };
-                        if let Err(error) = state
-                            .kura()
-                            .persist_pending_queue_plan_admission_certificate(certificate)
-                        {
-                            iroha_logger::error!(%entrypoint_hash, %error, "failed to persist authenticated QueuePlan gossip certificate");
-                            continue;
+                        match persist_queue_plan_gossip_certificate(state, certificate, &binding) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                iroha_logger::debug!(%entrypoint_hash, "dropping already-applied QueuePlan gossip entry");
+                                continue;
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(%entrypoint_hash, %error, "failed to persist authenticated QueuePlan gossip certificate");
+                                continue;
+                            }
                         }
                         self.queue
                             .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
@@ -2686,16 +2707,20 @@ impl TransactionGossiper {
                         let Some(certificate) = queue_plan_certificate else {
                             unreachable!("validated QueuePlan gossip retains its certificate")
                         };
-                        if let Err(error) = state
-                            .kura()
-                            .persist_pending_queue_plan_admission_certificate(certificate)
-                        {
-                            iroha_logger::error!(
-                                %entrypoint_hash,
-                                %error,
-                                "failed to persist authenticated QueuePlan gossip certificate"
-                            );
-                            continue;
+                        match persist_queue_plan_gossip_certificate(state, certificate, &binding) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                iroha_logger::debug!(%entrypoint_hash, "dropping already-applied QueuePlan gossip entry");
+                                continue;
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    %entrypoint_hash,
+                                    %error,
+                                    "failed to persist authenticated QueuePlan gossip certificate"
+                                );
+                                continue;
+                            }
                         }
                         self.queue
                             .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
@@ -6061,6 +6086,67 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 },
             ],
             plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+        assert_eq!(gossiper.queue.queued_len(), 1);
+    }
+    #[test]
+    fn gossip_rejects_changed_signature_after_exact_valid_envelope_warms_cache() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        assert!(gossiper.state.pipeline.stateless_cache_cap > 0);
+        let (valid, _) = build_transaction("signature-cache-identity");
+        let (max_clock_drift, limits) = gossiper.state.transaction_admission_limits();
+        let accepted = AcceptedTransaction::accept(
+            valid.clone(),
+            gossiper.state.network_id_ref(),
+            max_clock_drift,
+            limits,
+            &gossiper.state.crypto(),
+        )
+        .expect("validate the complete original signed envelope");
+        gossiper
+            .state
+            .warm_stateless_validation_cache_for_torii_prechecked_batch([&accepted]);
+        let valid_key = crate::tx::StatelessValidationCacheKey::new(&valid);
+        assert!(
+            gossiper
+                .state
+                .stateless_validation_cache()
+                .lock()
+                .contains_key(&valid_key)
+        );
+        let mut invalid = valid.clone();
+        corrupt_signature(&mut invalid);
+        assert_eq!(
+            valid.hash_as_entrypoint(),
+            invalid.hash_as_entrypoint(),
+            "the signature substitution preserves logical transaction identity"
+        );
+        assert_ne!(
+            valid_key,
+            crate::tx::StatelessValidationCacheKey::new(&invalid)
+        );
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![invalid.into()],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        }));
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            0,
+            "an invalid signature cannot reuse the valid envelope's precheck"
+        );
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![valid.into()],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         }));
         assert_eq!(gossiper.queue.queued_len(), 1);

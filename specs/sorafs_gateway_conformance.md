@@ -164,8 +164,8 @@ recomputes the embedded report BLAKE3 digest and checks the Ed25519 signature
 against the declared signer key.
 
 Fixture-only CI may exercise the local hook, but promotion evidence must use
-the independently administered external software signer. A future HSM adapter
-requires fresh HSM-backed deployment evidence and promotion signatures.
+the independently administered external software signer. Iroha exposes no
+hardware-specific signer mode.
 
 ## Test Matrix
 

@@ -77,17 +77,13 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
     }
 
     private static let starkFriProductionBackends: Set<String> = [
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1"
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1"
     ]
 
     private static let productionNativeHalo2PastaBackends: Set<String> = [
         "halo2/pasta/kaigi-roster-v1",
         "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/ivm-execution-v1",
-        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -232,14 +228,10 @@ public enum VerifierBackendCatalogTag: Sendable, Equatable {
         "halo2/pasta/kaigi-roster-v1",
         "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/ivm-execution-v1",
-        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1"
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1"
     ]
 }
 

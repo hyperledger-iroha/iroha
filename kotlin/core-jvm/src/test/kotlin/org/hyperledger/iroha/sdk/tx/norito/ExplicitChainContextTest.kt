@@ -19,7 +19,6 @@ import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
-import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
@@ -189,56 +188,6 @@ class ExplicitChainContextTest {
             2,
         )
 
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "prepareRequestAuthorization",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "prepareTopUp",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "prepareRecipientPaymentRequest",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "createRecipientLineageQueryV2",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "buildRedeemRequestV4",
-            2,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "nativePrepareAuthorizationV2",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "nativePrepareTopUpV4",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "nativePrepareRecipientRequestV2",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "nativeCreateRecipientLineageQueryV2",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "nativeBuildRedeemRequestV4",
-            5,
-        )
     }
 
     @Test

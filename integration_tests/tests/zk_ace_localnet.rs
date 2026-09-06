@@ -34,7 +34,7 @@ use zk_ace_prover::{
 };
 
 const TEST_NAME: &str = "zk_ace_privacy_transfer_fails_closed_taira_localnet";
-const PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+const PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
 
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)

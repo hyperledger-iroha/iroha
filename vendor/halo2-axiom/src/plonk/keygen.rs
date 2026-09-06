@@ -258,6 +258,54 @@ impl<E: fmt::Display> fmt::Display for KeygenWithExtractorError<E> {
 
 impl<E> std::error::Error for KeygenWithExtractorError<E> where E: fmt::Debug + fmt::Display {}
 
+/// Exact column inventory for a synthesized key-generation assembly.
+///
+/// In particular, `materialized_selector_columns` accounts for the synthesized selector
+/// activation overlap when compression is enabled. This can be inspected before selector
+/// bitmaps are expanded into degree-sized field polynomials.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeygenCircuitResourceProfile {
+    /// Rows in the commitment domain.
+    pub domain_rows: usize,
+    /// Advice columns configured by the circuit.
+    pub advice_columns: usize,
+    /// Instance columns configured by the circuit.
+    pub instance_columns: usize,
+    /// Fixed columns configured before selector materialization.
+    pub configured_fixed_columns: usize,
+    /// Original virtual selectors retained as bitmaps in a compressed Processed key.
+    pub selector_columns: usize,
+    /// Fixed columns produced by the selected selector-materialization strategy.
+    pub materialized_selector_columns: usize,
+    /// Columns participating in the permutation argument.
+    pub permutation_columns: usize,
+    /// Whether selector compression is selected for key construction.
+    pub compress_selectors: bool,
+}
+
+fn keygen_circuit_resource_profile<F: Field>(
+    domain_rows: usize,
+    cs: &ConstraintSystem<F>,
+    assembly: &Assembly<F>,
+    compress_selectors: bool,
+) -> KeygenCircuitResourceProfile {
+    let materialized_selector_columns = if compress_selectors {
+        cs.compressed_selector_columns(&assembly.selectors)
+    } else {
+        cs.num_selectors()
+    };
+    KeygenCircuitResourceProfile {
+        domain_rows,
+        advice_columns: cs.num_advice_columns(),
+        instance_columns: cs.num_instance_columns(),
+        configured_fixed_columns: cs.num_fixed_columns(),
+        selector_columns: cs.num_selectors(),
+        materialized_selector_columns,
+        permutation_columns: cs.permutation().get_columns().len(),
+        compress_selectors,
+    }
+}
+
 fn synthesize_keygen_assembly<'params, C, P, ConcreteCircuit>(
     params: &P,
     supplied_domain: Option<&EvaluationDomain<C::Scalar>>,
@@ -449,10 +497,45 @@ where
     ConcreteCircuit: Circuit<C::Scalar>,
     Extractor: FnOnce(&ConcreteCircuit) -> Result<Extracted, ExtractError>,
 {
+    keygen_vk_consuming_with_profile(params, circuit, false, |circuit, _profile| {
+        extractor(circuit)
+    })
+}
+
+/// Generate a verifier key from an owned circuit with selectable selector compression.
+///
+/// `extractor` runs after successful synthesis and receives the exact synthesized column profile.
+/// If it succeeds, `circuit` is dropped before permutation polynomials, selector field
+/// polynomials, and commitments are constructed. This lets callers enforce serialized-resource
+/// limits using actual selector overlap without first allocating the expensive key body.
+pub fn keygen_vk_consuming_with_profile<
+    'params,
+    C,
+    P,
+    ConcreteCircuit,
+    Extracted,
+    ExtractError,
+    Extractor,
+>(
+    params: &P,
+    circuit: ConcreteCircuit,
+    compress_selectors: bool,
+    extractor: Extractor,
+) -> Result<(VerifyingKey<C>, Extracted), KeygenWithExtractorError<ExtractError>>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+    Extractor:
+        FnOnce(&ConcreteCircuit, KeygenCircuitResourceProfile) -> Result<Extracted, ExtractError>,
+{
     let (cs, assembly, generated_domain) =
         synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
             .map_err(KeygenWithExtractorError::Keygen)?;
-    let extracted = extractor(&circuit).map_err(KeygenWithExtractorError::Extractor)?;
+    let profile =
+        keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, compress_selectors);
+    let extracted = extractor(&circuit, profile).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
     // The synthesized assembly is the only live owner needed below. On
     // Darwin, promptly purge pages freed with the much larger virtual circuit
@@ -460,7 +543,8 @@ where
     release_allocator_slack();
 
     let domain = generated_domain.expect("verifier-key generation constructs a domain");
-    let vk = keygen_vk_from_assembly(params, domain, cs, assembly, false);
+    let vk = keygen_vk_from_assembly(params, domain, cs, assembly, compress_selectors);
+    release_allocator_slack();
     Ok((vk, extracted))
 }
 
@@ -522,6 +606,7 @@ where
         assembly,
         compress_selectors,
     );
+    release_allocator_slack();
     Ok((pk, extracted))
 }
 
@@ -538,6 +623,82 @@ where
     ConcreteCircuit: Circuit<C::Scalar>,
 {
     keygen_pk_impl(params, None, circuit, compress_selectors)
+}
+
+/// Generate a `ProvingKey` from an owned circuit and release the circuit before key assembly.
+///
+/// This is the memory-bounded counterpart to [`keygen_pk2`]. It retains the latter's single
+/// synthesis pass, but drops the generation-only circuit graph before fixed/permutation
+/// polynomials and commitments are constructed. The returned proving key embeds the generated
+/// verifying key exactly as `keygen_pk2` does.
+pub fn keygen_pk2_consuming<'params, C, P, ConcreteCircuit>(
+    params: &P,
+    circuit: ConcreteCircuit,
+    compress_selectors: bool,
+) -> Result<ProvingKey<C>, Error>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+{
+    match keygen_pk2_consuming_with_profile(
+        params,
+        circuit,
+        compress_selectors,
+        |_circuit, _profile| Ok::<(), core::convert::Infallible>(()),
+    ) {
+        Ok((pk, ())) => Ok(pk),
+        Err(KeygenWithExtractorError::Keygen(error)) => Err(error),
+        Err(KeygenWithExtractorError::Extractor(never)) => match never {},
+    }
+}
+
+/// Generate a combined proving/verifying key from an owned circuit with an exact resource guard.
+///
+/// The callback observes the synthesized selector overlap before any selector field polynomial or
+/// proving-key polynomial is built. Returning an error aborts key assembly. On success, the owned
+/// circuit is dropped before the expensive key construction starts.
+pub fn keygen_pk2_consuming_with_profile<
+    'params,
+    C,
+    P,
+    ConcreteCircuit,
+    Extracted,
+    ExtractError,
+    Extractor,
+>(
+    params: &P,
+    circuit: ConcreteCircuit,
+    compress_selectors: bool,
+    extractor: Extractor,
+) -> Result<(ProvingKey<C>, Extracted), KeygenWithExtractorError<ExtractError>>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+    Extractor:
+        FnOnce(&ConcreteCircuit, KeygenCircuitResourceProfile) -> Result<Extracted, ExtractError>,
+{
+    let (cs, assembly, generated_domain) =
+        synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
+            .map_err(KeygenWithExtractorError::Keygen)?;
+    let profile =
+        keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, compress_selectors);
+    let extracted = extractor(&circuit, profile).map_err(KeygenWithExtractorError::Extractor)?;
+    drop(circuit);
+    release_allocator_slack();
+    let pk = keygen_pk_from_assembly(
+        params,
+        None,
+        generated_domain,
+        cs,
+        assembly,
+        compress_selectors,
+    );
+    release_allocator_slack();
+    Ok((pk, extracted))
 }
 
 /// Generate a `ProvingKey` from either a precalculated `VerifyingKey` and an instance of `Circuit`, or
@@ -694,8 +855,7 @@ where
         .map(|poly| vk.domain.lagrange_to_coeff(poly.clone()))
         .collect();
 
-    let (l0, l_last, l_active_row) =
-        create_proving_key_masks(&vk.domain, vk.cs.blinding_factors());
+    let (l0, l_last, l_active_row) = create_proving_key_masks(&vk.domain, vk.cs.blinding_factors());
 
     // Compute the optimized evaluation data structure
     let ev = Evaluator::new(&vk.cs);

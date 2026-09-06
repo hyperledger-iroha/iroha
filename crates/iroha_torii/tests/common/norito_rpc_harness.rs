@@ -58,7 +58,7 @@ pub fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
 /// Shared Norito-RPC harness used by integration tests to avoid ad-hoc runtimes.
 pub struct NoritoRpcHarness {
     /// Application router ready for HTTP testing.
-    pub app: axum::Router,
+    pub app: iroha_torii::TestApiRouterRuntime,
     #[allow(dead_code)]
     /// Effective configuration used to initialise the harness.
     pub cfg: ActualRoot,
@@ -99,9 +99,12 @@ impl NoritoRpcHarness {
             OnlinePeersProvider::new(peers_rx),
             None,
             iroha_torii::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid Torii Norito-RPC fixture");
         Self {
-            app: torii.api_router_for_tests(),
+            app: torii
+                .api_router_for_tests()
+                .expect("test Torii router initializes"),
             cfg,
             network_id,
         }
@@ -114,6 +117,10 @@ impl NoritoRpcHarness {
         let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
         configure(&mut cfg);
         Self::with_config(cfg)
+    }
+    /// Signal shutdown and join every worker retained by the test router.
+    pub async fn shutdown(self) {
+        self.app.shutdown().await;
     }
     /// Post a Norito-encoded transaction to the RPC endpoint.
     #[allow(dead_code)]

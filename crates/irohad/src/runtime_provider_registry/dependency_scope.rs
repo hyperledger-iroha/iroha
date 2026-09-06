@@ -523,11 +523,11 @@ mod tests {
         fn with_drift(mut self, drift: AttestationProviderDrift) -> Self {
             match drift {
                 AttestationProviderDrift::Handle => {
-                    self.handle = "hsm://sorafs/provider-attestation/substituted".to_owned();
+                    self.handle = "provider://sorafs/provider-attestation/substituted".to_owned();
                 }
                 AttestationProviderDrift::HandleAfterSnapshot => {
                     self.handle_after_first =
-                        Some("hsm://sorafs/provider-attestation/substituted".to_owned());
+                        Some("provider://sorafs/provider-attestation/substituted".to_owned());
                 }
                 AttestationProviderDrift::Revision => {
                     self.revision = self.revision.saturating_add(1);

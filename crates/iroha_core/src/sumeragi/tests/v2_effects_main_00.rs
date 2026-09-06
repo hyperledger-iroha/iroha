@@ -79,8 +79,8 @@ fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
         "body worker disconnected",
     );
     outcome.record(
-        PostFinalityCleanupTarget::PayloadChunks,
-        "chunk root retained",
+        PostFinalityCleanupTarget::CleanupWorker,
+        "cleanup worker unavailable",
     );
     assert_eq!(outcome.warnings().len(), 3);
     assert_eq!(
@@ -92,7 +92,7 @@ fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
         vec![
             PostFinalityCleanupTarget::SafetyWal,
             PostFinalityCleanupTarget::DurableBodies,
-            PostFinalityCleanupTarget::PayloadChunks,
+            PostFinalityCleanupTarget::CleanupWorker,
         ]
     );
     assert_eq!(outcome.warnings()[0].reason(), "WAL directory sync");
@@ -1104,6 +1104,7 @@ struct FakeServices {
     broadcast_attempts: Vec<wire::ConsensusMessageV2>,
     broadcasts: Vec<wire::ConsensusMessageV2>,
     fetch_tasks: Vec<BodyFetchTask>,
+    chunk_validation_sessions: BTreeMap<EffectWorkId, wire::ValidatedPayloadManifest>,
     cancelled_fetches: Vec<EffectWorkId>,
     completed_reconstruction_fetches: Vec<EffectWorkId>,
     chunks: Vec<EffectWorkId>,
@@ -1167,6 +1168,7 @@ impl V2EffectServices for FakeServices {
     fn finish_runtime_step_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
+        _authority: Option<super::super::serviced_candidate_store::LeaderWireRecoveryAuthority>,
     ) -> Result<(), Self::Error> {
         self.check("finish-runtime-step-reconciliation")?;
         match (self.durable_runtime_decision, decided_subject) {
@@ -1272,10 +1274,12 @@ impl V2EffectServices for FakeServices {
             return Err("body-fetch consumer rebind differs from service ownership".to_owned());
         }
         *owned = rebound;
+        self.chunk_validation_sessions.remove(&previous.id());
         Ok(())
     }
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         self.check("cancel-fetch")?;
+        self.chunk_validation_sessions.remove(&task.id());
         self.cancelled_fetches.push(task.id());
         Ok(())
     }
@@ -1284,8 +1288,34 @@ impl V2EffectServices for FakeServices {
         task: &BodyFetchTask,
     ) -> Result<(), Self::Error> {
         self.check("complete-reconstruction-fetch")?;
+        self.chunk_validation_sessions.remove(&task.id());
         self.completed_reconstruction_fetches.push(task.id());
         Ok(())
+    }
+    fn validated_payload_manifest<'a>(
+        &'a mut self,
+        context: &wire::HeightContext,
+        task: &BodyFetchTask,
+    ) -> Result<&'a wire::ValidatedPayloadManifest, Self::Error> {
+        if !self
+            .fetch_tasks
+            .iter()
+            .any(|owned| owned == task && owned.id() == task.id())
+        {
+            return Err("chunk validation has no fake service owner".to_owned());
+        }
+        if !self.chunk_validation_sessions.contains_key(&task.id()) {
+            let manifest = task
+                .manifest()
+                .cloned()
+                .ok_or_else(|| "chunk validation requires a manifest".to_owned())?;
+            let validated = wire::ValidatedPayloadManifest::new(context, manifest)
+                .map_err(|error| error.to_string())?;
+            self.chunk_validation_sessions.insert(task.id(), validated);
+        }
+        self.chunk_validation_sessions
+            .get(&task.id())
+            .ok_or_else(|| "chunk validation session disappeared".to_owned())
     }
     fn accept_authenticated_chunk(
         &mut self,
@@ -1391,8 +1421,13 @@ impl Fixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = crate::sumeragi::synthetic_network_id("v2-effect-executor-test");
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("v2-effect-executor-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1403,6 +1438,8 @@ impl Fixture {
             snapshot_bootstrap: None,
             roster: roster.clone(),
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -1533,8 +1570,14 @@ impl ProductionTransportFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("v2-production-transport-regression");
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("v2-production-transport-regression"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1545,6 +1588,8 @@ impl ProductionTransportFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"production transport nexus/amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -1589,13 +1634,14 @@ impl ProductionTransportFixture {
             DurableBodyReceipt::for_test(context.id(), round, subject, HashOf::new(&manifest));
         let validated = ValidatedBodyReceipt::for_test(durable.clone());
         let canonical_commitment = validated.execution_commitment();
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"conflicting parent state"),
-            Hash::new(b"conflicting post state"),
-            Hash::new(b"conflicting ordinary writes"),
-            1,
-            Hash::new(b"conflicting executed block wire"),
-        );
+        let conflicting_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"conflicting parent state"),
+                Hash::new(b"conflicting post state"),
+                Hash::new(b"conflicting ordinary writes"),
+                1,
+                Hash::new(b"conflicting executed block wire"),
+            );
         assert_ne!(canonical_commitment, conflicting_commitment);
         let proofs = validator_keys
             .iter()
@@ -2198,7 +2244,7 @@ fn deliberately_conflicting_payload_manifest(
     .expect("derive the structurally valid conflicting fixture manifest")
 }
 fn fixture_execution_commitment() -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"effects fixture parent state"),
         Hash::new(b"effects fixture post state"),
         Hash::new(b"effects fixture ordinary writes"),
@@ -2328,13 +2374,14 @@ fn vote_equivocation_evidence(
     let mut second = first.clone();
     second.subject.block_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"conflicting equivocation block"));
-    second.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"conflicting equivocation parent state"),
-        Hash::new(b"conflicting equivocation post state"),
-        Hash::new(b"conflicting equivocation ordinary writes"),
-        1,
-        Hash::new(b"conflicting equivocation executed block"),
-    );
+    second.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"conflicting equivocation parent state"),
+            Hash::new(b"conflicting equivocation post state"),
+            Hash::new(b"conflicting equivocation ordinary writes"),
+            1,
+            Hash::new(b"conflicting equivocation executed block"),
+        );
     second.signature = vec![0xE2];
     AdapterEquivocationEvidence::vote_for_test(first, second)
 }

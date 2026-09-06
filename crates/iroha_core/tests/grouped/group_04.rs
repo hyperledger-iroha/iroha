@@ -2,8 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../fx_routing_review.rs"]
 mod fx_routing_review;
-#[path = "../offline_role_authorization.rs"]
-mod offline_role_authorization;
 #[path = "../pin_registry.rs"]
 mod pin_registry;
 #[path = "../quarantine_lane.rs"]

@@ -17,6 +17,13 @@ public interface AndroidKeystoreBackend extends KeystoreBackend {
   @Override
   Optional<KeyPair> load(String alias) throws KeyManagementException;
 
+  /**
+   * Generates a key using the requested Android Keystore policy.
+   *
+   * <p>The system backend treats {@link KeyGenParameters#preferStrongBox()} as best effort and
+   * retries without StrongBox when Android reports that StrongBox is unavailable. {@link
+   * KeyGenParameters#requireStrongBox()} never downgrades.
+   */
   @Override
   KeyGenerationResult generate(String alias, KeyGenParameters parameters) throws KeyManagementException;
 

@@ -12,7 +12,7 @@ internal fun applicationAuth(
 ): ToriiCanonicalRequestAuth =
     ToriiCanonicalRequestAuth(
         accountId,
-        applicationKeyPair.private,
+        RequestSigner.ed25519(applicationKeyPair.private),
         1_700_000_000_123L,
         "application-post-auth",
     )

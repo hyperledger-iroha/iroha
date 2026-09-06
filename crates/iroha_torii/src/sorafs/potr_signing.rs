@@ -32,7 +32,7 @@ use thiserror::Error;
 /// Fixed, payload-free failure classes returned by a runtime signing service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrSignerServiceError {
-    /// The HSM, KMS, or remote signer is temporarily unavailable.
+    /// The configured signing provider is temporarily unavailable.
     #[error("runtime signer unavailable")]
     Unavailable,
     /// The signer refused the exact canonical payload.
@@ -567,8 +567,8 @@ pub enum PotrFinalizedAdmissionReaderConfigError {
 }
 /// Runtime-only Ed25519 signer for the gateway role of a PoTR receipt.
 ///
-/// Implementations may delegate to PKCS#11, an HSM, or a remote signing service. `signer_id` is a
-/// non-secret stable deployment identity for the signer instance, not a key handle or credential.
+/// Implementations use a qualified deployment-owned signing provider. `signer_id` is a non-secret
+/// stable deployment identity for the signer instance, not a key handle or credential.
 pub trait PotrGatewaySignerV1: Send + Sync {
     /// Stable opaque production provider handle.
     fn handle(&self) -> &str;
@@ -1391,7 +1391,7 @@ pub(crate) enum PotrReceiptRuntimeSigningError {
     /// The live admission binding regressed or conflicted with its exact floor.
     #[error("PoTR live admission policy conflicts with the retained floor")]
     AdmissionPolicyProgress(PotrAdmissionPolicyProgressError),
-    /// Admission changed or was revoked while HSM signatures were being made.
+    /// Admission changed or was revoked while provider signatures were being made.
     #[error("PoTR admission changed during receipt signing")]
     AdmissionChangedDuringSigning,
     /// The admission record did not establish council trust.
@@ -1466,8 +1466,8 @@ mod tests {
     };
     const GATEWAY_SIGNER_ID: [u8; 32] = [0xA1; 32];
     const PROVIDER_SIGNER_ID: [u8; 32] = [0xB2; 32];
-    const GATEWAY_HANDLE: &str = "hsm:potr:gateway-primary";
-    const PROVIDER_HANDLE: &str = "hsm:potr:provider-primary";
+    const GATEWAY_HANDLE: &str = "provider:potr:gateway-primary";
+    const PROVIDER_HANDLE: &str = "provider:potr:provider-primary";
     const GATEWAY_QUALIFICATION: PotrRuntimeProviderQualificationV1 =
         PotrRuntimeProviderQualificationV1::new(1, [0xA7; 32]);
     const PROVIDER_BASELINE_QUALIFICATION: PotrRuntimeProviderQualificationV1 =
@@ -2618,7 +2618,7 @@ mod tests {
     #[test]
     fn runtime_bindings_use_central_handle_grammar_and_reject_invalid_qualification() {
         PotrRuntimeProviderBindingV1::try_new(
-            "pkcs11:prod/potr.gateway-v1_slot-a",
+            "provider:prod/potr.gateway-v1_slot-a",
             GATEWAY_SIGNER_ID,
             GATEWAY_QUALIFICATION,
         )
@@ -2627,8 +2627,8 @@ mod tests {
             "https://operator:secret@potr-signer",
             "https://potr-signer/path?credential=secret",
             "https://potr-signer/path#fragment",
-            "pkcs11:prod/%70otr-signer",
-            "pkcs11:prod\\potr-signer",
+            "provider:prod/%70otr-signer",
+            "provider:prod\\potr-signer",
         ] {
             assert_eq!(
                 PotrRuntimeProviderBindingV1::try_new(
@@ -2642,7 +2642,7 @@ mod tests {
         }
         assert_eq!(
             PotrRuntimeProviderBindingV1::try_new(
-                "hsm:dummy:potr",
+                "provider:dummy:potr",
                 GATEWAY_SIGNER_ID,
                 GATEWAY_QUALIFICATION,
             )
@@ -2886,7 +2886,7 @@ mod tests {
         assert_eq!(
             provider_calls.load(Ordering::SeqCst),
             0,
-            "provider HSM must not sign after an invalid gateway result"
+            "provider signer must not sign after an invalid gateway result"
         );
     }
     #[test]

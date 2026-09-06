@@ -824,18 +824,20 @@ impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1
         let metadata_digest = self.metadata_digest;
         let source_provider_ids = self.source_provider_ids.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                Self::open_stream(
-                    endpoint,
-                    chain_id,
-                    network_id,
-                    requested_catalog,
-                    binding,
-                    metadata_digest,
-                    source_provider_ids,
-                    request,
-                )
-            })
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    Self::open_stream(
+                        endpoint,
+                        chain_id,
+                        network_id,
+                        requested_catalog,
+                        binding,
+                        metadata_digest,
+                        source_provider_ids,
+                        request,
+                    )
+                }),
+            )
             .await
             .map_err(|_| sorafs_node::ProviderIngestSourceFetchErrorV1::Unavailable)?
             .map_err(|error| match error {

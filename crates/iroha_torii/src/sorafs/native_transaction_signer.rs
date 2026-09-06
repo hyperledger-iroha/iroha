@@ -172,7 +172,7 @@ pub enum SorafsNativeTransactionSignerBindingErrorV1 {
 /// Payload-free failure while probing an external signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsNativeTransactionSignerProbeErrorV1 {
-    /// The provider or its backing HSM/KMS is temporarily unavailable.
+    /// The configured signing provider is temporarily unavailable.
     Unavailable,
     /// The provider refused or could not answer the public probe.
     Refused,
@@ -208,8 +208,9 @@ pub trait SorafsNativeTransactionSignerProviderV1: Send + Sync {
 }
 /// Runtime-only signer used by the durable SoraFS proof-outcome forwarder.
 ///
-/// Implementations may delegate to PKCS#11/HSM infrastructure. The signer is intentionally given
-/// only a fully constructed payload and no transaction queue capability, which makes an interrupted
+/// Implementations use qualified deployment-owned signing infrastructure. The signer is
+/// intentionally given only a fully constructed payload and no transaction queue capability,
+/// which makes an interrupted
 /// signing claim safe to replay. Before claiming an outbox entry, the worker checks finalized state
 /// for the exact provider-scoped `CanRecordSorafsProofOutcome` permission on
 /// [`SorafsNativeTransactionSignerProviderV1::authority`], including permissions inherited through
@@ -226,7 +227,7 @@ pub trait SoraFsProofOutcomeTransactionSigner:
 /// Payload-free proof-outcome signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsProofOutcomeSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,
@@ -254,7 +255,7 @@ pub trait SoraFsRepairTransactionSigner:
 /// Payload-free native repair transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsRepairTransactionSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,
@@ -283,7 +284,7 @@ pub trait SoraFsReserveTransactionSigner:
 /// Payload-free native reserve/rent transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsReserveTransactionSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,
@@ -311,7 +312,7 @@ pub trait SoraFsOrderbookTransactionSigner:
 /// Payload-free native orderbook transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsOrderbookTransactionSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,
@@ -877,28 +878,28 @@ mod tests {
     fn all_role_constructors_accept_exact_production_bindings() {
         let proof = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x11,
         ));
         qualify_sorafs_proof_outcome_transaction_signer_v1(proof.expected_binding(), proof.clone())
             .expect("qualify proof-outcome signer");
         let repair = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Repair,
-            "hsm://sorafs/repair/primary",
+            "provider://sorafs/repair/primary",
             0x12,
         ));
         qualify_sorafs_repair_transaction_signer_v1(repair.expected_binding(), repair.clone())
             .expect("qualify repair signer");
         let reserve = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Reserve,
-            "hsm://sorafs/reserve/primary",
+            "provider://sorafs/reserve/primary",
             0x13,
         ));
         qualify_sorafs_reserve_transaction_signer_v1(reserve.expected_binding(), reserve.clone())
             .expect("qualify reserve signer");
         let orderbook = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Orderbook,
-            "hsm://sorafs/orderbook/primary",
+            "provider://sorafs/orderbook/primary",
             0x14,
         ));
         qualify_sorafs_orderbook_transaction_signer_v1(orderbook.expected_binding(), orderbook)
@@ -908,14 +909,14 @@ mod tests {
     fn expected_bindings_enforce_handle_grammar_qualification_and_key_identity() {
         let provider = TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x21,
         );
         let authority = provider.authority();
         let public_key = provider.public_key().expect("fixture public key");
         for handle in [
-            "hsm://sorafs/proof-outcome/primary",
-            "pkcs11:prod/native_signer.v1-slot_a",
+            "provider://sorafs/proof-outcome/primary",
+            "provider:prod/native_signer.v1-slot_a",
         ] {
             SorafsNativeTransactionSignerBindingV1::try_new(
                 SorafsNativeTransactionSignerRoleV1::ProofOutcome,
@@ -929,13 +930,13 @@ mod tests {
         for handle in [
             "",
             "mock://sorafs/proof-outcome",
-            "hsm://sorafs/test/primary",
-            "hsm://sorafs/proof outcome",
+            "provider://sorafs/test/primary",
+            "provider://sorafs/proof outcome",
             "https://operator:secret@signer",
             "https://signer/path?credential=secret",
             "https://signer/path#fragment",
-            "hsm://sorafs/%70roof-outcome/primary",
-            "hsm:\\sorafs\\proof-outcome\\primary",
+            "provider://sorafs/%70roof-outcome/primary",
+            "provider:\\sorafs\\proof-outcome\\primary",
         ] {
             assert_eq!(
                 SorafsNativeTransactionSignerBindingV1::try_new(
@@ -955,7 +956,7 @@ mod tests {
             assert_eq!(
                 SorafsNativeTransactionSignerBindingV1::try_new(
                     SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-                    "hsm://sorafs/proof-outcome/primary",
+                    "provider://sorafs/proof-outcome/primary",
                     authority.clone(),
                     public_key.clone(),
                     invalid,
@@ -968,7 +969,7 @@ mod tests {
         assert_eq!(
             SorafsNativeTransactionSignerBindingV1::try_new(
                 SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-                "hsm://sorafs/proof-outcome/primary",
+                "provider://sorafs/proof-outcome/primary",
                 AccountId::new(secp.public_key().clone()),
                 secp.public_key().clone(),
                 EXPECTED_QUALIFICATION,
@@ -978,7 +979,7 @@ mod tests {
         assert_eq!(
             SorafsNativeTransactionSignerBindingV1::try_new(
                 SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-                "hsm://sorafs/proof-outcome/primary",
+                "provider://sorafs/proof-outcome/primary",
                 AccountId::new(secp.public_key().clone()),
                 public_key,
                 EXPECTED_QUALIFICATION,
@@ -990,13 +991,13 @@ mod tests {
     fn startup_rejects_each_stable_provider_substitution() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x31,
         ));
         let expected = provider.expected_binding();
         let wrong_handle = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/secondary",
+            "provider://sorafs/proof-outcome/secondary",
             0x31,
         ));
         assert!(matches!(
@@ -1005,7 +1006,7 @@ mod tests {
         ));
         let wrong_key = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x32,
         ));
         assert!(matches!(
@@ -1042,7 +1043,7 @@ mod tests {
     fn startup_rejects_invalid_or_unavailable_provider_probes() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x41,
         ));
         let binding = provider.expected_binding();
@@ -1063,7 +1064,7 @@ mod tests {
     fn startup_rejects_unavailable_key_invalid_handle_algorithm_and_probe_drift() {
         let expected_provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x45,
         ));
         let binding = expected_provider.expected_binding();
@@ -1081,8 +1082,8 @@ mod tests {
             "https://operator:secret@signer",
             "https://signer/path?credential=secret",
             "https://signer/path#fragment",
-            "hsm://sorafs/%70roof-outcome/primary",
-            "hsm:\\sorafs\\proof-outcome\\primary",
+            "provider://sorafs/%70roof-outcome/primary",
+            "provider:\\sorafs\\proof-outcome\\primary",
         ] {
             let invalid_handle = Arc::new(TestProvider::new(
                 SorafsNativeTransactionSignerRoleV1::ProofOutcome,
@@ -1098,7 +1099,7 @@ mod tests {
             .expect("derive unsupported provider fixture");
         let unsupported_algorithm = Arc::new(TestProvider::with_keypair(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             secp,
         ));
         assert!(matches!(
@@ -1110,7 +1111,7 @@ mod tests {
         ));
         let drifting = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x45,
         ));
         drifting.drift_qualification_after_probe(Ok(
@@ -1125,7 +1126,7 @@ mod tests {
     fn constructors_reject_binding_and_provider_role_confusion() {
         let proof = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/primary",
+            "provider://sorafs/proof-outcome/primary",
             0x51,
         ));
         assert!(matches!(
@@ -1149,7 +1150,7 @@ mod tests {
     fn qualified_signer_revalidates_before_and_after_signing() {
         let pre_drift = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/pre-drift",
+            "provider://sorafs/proof-outcome/pre-drift",
             0x61,
         ));
         let pre_binding = pre_drift.expected_binding();
@@ -1166,7 +1167,7 @@ mod tests {
         assert_eq!(pre_drift.sign_calls.load(Ordering::SeqCst), 0);
         let post_drift = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/post-drift",
+            "provider://sorafs/proof-outcome/post-drift",
             0x62,
         ));
         let post_binding = post_drift.expected_binding();
@@ -1186,7 +1187,7 @@ mod tests {
     fn qualified_signer_maps_probe_failure_to_qualification_changed() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/probe-failure",
+            "provider://sorafs/proof-outcome/probe-failure",
             0x71,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
@@ -1205,7 +1206,7 @@ mod tests {
     fn double_qualification_rejects_live_provider_drift() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/double-qualification-drift",
+            "provider://sorafs/proof-outcome/double-qualification-drift",
             0x72,
         ));
         let binding = provider.expected_binding();
@@ -1233,7 +1234,7 @@ mod tests {
     fn double_qualification_rejects_unavailable_live_provider() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/double-qualification-unavailable",
+            "provider://sorafs/proof-outcome/double-qualification-unavailable",
             0x73,
         ));
         let binding = provider.expected_binding();
@@ -1258,7 +1259,7 @@ mod tests {
     fn qualified_facade_keeps_immutable_infallible_identity_and_rejects_stale_public_probes() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/immutable-facade",
+            "provider://sorafs/proof-outcome/immutable-facade",
             0x81,
         ));
         let binding = provider.expected_binding();
@@ -1298,7 +1299,7 @@ mod tests {
     fn qualified_signer_rejects_unbound_input_authority_before_provider_call() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/input-authority",
+            "provider://sorafs/proof-outcome/input-authority",
             0x83,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
@@ -1318,7 +1319,7 @@ mod tests {
     fn qualified_signer_rejects_provider_substituted_payload() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/substituted-payload",
+            "provider://sorafs/proof-outcome/substituted-payload",
             0x85,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
@@ -1343,7 +1344,7 @@ mod tests {
     fn qualified_signer_rejects_provider_forged_signature() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/forged-signature",
+            "provider://sorafs/proof-outcome/forged-signature",
             0x86,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
@@ -1364,7 +1365,7 @@ mod tests {
     fn qualified_signer_accepts_exact_envelope_and_rejects_provider_sidecars() {
         let exact_provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/exact-envelope",
+            "provider://sorafs/proof-outcome/exact-envelope",
             0x88,
         ));
         let exact = qualify_sorafs_proof_outcome_transaction_signer_v1(
@@ -1379,7 +1380,7 @@ mod tests {
         assert_eq!(exact_provider.sign_calls.load(Ordering::SeqCst), 1);
         let attached_provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/proof-sidecar",
+            "provider://sorafs/proof-outcome/proof-sidecar",
             0x89,
         ));
         let attached = qualify_sorafs_proof_outcome_transaction_signer_v1(
@@ -1395,7 +1396,7 @@ mod tests {
         assert_eq!(attached_provider.sign_calls.load(Ordering::SeqCst), 1);
         let multisig_provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/empty-multisig-sidecar",
+            "provider://sorafs/proof-outcome/empty-multisig-sidecar",
             0x8A,
         ));
         let multisig = qualify_sorafs_proof_outcome_transaction_signer_v1(

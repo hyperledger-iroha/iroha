@@ -22,6 +22,8 @@ pub type DirectoryId = [u8; 32];
 /// Deterministic host bindings derived from a resolver's canonical FQDN.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::GatewayHostSet")]
 pub struct GatewayHostSet {
     /// Base32-encoded BLAKE3 label used for canonical hosts.
     pub canonical_label: String,
@@ -53,6 +55,8 @@ impl From<&GatewayHostBindings> for GatewayHostSet {
 /// Transport capabilities and endpoints exposed by a resolver.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::ResolverTransportBundle")]
 pub struct ResolverTransportBundle {
     /// HTTPS `DoH` endpoint (RFC8484).
     pub doh: Option<HttpTransportV1>,
@@ -72,6 +76,8 @@ pub struct ResolverTransportBundle {
 /// HTTP-based DNS transport metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::HttpTransportV1")]
 pub struct HttpTransportV1 {
     /// Fully-qualified HTTPS endpoint.
     pub endpoint: String,
@@ -85,6 +91,8 @@ pub struct HttpTransportV1 {
 /// TLS-based DNS transport metadata (`DoT`/`DoH3`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::TlsTransportV1")]
 pub struct TlsTransportV1 {
     /// Endpoint (e.g., `tls://resolver.sora.net:853`).
     pub endpoint: String,
@@ -96,6 +104,8 @@ pub struct TlsTransportV1 {
 /// QUIC-based DNS transport metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::QuicTransportV1")]
 pub struct QuicTransportV1 {
     /// Endpoint (e.g., `quic://resolver.sora.net:784`).
     pub endpoint: String,
@@ -107,6 +117,8 @@ pub struct QuicTransportV1 {
 /// Oblivious `DoH` relay preview metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::OdohRelayV1")]
 pub struct OdohRelayV1 {
     /// Relay endpoint.
     pub endpoint: String,
@@ -118,6 +130,8 @@ pub struct OdohRelayV1 {
 /// Configuration for bridging requests over `SoraNet` circuits.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::SoranetBridgeConfigV1")]
 pub struct SoranetBridgeConfigV1 {
     /// Multiaddr entry point (e.g., `/dns4/resolver.sora.net/tcp/7000/quic`).
     pub multiaddr: String,
@@ -127,6 +141,8 @@ pub struct SoranetBridgeConfigV1 {
 /// Padding configuration applied to DNS responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::PaddingPolicyV1")]
 pub struct PaddingPolicyV1 {
     /// Minimum padding bytes appended to each response.
     pub min_bytes: u16,
@@ -138,6 +154,8 @@ pub struct PaddingPolicyV1 {
 /// TLS provisioning material associated with a resolver.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::ResolverTlsBundle")]
 pub struct ResolverTlsBundle {
     /// ACME/issuance profiles authorised for the resolver.
     pub provisioning_profiles: Vec<TlsProvisioningProfile>,
@@ -152,6 +170,8 @@ pub struct ResolverTlsBundle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "profile", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::TlsProvisioningProfile")]
 pub enum TlsProvisioningProfile {
     /// ACME DNS-01 issuance.
     Dns01,
@@ -163,6 +183,8 @@ pub enum TlsProvisioningProfile {
 /// Rotation policy attached to a resolver attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::RotationPolicyV1")]
 pub struct RotationPolicyV1 {
     /// Maximum allowed lifetime for a RAD (days).
     pub max_lifetime_days: u16,
@@ -174,6 +196,8 @@ pub struct RotationPolicyV1 {
 /// Resolver Attestation Document (RAD) signed by the operator and governance.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::ResolverAttestationDocumentV1")]
 pub struct ResolverAttestationDocumentV1 {
     /// RAD schema version (currently `RAD_VERSION_V1`).
     pub version: u8,
@@ -211,6 +235,8 @@ pub struct ResolverAttestationDocumentV1 {
 /// Directory record anchoring the active RAD set in the ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::ResolverDirectoryRecordV1")]
 pub struct ResolverDirectoryRecordV1 {
     /// Merkle root hash of the active RAD set.
     pub root_hash: DirectoryId,
@@ -239,6 +265,8 @@ pub struct ResolverDirectoryRecordV1 {
 /// Pending resolver directory draft awaiting council publication.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::PendingDirectoryDraftV1")]
 pub struct PendingDirectoryDraftV1 {
     /// Directory record submitted for approval.
     pub record: ResolverDirectoryRecordV1,
@@ -256,6 +284,8 @@ pub struct PendingDirectoryDraftV1 {
 /// Record describing a resolver revocation hotfix entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::ResolverRevocationRecordV1")]
 pub struct ResolverRevocationRecordV1 {
     /// Resolver identifier that was revoked.
     pub resolver_id: ResolverId,
@@ -267,6 +297,8 @@ pub struct ResolverRevocationRecordV1 {
 /// Rotation policy enforced for directory publishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::DirectoryRotationPolicyV1")]
 pub struct DirectoryRotationPolicyV1 {
     /// Minimum interval (milliseconds) between two publishes.
     pub min_interval_ms: u64,
@@ -291,6 +323,8 @@ impl Default for DirectoryRotationPolicyV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "event", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::ResolverDirectoryEventV1")]
 pub enum ResolverDirectoryEventV1 {
     /// Draft submitted by an authorized release signer.
     DraftSubmitted(DirectoryDraftSubmittedEventV1),
@@ -311,6 +345,8 @@ pub enum ResolverDirectoryEventV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "reason", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::RadRevokeReason")]
 pub enum RadRevokeReason {
     /// Operator-requested revocation (e.g., compromise).
     OperatorRequest,
@@ -322,6 +358,8 @@ pub enum RadRevokeReason {
 /// Payload for `ResolverDirectoryEventV1::DraftSubmitted`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::DirectoryDraftSubmittedEventV1")]
 pub struct DirectoryDraftSubmittedEventV1 {
     /// Directory identifier (Merkle root) referenced by the draft.
     pub directory_id: DirectoryId,
@@ -333,6 +371,8 @@ pub struct DirectoryDraftSubmittedEventV1 {
 /// Payload for `ResolverDirectoryEventV1::Published`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::DirectoryPublishedEventV1")]
 pub struct DirectoryPublishedEventV1 {
     /// Directory identifier (Merkle root) that became active.
     pub directory_id: DirectoryId,
@@ -348,6 +388,8 @@ pub struct DirectoryPublishedEventV1 {
 /// Payload for `ResolverDirectoryEventV1::Revoked`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::DirectoryRevokedEventV1")]
 pub struct DirectoryRevokedEventV1 {
     /// Resolver identifier that was revoked.
     pub resolver_id: ResolverId,
@@ -359,6 +401,8 @@ pub struct DirectoryRevokedEventV1 {
 /// Payload for `ResolverDirectoryEventV1::Unrevoked`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::DirectoryUnrevokedEventV1")]
 pub struct DirectoryUnrevokedEventV1 {
     /// Resolver identifier that was restored.
     pub resolver_id: ResolverId,
@@ -368,6 +412,8 @@ pub struct DirectoryUnrevokedEventV1 {
 /// Payload for release signer modifications.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::DirectoryReleaseSignerEventV1")]
 pub struct DirectoryReleaseSignerEventV1 {
     /// Public key that was added or removed.
     pub public_key: PublicKey,
@@ -375,6 +421,8 @@ pub struct DirectoryReleaseSignerEventV1 {
 /// Payload for `ResolverDirectoryEventV1::PolicyUpdated`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soradns::DirectoryPolicyUpdatedEventV1")]
 pub struct DirectoryPolicyUpdatedEventV1 {
     /// Updated directory rotation policy.
     pub policy: DirectoryRotationPolicyV1,
@@ -407,3 +455,6 @@ mod tests {
         assert!(!host_set.matches("example.com"));
     }
 }
+
+#[cfg(test)]
+mod captured_soradns_schema_tests;

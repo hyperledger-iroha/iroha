@@ -1123,12 +1123,35 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
     let mut blocks = Vec::new();
     let (leader_public_key, leader_private_key) =
         checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
-    let peer_id = PeerId::new(leader_public_key.clone());
-    let topology = Topology::new(vec![peer_id]);
-    let topology_entries = vec![GenesisTopologyEntry::new(
+    let mut topology_entries = vec![GenesisTopologyEntry::new(
         PeerId::new(leader_public_key.clone()),
         bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP"),
     )];
+    topology_entries.extend((0..3).map(|_| {
+        let validator = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let pop = bls_normal_pop_prove(validator.private_key())
+            .expect("generate additional Kura fixture validator PoP");
+        GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+    }));
+    topology_entries.sort_by(|left, right| left.peer.cmp(&right.peer));
+    let topology = Topology::new(
+        topology_entries
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>(),
+    );
+    let mint_finality_roster = topology_entries
+        .iter()
+        .map(
+            |entry| iroha_data_model::block::consensus_v2::ValidatorPower {
+                validator: entry.peer.clone(),
+                power: 1,
+            },
+        )
+        .collect::<Vec<_>>();
+    let mint_finality = crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(
+        &mint_finality_roster,
+    );
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (genesis_id, genesis_key_pair) = gen_account_in("genesis");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("Valid");
@@ -1176,6 +1199,11 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         BTreeMap::from([(LaneId::SINGLE, lane_manifest)]),
     )));
     let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
+        .with_sumeragi_v2_context_parameters(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        )
+        .with_kagemusha_mint_finality_genesis_parameters(mint_finality)
         .set_topology(topology_entries)
         .build_and_sign(&genesis_key_pair)
         .expect("genesis block should be built");
@@ -2376,7 +2404,7 @@ fn durable_lane_payload_availability_for_kura(
     proposal: &LaneBlockProposalV1,
     signer: &KeyPair,
 ) -> DurableLanePayloadAvailabilityCertificateV1 {
-    let body = proposal.vote_body(Phase::Prepare);
+    let body = proposal.vote_body(CertPhase::Prepare);
     let signature = Signature::try_new(signer.private_key(), &body.signature_preimage())
         .expect("availability READY signature");
     let validator_set_pops =
@@ -2799,4 +2827,105 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
             .is_none(),
         "restart must not resurrect the retired executable payload",
     );
+}
+
+#[test]
+fn consensus_body_read_bypasses_warm_cache_and_rejects_occupied_corruption() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    assert!(
+        kura.read_block_body(nonzero!(3_usize))
+            .expect("uncommitted height")
+            .is_none()
+    );
+    assert!(matches!(
+        kura.read_block_body(height),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })
+    ));
+    finalize_chain_through_for_eviction(&kura, height);
+    assert_eq!(kura.get_block(height).as_deref(), Some(blocks[1].as_ref()));
+    assert!(
+        kura.block_data.lock().cached_body(1).is_some(),
+        "test requires warm body cache"
+    );
+    assert_eq!(
+        kura.read_block_body(height)
+            .expect("strict valid body")
+            .as_deref(),
+        Some(blocks[1].as_ref())
+    );
+    let (data_path, slot) = {
+        let mut store = kura.block_store.lock();
+        (
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+            store.read_block_index(1).expect("occupied body slot"),
+        )
+    };
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&data_path)
+        .expect("open actual data file");
+    file.seek(SeekFrom::Start(slot.start))
+        .expect("seek exact body slot");
+    file.write_all(&vec![
+        0;
+        usize::try_from(slot.length)
+            .expect("bounded body length")
+    ])
+    .expect("corrupt occupied bytes");
+    assert!(
+        kura.read_block_body(height).is_err(),
+        "cached decoded body must not hide corrupt durable bytes"
+    );
+}
+
+#[test]
+fn consensus_body_read_rejects_decodable_same_header_wire_substitution() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    finalize_chain_through_for_eviction(&kura, height);
+    let canonical = &blocks[1];
+    assert_eq!(kura.get_block(height).as_deref(), Some(canonical.as_ref()));
+    let mut substituted = canonical.as_ref().clone();
+    let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("substitute key");
+    substituted
+        .replace_signatures(
+            [BlockSignature::new(
+                0,
+                SignatureOf::try_from_hash(key.private_key(), substituted.hash())
+                    .expect("sign unchanged header"),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("replace only envelope signature");
+    let wire = substituted
+        .encode_wire()
+        .expect("substitute canonical wire");
+    assert_eq!(substituted.hash(), canonical.hash());
+    assert_eq!(
+        wire.len(),
+        canonical.encode_wire().expect("original wire").len()
+    );
+    let (path, slot) = {
+        let mut store = kura.block_store.lock();
+        (
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+            store.read_block_index(1).expect("occupied slot"),
+        )
+    };
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("data file");
+    file.seek(SeekFrom::Start(slot.start)).expect("seek slot");
+    file.write_all(&wire)
+        .expect("substitute actual durable wire");
+    assert!(matches!(
+        kura.read_block_body(height),
+        Err(Error::CanonicalBlockWireMismatch { height: 2 })
+    ));
+    assert!(kura.block_data.lock().cached_body(1).is_some());
 }

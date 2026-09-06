@@ -20,6 +20,8 @@ use thiserror::Error;
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::rekey::AccountAliasDomain")]
 pub struct AccountAliasDomain(pub Name);
 impl AccountAliasDomain {
     /// Construct an alias-domain segment from its canonical name.
@@ -261,6 +263,8 @@ mod tests {
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::rekey::AccountRekeyTransitionProvenance")]
 pub enum AccountRekeyTransitionProvenance {
     /// The stable alias was assigned to a different, independently controlled account.
     #[codec(index = 0)]
@@ -290,6 +294,8 @@ pub enum AccountRekeyRecordError {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::rekey::AccountRekeyRecord")]
 pub struct AccountRekeyRecord {
     /// Stable alias under which the account is addressed.
     pub label: AccountAlias,
@@ -565,3 +571,6 @@ mod rekey_record_tests {
         assert_eq!(record.active_account_id, active);
     }
 }
+
+#[cfg(test)]
+mod captured_rekey_schema_tests;

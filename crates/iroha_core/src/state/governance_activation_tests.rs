@@ -25,7 +25,7 @@ fn fee_sponsor_activation_lease(
         1,
         *Hash::new(b"fee-sponsor-activation-manifest").as_ref(),
         AxtFastpqBinding {
-            parameter: "fastpq-lane-balanced".to_owned(),
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
             source_dsid: DataSpaceId::UNIVERSAL.as_u64(),
             source_dataspace: "universal".to_owned(),
             source_receipt_id: "fee-sponsor-activation".to_owned(),

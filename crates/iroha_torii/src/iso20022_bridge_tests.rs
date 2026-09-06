@@ -1,7 +1,8 @@
 use super::*;
+use base64::Engine as _;
 use iroha_core::iso_bridge::reference_data::SnapshotState;
 use iroha_core::state::World;
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     Registrable, ValidationFail,
     account::Account,
@@ -176,6 +177,8 @@ fn sample_asset_definition_literal() -> String {
 fn sample_config() -> actual::IsoBridge {
     let (_account_id, account_literal, private_key) = sample_account_bundle();
     let asset_definition = sample_asset_definition_literal();
+    let originator_operator = fixture_key_pair(0xAB).public_key().clone();
+    let counterparty_operator = fixture_key_pair(0xAC).public_key().clone();
     actual::IsoBridge {
         enabled: true,
         max_body_bytes: iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
@@ -192,6 +195,23 @@ fn sample_config() -> actual::IsoBridge {
             account_id: account_literal.clone(),
             private_key,
         }),
+        participants: vec![
+            actual::IsoBridgeParticipant {
+                id: "originator-bank".to_owned(),
+                operator_keys: vec![originator_operator],
+                financial_identifiers: vec!["DEUTDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+            actual::IsoBridgeParticipant {
+                id: "counterparty-bank".to_owned(),
+                operator_keys: vec![counterparty_operator],
+                financial_identifiers: vec!["MARKDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+        ],
+        audit_admin_keys: Vec::new(),
         account_aliases: vec![actual::IsoAccountAlias {
             iban: "GB82 WEST 1234 5698 7654 32".to_string(),
             account_id: account_literal,
@@ -8711,6 +8731,39 @@ fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
     assert_eq!(settled.pacs002_code(), "ACSC");
 }
 #[test]
+fn candidate_execution_events_do_not_terminalize_queued_iso_payment() {
+    let runtime = sample_runtime();
+    let message_id = "candidate-execution-is-not-final";
+    let hash_text = "11".repeat(32);
+    let hash = crate::parse_signed_transaction_hash(&hash_text).expect("canonical hash");
+    assert!(runtime.check_and_record_inbound(message_id, inbound_metadata(message_id, "pacs.008")));
+    runtime.mark_accepted(message_id, &hash_text);
+
+    let approved = iroha_data_model::events::pipeline::TransactionEvent {
+        hash,
+        block_height: std::num::NonZeroU64::new(7),
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(1),
+        status: iroha_data_model::events::pipeline::TransactionStatus::Approved,
+    };
+    crate::process_iso_bridge_transaction_event(&runtime, &approved)
+        .expect("candidate approval is only a hint");
+    assert!(runtime.has_queued_transaction_hash(&hash_text));
+
+    let rejected = iroha_data_model::events::pipeline::TransactionEvent {
+        status: iroha_data_model::events::pipeline::TransactionStatus::Rejected(Box::new(
+            TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+        )),
+        ..approved
+    };
+    crate::process_iso_bridge_transaction_event(&runtime, &rejected)
+        .expect("candidate rejection is only a hint");
+    assert!(runtime.has_queued_transaction_hash(&hash_text));
+    let status = runtime.message_status(message_id).expect("status");
+    assert_eq!(status.status_label(), "Accepted");
+    assert!(status.settled_at().is_none());
+}
+#[test]
 fn pacs004_return_requires_settlement_and_preserves_original_transaction() {
     let runtime = sample_runtime();
     let original_id = "settled-payment-return";
@@ -8924,23 +8977,297 @@ fn durable_store_reloads_message_status() {
     assert!(!reloaded.check_and_record_inbound("persisted-replay", replay));
 }
 #[test]
-fn transaction_hash_binding_fails_closed_when_durable_store_is_unwritable() {
+fn configured_durable_store_must_be_available_at_startup() {
     let store = TempDir::new().expect("tempdir");
     let blocked_store = store.path().join("not-a-directory");
     fs::write(&blocked_store, b"file blocks durable store creation").expect("write blocker");
     let mut config = sample_config();
     config.store_dir = Some(blocked_store);
+    let error = runtime_config_error(
+        &config,
+        "an unavailable configured durable store must stop startup",
+    );
+    assert!(
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
+    );
+}
+#[test]
+fn status_transition_is_not_published_when_candidate_persistence_fails() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
-    assert!(runtime.check_and_record_message("durability-blocked"));
-    assert!(!runtime.bind_transaction_hash("durability-blocked", "tx-must-not-dispatch"));
-    let status = runtime
-        .message_status("durability-blocked")
-        .expect("pending status retained");
-    assert_eq!(status.status_label(), "Pending");
-    assert_eq!(status.transaction_hash(), None);
-    assert!(!runtime.tx_hash_index.contains_key("tx-must-not-dispatch"));
+    assert!(runtime.check_and_record_message("atomic-status"));
+    let messages_dir = store.path().join("messages");
+    let backup_dir = store.path().join("messages-backup");
+    fs::rename(&messages_dir, &backup_dir).expect("move valid message store aside");
+    fs::write(&messages_dir, b"block candidate persistence").expect("write directory blocker");
+
+    let returned = runtime.mark_accepted("atomic-status", "tx-must-not-publish");
+    assert_eq!(returned.status_label(), "Pending");
+    let retained = runtime
+        .message_status("atomic-status")
+        .expect("original pending record retained");
+    assert_eq!(retained.status_label(), "Pending");
+    assert_eq!(retained.transaction_hash(), None);
+    assert!(!runtime.tx_hash_index.contains_key("tx-must-not-publish"));
+    let lifecycle_error = runtime
+        .try_transition_existing("atomic-status", |record| {
+            record.detail = Some("must not publish".to_owned());
+        })
+        .expect_err("lifecycle candidate persistence must fail");
+    assert_eq!(lifecycle_error, IsoStatusHistoryLimitError::Persistence);
+    assert_eq!(
+        runtime
+            .message_status("atomic-status")
+            .expect("original record still retained")
+            .detail(),
+        None
+    );
+
+    fs::remove_file(&messages_dir).expect("remove directory blocker");
+    fs::rename(&backup_dir, &messages_dir).expect("restore valid message store");
+    let persisted = fs::read_to_string(messages_dir.join(message_filename("atomic-status")))
+        .expect("read original persisted record");
+    let value = norito::json::from_json::<JsonValue>(&persisted).expect("parse persisted record");
+    let (_, record) = persisted_record_from_value(&value).expect("valid persisted record");
+    assert_eq!(record.state, IsoMessageState::Pending);
+    assert_eq!(record.transaction_hash, None);
+}
+#[test]
+fn lifecycle_apply_classifies_unavailable_journal_as_retryable() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let original_id = "journal-unavailable-original";
+    let lifecycle_id = "journal-unavailable-status";
+    record_original(&runtime, original_id, "pacs.008");
+    runtime.mark_accepted(original_id, "tx-journal-unavailable");
+    record_lifecycle(&runtime, lifecycle_id, "pacs.002");
+    let lifecycle = parse_message(
+        "pacs.002",
+        b"BizMsgIdr=journal-unavailable-status\nOrgnlMsgId=journal-unavailable-original\nTxSts=PDNG",
+    )
+    .expect("lifecycle message");
+    let authorization = runtime
+        .compatibility_lifecycle_authorization("pacs.002", &lifecycle)
+        .expect("bind original record");
+    let original_code = runtime
+        .message_status(original_id)
+        .expect("original status")
+        .pacs002_code()
+        .to_owned();
+
+    let operations_dir = store.path().join(ISO_PERSISTED_LIFECYCLE_OPERATION_DIR);
+    let backup_dir = store.path().join("lifecycle-operations-backup");
+    fs::rename(&operations_dir, &backup_dir).expect("move lifecycle journal directory aside");
+    fs::write(&operations_dir, b"block lifecycle journal persistence")
+        .expect("write journal directory blocker");
+
+    let error = runtime
+        .apply_inbound_lifecycle_message_with_evidence(
+            lifecycle_id,
+            "pacs.002",
+            &lifecycle,
+            &authorization,
+            None,
+        )
+        .expect_err("unavailable lifecycle journal must not become a validation rejection");
+    assert!(matches!(
+        error,
+        IsoLifecycleApplyError::PersistenceUnavailable
+    ));
+    assert_eq!(
+        runtime
+            .message_status(original_id)
+            .expect("original remains unchanged")
+            .pacs002_code(),
+        original_code
+    );
+    assert_eq!(
+        runtime
+            .message_status(lifecycle_id)
+            .expect("admitted lifecycle record remains pending")
+            .status_label(),
+        "Pending"
+    );
+}
+#[test]
+fn committed_lifecycle_journal_recovers_both_records_after_materialization_outage() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let original_id = "journal-outage-original";
+    let lifecycle_id = "journal-outage-status";
+    record_original(&runtime, original_id, "pacs.008");
+    runtime.mark_accepted(original_id, "tx-journal-outage");
+    record_lifecycle(&runtime, lifecycle_id, "pacs.002");
+    let lifecycle = parse_message(
+        "pacs.002",
+        b"BizMsgIdr=journal-outage-status\nOrgnlMsgId=journal-outage-original\nTxSts=PDNG",
+    )
+    .expect("lifecycle message");
+
+    let messages_dir = store.path().join("messages");
+    let backup_dir = store.path().join("messages-backup");
+    fs::rename(&messages_dir, &backup_dir).expect("move message store aside");
+    fs::write(&messages_dir, b"block lifecycle materialization").expect("write blocker");
+    let (outcome, lifecycle_status) = runtime
+        .apply_inbound_lifecycle_message_with_status(
+            lifecycle_id,
+            "pacs.002",
+            &lifecycle,
+        )
+        .expect("the durable journal is the lifecycle commit point");
+    assert_eq!(outcome.action(), "marked_pending");
+    assert_eq!(lifecycle_status.status_label(), "Accepted");
+    assert_eq!(
+        runtime
+            .message_status(original_id)
+            .expect("journaled original after-image is visible")
+            .pacs002_code(),
+        "PDNG"
+    );
+    assert!(!runtime.lifecycle_persistence_is_healthy());
+    assert!(lifecycle_journal_path(store.path()).is_file());
+    assert!(
+        !runtime.mark_rejected(
+            lifecycle_id,
+            Some("must not overwrite a committed journal".to_owned()),
+            None,
+        ),
+        "ordinary transitions must freeze until journal recovery"
+    );
+
+    fs::remove_file(&messages_dir).expect("remove blocker");
+    fs::rename(&backup_dir, &messages_dir).expect("restore message store");
+    drop(runtime);
+
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("startup rolls the committed operation forward")
+        .expect("enabled");
+    assert!(reloaded.lifecycle_persistence_is_healthy());
+    assert!(!lifecycle_journal_path(store.path()).exists());
+    assert_eq!(
+        reloaded
+            .message_status(original_id)
+            .expect("original recovered")
+            .pacs002_code(),
+        "PDNG"
+    );
+    assert_eq!(
+        reloaded
+            .message_status(lifecycle_id)
+            .expect("lifecycle recovered")
+            .status_label(),
+        "Accepted"
+    );
+}
+#[test]
+fn lifecycle_journal_recovers_second_record_after_partial_roll_forward() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let original_id = "journal-partial-original";
+    let lifecycle_id = "journal-partial-status";
+    record_original(&runtime, original_id, "pacs.008");
+    runtime.mark_accepted(original_id, "tx-journal-partial");
+    record_lifecycle(&runtime, lifecycle_id, "pacs.002");
+    let (_, original) = runtime
+        .prepare_lifecycle_update(
+            lifecycle_id,
+            original_id,
+            "pacs.002",
+            Some("PDNG"),
+            None,
+            None,
+        )
+        .expect("prepare original after-image");
+    let original = original.expect("status transition mutates original");
+    let lifecycle = runtime
+        .prepare_lifecycle_accepted(
+            lifecycle_id,
+            None,
+            Some("recorded test lifecycle".to_owned()),
+        )
+        .expect("prepare lifecycle after-image");
+    let journal = IsoLifecycleJournal {
+        original: Some(lifecycle_journal_mutation(&original)),
+        lifecycle: lifecycle_journal_mutation(&lifecycle),
+    };
+    assert!(runtime.preflight_lifecycle_journal(&journal));
+    assert!(runtime.persist_lifecycle_journal(&journal));
+    runtime
+        .materialize_lifecycle_journal_mutation(
+            journal.original.as_ref().expect("original journal row"),
+            true,
+        )
+        .expect("first record materializes before simulated crash");
+    drop(runtime);
+
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("startup completes partial roll-forward")
+        .expect("enabled");
+    assert_eq!(
+        reloaded
+            .message_status(original_id)
+            .expect("original recovered")
+            .pacs002_code(),
+        "PDNG"
+    );
+    assert_eq!(
+        reloaded
+            .message_status(lifecycle_id)
+            .expect("lifecycle recovered")
+            .status_label(),
+        "Accepted"
+    );
+    assert!(!lifecycle_journal_path(store.path()).exists());
+}
+#[test]
+fn context_update_preserves_previous_record_when_candidate_exceeds_byte_cap() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    assert!(runtime.check_and_record_message("oversized-candidate"));
+    let path = store
+        .path()
+        .join("messages")
+        .join(message_filename("oversized-candidate"));
+    let before = fs::read(&path).expect("read original record");
+    let oversized = "x".repeat(
+        usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("record cap fits usize") + 1,
+    );
+    assert!(!runtime.update_message_context(
+        "oversized-candidate",
+        IsoMessageContext {
+            settlement_amount: Some(oversized),
+            ..IsoMessageContext::default()
+        },
+    ));
+    assert_eq!(
+        runtime
+            .message_status("oversized-candidate")
+            .expect("original record retained")
+            .settlement_amount(),
+        None
+    );
+    assert_eq!(fs::read(path).expect("read retained record"), before);
 }
 fn read_audit_index(store: &TempDir) -> JsonValue {
     let index_path = store
@@ -8973,8 +9300,60 @@ fn rewrite_persisted_record(path: &Path, mutate: impl FnOnce(&mut norito::json::
     )
     .expect("write mutated JSON");
 }
+fn rewrite_persisted_audit_index(store: &TempDir, mutate: impl FnOnce(&mut norito::json::Map)) {
+    let path = store
+        .path()
+        .join(ISO_PERSISTED_AUDIT_DIR)
+        .join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+    let mut value = read_audit_index(store);
+    {
+        let object = value.as_object_mut().expect("audit index object");
+        mutate(object);
+        object.remove(ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD);
+        let digest = persisted_record_digest(&JsonValue::Object(object.clone()));
+        object.insert(
+            ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD.to_owned(),
+            JsonValue::from(digest.as_str()),
+        );
+        assert!(persisted_audit_index_digest_matches(object));
+    }
+    fs::write(
+        path,
+        norito::json::to_string_pretty(&value).expect("serialize mutated audit index"),
+    )
+    .expect("write mutated audit index");
+}
+fn rewrite_persisted_tombstone(
+    store: &TempDir,
+    message_id: &str,
+    mutate: impl FnOnce(&mut norito::json::Map),
+) {
+    let path = store
+        .path()
+        .join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR)
+        .join(message_filename(message_id));
+    let text = fs::read_to_string(&path).expect("persisted tombstone");
+    let mut value = norito::json::from_json::<JsonValue>(&text).expect("tombstone JSON");
+    {
+        let object = value.as_object_mut().expect("tombstone object");
+        mutate(object);
+        object.remove(ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD);
+        let digest = persisted_record_digest(&JsonValue::Object(object.clone()));
+        object.insert(
+            ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD.to_owned(),
+            JsonValue::from(digest.as_str()),
+        );
+    }
+    fs::write(
+        path,
+        norito::json::to_string_pretty(&value).expect("serialize mutated tombstone"),
+    )
+    .expect("write mutated tombstone");
+}
 #[test]
 fn persisted_record_reader_enforces_the_open_file_byte_limit() {
+    assert!(persisted_json_fits_cap("1234", 4));
+    assert!(!persisted_json_fits_cap("12345", 4));
     let cap = usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("record cap fits usize");
     let mut exact = NamedTempFile::new().expect("exact-size record");
     exact
@@ -8991,6 +9370,376 @@ fn persisted_record_reader_enforces_the_open_file_byte_limit() {
         .write_all(&vec![b'a'; cap + 1])
         .expect("write oversized record");
     assert!(read_persisted_record_bounded(excessive.path()).is_none());
+}
+#[test]
+fn persisted_record_reader_rejects_a_replaced_path_identity() {
+    let directory = TempDir::new().expect("tempdir");
+    let path = directory.path().join("record.json");
+    let displaced = directory.path().join("record.displaced.json");
+    fs::write(&path, b"same-length").expect("write original record");
+    let expected = secure_file_metadata::from_path(&path).expect("inspect original record");
+    fs::rename(&path, &displaced).expect("displace original record");
+    fs::write(&path, b"same-length").expect("write replacement record");
+
+    assert!(
+        read_persisted_json_bounded_with_metadata(
+            &path,
+            &expected,
+            ISO_PERSISTED_RECORD_MAX_BYTES,
+        )
+        .is_none(),
+        "a same-sized replacement must not satisfy the enumerated identity"
+    );
+}
+#[test]
+fn persisted_record_reader_rejects_hard_linked_input() {
+    let directory = TempDir::new().expect("tempdir");
+    let path = directory.path().join("record.json");
+    let alias = directory.path().join("record-alias.json");
+    fs::write(&path, b"{}").expect("write original record");
+    fs::hard_link(&path, alias).expect("create hard link");
+
+    assert!(
+        read_persisted_record_bounded(&path).is_none(),
+        "a multiply-linked persistence object must fail closed"
+    );
+}
+#[test]
+fn startup_scan_budget_bounds_entry_work_and_aggregate_bytes() {
+    let mut entry_budget = IsoStartupScanBudget {
+        entries: 0,
+        bytes: 0,
+        max_entries: 1,
+        max_bytes: 16,
+    };
+    entry_budget
+        .charge_entry(Path::new("first.json"), 1)
+        .expect("first entry fits");
+    let entry_error = entry_budget
+        .charge_entry(Path::new("second.json"), 1)
+        .expect_err("second entry exceeds work bound");
+    assert!(entry_error.to_string().contains("startup work limit"));
+
+    let mut byte_budget = IsoStartupScanBudget {
+        entries: 0,
+        bytes: 0,
+        max_entries: 2,
+        max_bytes: 3,
+    };
+    byte_budget
+        .charge_entry(Path::new("first.json"), 2)
+        .expect("first entry fits");
+    let byte_error = byte_budget
+        .charge_entry(Path::new("second.json"), 2)
+        .expect_err("aggregate bytes exceed bound");
+    assert!(
+        byte_error
+            .to_string()
+            .contains("aggregate startup byte limit")
+    );
+}
+#[test]
+fn startup_removes_exact_bounded_writer_crash_temps() {
+    for directory in ["messages", ISO_PERSISTED_REPLAY_TOMBSTONE_DIR] {
+        let store = TempDir::new().expect("tempdir");
+        let owned_dir = store.path().join(directory);
+        fs::create_dir_all(&owned_dir).expect("create owned store directory");
+        let target = message_filename("crashed-writer");
+        let temp_path = owned_dir.join(iso_record_temp_filename(&target, 42, 7));
+        fs::write(&temp_path, [0xff, 0xfe, 0xfd]).expect("write partial crash temp");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+
+        Iso20022BridgeRuntime::from_config(&config)
+            .expect("an exact writer temp is recoverable")
+            .expect("bridge remains enabled");
+
+        assert!(
+            !temp_path.exists(),
+            "startup must durably remove a recognized crash temp in {directory}"
+        );
+    }
+}
+#[test]
+fn startup_writer_temp_cleanup_is_budgeted_before_unlink() {
+    for (max_entries, max_bytes, expected) in [
+        (0, ISO_PERSISTED_RECORD_MAX_BYTES, "startup work limit"),
+        (1, 0, "aggregate startup byte limit"),
+    ] {
+        let store = TempDir::new().expect("tempdir");
+        let owned_dir = store.path().join("messages");
+        fs::create_dir_all(&owned_dir).expect("create messages directory");
+        let target = message_filename("budgeted-crash-temp");
+        let temp_path = owned_dir.join(iso_record_temp_filename(&target, 42, 7));
+        fs::write(&temp_path, b"x").expect("write crash temp");
+        let entry = fs::read_dir(&owned_dir)
+            .expect("enumerate crash temp")
+            .next()
+            .expect("crash temp entry")
+            .expect("read crash temp entry");
+        let mut directory_entries = 0;
+        let mut budget = IsoStartupScanBudget {
+            entries: 0,
+            bytes: 0,
+            max_entries,
+            max_bytes,
+        };
+
+        let error =
+            read_startup_record_entry(entry, &mut directory_entries, &mut budget, "message")
+                .expect_err("a crash temp cannot bypass startup bounds");
+
+        assert!(error.to_string().contains(expected), "{error:?}");
+        assert_eq!(directory_entries, 1);
+        assert_eq!(budget.entries, 1);
+        assert!(
+            temp_path.exists(),
+            "startup must not unlink work it refused to account"
+        );
+    }
+}
+#[test]
+fn durable_store_usage_enforces_runtime_count_and_byte_limits() {
+    let mut usage = IsoDurableStoreUsage {
+        message_bytes: std::collections::HashMap::new(),
+        tombstone_bytes: std::collections::HashMap::new(),
+        bytes: 0,
+        max_directory_entries: 1,
+        max_entries: 2,
+        max_bytes: 10,
+    };
+    usage
+        .record_existing(IsoDurableRecordKind::Message, "first", 6)
+        .expect("first message fits");
+    assert_eq!(
+        usage.record_existing(IsoDurableRecordKind::Message, "second", 1),
+        Err(IsoDurableStoreUsageError::DirectoryEntries)
+    );
+    assert_eq!(
+        usage.record_existing(IsoDurableRecordKind::ReplayTombstone, "first", 5),
+        Err(IsoDurableStoreUsageError::AggregateBytes)
+    );
+    assert_eq!(usage.bytes, 6, "rejected reservations do not mutate usage");
+    usage
+        .record_replacement(IsoDurableRecordKind::Message, "first", 4)
+        .expect("smaller replacement releases bytes");
+    usage
+        .record_existing(IsoDurableRecordKind::ReplayTombstone, "first", 5)
+        .expect("tombstone fits after replacement");
+    assert_eq!(usage.bytes, 9);
+    usage
+        .remove(IsoDurableRecordKind::Message, "first")
+        .expect("removal updates usage");
+    assert_eq!(usage.bytes, 5);
+}
+#[test]
+fn runtime_refuses_writes_beyond_the_restart_byte_budget() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    runtime.durable_store_usage.lock().max_bytes = 1;
+
+    assert!(!runtime.check_and_record_message("runtime-byte-budget"));
+    assert!(!runtime.records.contains_key("runtime-byte-budget"));
+    assert!(
+        !runtime
+            .replay_tombstones
+            .contains_key("runtime-byte-budget")
+    );
+    let usage = runtime.durable_store_usage.lock();
+    assert_eq!(usage.bytes, 0);
+    assert!(usage.message_bytes.is_empty());
+    assert!(usage.tombstone_bytes.is_empty());
+}
+#[test]
+fn startup_rejects_unexpected_entries_in_owned_record_directories() {
+    for directory in ["messages", ISO_PERSISTED_REPLAY_TOMBSTONE_DIR] {
+        let target = message_filename("writer-temp-lookalike");
+        for unexpected_name in [
+            "unexpected.tmp".to_owned(),
+            format!(".{target}.01.0.tmp"),
+            format!(".{target}.1.00.tmp"),
+            format!(".{target}.1.0.tmp.extra"),
+        ] {
+            let store = TempDir::new().expect("tempdir");
+            let owned_dir = store.path().join(directory);
+            fs::create_dir_all(&owned_dir).expect("create owned store directory");
+            fs::write(
+                owned_dir.join(&unexpected_name),
+                b"ignored work is forbidden",
+            )
+            .expect("write unexpected entry");
+            let mut config = sample_config();
+            config.store_dir = Some(store.path().to_path_buf());
+            let error = runtime_config_error(&config, "unexpected entries must stop startup");
+            assert!(
+                error.to_string().contains("contains unexpected entry"),
+                "unexpected hard-cut error for {directory}/{unexpected_name}: {error:?}"
+            );
+        }
+    }
+}
+#[cfg(unix)]
+#[test]
+fn startup_rejects_symlinked_writer_temps_without_touching_the_target() {
+    for directory in ["messages", ISO_PERSISTED_REPLAY_TOMBSTONE_DIR] {
+        let store = TempDir::new().expect("tempdir");
+        let owned_dir = store.path().join(directory);
+        fs::create_dir_all(&owned_dir).expect("create owned store directory");
+        let target_path = store.path().join("outside-writer-temp-target");
+        fs::write(&target_path, b"must survive").expect("write symlink target");
+        let target = message_filename("symlinked-writer-temp");
+        let temp_path = owned_dir.join(iso_record_temp_filename(&target, 42, 7));
+        std::os::unix::fs::symlink(&target_path, &temp_path).expect("symlink writer temp");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+
+        let error = runtime_config_error(&config, "writer temp symlinks must stop startup");
+
+        assert!(
+            error.to_string().contains("not a direct regular file"),
+            "unexpected hard-cut error for {directory}: {error:?}"
+        );
+        assert_eq!(
+            fs::read(&target_path).expect("read retained symlink target"),
+            b"must survive"
+        );
+    }
+}
+#[test]
+fn durable_unlink_keeps_accounting_when_directory_sync_fails() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let message_id = "directory-sync-failure";
+    assert!(runtime.check_and_record_message(message_id));
+    let messages_dir = store.path().join("messages");
+    let path = messages_dir.join(message_filename(message_id));
+    let before_bytes = runtime.durable_store_usage.lock().bytes;
+    let sync_called = std::cell::Cell::new(false);
+
+    assert!(!runtime.remove_durable_identity_file_with_directory_sync(
+        IsoDurableRecordKind::Message,
+        message_id,
+        &path,
+        |parent| {
+            sync_called.set(true);
+            assert_eq!(parent, messages_dir.as_path());
+            Err(std::io::Error::other("injected directory sync failure"))
+        },
+    ));
+
+    assert!(sync_called.get());
+    assert!(!path.exists(), "unlink itself succeeded");
+    assert!(
+        runtime.records.contains_key(message_id),
+        "the in-memory identity remains authoritative while durability is uncertain"
+    );
+    {
+        let usage = runtime.durable_store_usage.lock();
+        assert_eq!(usage.bytes, before_bytes);
+        assert!(usage.message_bytes.contains_key(message_id));
+    }
+    let retry_sync_called = std::cell::Cell::new(false);
+    assert!(runtime.remove_durable_identity_file_with_directory_sync(
+        IsoDurableRecordKind::Message,
+        message_id,
+        &path,
+        |parent| {
+            retry_sync_called.set(true);
+            assert_eq!(parent, messages_dir.as_path());
+            Ok(())
+        },
+    ));
+    assert!(
+        retry_sync_called.get(),
+        "an already absent name still requires a durable directory sync"
+    );
+    let usage = runtime.durable_store_usage.lock();
+    assert!(!usage.message_bytes.contains_key(message_id));
+    assert!(usage.bytes < before_bytes);
+}
+#[test]
+fn durable_directory_initialization_resyncs_an_existing_name_after_failure() {
+    let parent = TempDir::new().expect("tempdir");
+    let directory = parent.path().join("iso-store");
+    let durable_parent = fs::canonicalize(parent.path()).expect("canonical parent");
+    let durable_directory = durable_parent.join("iso-store");
+    let first_syncs = std::cell::RefCell::new(Vec::new());
+
+    let error = prepare_real_directory_with_sync(&directory, |path| {
+        first_syncs.borrow_mut().push(path.to_path_buf());
+        if path == durable_parent.as_path() {
+            return Err(std::io::Error::other(
+                "injected parent-directory sync failure",
+            ));
+        }
+        Ok(())
+    })
+    .expect_err("the first parent sync must fail");
+
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::Other,
+        "unexpected initialization failure: {error}"
+    );
+    assert!(is_real_directory(&directory));
+    assert_eq!(
+        first_syncs.into_inner(),
+        vec![durable_directory.clone(), durable_parent.clone()]
+    );
+
+    let retry_syncs = std::cell::RefCell::new(Vec::new());
+    prepare_real_directory_with_sync(&directory, |path| {
+        retry_syncs.borrow_mut().push(path.to_path_buf());
+        Ok(())
+    })
+    .expect("an existing directory must repeat both durability syncs");
+    assert_eq!(
+        retry_syncs.into_inner(),
+        vec![durable_directory, durable_parent]
+    );
+}
+#[test]
+fn durable_directory_initialization_does_not_create_unowned_parent_trees() {
+    let holder = TempDir::new().expect("tempdir");
+    let missing_parent = holder.path().join("operator-owned-parent");
+    let directory = missing_parent.join("iso-store");
+
+    let error = prepare_real_directory_with_sync(&directory, |_| Ok(()))
+        .expect_err("a missing operator-owned parent must fail closed");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!missing_parent.exists());
+}
+#[test]
+fn runtime_prepares_identity_directories_once_and_does_not_recreate_them() {
+    let holder = TempDir::new().expect("tempdir");
+    let store = holder.path().join("iso-store");
+    let mut config = sample_config();
+    config.store_dir = Some(store.clone());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let messages = store.join("messages");
+    let tombstones = store.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
+    let audit = store.join(ISO_PERSISTED_AUDIT_DIR);
+    assert!(is_real_directory(&messages));
+    assert!(is_real_directory(&tombstones));
+    assert!(is_real_directory(&audit));
+
+    fs::remove_dir(&tombstones).expect("remove empty tombstone directory");
+    assert!(!runtime.check_and_record_message("missing-tombstone-directory"));
+    assert!(
+        !tombstones.exists(),
+        "runtime persistence must fail closed instead of rebuilding directory topology"
+    );
 }
 #[test]
 fn runtime_rejects_unbounded_or_excessive_store_counts() {
@@ -9012,10 +9761,11 @@ fn runtime_rejects_unbounded_or_excessive_store_counts() {
     }
 }
 #[test]
-fn durable_store_reload_streams_only_deterministic_newest_records() {
+fn lowering_store_capacity_preserves_every_unexpired_replay_identity() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
+    config.store_retention_secs = 0;
     config.store_max_records = 4;
     {
         let runtime = Iso20022BridgeRuntime::from_config(&config)
@@ -9039,6 +9789,8 @@ fn durable_store_reload_streams_only_deterministic_newest_records() {
             runtime.mark_settled(message_id, SystemTime::now());
         }
     }
+    // A record rename can commit immediately before the derived audit index is
+    // rewritten. Exercise that valid-but-stale crash window explicitly.
     for (message_id, updated_at_ms) in [
         ("old", 1_000_u64),
         ("middle", 2_000),
@@ -9057,23 +9809,36 @@ fn durable_store_reload_streams_only_deterministic_newest_records() {
     let reloaded = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
-    assert_eq!(reloaded.records.len(), 2);
-    assert_eq!(reloaded.tx_hash_index.len(), 2);
-    assert_eq!(reloaded.payload_hash_index.len(), 2);
-    assert_eq!(reloaded.business_message_id_index.len(), 2);
-    assert!(reloaded.message_status("old").is_none());
-    assert!(reloaded.message_status("middle").is_none());
+    assert_eq!(reloaded.records.len(), 4);
+    assert_eq!(reloaded.tx_hash_index.len(), 4);
+    assert_eq!(reloaded.payload_hash_index.len(), 4);
+    assert_eq!(reloaded.business_message_id_index.len(), 4);
+    assert!(reloaded.message_status("old").is_some());
+    assert!(reloaded.message_status("middle").is_some());
     assert!(reloaded.message_status("tie-a").is_some());
     assert!(reloaded.message_status("tie-z").is_some());
-    for evicted in ["old", "middle"] {
+    for protected in ["old", "middle", "tie-a", "tie-z"] {
         assert!(
-            !store
+            store
                 .path()
                 .join("messages")
-                .join(message_filename(evicted))
+                .join(message_filename(protected))
                 .exists()
         );
     }
+    assert!(!reloaded.check_and_record_inbound(
+        "capacity-rejected",
+        IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("capacity-rejected-biz".to_owned()),
+            None,
+            "capacity-rejected-hash".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        ),
+    ));
 }
 fn assert_digest_correct_record_mutation_is_rejected(
     message_id: &str,
@@ -9106,19 +9871,51 @@ fn assert_digest_correct_record_mutation_is_rejected(
         .join("messages")
         .join(message_filename(message_id));
     rewrite_persisted_record(&path, mutate);
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(
-        reloaded.message_status(message_id).is_none(),
-        "digest-correct malformed records must fail closed"
+    let error = runtime_config_error(
+        &config,
+        "digest-correct malformed ISO stores must stop startup",
     );
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    assert!(
+        error
+            .to_string()
+            .contains("regenerate the first-release ISO store"),
+        "unexpected hard-cut error: {error:?}"
+    );
+}
+fn assert_digest_correct_audit_mutation_is_rejected(
+    case: &str,
+    mutate: impl FnOnce(&mut norito::json::Map),
+) {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        for message_id in ["audit-a", "audit-b"] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(format!("{case}-{message_id}-biz")),
+                    None,
+                    format!("{case}-{message_id}-hash"),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+    }
+    rewrite_persisted_audit_index(&store, mutate);
+    let error = runtime_config_error(&config, "malformed ISO audit indexes must stop startup");
+    assert!(
+        error
+            .to_string()
+            .contains("is invalid or corrupt for schema V2"),
+        "unexpected hard-cut error for {case}: {error:?}"
     );
 }
 fn read_external_audit_index(export: &TempDir) -> JsonValue {
@@ -9180,7 +9977,7 @@ fn durable_store_retention_is_independent_from_dedupe_ttl() {
     );
 }
 #[test]
-fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
+fn durable_store_never_evicts_an_unexpired_identity_for_capacity() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
@@ -9217,16 +10014,16 @@ fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
             false,
         ),
     ));
-    assert!(runtime.message_status("compact-old").is_none());
-    assert!(runtime.message_status("compact-new").is_some());
+    assert!(runtime.message_status("compact-old").is_some());
+    assert!(runtime.message_status("compact-new").is_none());
     assert!(
         runtime
             .business_message_id_index
             .get(&normalise_business_message_id("compact-old-biz").expect("business id"))
-            .is_none()
+            .is_some()
     );
     assert!(
-        !store
+        store
             .path()
             .join("messages")
             .join(message_filename("compact-old"))
@@ -9247,7 +10044,7 @@ fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
             .and_then(JsonValue::as_object)
             .and_then(|entry| entry.get("message_id"))
             .and_then(JsonValue::as_str),
-        Some("compact-new")
+        Some("compact-old")
     );
 }
 #[test]
@@ -9280,6 +10077,12 @@ fn durable_store_compacts_records_older_than_retention_window() {
     }
     runtime.persist_message("age-expired");
     assert!(runtime.message_status("age-expired").is_none());
+    assert!(runtime.replay_tombstones.contains_key("age-expired"));
+    assert!(
+        runtime
+            .business_message_id_index
+            .contains_key(&normalise_business_message_id("age-expired-biz").expect("business id"))
+    );
     assert!(
         !store
             .path()
@@ -9446,6 +10249,53 @@ fn durable_store_exports_external_audit_notary_spool() {
         tampered.as_object().expect("tampered anchor")
     ));
 }
+#[tokio::test]
+async fn external_audit_write_failure_marks_runtime_unhealthy_and_retries() {
+    let store = TempDir::new().expect("store tempdir");
+    let export = TempDir::new().expect("export tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.audit_export_dir = Some(export.path().to_path_buf());
+    let runtime = Arc::new(
+        Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled"),
+    );
+    let latest_anchor = export.path().join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE);
+    fs::remove_file(&latest_anchor).expect("remove initial latest anchor");
+    fs::create_dir(&latest_anchor).expect("block latest anchor replacement");
+
+    assert!(runtime.check_and_record_inbound(
+        "external-audit-failure",
+        IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("external-audit-failure-biz".to_owned()),
+            None,
+            "external-audit-failure-hash".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        ),
+    ));
+    assert!(!runtime.audit_persistence_is_healthy());
+
+    let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+    let worker = runtime.start_audit_persistence_worker(shutdown.clone());
+    fs::remove_dir(&latest_anchor).expect("repair latest anchor path");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !runtime.audit_persistence_is_healthy() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("audit retry should recover");
+    shutdown.send();
+    assert_eq!(
+        worker.await.expect("audit worker joins"),
+        crate::ToriiCriticalWorkerExit::StoppedByShutdown
+    );
+}
 #[test]
 fn durable_store_exports_audit_index_matching_persisted_manifest() {
     let store = TempDir::new().expect("tempdir");
@@ -9483,7 +10333,7 @@ fn durable_store_exports_audit_index_matching_persisted_manifest() {
     ));
 }
 #[test]
-fn durable_store_audit_index_excludes_tampered_record_on_reload() {
+fn durable_store_audit_index_stops_startup_on_tampered_record() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
@@ -9528,43 +10378,13 @@ fn durable_store_audit_index_excludes_tampered_record_on_reload() {
     let original = fs::read_to_string(&tampered_path).expect("persisted JSON");
     assert!(original.contains("tx-tampered"));
     fs::write(&tampered_path, original.replace("tx-tampered", "tx-forged")).expect("tamper record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("audit-clean").is_some());
-    assert!(reloaded.message_status("audit-tampered").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(1)
+    let error = runtime_config_error(&config, "tampered ISO records must stop startup");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
-    let entries = index_obj
-        .get("records")
-        .and_then(JsonValue::as_array)
-        .expect("audit records");
-    assert_eq!(entries.len(), 1);
-    assert_eq!(
-        entries[0]
-            .as_object()
-            .and_then(|obj| obj.get("message_id"))
-            .and_then(JsonValue::as_str),
-        Some("audit-clean")
-    );
-    assert!(reloaded.check_and_record_inbound(
-        "audit-replacement",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("audit-tampered-biz".to_owned()),
-            None,
-            "audit-replacement-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
 }
 #[test]
 fn durable_store_rejects_tampered_record_body() {
@@ -9596,34 +10416,26 @@ fn durable_store_rejects_tampered_record_body() {
         .join(message_filename("tamper-msg"));
     let original = fs::read_to_string(&path).expect("persisted JSON");
     assert!(original.contains("tx-original"));
-    fs::write(&path, original.replace("tx-original", "tx-forged")).expect("tamper record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
+    let tampered = original.replace("tx-original", "tx-forged");
+    fs::write(&path, &tampered).expect("tamper record");
+    let audit_path = store
+        .path()
+        .join(ISO_PERSISTED_AUDIT_DIR)
+        .join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+    let audit_before = fs::read_to_string(&audit_path).expect("audit index");
+    let error = runtime_config_error(&config, "tampered ISO records must stop startup");
     assert!(
-        reloaded.message_status("tamper-msg").is_none(),
-        "tampered persisted records must not rebuild durable status"
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
+    assert_eq!(fs::read_to_string(path).expect("tampered record"), tampered);
     assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+        fs::read_to_string(audit_path).expect("audit index"),
+        audit_before,
+        "failed startup must not regenerate the derived audit index"
     );
-    assert!(reloaded.check_and_record_inbound(
-        "fresh-msg",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("tamper-biz".to_owned()),
-            None,
-            "fresh-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
 }
 #[test]
 fn durable_store_rejects_missing_record_digest() {
@@ -9661,12 +10473,12 @@ fn durable_store_rejects_missing_record_digest() {
         norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
     )
     .expect("write tampered JSON");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
+    let error = runtime_config_error(&config, "digest-free ISO records must stop startup");
     assert!(
-        reloaded.message_status("missing-digest-msg").is_none(),
-        "legacy or stripped records without a digest must fail closed"
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[test]
@@ -9708,12 +10520,12 @@ fn durable_store_rejects_malformed_record_digest() {
         norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
     )
     .expect("write tampered JSON");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
+    let error = runtime_config_error(&config, "malformed ISO record digests must stop startup");
     assert!(
-        reloaded.message_status("bad-digest-msg").is_none(),
-        "malformed record digests must not be accepted"
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[test]
@@ -9890,17 +10702,12 @@ fn durable_store_rejects_digest_correct_message_id_filename_drift() {
     let expected_path = messages_dir.join(message_filename("filename-drift"));
     let drifted_path = messages_dir.join(message_filename("filename-drift-forged"));
     fs::rename(&expected_path, &drifted_path).expect("rename persisted record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("filename-drift").is_none());
-    assert!(reloaded.message_status("filename-drift-forged").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    let error = runtime_config_error(&config, "drifted ISO record filenames must stop startup");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match its embedded message identity"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[cfg(unix)]
@@ -9933,16 +10740,10 @@ fn durable_store_rejects_symlinked_record_on_reload() {
     let target_path = store.path().join("symlink-target.json");
     fs::rename(&expected_path, &target_path).expect("move persisted record");
     std::os::unix::fs::symlink(&target_path, &expected_path).expect("symlink persisted record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("symlinked-record").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    let error = runtime_config_error(&config, "symlinked ISO records must stop startup");
+    assert!(
+        error.to_string().contains("is not a regular file"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[cfg(unix)]
@@ -9978,17 +10779,38 @@ fn durable_store_rejects_symlinked_messages_dir_on_reload() {
     .expect("symlink messages dir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("symlinked-messages-dir").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    let error = runtime_config_error(&config, "symlinked ISO message stores must stop startup");
+    assert!(
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
     );
+}
+#[cfg(unix)]
+#[test]
+fn durable_store_rejects_non_real_replay_tombstone_directories() {
+    for kind in ["file", "symlink"] {
+        let store = TempDir::new().expect("store tempdir");
+        let tombstones = store.path().join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
+        let _target = if kind == "symlink" {
+            let target = TempDir::new().expect("target tempdir");
+            std::os::unix::fs::symlink(target.path(), &tombstones)
+                .expect("symlink tombstone directory");
+            Some(target)
+        } else {
+            fs::write(&tombstones, b"not a directory").expect("tombstone directory blocker");
+            None
+        };
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let error = runtime_config_error(
+            &config,
+            "non-real ISO replay tombstone stores must stop startup",
+        );
+        assert!(
+            error.to_string().contains("is not a real directory"),
+            "unexpected hard-cut error for {kind}: {error:?}"
+        );
+    }
 }
 #[cfg(unix)]
 #[test]
@@ -9999,36 +10821,18 @@ fn durable_store_refuses_symlinked_messages_dir_on_persist() {
         .expect("symlink messages dir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(runtime.check_and_record_inbound(
-        "symlinked-persist-dir",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-persist-dir-biz".to_owned()),
-            None,
-            "symlinked-persist-dir-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
-    assert!(runtime.message_status("symlinked-persist-dir").is_some());
+    let error = runtime_config_error(&config, "symlinked ISO message stores must stop startup");
     assert!(
-        !target
-            .path()
-            .join(message_filename("symlinked-persist-dir"))
-            .exists(),
-        "persist_message must not follow a symlinked messages directory"
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
     );
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    assert!(
+        target
+            .path()
+            .read_dir()
+            .expect("target directory")
+            .next()
+            .is_none()
     );
 }
 #[cfg(unix)]
@@ -10040,33 +10844,18 @@ fn durable_store_refuses_symlinked_audit_dir_on_persist() {
         .expect("symlink audit dir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(runtime.check_and_record_inbound(
-        "symlinked-audit-dir",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-audit-dir-biz".to_owned()),
-            None,
-            "symlinked-audit-dir-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
+    let error = runtime_config_error(&config, "symlinked ISO audit stores must stop startup");
     assert!(
-        store
-            .path()
-            .join("messages")
-            .join(message_filename("symlinked-audit-dir"))
-            .exists(),
-        "record persistence should still use the real messages directory"
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
     );
     assert!(
-        !target.path().join(ISO_PERSISTED_AUDIT_INDEX_FILE).exists(),
-        "persist_audit_index must not follow a symlinked audit directory"
+        target
+            .path()
+            .read_dir()
+            .expect("target directory")
+            .next()
+            .is_none()
     );
 }
 #[cfg(unix)]
@@ -10080,22 +10869,14 @@ fn durable_store_refuses_symlinked_external_export_dirs() {
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
     config.audit_export_dir = Some(export_link);
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(runtime.check_and_record_inbound(
-        "symlinked-export-root",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-export-root-biz".to_owned()),
-            None,
-            "symlinked-export-root-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
+    let error = runtime_config_error(
+        &config,
+        "symlinked ISO audit export roots must stop startup",
+    );
+    assert!(
+        error.to_string().contains("audit persistence targets"),
+        "unexpected hard-cut error: {error:?}"
+    );
     assert!(
         !export_target
             .path()
@@ -10120,36 +10901,28 @@ fn durable_store_refuses_symlinked_external_export_dirs() {
     let mut anchor_config = sample_config();
     anchor_config.store_dir = Some(store.path().to_path_buf());
     anchor_config.audit_export_dir = Some(export.path().to_path_buf());
-    let anchor_runtime = Iso20022BridgeRuntime::from_config(&anchor_config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(anchor_runtime.check_and_record_inbound(
-        "symlinked-anchor-dir",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-anchor-dir-biz".to_owned()),
-            None,
-            "symlinked-anchor-dir-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
-    let external = read_external_audit_index(&export);
-    let index_digest = audit_index_digest(&external).expect("index digest");
+    let error = runtime_config_error(
+        &anchor_config,
+        "symlinked ISO audit anchor directories must stop startup",
+    );
     assert!(
-        export
+        error.to_string().contains("audit persistence targets"),
+        "unexpected hard-cut error: {error:?}"
+    );
+    assert!(
+        !export
             .path()
             .join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE)
             .exists(),
-        "latest anchor should still be written to the real export root"
+        "latest anchor must not advance when the immutable anchor cannot be written"
     );
     assert!(
-        !anchor_target
+        anchor_target
             .path()
-            .join(format!("{index_digest}.notary.json"))
-            .exists(),
+            .read_dir()
+            .expect("anchor target directory")
+            .next()
+            .is_none(),
         "digest-addressed anchors must not follow a symlinked anchors directory"
     );
 }
@@ -10769,11 +11542,11 @@ fn pacs009_rejects_unknown_bic() {
     );
 }
 #[test]
-fn rejected_message_can_be_retried() {
+fn rejected_message_identity_remains_reserved_until_dedupe_expiry() {
     let runtime = sample_runtime();
     assert!(runtime.check_and_record_message("m1"));
     runtime.mark_rejected("m1", Some("missing mapping".to_string()), None);
-    assert!(runtime.check_and_record_message("m1"));
+    assert!(!runtime.check_and_record_message("m1"));
 }
 #[test]
 fn status_transitions_are_recorded() {
@@ -10848,7 +11621,7 @@ fn durable_indeterminate_queue_outcome_survives_reload_and_pins_capacity() {
 }
 #[test]
 fn status_history_encoded_byte_cap_accepts_exact_boundary() {
-    let mut exact = IsoMessageRecord::pending(Instant::now());
+    let mut exact = IsoMessageRecordV2::pending(Instant::now());
     exact.status_history.clear();
     exact.state = IsoMessageState::Rejected;
     exact.updated_at = std::time::UNIX_EPOCH;
@@ -10875,7 +11648,7 @@ fn status_history_encoded_byte_cap_accepts_exact_boundary() {
     ))
     .expect("encode exact-bound history");
     assert_eq!(canonical.len(), ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1);
-    let mut overflow = IsoMessageRecord::pending(Instant::now());
+    let mut overflow = IsoMessageRecordV2::pending(Instant::now());
     overflow.status_history.clear();
     overflow.state = IsoMessageState::Rejected;
     overflow.updated_at = std::time::UNIX_EPOCH;
@@ -10888,7 +11661,7 @@ fn status_history_encoded_byte_cap_accepts_exact_boundary() {
 }
 #[test]
 fn alternating_status_history_refuses_entry_overflow_before_memory_or_disk_mutation() {
-    let mut record = IsoMessageRecord::pending(Instant::now());
+    let mut record = IsoMessageRecordV2::pending(Instant::now());
     for index in 1..ISO_STATUS_HISTORY_MAX_ENTRIES_V1 {
         let accepted = index % 2 == 1;
         record
@@ -10919,6 +11692,16 @@ fn alternating_status_history_refuses_entry_overflow_before_memory_or_disk_mutat
         .expect("cfg")
         .expect("enabled");
     let message_id = "bounded-alternating-history";
+    let metadata = inbound_metadata(message_id, "pacs.008");
+    let parties = runtime.compatibility_test_parties(&metadata);
+    runtime
+        .admit_authenticated_inbound(message_id, metadata, parties)
+        .expect("precommit replay identity");
+    let admitted = runtime.records.get(message_id).expect("admitted record");
+    record.metadata = admitted.metadata.clone();
+    record.parties = admitted.parties.clone();
+    record.replay_expires_at = admitted.replay_expires_at;
+    drop(admitted);
     runtime.records.insert(message_id.to_owned(), record);
     runtime
         .tx_hash_index
@@ -10971,7 +11754,7 @@ fn change_reason_encoded_byte_cap_accepts_exact_boundary() {
     let code_bytes = ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1
         .checked_sub(4)
         .expect("V1 byte cap exceeds array and string syntax");
-    let mut exact = IsoMessageRecord::pending(Instant::now());
+    let mut exact = IsoMessageRecordV2::pending(Instant::now());
     exact
         .try_transition(|candidate| {
             candidate.change_reason_codes = vec!["x".repeat(code_bytes)];
@@ -10990,7 +11773,7 @@ fn change_reason_encoded_byte_cap_accepts_exact_boundary() {
     ))
     .expect("encode exact-bound change reasons");
     assert_eq!(canonical.len(), ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1);
-    let mut overflow = IsoMessageRecord::pending(Instant::now());
+    let mut overflow = IsoMessageRecordV2::pending(Instant::now());
     let before = persisted_record_json("change-reason-overflow", &overflow)
         .expect("encode pre-transition record");
     assert_eq!(
@@ -11231,5 +12014,1224 @@ fn securities_outbox_xml_uses_sese023_context_and_settlement_state() {
     assert!(confirmation.contains("<ExecutionOrder>DELIVERY_THEN_PAYMENT</ExecutionOrder>"));
     parse_message("sese.025", confirmation.as_bytes()).expect("generated sese.025 parses");
 }
+fn participant_message(
+    message_type: &str,
+    from: &str,
+    to: &str,
+    extra_fields: &str,
+) -> ParsedMessage {
+    let fields = format!(
+        "AppHdr/Fr/FIId/FinInstnId/BICFI={from}\n\
+         AppHdr/To/FIId/FinInstnId/BICFI={to}\n\
+         {extra_fields}"
+    );
+    parse_message(message_type, fields.as_bytes()).expect("participant message parses")
+}
+
+#[test]
+fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
+    let store = TempDir::new().expect("tempdir");
+    let audit_admin = fixture_key_pair(0xAD);
+    let other_party = fixture_key_pair(0xAE);
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.audit_admin_keys = vec![audit_admin.public_key().clone()];
+    config.participants.push(actual::IsoBridgeParticipant {
+        id: "other-bank".to_owned(),
+        operator_keys: vec![other_party.public_key().clone()],
+        financial_identifiers: vec!["OTHRDEFF".to_owned()],
+        allowed_profiles: vec!["generic-iso20022".to_owned()],
+        roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+    });
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let parsed = participant_message(
+        "pacs.008",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "MsgId=participant-payment",
+    );
+    let profile = runtime.default_profile();
+    let parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &parsed)
+        .expect("configured From owner");
+    assert_eq!(parties.originator_participant_id, "originator-bank");
+    assert_eq!(parties.counterparty_participant_id, "counterparty-bank");
+    assert_eq!(
+        runtime.authorize_initial_submission(counterparty.public_key(), profile, &parsed),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let ambiguous_from = parse_message(
+        "pacs.008",
+        b"AppHdr/Fr/FIId/FinInstnId/BICFI=DEUTDEFF\nAppHdr/Fr/FIId/FinInstnId/LEI=5493001KJTIIGC8Y1R12\nAppHdr/To/FIId/FinInstnId/BICFI=MARKDEFF\nMsgId=ambiguous",
+    )
+    .expect("ambiguous From parses");
+    assert_eq!(
+        runtime.authorize_initial_submission(originator.public_key(), profile, &ambiguous_from),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    assert_eq!(
+        runtime.authorize_initial_submission(audit_admin.public_key(), profile, &parsed),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    runtime
+        .admit_authenticated_inbound(
+            "participant-payment",
+            inbound_metadata("participant-payment", "pacs.008"),
+            parties,
+        )
+        .expect("durable authenticated admission");
+    let other_message =
+        participant_message("pacs.008", "OTHRDEFF", "MARKDEFF", "MsgId=other-payment");
+    let other_parties = runtime
+        .authorize_initial_submission(other_party.public_key(), profile, &other_message)
+        .expect("other participant owns its From identity");
+    runtime
+        .admit_authenticated_inbound(
+            "other-payment",
+            inbound_metadata("other-payment", "pacs.008"),
+            other_parties,
+        )
+        .expect("second durable authenticated admission");
+    assert!(
+        runtime
+            .authorized_message_status(originator.public_key(), "participant-payment")
+            .is_some()
+    );
+    assert!(
+        runtime
+            .authorized_message_status(counterparty.public_key(), "participant-payment")
+            .is_some()
+    );
+    assert!(
+        runtime
+            .authorized_message_status(audit_admin.public_key(), "participant-payment")
+            .is_some()
+    );
+    assert!(
+        runtime
+            .authorized_message_status(other_party.public_key(), "participant-payment")
+            .is_none()
+    );
+    assert!(
+        runtime
+            .authorized_message_status(fixture_key_pair(0xAF).public_key(), "participant-payment")
+            .is_none()
+    );
+
+    let originator_audit = runtime
+        .audit_index_for(originator.public_key())
+        .expect("participant audit index");
+    let counterparty_audit = runtime
+        .audit_index_for(counterparty.public_key())
+        .expect("shared counterparty audit index");
+    let other_audit = runtime
+        .audit_index_for(other_party.public_key())
+        .expect("other participant audit index");
+    let admin_audit = runtime
+        .audit_index_for(audit_admin.public_key())
+        .expect("audit admin global index");
+    assert_eq!(originator_audit["record_count"].as_u64(), Some(1));
+    assert_eq!(counterparty_audit["record_count"].as_u64(), Some(2));
+    assert_eq!(other_audit["record_count"].as_u64(), Some(1));
+    assert_eq!(admin_audit["record_count"].as_u64(), Some(2));
+    assert!(
+        runtime
+            .audit_index_for(fixture_key_pair(0xAF).public_key())
+            .is_none()
+    );
+}
+
+#[test]
+fn participant_catalog_rejects_legacy_unscoped_and_overlapping_admin_keys() {
+    let mut unscoped = sample_config();
+    unscoped.participants.clear();
+    let error = runtime_config_error(&unscoped, "unscoped participant catalog must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("legacy unscoped bridge configuration")
+    );
+
+    let mut overlapping = sample_config();
+    overlapping.audit_admin_keys = vec![overlapping.participants[0].operator_keys[0].clone()];
+    let error = runtime_config_error(&overlapping, "audit mutation key overlap must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("must not also be a participant mutation key")
+    );
+}
+
+#[test]
+fn lifecycle_roles_reject_cross_party_updates() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    for participant in &mut config.participants {
+        participant
+            .allowed_profiles
+            .push("swift-cbpr-plus".to_owned());
+    }
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let original = participant_message("pacs.008", "DEUTDEFF", "MARKDEFF", "MsgId=owned-payment");
+    let profile = runtime.default_profile();
+    let parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &original)
+        .expect("originator owns From");
+    runtime
+        .admit_authenticated_inbound(
+            "owned-payment",
+            inbound_metadata("owned-payment", "pacs.008"),
+            parties,
+        )
+        .expect("original admitted");
+    let lifecycle = participant_message(
+        "pacs.002",
+        "MARKDEFF",
+        "DEUTDEFF",
+        "BizMsgIdr=status-1\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+    );
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            originator.public_key(),
+            profile,
+            "pacs.002",
+            &lifecycle,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let lifecycle_parties = runtime
+        .authorize_lifecycle_submission(counterparty.public_key(), profile, "pacs.002", &lifecycle)
+        .expect("original counterparty owns pacs.002");
+    assert_eq!(
+        lifecycle_parties.parties().admitting_participant_id,
+        "counterparty-bank"
+    );
+    for (label, malformed) in [
+        (
+            "missing From",
+            parse_message(
+                "pacs.002",
+                b"AppHdr/To/FIId/FinInstnId/BICFI=DEUTDEFF\nBizMsgIdr=status-missing-from\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+            )
+            .expect("missing-From lifecycle parses"),
+        ),
+        (
+            "missing To",
+            parse_message(
+                "pacs.002",
+                b"AppHdr/Fr/FIId/FinInstnId/BICFI=MARKDEFF\nBizMsgIdr=status-missing-to\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+            )
+            .expect("missing-To lifecycle parses"),
+        ),
+        (
+            "wrong To",
+            participant_message(
+                "pacs.002",
+                "MARKDEFF",
+                "MARKDEFF",
+                "BizMsgIdr=status-wrong-to\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+            ),
+        ),
+    ] {
+        assert_eq!(
+            runtime.authorize_lifecycle_submission(
+                counterparty.public_key(),
+                profile,
+                "pacs.002",
+                &malformed,
+            ),
+            Err(IsoAdmissionError::NotAuthorized),
+            "{label} must not be accepted",
+        );
+    }
+    let downgraded_profile = runtime
+        .resolve_profile(Some("swift-cbpr-plus"))
+        .expect("built-in SWIFT profile");
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            counterparty.public_key(),
+            downgraded_profile,
+            "pacs.002",
+            &lifecycle,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let cancellation = participant_message(
+        "camt.056",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "BizMsgIdr=cancel-1\nOrgnlGrpInf/OrgnlMsgId=owned-payment",
+    );
+    runtime
+        .authorize_lifecycle_submission(originator.public_key(), profile, "camt.056", &cancellation)
+        .expect("original originator owns camt.056");
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            counterparty.public_key(),
+            profile,
+            "camt.056",
+            &cancellation,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+}
+
+#[test]
+fn lifecycle_apply_rejects_original_pruned_after_authorization() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_retention_secs = 3_600;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let profile = runtime.default_profile();
+
+    let original = participant_message(
+        "pacs.008",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "MsgId=expiry-boundary-original",
+    );
+    let original_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &original)
+        .expect("originator owns original");
+    runtime
+        .admit_authenticated_inbound(
+            "expiry-boundary-original",
+            inbound_metadata("expiry-boundary-original", "pacs.008"),
+            original_parties,
+        )
+        .expect("original admitted");
+    runtime.mark_accepted("expiry-boundary-original", "tx-expiry-boundary");
+    assert!(runtime.mark_settled("expiry-boundary-original", SystemTime::now()));
+    assert!(runtime.lifecycle_reference_is_live_at("expiry-boundary-original", SystemTime::now(),));
+
+    let lifecycle = participant_message(
+        "pacs.004",
+        "MARKDEFF",
+        "DEUTDEFF",
+        "BizMsgIdr=expiry-boundary-return\n\
+         OrgnlGrpInf/OrgnlMsgId=expiry-boundary-original",
+    );
+    let lifecycle_parties = runtime
+        .authorize_lifecycle_submission(counterparty.public_key(), profile, "pacs.004", &lifecycle)
+        .expect("counterparty is authorized before the original expires");
+    runtime
+        .records
+        .get_mut("expiry-boundary-original")
+        .expect("original remains before retention pruning")
+        .updated_at = SystemTime::UNIX_EPOCH;
+    assert!(
+        !runtime.lifecycle_reference_is_live_at("expiry-boundary-original", SystemTime::now(),)
+    );
+
+    let lifecycle_metadata = inbound_metadata("expiry-boundary-return", "pacs.004");
+    runtime
+        .admit_authenticated_inbound(
+            "expiry-boundary-return",
+            lifecycle_metadata.clone(),
+            lifecycle_parties.parties().clone(),
+        )
+        .expect("lifecycle identity admitted after retention pruning");
+    assert!(
+        runtime.message_status("expiry-boundary-original").is_none(),
+        "admission must reproduce the retention-pruning side of the race"
+    );
+
+    let error = runtime
+        .apply_inbound_lifecycle_message_with_evidence(
+            "expiry-boundary-return",
+            "pacs.004",
+            &lifecycle,
+            &lifecycle_parties,
+            None,
+        )
+        .expect_err("a lifecycle message must not be accepted without its original");
+    assert!(matches!(
+        error,
+        IsoLifecycleApplyError::Validation(MsgError::ValidationFailed)
+    ));
+    assert_eq!(
+        runtime
+            .message_status("expiry-boundary-return")
+            .expect("failed lifecycle identity remains reserved")
+            .status_label(),
+        "Pending"
+    );
+    assert!(runtime.mark_rejected("expiry-boundary-return", Some(error.to_string()), None,));
+    assert_eq!(
+        runtime.admit_authenticated_inbound(
+            "expiry-boundary-return",
+            lifecycle_metadata,
+            lifecycle_parties.parties().clone(),
+        ),
+        Err(IsoAdmissionError::Duplicate),
+        "rejection must retain lifecycle replay protection"
+    );
+}
+
+#[test]
+fn lifecycle_authorization_rejects_prune_readmit_aba_and_old_settlement_hash() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_retention_secs = 3_600;
+    config.dedupe_ttl_secs = 0;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let profile = runtime.default_profile();
+    let original = participant_message("pacs.008", "DEUTDEFF", "MARKDEFF", "MsgId=aba-original");
+    let original_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &original)
+        .expect("originator owns original");
+    runtime
+        .admit_authenticated_inbound(
+            "aba-original",
+            inbound_metadata("aba-original-v1", "pacs.008"),
+            original_parties,
+        )
+        .expect("first incarnation admitted");
+    runtime.mark_accepted("aba-original", "tx-aba-original-v1");
+    assert!(runtime.mark_settled("aba-original", SystemTime::now()));
+
+    let lifecycle = participant_message(
+        "pacs.002",
+        "MARKDEFF",
+        "DEUTDEFF",
+        "BizMsgIdr=aba-status\nOrgnlMsgId=aba-original\nTxSts=ACSC",
+    );
+    let authorization = runtime
+        .authorize_lifecycle_submission(counterparty.public_key(), profile, "pacs.002", &lifecycle)
+        .expect("counterparty authorized against first incarnation");
+    {
+        let mut record = runtime
+            .records
+            .get_mut("aba-original")
+            .expect("first incarnation remains");
+        record.updated_at = SystemTime::UNIX_EPOCH;
+        record.replay_expires_at = SystemTime::UNIX_EPOCH;
+    }
+    runtime
+        .replay_tombstones
+        .get_mut("aba-original")
+        .expect("first incarnation tombstone")
+        .expires_at = SystemTime::UNIX_EPOCH;
+    runtime
+        .admit_authenticated_inbound(
+            "aba-status",
+            inbound_metadata("aba-status", "pacs.002"),
+            authorization.parties().clone(),
+        )
+        .expect("lifecycle admission prunes the expired first incarnation");
+    assert!(!runtime.records.contains_key("aba-original"));
+
+    let replacement_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &original)
+        .expect("same external identifier may be readmitted after expiry");
+    runtime
+        .admit_authenticated_inbound(
+            "aba-original",
+            inbound_metadata("aba-original-v2", "pacs.008"),
+            replacement_parties,
+        )
+        .expect("replacement incarnation admitted");
+    runtime.mark_accepted("aba-original", "tx-aba-original-v2");
+
+    let error = runtime
+        .apply_inbound_lifecycle_message_with_evidence(
+            "aba-status",
+            "pacs.002",
+            &lifecycle,
+            &authorization,
+            Some("tx-aba-original-v1"),
+        )
+        .expect_err("authorization and evidence for the old incarnation must fail closed");
+    assert!(matches!(
+        error,
+        IsoLifecycleApplyError::Validation(MsgError::ValidationFailed)
+    ));
+    let replacement = runtime
+        .message_status("aba-original")
+        .expect("replacement remains untouched");
+    assert_eq!(replacement.transaction_hash(), Some("tx-aba-original-v2"));
+    assert_ne!(replacement.pacs002_code(), "ACSC");
+}
+
+#[test]
+fn counterparty_owns_every_return_and_securities_lifecycle_message() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let profile = runtime.default_profile();
+
+    let payment = participant_message(
+        "pacs.008",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "MsgId=return-role-payment",
+    );
+    let payment_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &payment)
+        .expect("originator owns payment From identity");
+    runtime
+        .admit_authenticated_inbound(
+            "return-role-payment",
+            inbound_metadata("return-role-payment", "pacs.008"),
+            payment_parties,
+        )
+        .expect("payment original admitted");
+    let payment_return = participant_message(
+        "pacs.004",
+        "MARKDEFF",
+        "DEUTDEFF",
+        "BizMsgIdr=return-role-1\nOrgnlGrpInf/OrgnlMsgId=return-role-payment",
+    );
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            originator.public_key(),
+            profile,
+            "pacs.004",
+            &payment_return,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let admitted_return = runtime
+        .authorize_lifecycle_submission(
+            counterparty.public_key(),
+            profile,
+            "pacs.004",
+            &payment_return,
+        )
+        .expect("original counterparty owns pacs.004");
+    assert_eq!(
+        admitted_return.parties().admitting_participant_id,
+        "counterparty-bank"
+    );
+
+    let securities = participant_message(
+        "sese.023",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "TxId=securities-role-trade",
+    );
+    let securities_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &securities)
+        .expect("originator owns securities From identity");
+    runtime
+        .admit_authenticated_inbound(
+            "sese.023:securities-role-trade",
+            inbound_metadata("sese.023:securities-role-trade", "sese.023"),
+            securities_parties,
+        )
+        .expect("securities original admitted");
+    for (message_type, lifecycle) in [
+        (
+            "sese.024",
+            participant_message(
+                "sese.024",
+                "MARKDEFF",
+                "DEUTDEFF",
+                "BizMsgIdr=securities-status-1\nTxId=securities-role-trade\nSttlmSts=ACCP",
+            ),
+        ),
+        (
+            "sese.025",
+            participant_message(
+                "sese.025",
+                "MARKDEFF",
+                "DEUTDEFF",
+                "BizMsgIdr=securities-confirmation-1\nTxId=securities-role-trade\nConfSts=ACSC",
+            ),
+        ),
+    ] {
+        assert_eq!(
+            runtime.authorize_lifecycle_submission(
+                originator.public_key(),
+                profile,
+                message_type,
+                &lifecycle,
+            ),
+            Err(IsoAdmissionError::NotAuthorized),
+            "originator must not submit {message_type}"
+        );
+        let admitted = runtime
+            .authorize_lifecycle_submission(
+                counterparty.public_key(),
+                profile,
+                message_type,
+                &lifecycle,
+            )
+            .unwrap_or_else(|error| panic!("counterparty must own {message_type}: {error:?}"));
+        assert_eq!(
+            admitted.parties().admitting_participant_id,
+            "counterparty-bank"
+        );
+    }
+}
+
+#[test]
+fn settling_pacs002_requires_committed_transaction_evidence() {
+    let runtime = sample_runtime();
+    record_original(&runtime, "settlement-evidence", "pacs.008");
+    runtime.mark_accepted("settlement-evidence", "tx-settlement-evidence");
+    let lifecycle_id = "settlement-evidence-status";
+    assert!(
+        runtime.check_and_record_inbound(lifecycle_id, inbound_metadata(lifecycle_id, "pacs.002"))
+    );
+    let lifecycle = parse_message(
+        "pacs.002",
+        b"BizMsgIdr=settlement-evidence-status\nOrgnlMsgId=settlement-evidence\nTxSts=ACSC",
+    )
+    .expect("pacs.002 parses");
+    let authorization = runtime
+        .compatibility_lifecycle_authorization("pacs.002", &lifecycle)
+        .expect("bind exact original");
+    assert!(
+        runtime
+            .apply_inbound_lifecycle_message_with_evidence(
+                lifecycle_id,
+                "pacs.002",
+                &lifecycle,
+                &authorization,
+                None,
+            )
+            .is_err()
+    );
+    assert_ne!(
+        runtime
+            .message_status("settlement-evidence")
+            .expect("original remains")
+            .pacs002_code(),
+        "ACSC"
+    );
+    assert!(
+        runtime
+            .apply_inbound_lifecycle_message_with_evidence(
+                lifecycle_id,
+                "pacs.002",
+                &lifecycle,
+                &authorization,
+                Some("tx-from-another-record"),
+            )
+            .is_err(),
+        "an unrelated committed hash must not authorize settlement"
+    );
+    runtime
+        .apply_inbound_lifecycle_message_with_evidence(
+            lifecycle_id,
+            "pacs.002",
+            &lifecycle,
+            &authorization,
+            Some("tx-settlement-evidence"),
+        )
+        .expect("committed evidence permits settlement transition");
+    assert_eq!(
+        runtime
+            .message_status("settlement-evidence")
+            .expect("original settles")
+            .pacs002_code(),
+        "ACSC"
+    );
+}
+
+#[test]
+fn unexpired_replay_tombstone_survives_detail_pruning_and_restart() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_retention_secs = 1;
+    config.dedupe_ttl_secs = 3_600;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("runtime")
+        .expect("enabled");
+    let metadata = inbound_metadata("durable-replay", "pacs.008");
+    assert!(runtime.check_and_record_inbound("durable-replay", metadata.clone()));
+    runtime.mark_accepted("durable-replay", "tx-durable-replay");
+    runtime.mark_settled("durable-replay", SystemTime::now());
+    runtime
+        .records
+        .get_mut("durable-replay")
+        .expect("rich record")
+        .updated_at = SystemTime::UNIX_EPOCH;
+    runtime.compact_persisted_records();
+    assert!(!runtime.records.contains_key("durable-replay"));
+    assert!(runtime.replay_tombstones.contains_key("durable-replay"));
+    drop(runtime);
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("restart loads tombstone")
+        .expect("enabled");
+    assert!(!reloaded.check_and_record_inbound("durable-replay", metadata));
+}
+
+#[test]
+fn protected_replay_capacity_fails_closed_without_mutation() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_max_records = 1;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("runtime")
+        .expect("enabled");
+    let first = runtime.compatibility_test_parties(&inbound_metadata("one", "pacs.008"));
+    runtime
+        .admit_authenticated_inbound("one", inbound_metadata("one", "pacs.008"), first)
+        .expect("first admission");
+    let second = runtime.compatibility_test_parties(&inbound_metadata("two", "pacs.008"));
+    assert_eq!(
+        runtime.admit_authenticated_inbound("two", inbound_metadata("two", "pacs.008"), second,),
+        Err(IsoAdmissionError::ProtectedCapacity)
+    );
+    assert!(!runtime.records.contains_key("two"));
+}
+
+#[test]
+fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("runtime")
+        .expect("enabled");
+    let messages = store.path().join("messages");
+    let messages_backup = store.path().join("messages-backup");
+    fs::rename(&messages, &messages_backup).expect("move initialized message directory");
+    fs::write(&messages, b"block rich-record persistence").expect("write rich-record blocker");
+    let metadata = inbound_metadata("precommitted-replay", "pacs.008");
+    let parties = runtime.compatibility_test_parties(&metadata);
+    assert_eq!(
+        runtime.admit_authenticated_inbound("precommitted-replay", metadata.clone(), parties,),
+        Err(IsoAdmissionError::PersistenceUnavailable)
+    );
+    assert!(!runtime.records.contains_key("precommitted-replay"));
+    assert!(
+        runtime
+            .replay_tombstones
+            .contains_key("precommitted-replay")
+    );
+    drop(runtime);
+    fs::remove_file(&messages).expect("remove rich-record blocker");
+    fs::rename(messages_backup, messages).expect("restore initialized message directory");
+
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("restart loads precommitted tombstone")
+        .expect("enabled");
+    let parties = reloaded.compatibility_test_parties(&metadata);
+    assert_eq!(
+        reloaded.admit_authenticated_inbound("precommitted-replay", metadata, parties),
+        Err(IsoAdmissionError::Duplicate)
+    );
+}
+
+#[test]
+fn outbound_document_signature_covers_exact_xml_bytes() {
+    let runtime = sample_runtime();
+    let signed = runtime
+        .sign_outbound_document("<Document>status</Document>".to_owned())
+        .expect("outbound signature");
+    let public_key = PublicKey::from_str(&signed.public_key).expect("canonical signer key");
+    let signature = Signature::from_bytes(
+        &BASE64_STANDARD
+            .decode(signed.signature)
+            .expect("base64 signature"),
+    );
+    let mut payload = b"iroha.iso20022.outbound.v2\0".to_vec();
+    payload.extend_from_slice(signed.xml.as_bytes());
+    signature
+        .verify(&public_key, &payload)
+        .expect("signature verifies exact XML");
+    payload.push(b'!');
+    assert!(signature.verify(&public_key, &payload).is_err());
+}
+
+#[test]
+fn legacy_iso_record_store_fails_fast_with_schema_incompatibility() {
+    let store = TempDir::new().expect("tempdir");
+    let messages = store.path().join("messages");
+    fs::create_dir_all(&messages).expect("messages directory");
+    fs::write(
+        messages.join(message_filename("legacy-record")),
+        r#"{"version":1,"message_id":"legacy-record"}"#,
+    )
+    .expect("legacy record fixture");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let error = match Iso20022BridgeRuntime::from_config(&config) {
+        Ok(_) => panic!("legacy store must not be accepted"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible ISO bridge store record schema version 1")
+    );
+}
+
+#[test]
+fn persisted_record_rejects_same_id_profile_policy_drift_on_restart() {
+    let store = TempDir::new().expect("tempdir");
+    let mut profile = live_message_profile("pacs.008", "pacs.008");
+    profile.id = "generic-iso20022".to_owned();
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.profiles = vec![profile];
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("profile override")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "profile-policy-pinned",
+            inbound_metadata("profile-policy-pinned", "pacs.008"),
+        ));
+        let status = runtime
+            .message_status("profile-policy-pinned")
+            .expect("pinned record");
+        assert!(is_canonical_sha256_hex(
+            status.pinned_profile_policy_sha256()
+        ));
+    }
+
+    // Keep the stable profile id and coarse signature label unchanged while weakening one
+    // message constraint. V3 records bind the whole policy and must stop this restart.
+    config.profiles[0].message_profiles[0].require_uetr = true;
+    let error = runtime_config_error(
+        &config,
+        "same-id profile policy drift must not reinterpret persisted records",
+    );
+    assert!(
+        error.to_string().contains("full profile policy absent"),
+        "unexpected policy hard-cut error: {error:?}"
+    );
+}
+
+#[test]
+fn profile_policy_digest_covers_every_security_and_message_constraint() {
+    let base = profiles::default_profile("generic-iso20022").expect("default profile");
+    let mutations: &[(&str, fn(&mut TradfiRailProfile))] = &[
+        ("id", |profile| profile.id.push_str("-changed")),
+        ("rail", |profile| profile.rail = TradfiRail::SwiftCbprPlus),
+        ("embedded signature policy", |profile| {
+            profile.embedded_signature_policy = EmbeddedSignaturePolicy::RequireVerified;
+        }),
+        ("public-key pins", |profile| {
+            profile
+                .signature_public_key_sha256_pins
+                .push("11".repeat(32));
+        }),
+        ("trust-anchor pins", |profile| {
+            profile
+                .x509_trust_anchor_sha256_pins
+                .push("22".repeat(32));
+        }),
+        ("certificate policy OIDs", |profile| {
+            profile
+                .x509_required_certificate_policy_oids
+                .push("1.2.3.4".to_owned());
+        }),
+        ("CRL requirement", |profile| {
+            profile.x509_require_crl_revocation_check =
+                !profile.x509_require_crl_revocation_check;
+        }),
+        ("CRL material", |profile| {
+            profile.x509_crl_der_base64.push("AA==".to_owned());
+        }),
+        ("OCSP requirement", |profile| {
+            profile.x509_require_ocsp_revocation_check =
+                !profile.x509_require_ocsp_revocation_check;
+        }),
+        ("OCSP material", |profile| {
+            profile
+                .x509_ocsp_response_der_base64
+                .push("AA==".to_owned());
+        }),
+        ("revoked certificates", |profile| {
+            profile.revoked_certificate_sha256.push("33".repeat(32));
+        }),
+        ("reference datasets", |profile| {
+            if profile
+                .required_reference_datasets
+                .contains(&ReferenceDatasetRequirement::BicLei)
+            {
+                profile
+                    .required_reference_datasets
+                    .retain(|item| *item != ReferenceDatasetRequirement::BicLei);
+            } else {
+                profile
+                    .required_reference_datasets
+                    .push(ReferenceDatasetRequirement::BicLei);
+            }
+        }),
+        ("message type", |profile| {
+            profile.message_profiles[0].message_type.push_str(".changed");
+        }),
+        ("message direction", |profile| {
+            profile.message_profiles[0].direction = MessageDirection::FollowUp;
+        }),
+        ("message versions", |profile| {
+            profile.message_profiles[0]
+                .versions
+                .push("changed.version".to_owned());
+        }),
+        ("business services", |profile| {
+            profile.message_profiles[0]
+                .business_services
+                .push("changed.service".to_owned());
+        }),
+        ("application header requirement", |profile| {
+            profile.message_profiles[0].require_app_header =
+                !profile.message_profiles[0].require_app_header;
+        }),
+        ("business service requirement", |profile| {
+            profile.message_profiles[0].require_business_service =
+                !profile.message_profiles[0].require_business_service;
+        }),
+        ("UETR requirement", |profile| {
+            profile.message_profiles[0].require_uetr = !profile.message_profiles[0].require_uetr;
+        }),
+        ("address mode", |profile| {
+            profile.message_profiles[0].structured_address_mode =
+                StructuredAddressMode::ForbidUnstructured;
+        }),
+        ("supplementary data limit", |profile| {
+            profile.message_profiles[0].supplementary_data_max_bytes += 1;
+        }),
+        ("currency precision", |profile| {
+            profile.message_profiles[0]
+                .amount_minor_units
+                .insert("ZZZ".to_owned(), 4);
+        }),
+    ];
+    let base_digest = profile_policy_sha256(&base);
+    for (label, mutate) in mutations {
+        let mut candidate = base.clone();
+        mutate(&mut candidate);
+        assert_ne!(
+            profile_policy_sha256(&candidate),
+            base_digest,
+            "{label} must be part of the pinned profile policy"
+        );
+    }
+}
+
+#[test]
+fn conflicting_v2_replay_and_transaction_identities_stop_startup() {
+    let transaction_store = TempDir::new().expect("transaction store");
+    let mut transaction_config = sample_config();
+    transaction_config.store_dir = Some(transaction_store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&transaction_config)
+            .expect("cfg")
+            .expect("enabled");
+        for message_id in ["tx-owner-a", "tx-owner-b"] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(format!("{message_id}-biz")),
+                    None,
+                    format!("{message_id}-hash"),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted(message_id, &format!("{message_id}-transaction"));
+        }
+    }
+    rewrite_persisted_record(
+        &transaction_store
+            .path()
+            .join("messages")
+            .join(message_filename("tx-owner-b")),
+        |object| {
+            object.insert(
+                "transaction_hash".to_owned(),
+                JsonValue::from("tx-owner-a-transaction"),
+            );
+        },
+    );
+    let error = runtime_config_error(
+        &transaction_config,
+        "conflicting ISO transaction identities must stop startup",
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("conflicting transaction identities"),
+        "unexpected transaction hard-cut error: {error:?}"
+    );
+
+    let replay_store = TempDir::new().expect("replay store");
+    let mut replay_config = sample_config();
+    replay_config.store_dir = Some(replay_store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&replay_config)
+            .expect("cfg")
+            .expect("enabled");
+        for message_id in ["replay-owner-a", "replay-owner-b"] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(format!("{message_id}-biz")),
+                    None,
+                    format!("{message_id}-hash"),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+    }
+    rewrite_persisted_record(
+        &replay_store
+            .path()
+            .join("messages")
+            .join(message_filename("replay-owner-b")),
+        |object| {
+            object
+                .get_mut("metadata")
+                .and_then(JsonValue::as_object_mut)
+                .expect("metadata object")
+                .insert(
+                    "payload_hash".to_owned(),
+                    JsonValue::from("replay-owner-a-hash"),
+                );
+        },
+    );
+    rewrite_persisted_tombstone(&replay_store, "replay-owner-b", |object| {
+        object.insert(
+            "payload_hash".to_owned(),
+            JsonValue::from("replay-owner-a-hash"),
+        );
+    });
+    let error = runtime_config_error(
+        &replay_config,
+        "conflicting ISO replay identities must stop startup",
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("conflicting immutable identities"),
+        "unexpected replay hard-cut error: {error:?}"
+    );
+}
+
+#[test]
+fn unversioned_or_malformed_iso_record_store_stops_startup() {
+    for (name, contents, expected) in [
+        (
+            "missing-version",
+            r#"{"message_id":"missing-version"}"#,
+            "does not advertise numeric schema version V3",
+        ),
+        (
+            "string-version",
+            r#"{"version":"3","message_id":"string-version"}"#,
+            "does not advertise numeric schema version V3",
+        ),
+        ("invalid-json", "{", "is not valid JSON"),
+        (
+            "incomplete-v3",
+            r#"{"version":3,"message_id":"incomplete-v3"}"#,
+            "is invalid or corrupt for schema V3",
+        ),
+    ] {
+        let store = TempDir::new().expect("tempdir");
+        let messages = store.path().join("messages");
+        fs::create_dir_all(&messages).expect("messages directory");
+        fs::write(messages.join(message_filename(name)), contents).expect("record fixture");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let error = runtime_config_error(&config, "malformed ISO stores must stop startup");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected hard-cut error for {name}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn persisted_iso_records_regenerate_a_missing_v3_audit_index() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "audit-required",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("audit-required-biz".to_owned()),
+                None,
+                "audit-required-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+    fs::remove_file(
+        store
+            .path()
+            .join(ISO_PERSISTED_AUDIT_DIR)
+            .join(ISO_PERSISTED_AUDIT_INDEX_FILE),
+    )
+    .expect("remove audit index");
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("missing derived audit index is recoverable")
+        .expect("enabled");
+    assert!(reloaded.message_status("audit-required").is_some());
+    let regenerated = read_audit_index(&store);
+    let object = regenerated.as_object().expect("audit index object");
+    assert!(persisted_audit_index_digest_matches(object));
+    assert_eq!(
+        object.get("record_count").and_then(JsonValue::as_u64),
+        Some(1)
+    );
+}
+
+#[test]
+fn malformed_or_unversioned_iso_audit_index_stops_startup() {
+    for (name, contents, expected) in [
+        ("invalid-json", "{", "is not valid JSON"),
+        (
+            "missing-version",
+            r#"{"record_count":0,"records":[],"index_sha256":"00"}"#,
+            "does not advertise numeric schema version V3",
+        ),
+        (
+            "string-version",
+            r#"{"version":"3","record_count":0,"records":[],"index_sha256":"00"}"#,
+            "does not advertise numeric schema version V3",
+        ),
+        (
+            "legacy-version",
+            r#"{"version":1,"record_count":0,"records":[],"index_sha256":"00"}"#,
+            "incompatible ISO bridge audit index schema version 1",
+        ),
+        (
+            "invalid-current-schema",
+            r#"{"version":3,"record_count":0,"records":[],"index_sha256":"00"}"#,
+            "is invalid or corrupt for schema V3",
+        ),
+    ] {
+        let store = TempDir::new().expect("tempdir");
+        let audit_dir = store.path().join(ISO_PERSISTED_AUDIT_DIR);
+        fs::create_dir_all(&audit_dir).expect("audit directory");
+        fs::write(audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE), contents).expect("audit fixture");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let error = runtime_config_error(&config, "malformed ISO audit stores must stop startup");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected hard-cut error for {name}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn digest_correct_malformed_iso_audit_entries_stop_startup() {
+    assert_digest_correct_audit_mutation_is_rejected("extra-root-field", |object| {
+        object.insert("unexpected".to_owned(), JsonValue::from("drift"));
+    });
+    assert_digest_correct_audit_mutation_is_rejected("missing-row-field", |object| {
+        let row = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|records| records.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("audit row");
+        assert!(row.remove("profile_id").is_some());
+    });
+    assert_digest_correct_audit_mutation_is_rejected("unsorted-rows", |object| {
+        let records = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .expect("audit rows");
+        records.swap(0, 1);
+    });
+    assert_digest_correct_audit_mutation_is_rejected("duplicate-row", |object| {
+        let records = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .expect("audit rows");
+        records[1] = records[0].clone();
+    });
+    assert_digest_correct_audit_mutation_is_rejected("noncanonical-filename", |object| {
+        let row = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|records| records.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("audit row");
+        row.insert("filename".to_owned(), JsonValue::from("forged.json"));
+    });
+}
+
+#[test]
+fn valid_but_stale_iso_audit_index_is_regenerated_after_validation() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "stale-audit",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("stale-audit-biz".to_owned()),
+                None,
+                "stale-audit-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+    rewrite_persisted_audit_index(&store, |object| {
+        object.insert("record_count".to_owned(), JsonValue::from(0_u64));
+        object.insert("records".to_owned(), JsonValue::Array(Vec::new()));
+    });
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid stale derived index is recoverable")
+        .expect("enabled");
+    assert!(reloaded.message_status("stale-audit").is_some());
+    let regenerated = read_audit_index(&store);
+    let object = regenerated.as_object().expect("audit index object");
+    assert!(persisted_audit_index_digest_matches(object));
+    assert_eq!(
+        object.get("record_count").and_then(JsonValue::as_u64),
+        Some(1)
+    );
+}
+
 include!("iso20022_bridge/tests/lifecycle_tail.rs");
 include!("iso20022_bridge/tests/wrong_family_test.rs");

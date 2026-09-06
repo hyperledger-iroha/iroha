@@ -1413,6 +1413,22 @@ mod tests {
         assert_eq!(plan.payload_digest.as_bytes(), manifest.blob_hash.as_ref());
     }
     #[test]
+    fn car_plan_rejects_stripe_geometry_from_a_different_profile() {
+        let (mut manifest, _) = sample_manifest_and_payload();
+        assert_eq!(manifest.erasure_profile.data_shards, 1);
+        assert_eq!(manifest.erasure_profile.parity_shards, 0);
+        assert_eq!(manifest.shards_per_stripe, 1);
+        assert_eq!(manifest.total_stripes, 1);
+        manifest.shards_per_stripe = 14;
+        let err = build_car_plan_from_manifest(&manifest)
+            .expect_err("a foreign profile's stripe geometry must be rejected");
+        assert!(
+            err.to_string()
+                .contains("manifest shards_per_stripe is 14; canonical value is 1"),
+            "unexpected error: {err:?}"
+        );
+    }
+    #[test]
     fn proof_summary_contains_expected_fields() {
         let (manifest, payload) = sample_manifest_and_payload();
         let summary = generate_da_proof_summary(&manifest, &payload, &DaProofConfig::default())
@@ -1705,17 +1721,22 @@ mod tests {
             || u32::try_from(payload.len()).expect("payload length fits in u32"),
             |commitment| commitment.length,
         );
+        let erasure_profile = ErasureProfile {
+            data_shards: 1,
+            parity_shards: 0,
+            row_parity_stripes: 0,
+            chunk_alignment: 1,
+            fec_scheme: FecScheme::Rs12_10,
+        };
         let total_stripes = u32::try_from(
             chunk_commitments
                 .len()
-                .div_ceil(usize::from(ErasureProfile::default().data_shards)),
+                .div_ceil(usize::from(erasure_profile.data_shards)),
         )
-        .expect("stripe count fits in u32");
-        let shards_per_stripe = u32::from(
-            ErasureProfile::default()
-                .data_shards
-                .saturating_add(ErasureProfile::default().parity_shards),
-        );
+        .expect("stripe count fits in u32")
+            + u32::from(erasure_profile.row_parity_stripes);
+        let shards_per_stripe =
+            u32::from(erasure_profile.data_shards) + u32::from(erasure_profile.parity_shards);
         let metadata = ExtraMetadata {
             items: vec![
                 MetadataEntry::new(
@@ -1754,13 +1775,7 @@ mod tests {
             chunk_size,
             total_stripes,
             shards_per_stripe,
-            erasure_profile: ErasureProfile {
-                data_shards: 1,
-                parity_shards: 0,
-                row_parity_stripes: 0,
-                chunk_alignment: 1,
-                fec_scheme: iroha_data_model::da::types::FecScheme::Rs12_10,
-            },
+            erasure_profile,
             retention_policy: RetentionPolicy {
                 hot_retention_secs: 0,
                 cold_retention_secs: 0,

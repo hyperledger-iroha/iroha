@@ -1,4 +1,6 @@
 //! Crash-safe time-floor persistence for the private Musubi publication service.
+#[cfg(test)]
+pub(super) mod wire_fixtures;
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{
@@ -6,7 +8,7 @@ use super::{
     MusubiPublicationSystemClockV1,
 };
 #[cfg(unix)]
-use crate::musubi_archive_fetch::{
+use iroha_primitives::fs::{
     secure_directory_open_flags, secure_no_follow_nonblocking_flags,
 };
 #[cfg(unix)]
@@ -69,6 +71,8 @@ impl fmt::Display for DurableMusubiPublicationServiceClockOpenErrorV1 {
 }
 impl std::error::Error for DurableMusubiPublicationServiceClockOpenErrorV1 {}
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_clock::DurableClockStateV1")]
 struct DurableClockStateV1 {
     domain: [u8; 32],
     schema: u8,
@@ -103,6 +107,8 @@ impl DurableClockStateV1 {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_clock::DurableClockEnvelopeV1")]
 struct DurableClockEnvelopeV1 {
     state: DurableClockStateV1,
     state_digest: [u8; 32],

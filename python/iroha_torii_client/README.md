@@ -51,6 +51,14 @@ debt, the last tracked reducer transition, and any classified delay.
 pressure, governance readiness, and Native AMX participant-application
 records. Diagnostics are operational evidence and are not consensus authority.
 
+Committed Sumeragi evidence is exposed through the authenticated
+`list_sumeragi_evidence()` and `get_sumeragi_evidence_count()` reads. The
+first-release JSON contract accepts only `SumeragiV2Equivocation` records,
+requires a non-null consensus admission height, and models the penalty state
+as the closed `pending`, `applied`, or `cancelled` union. Missing, extra, and
+retired fields fail closed. Both evidence responses require JSON media types;
+count is streamed under a 1 KiB client-side ceiling and list under 1 MiB.
+
 Use `get_status_snapshot()` for `/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
@@ -64,7 +72,28 @@ Signed transaction hashes in this status surface use exact
 `[0-9a-f]{63}[13579bdf]` text; the final odd nibble is the Iroha `HashOf`
 marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
-hashes, and offline-operation status transaction hashes.
+hashes, and KAGEMUSHA operation-status transaction hashes.
+
+`get_kagemusha_readiness()` validates the closed four-field KAGEMUSHA
+wire-version-1 response from `GET /v1/kagemusha/readiness`. Peer-payment,
+mint-credit, and redemption-voucher codecs live in the sole `Kagemusha` Python
+namespace.
+
+Top-up submission is payer-signed: `submit_kagemusha_top_up` accepts only the
+canonical version-1 `SignedTransaction` bytes and the exact nonzero 32-byte
+operation ID embedded in its sole `iroha.kagemusha.v1.top_up` instruction. It
+posts the transaction unchanged to `/v1/kagemusha/top-up` and derives the
+lowercase `Idempotency-Key` from that explicit operation ID. There is no
+unsigned-request overload or server-signing path. The transaction must contain
+exactly one payer-authorized top-up instruction and signature-bind
+`QueuePlanSynced`; its embedded request may be up to 16 KiB, while the complete
+transaction uses Torii's normal signed-transaction ingress limit. Redemption
+continues to submit its canonical typed request archive. Both submission calls
+require the exact operation resource in `Location`: HTTP 202 is accepted only
+with a pending status and a positive `Retry-After`, while HTTP 200 is accepted
+only for applied or rejected status without `Retry-After`. Applied monetary
+results remain inaccessible in the returned wrapper until a caller-pinned
+finality verifier authenticates them.
 
 ## Caller-trusted unsigned drafts
 
@@ -254,6 +283,51 @@ quote, or fall back to the authority. Legacy transaction metadata keys
 `IROHA_NETWORK_ID` must be the canonical checksummed hash literal generated
 from the deployment genesis; a display chain label is never accepted as a
 signing domain.
+
+## Atomic private settlement transport
+
+The Python SDK exposes the complete V1 Torii route set without accepting proof
+witnesses or audit plaintext. A native wallet or coordinator first produces a
+bounded JSON object for one closed operation. Python validates its exact
+top-level shape, signs the final route, sends it once with redirects and retries
+disabled, and returns an opaque response that can be handed back to native code:
+
+```python
+from iroha_torii_client import (
+    AtomicPrivateSettlementOperationV1,
+    AtomicPrivateSettlementPreparedRequestV1,
+)
+
+prepared = AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
+    AtomicPrivateSettlementOperationV1.LEG_UPLOAD,
+    native_coordinator.prepared_leg_upload_json(),
+)
+try:
+    response = client.upload_private_settlement_leg_v1(
+        prepared,
+        canonical_auth=sponsor_auth,
+    )
+    try:
+        native_coordinator.accept_torii_response(response.bytes())
+    finally:
+        response.close()
+finally:
+    prepared.close()
+```
+
+Availability, Prepare, Commit, certificate persistence, leg upload, and global
+carrier submission use the sponsor's canonical account signature. Committee
+proof reads require the exact validator operator identity; capsule reads and
+approval submission require the exact governed auditor identity. Bundle status
+and receipt reads are public and expose only the protocol allowlist.
+
+Prepared requests are operation-bound and retained in erasable buffers. Their
+representations and all transport errors redact bodies. Restricted responses
+remain opaque, bounded, strict UTF-8 JSON; unexpected fields, identifier
+substitution, redirects, compressed responses, and noncanonical hash literals
+fail closed. The network must still have the governed feature activated and
+the audited proof profile available. This SDK surface is not evidence that a
+deployment has passed the independent audit or production qualification gates.
 
 ## SORA Parliament V1
 

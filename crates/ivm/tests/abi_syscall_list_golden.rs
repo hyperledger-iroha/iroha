@@ -127,7 +127,7 @@ fn abi_syscall_list_matches_golden() {
         S::SYSCALL_INPUT_PUBLISH_TLV,
         S::SYSCALL_ALLOC,
         S::SYSCALL_GET_PUBLIC_INPUT,
-        S::SYSCALL_PROVE_EXECUTION,
+        S::SYSCALL_EXECUTION_SUMMARY,
         S::SYSCALL_GROW_HEAP,
         S::SYSCALL_VERIFY_PROOF,
         S::SYSCALL_GET_MERKLE_PATH,

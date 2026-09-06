@@ -30,6 +30,9 @@ explicitly checked.
   its sole route is immutable and it has no owner or bridge mutator.
 - `TairaXorExactEvmSccpBridge.sol` is the concrete value-moving base route. The
   Ethereum and BSC wrappers fix their profiles and route identifiers.
+- `SccpSha256ReplayForest.sol` implements the canonical sharded SHA-256 sparse
+  Merkle replay forest and witness verifier shared by admission and outbound
+  burn paths.
 - `ISccpMessageVerifier.sol` and `SccpGroth16Bn254MessageVerifier.sol` define
   and implement immutable BN254 verification for the eleven exact SCCP signals.
 
@@ -37,14 +40,13 @@ Account roles are deliberately asymmetric. An external-to-Taira burn accepts
 only the exact `test...` I105 spelling for discriminant `369` and a single,
 canonical Ed25519 controller in the prime-order subgroup, matching Taira
 settlement admission and rejecting both small-order and mixed-torsion points.
-A proof-authenticated Taira-to-external sender may instead be a single-key or
-canonical multisig `AccountId` composed from Ed25519 and compressed secp256k1
-keys. The parser checks the complete V1 AccountAddress tags, big-endian policy
-fields, Rust algorithm-name member order, I105 round trip and checksum, weak
-Ed25519 encodings, and off-curve/noncanonical secp256k1 encodings. Taira rejects
-all other controller algorithms before locking assets, so no accepted outbound
-message can be unfinalizable merely because its sender controller is outside
-the immutable destination parser.
+A proof-authenticated Taira-to-external sender uses that same canonical
+single-key Ed25519 controller because it is the sole account shape constrained
+by the fixed V1 semantic circuits. The destination parser still rejects
+malformed AccountAddress tags, noncanonical I105 round trips and checksums, and
+weak Ed25519 encodings. Taira rejects multisig, secp256k1, and every other
+controller before locking assets, so every accepted sender is provable by the
+immutable destination verifier.
 
 Generic owner emitters and the secp256k1 attestation verifier are intentionally
 absent. Generic proof-only message wrappers are also absent: accepting a proof
@@ -62,7 +64,11 @@ immutably, commits it to `routeConfigHash`, and rejects any mint that would make
 the wrapped token's total supply exceed that ceiling. The revision is encoded
 immediately after the Transfer nonce and is included in `routeConfigHash`, so
 nonce reuse by a replacement route cannot collide with an older route's
-message identity.
+message identity. Each route deploys an immutable five-guardian, three-vote,
+one-way mint breaker. The route stores the breaker's deployment-time runtime
+hash, exposes it through `mintBreakerCodeHash()`, and checks the live runtime
+hash plus the disabled latch before every new mint admission. Breaker votes can
+never re-enable minting, withdraw assets, or block outbound burns.
 
 ## Groth16 statement
 
@@ -106,11 +112,13 @@ creates a new immutable route revision and destination binding.
 The concrete destination binding commits the exact network, domains, Groth16
 backend, verifier address, value-moving route address, verifier runtime
 code hash, verifying-key hash, audited semantic-profile hash, and governed SORA
-finality-anchor hash. The separate route-configuration signal also commits all
-of those policy roles plus the governed token identity, token runtime code
-hash, both lane hashes, network profile, route revision, and maximum wrapped
-supply. Proofs are therefore not portable between supply caps, policy
-revisions, route contracts, or route revisions even if the verifier is shared.
+finality-anchor hash, followed by the replay-verifier address and runtime hash
+and the mint-breaker address and runtime hash. The separate route-configuration
+signal also commits all of those policy roles plus the governed token identity,
+token runtime code hash, both lane hashes, network profile, route revision,
+maximum wrapped supply, and the same replay/breaker quartet. Proofs are
+therefore not portable between supply caps, policy revisions, route contracts,
+breaker deployments, or route revisions even if the verifier is shared.
 Route constructors take one typed
 `VerifierPolicyV1` tuple and reject zero, aliased, or getter-mismatched roles.
 Governed destination deployment records carry the same tuple as required
@@ -145,7 +153,8 @@ The suite enforces runtime, initcode, and deployment-gas
 ceilings, cross-checks precompiled and
 software BLAKE2b results, and exercises positive accounting plus malformed
 payloads, zero or mismatched route revisions, wrong routes/networks/codecs,
-replay, cross-route proof attacks, code/key drift, reentrancy, token failures,
+replay, stale sparse-Merkle witnesses, cross-route proof attacks, token,
+replay-verifier and mint-breaker runtime drift, reentrancy, token failures,
 substituted/zero/aliased semantic-profile or finality-anchor commitments, and
 adversarial BN254 inputs.
 

@@ -8,10 +8,12 @@
 //! separate durable body-store boundary before validation or voting. The
 //! reducer sees only the resulting body-availability token; READY/DELIVER
 //! state and collector selection do not exist here.
-use iroha_crypto::{Hash, HashOf};
+use super::v2_transport::AuthenticatedPayloadChunk;
+use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_crypto::HashOf;
 use iroha_data_model::block::consensus_v2 as wire;
 use iroha_primitives::erasure::rs16;
-use std::path::Path;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use thiserror::Error;
@@ -42,8 +44,12 @@ pub(crate) enum ChunkAdmission {
 /// Bounded in-memory reconstruction session for one immutable manifest.
 #[derive(Debug)]
 pub(crate) struct V2ChunkSession {
-    manifest: wire::PayloadManifest,
+    validated: wire::ValidatedPayloadManifest,
     chunks: Vec<Option<Vec<u8>>>,
+    stripe_width: usize,
+    shards_needed_by_stripe: Vec<u16>,
+    stripes_waiting: usize,
+    terminal_reconstruction_error: Option<TerminalReconstructionError>,
     #[cfg(test)]
     reconstruction_attempts: AtomicUsize,
     #[cfg(test)]
@@ -51,20 +57,27 @@ pub(crate) struct V2ChunkSession {
 }
 impl V2ChunkSession {
     /// Open an empty bounded session for the exact validated manifest.
-    ///
-    /// `root` remains part of the caller boundary so changing the acquisition
-    /// implementation does not alter worker construction. No directory or
-    /// shard file is created here.
     pub(crate) fn open(
-        _root: impl AsRef<Path>,
         context: &wire::HeightContext,
         manifest: wire::PayloadManifest,
     ) -> Result<Self, V2ChunkError> {
-        manifest.validate(context)?;
-        let chunk_count = manifest.chunk_hashes.len();
+        let validated = wire::ValidatedPayloadManifest::new(context, manifest)?;
+        let chunk_count = validated.manifest().chunk_hashes.len();
+        let data_shards = validated.manifest().layout.data_shards;
+        let stripe_width = usize::from(data_shards)
+            .checked_add(usize::from(validated.manifest().layout.parity_shards))
+            .ok_or(V2ChunkError::InvalidErasureLayout)?;
+        if stripe_width == 0 || !chunk_count.is_multiple_of(stripe_width) {
+            return Err(V2ChunkError::InvalidErasureLayout);
+        }
+        let stripe_count = chunk_count / stripe_width;
         Ok(Self {
-            manifest,
+            validated,
             chunks: vec![None; chunk_count],
+            stripe_width,
+            shards_needed_by_stripe: vec![data_shards; stripe_count],
+            stripes_waiting: stripe_count,
+            terminal_reconstruction_error: None,
             #[cfg(test)]
             reconstruction_attempts: AtomicUsize::new(0),
             #[cfg(test)]
@@ -73,59 +86,129 @@ impl V2ChunkSession {
     }
     /// Borrow the immutable manifest.
     pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
-        &self.manifest
+        self.validated.manifest()
     }
-    /// Buffer one structurally authenticated chunk.
+    /// Borrow the once-validated manifest session used for chunk authentication.
+    pub(crate) const fn validated_manifest(&self) -> &wire::ValidatedPayloadManifest {
+        &self.validated
+    }
+    /// Whether deterministic reconstruction terminally poisoned this session.
+    pub(crate) const fn is_terminally_failed(&self) -> bool {
+        self.terminal_reconstruction_error.is_some()
+    }
+    /// Buffer one structurally and cryptographically authenticated chunk.
     ///
-    /// The caller is still responsible for verifying its sender signature.
-    /// This boundary independently rechecks manifest identity, index, length,
-    /// and content hash before retaining bounded session memory.
+    /// The authentication seal carries the hash already verified with the
+    /// sender signature. This boundary independently rechecks manifest
+    /// identity, index, length, and that cached hash before retaining bounded
+    /// session memory.
     pub(crate) fn admit(
         &mut self,
-        chunk: &wire::PayloadChunk,
+        authenticated: AuthenticatedPayloadChunk,
     ) -> Result<ChunkAdmission, V2ChunkError> {
-        if chunk.manifest_hash != HashOf::new(&self.manifest) {
+        self.ensure_live()?;
+        let (chunk, chunk_hash) = authenticated.into_parts();
+        if chunk.manifest_hash != self.validated.manifest_hash() {
             return Err(V2ChunkError::ManifestMismatch);
         }
-        self.admit_bytes(chunk.index, &chunk.bytes)
+        let index = usize::try_from(chunk.index).map_err(|_| V2ChunkError::ChunkIndexOutOfRange)?;
+        self.validate_chunk(index, &chunk.bytes, chunk_hash)?;
+        self.admit_validated_owned(index, chunk.bytes)
     }
     /// Buffer already-authenticated bytes at an exact manifest index.
+    #[cfg(test)]
     pub(crate) fn admit_bytes(
         &mut self,
         index: u32,
         bytes: &[u8],
     ) -> Result<ChunkAdmission, V2ChunkError> {
+        self.ensure_live()?;
         let index = usize::try_from(index).map_err(|_| V2ChunkError::ChunkIndexOutOfRange)?;
-        self.validate_chunk(index, bytes)?;
+        if let Some(existing) = self
+            .chunks
+            .get(index)
+            .ok_or(V2ChunkError::ChunkIndexOutOfRange)?
+        {
+            if existing == bytes {
+                return Ok(ChunkAdmission::Duplicate);
+            }
+            self.validate_chunk(index, bytes, Hash::new(bytes))?;
+            return Err(V2ChunkError::ConflictingChunk);
+        }
+        self.validate_chunk(index, bytes, Hash::new(bytes))?;
+        self.admit_validated_owned(index, bytes.to_vec())
+    }
+    fn admit_validated_owned(
+        &mut self,
+        index: usize,
+        bytes: Vec<u8>,
+    ) -> Result<ChunkAdmission, V2ChunkError> {
+        let stripe = index / self.stripe_width;
         let slot = self
             .chunks
             .get_mut(index)
             .ok_or(V2ChunkError::ChunkIndexOutOfRange)?;
         if let Some(existing) = slot {
-            return if existing == bytes {
+            return if existing == &bytes {
                 Ok(ChunkAdmission::Duplicate)
             } else {
                 Err(V2ChunkError::ConflictingChunk)
             };
         }
-        *slot = Some(bytes.to_vec());
+        let shards_needed = self
+            .shards_needed_by_stripe
+            .get_mut(stripe)
+            .ok_or(V2ChunkError::InvalidErasureLayout)?;
+        if *shards_needed == 1 && self.stripes_waiting == 0 {
+            return Err(V2ChunkError::InvalidErasureLayout);
+        }
+        *slot = Some(bytes);
+        if *shards_needed > 0 {
+            *shards_needed -= 1;
+            if *shards_needed == 0 {
+                self.stripes_waiting = self
+                    .stripes_waiting
+                    .checked_sub(1)
+                    .ok_or(V2ChunkError::InvalidErasureLayout)?;
+            }
+        }
         Ok(ChunkAdmission::Buffered)
     }
     /// Reconstruct and verify the canonical payload once enough chunks exist.
     ///
     /// RS16 reconstruction needs any `data_shards` chunks per stripe. Missing
-    /// parity chunks are not materialized unless needed to recover data.
-    pub(crate) fn reconstruct(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
+    /// parity chunks are not materialized unless needed to recover data. The
+    /// completed payload is then re-encoded one stripe at a time to prove every
+    /// committed systematic and parity hash belongs to its canonical codeword.
+    pub(crate) fn reconstruct(&mut self) -> Result<Option<Vec<u8>>, V2ChunkError> {
+        self.ensure_live()?;
         #[cfg(test)]
         self.reconstruction_attempts.fetch_add(1, Ordering::Relaxed);
-        let payload = self.reconstruct_rs16()?;
-        let Some(payload) = payload else {
+        if self.stripes_waiting != 0 {
             return Ok(None);
+        }
+        let payload = match self.reconstruct_rs16() {
+            Ok(payload) => payload,
+            Err(V2ChunkError::ReconstructionFailed) => {
+                return Err(self.poison(TerminalReconstructionError::ReconstructionFailed));
+            }
+            Err(error) => return Err(error),
         };
-        if u64::try_from(payload.len()).unwrap_or(u64::MAX) != self.manifest.payload_size_bytes
-            || Hash::new(&payload) != self.manifest.subject.payload_hash
+        if u64::try_from(payload.len()).unwrap_or(u64::MAX)
+            != self.validated.manifest().payload_size_bytes
+            || Hash::new(&payload) != self.validated.manifest().subject.payload_hash
         {
-            return Err(V2ChunkError::PayloadMismatch);
+            return Err(self.poison(TerminalReconstructionError::PayloadMismatch));
+        }
+        match self.canonical_codeword_matches(&payload) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(self.poison(TerminalReconstructionError::NoncanonicalCodeword));
+            }
+            Err(V2ChunkError::ReconstructionFailed) => {
+                return Err(self.poison(TerminalReconstructionError::ReconstructionFailed));
+            }
+            Err(error) => return Err(error),
         }
         Ok(Some(payload))
     }
@@ -139,45 +222,62 @@ impl V2ChunkSession {
     pub(crate) fn payload_allocation_attempts(&self) -> usize {
         self.payload_allocation_attempts.load(Ordering::Relaxed)
     }
-    fn validate_chunk(&self, index: usize, bytes: &[u8]) -> Result<(), V2ChunkError> {
+    fn ensure_live(&self) -> Result<(), V2ChunkError> {
+        match self.terminal_reconstruction_error {
+            Some(error) => Err(error.into()),
+            None => Ok(()),
+        }
+    }
+    fn poison(&mut self, error: TerminalReconstructionError) -> V2ChunkError {
+        self.terminal_reconstruction_error = Some(error);
+        // The manifest is retained as a rejection tombstone, but no buffered
+        // shard survives or can make the session reconstructible again.
+        self.chunks = Vec::new();
+        self.shards_needed_by_stripe = Vec::new();
+        self.stripes_waiting = 0;
+        error.into()
+    }
+    fn validate_chunk(
+        &self,
+        index: usize,
+        bytes: &[u8],
+        chunk_hash: Hash,
+    ) -> Result<(), V2ChunkError> {
         let expected_hash = self
-            .manifest
+            .validated
+            .manifest()
             .chunk_hashes
             .get(index)
             .ok_or(V2ChunkError::ChunkIndexOutOfRange)?;
-        let chunk_size = usize::try_from(self.manifest.layout.chunk_size_bytes)
+        let chunk_size = usize::try_from(self.validated.manifest().layout.chunk_size_bytes)
             .map_err(|_| V2ChunkError::InvalidChunkLength)?;
         if bytes.len() != chunk_size || bytes.is_empty() {
             return Err(V2ChunkError::InvalidChunkLength);
         }
-        if Hash::new(bytes) != *expected_hash {
+        if chunk_hash != *expected_hash {
             return Err(V2ChunkError::ChunkHashMismatch);
         }
         Ok(())
     }
-    fn reconstruct_rs16(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
-        let data_shards = usize::from(self.manifest.layout.data_shards);
-        let parity_shards = usize::from(self.manifest.layout.parity_shards);
+    fn reconstruct_rs16(&self) -> Result<Vec<u8>, V2ChunkError> {
+        let data_shards = usize::from(self.validated.manifest().layout.data_shards);
+        let parity_shards = usize::from(self.validated.manifest().layout.parity_shards);
         let stripe_width = data_shards
             .checked_add(parity_shards)
             .ok_or(V2ChunkError::InvalidErasureLayout)?;
-        if stripe_width == 0 || !self.chunks.len().is_multiple_of(stripe_width) {
+        if stripe_width != self.stripe_width
+            || stripe_width == 0
+            || !self.chunks.len().is_multiple_of(stripe_width)
+        {
             return Err(V2ChunkError::InvalidErasureLayout);
         }
-        if self
-            .chunks
-            .chunks_exact(stripe_width)
-            .any(|stripe| stripe.iter().filter(|chunk| chunk.is_some()).count() < data_shards)
-        {
-            return Ok(None);
-        }
-        let chunk_size = usize::try_from(self.manifest.layout.chunk_size_bytes)
+        let chunk_size = usize::try_from(self.validated.manifest().layout.chunk_size_bytes)
             .map_err(|_| V2ChunkError::InvalidChunkLength)?;
         if !chunk_size.is_multiple_of(2) {
             return Err(V2ChunkError::InvalidErasureLayout);
         }
         let symbol_count = chunk_size / 2;
-        let payload_size = usize::try_from(self.manifest.payload_size_bytes)
+        let payload_size = usize::try_from(self.validated.manifest().payload_size_bytes)
             .map_err(|_| V2ChunkError::PayloadTooLarge)?;
         #[cfg(test)]
         self.payload_allocation_attempts
@@ -187,34 +287,121 @@ impl V2ChunkSession {
             if stripe.iter().take(data_shards).all(Option::is_some) {
                 for shard in stripe.iter().take(data_shards) {
                     payload.extend_from_slice(
-                        shard
-                            .as_deref()
-                            .expect("all data shards checked present above"),
+                        shard.as_deref().ok_or(V2ChunkError::ReconstructionFailed)?,
                     );
                 }
                 continue;
             }
-            let mut symbols = stripe
-                .iter()
-                .map(|chunk| {
-                    chunk
-                        .as_deref()
-                        .map(|bytes| rs16::symbols_from_chunk(symbol_count, bytes))
-                })
-                .collect::<Vec<_>>();
-            rs16::reconstruct_shards(&mut symbols, data_shards, parity_shards)
-                .map_err(|_| V2ChunkError::ReconstructionFailed)?;
-            for shard in symbols.iter().take(data_shards) {
-                let bytes = rs16::chunk_from_symbols(
-                    shard.as_ref().ok_or(V2ChunkError::ReconstructionFailed)?,
-                    chunk_size,
-                )
-                .map_err(|_| V2ChunkError::ReconstructionFailed)?;
-                payload.extend_from_slice(&bytes);
+            // Recovery needs only one decode basis and the missing systematic
+            // rows. Do not clone present rows or regenerate parity that the
+            // canonical payload will immediately discard.
+            let mut symbols = (0..stripe_width).map(|_| None).collect::<Vec<_>>();
+            let mut selected = 0_usize;
+            for (index, chunk) in stripe.iter().enumerate() {
+                let Some(bytes) = chunk.as_deref() else {
+                    continue;
+                };
+                symbols[index] = Some(rs16::symbols_from_chunk(symbol_count, bytes));
+                selected += 1;
+                if selected == data_shards {
+                    break;
+                }
+            }
+            let recovered =
+                rs16::reconstruct_missing_data_shards(&symbols, data_shards, parity_shards)
+                    .map_err(|_| V2ChunkError::ReconstructionFailed)?;
+            for (data, recovered) in stripe.iter().take(data_shards).zip(recovered) {
+                if let Some(bytes) = data.as_deref() {
+                    payload.extend_from_slice(bytes);
+                } else {
+                    let bytes = rs16::chunk_from_symbols(
+                        recovered
+                            .as_deref()
+                            .ok_or(V2ChunkError::ReconstructionFailed)?,
+                        chunk_size,
+                    )
+                    .map_err(|_| V2ChunkError::ReconstructionFailed)?;
+                    payload.extend_from_slice(&bytes);
+                }
             }
         }
         payload.truncate(payload_size);
-        Ok(Some(payload))
+        Ok(payload)
+    }
+    fn canonical_codeword_matches(&self, payload: &[u8]) -> Result<bool, V2ChunkError> {
+        let manifest = self.validated.manifest();
+        let data_shards = usize::from(manifest.layout.data_shards);
+        let parity_shards = usize::from(manifest.layout.parity_shards);
+        let stripe_width = data_shards
+            .checked_add(parity_shards)
+            .ok_or(V2ChunkError::InvalidErasureLayout)?;
+        if stripe_width != self.stripe_width
+            || stripe_width == 0
+            || !manifest.chunk_hashes.len().is_multiple_of(stripe_width)
+        {
+            return Err(V2ChunkError::InvalidErasureLayout);
+        }
+        let chunk_size = usize::try_from(manifest.layout.chunk_size_bytes)
+            .map_err(|_| V2ChunkError::InvalidChunkLength)?;
+        if chunk_size == 0 || !chunk_size.is_multiple_of(2) {
+            return Err(V2ChunkError::InvalidErasureLayout);
+        }
+        let symbol_count = chunk_size / 2;
+        let mut canonical_chunk = vec![0_u8; chunk_size];
+        for (stripe_index, expected_hashes) in
+            manifest.chunk_hashes.chunks_exact(stripe_width).enumerate()
+        {
+            let mut data_symbols = Vec::with_capacity(data_shards);
+            for data_index in 0..data_shards {
+                canonical_chunk.fill(0);
+                let payload_chunk_index = stripe_index
+                    .checked_mul(data_shards)
+                    .and_then(|base| base.checked_add(data_index))
+                    .ok_or(V2ChunkError::InvalidErasureLayout)?;
+                let offset = payload_chunk_index
+                    .checked_mul(chunk_size)
+                    .ok_or(V2ChunkError::InvalidErasureLayout)?;
+                if offset < payload.len() {
+                    let end = offset
+                        .checked_add(chunk_size)
+                        .unwrap_or(usize::MAX)
+                        .min(payload.len());
+                    canonical_chunk[..end - offset].copy_from_slice(&payload[offset..end]);
+                }
+                if Hash::new(&canonical_chunk) != expected_hashes[data_index] {
+                    return Ok(false);
+                }
+                data_symbols.push(rs16::symbols_from_chunk(symbol_count, &canonical_chunk));
+            }
+            let parity = rs16::encode_parity(&data_symbols, parity_shards)
+                .map_err(|_| V2ChunkError::ReconstructionFailed)?;
+            if parity.len() != parity_shards {
+                return Err(V2ChunkError::ReconstructionFailed);
+            }
+            for (parity_index, symbols) in parity.iter().enumerate() {
+                let bytes = rs16::chunk_from_symbols(symbols, chunk_size)
+                    .map_err(|_| V2ChunkError::ReconstructionFailed)?;
+                if Hash::new(&bytes) != expected_hashes[data_shards + parity_index] {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalReconstructionError {
+    PayloadMismatch,
+    ReconstructionFailed,
+    NoncanonicalCodeword,
+}
+impl From<TerminalReconstructionError> for V2ChunkError {
+    fn from(error: TerminalReconstructionError) -> Self {
+        match error {
+            TerminalReconstructionError::PayloadMismatch => Self::PayloadMismatch,
+            TerminalReconstructionError::ReconstructionFailed => Self::ReconstructionFailed,
+            TerminalReconstructionError::NoncanonicalCodeword => Self::NoncanonicalCodeword,
+        }
     }
 }
 /// Encode exact canonical payload bytes using the height-frozen DA layout.
@@ -272,6 +459,9 @@ pub(crate) enum V2ChunkError {
     /// Enough shards existed but deterministic RS16 recovery failed.
     #[error("Sumeragi v2 RS16 reconstruction failed")]
     ReconstructionFailed,
+    /// Committed shards are not the canonical RS16 codeword for the payload.
+    #[error("Sumeragi v2 manifest commits a noncanonical RS16 codeword")]
+    NoncanonicalCodeword,
 }
 #[cfg(test)]
 mod tests {
@@ -295,8 +485,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let network_id = test_network_id();
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         wire::HeightContext {
-            network_id: test_network_id(),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 2,
             epoch: 0,
@@ -307,6 +500,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -321,8 +516,11 @@ mod tests {
         }
     }
     fn parent_qc(roster: &[wire::ValidatorPower]) -> wire::QuorumCertificate {
+        let network_id = test_network_id();
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, roster);
         let parent_context = wire::HeightContext {
-            network_id: test_network_id(),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -333,6 +531,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(roster).expect("quorum"),
             roster: roster.to_vec(),
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -363,13 +563,14 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"chunk fixture parent state"),
-                Hash::new(b"chunk fixture post state"),
-                Hash::new(b"chunk fixture ordinary writes"),
-                1,
-                Hash::new(b"chunk fixture executed block wire"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"chunk fixture parent state"),
+                    Hash::new(b"chunk fixture post state"),
+                    Hash::new(b"chunk fixture ordinary writes"),
+                    1,
+                    Hash::new(b"chunk fixture executed block wire"),
+                ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         }
@@ -426,9 +627,8 @@ mod tests {
         let (context, encoded) = encode_fixture(payload);
         let data_shards = usize::from(context.da_layout.data_shards);
         let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
-        let root = tempfile::tempdir().expect("tempdir");
-        let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
-            .expect("open session");
+        let mut session =
+            V2ChunkSession::open(&context, encoded.manifest.clone()).expect("open session");
         for (index, chunk) in encoded.chunks.iter().enumerate() {
             if index % width < data_shards {
                 session
@@ -453,9 +653,8 @@ mod tests {
         let payload = b"RS16 parity recovery spanning deterministic stripes";
         let (context, encoded) = encode_fixture(payload);
         let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
-        let root = tempfile::tempdir().expect("tempdir");
-        let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
-            .expect("open session");
+        let mut session =
+            V2ChunkSession::open(&context, encoded.manifest.clone()).expect("open session");
         for (index, chunk) in encoded.chunks.iter().enumerate() {
             let within = index % width;
             if within != 0 && within != width - 1 {
@@ -476,10 +675,8 @@ mod tests {
         let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
         for first_missing in 0..width {
             for second_missing in first_missing + 1..width {
-                let root = tempfile::tempdir().expect("tempdir");
                 let mut session =
-                    V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
-                        .expect("open session");
+                    V2ChunkSession::open(&context, encoded.manifest.clone()).expect("open session");
                 for (index, chunk) in encoded.chunks.iter().enumerate() {
                     let within = index % width;
                     if within == first_missing || within == second_missing {
@@ -498,6 +695,50 @@ mod tests {
         }
     }
     #[test]
+    fn parity_first_out_of_order_admission_becomes_ready_once() {
+        let payload = b"RS16 parity-first payload spanning deterministic stripes";
+        let (context, encoded) = encode_fixture(payload);
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let stripe_width =
+            usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let stripe_count = encoded.chunks.len() / stripe_width;
+        assert!(stripe_count > 1, "fixture must span multiple stripes");
+
+        let mut selected = Vec::with_capacity(stripe_count * data_shards);
+        for stripe in (0..stripe_count).rev() {
+            for within in (stripe_width - data_shards..stripe_width).rev() {
+                selected.push(stripe * stripe_width + within);
+            }
+        }
+        let final_index = selected.pop().expect("fixture has a final required shard");
+        let mut session =
+            V2ChunkSession::open(&context, encoded.manifest.clone()).expect("open session");
+        for index in selected {
+            session
+                .admit_bytes(
+                    u32::try_from(index).expect("chunk index"),
+                    &encoded.chunks[index],
+                )
+                .expect("buffer out-of-order recovery shard");
+        }
+        assert_eq!(session.stripes_waiting, 1);
+        assert_eq!(session.reconstruct().expect("reconstruction pending"), None);
+        assert_eq!(session.payload_allocation_attempts(), 0);
+
+        session
+            .admit_bytes(
+                u32::try_from(final_index).expect("final chunk index"),
+                &encoded.chunks[final_index],
+            )
+            .expect("buffer final required recovery shard");
+        assert_eq!(session.stripes_waiting, 0);
+        assert_eq!(
+            session.reconstruct().expect("reconstruct payload"),
+            Some(payload.to_vec())
+        );
+        assert_eq!(session.payload_allocation_attempts(), 1);
+    }
+    #[test]
     fn incomplete_multi_stripe_session_returns_before_payload_allocation() {
         let payload = b"RS16 payload spanning more than one deterministic stripe";
         let (context, encoded) = encode_fixture(payload);
@@ -508,14 +749,30 @@ mod tests {
             encoded.chunks.len() > stripe_width,
             "fixture must span more than one stripe"
         );
-        let root = tempfile::tempdir().expect("tempdir");
         let mut session =
-            V2ChunkSession::open(root.path(), &context, encoded.manifest).expect("open session");
+            V2ChunkSession::open(&context, encoded.manifest.clone()).expect("open session");
+        assert_eq!(session.stripes_waiting, encoded.chunks.len() / stripe_width);
         for (index, chunk) in encoded.chunks.iter().take(data_shards).enumerate() {
             session
                 .admit_bytes(u32::try_from(index).expect("index"), chunk)
                 .expect("buffer complete first stripe data");
         }
+        assert_eq!(
+            session.stripes_waiting,
+            encoded.chunks.len() / stripe_width - 1,
+            "one complete stripe must leave only the later stripes pending"
+        );
+        assert_eq!(
+            session
+                .admit_bytes(0, &encoded.chunks[0])
+                .expect("accept duplicate data shard"),
+            ChunkAdmission::Duplicate
+        );
+        assert_eq!(
+            session.stripes_waiting,
+            encoded.chunks.len() / stripe_width - 1,
+            "a duplicate must not advance stripe readiness"
+        );
         assert_eq!(session.reconstruction_attempts(), 0);
         assert_eq!(session.payload_allocation_attempts(), 0);
         assert_eq!(session.reconstruct().expect("pending reconstruction"), None);
@@ -530,9 +787,8 @@ mod tests {
     fn corruption_duplicates_and_insufficient_shards_are_rejected_or_pending() {
         let payload = b"adversarial chunk payload";
         let (context, encoded) = encode_fixture(payload);
-        let root = tempfile::tempdir().expect("tempdir");
-        let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
-            .expect("open session");
+        let mut session =
+            V2ChunkSession::open(&context, encoded.manifest.clone()).expect("open session");
         let mut corrupt = encoded.chunks[0].clone();
         corrupt[0] ^= 0x80;
         assert!(matches!(
@@ -551,35 +807,195 @@ mod tests {
                 .expect("accept exact duplicate"),
             ChunkAdmission::Duplicate
         );
+        let stripes_waiting = session.stripes_waiting;
+        assert!(matches!(
+            session.admit_bytes(0, &corrupt),
+            Err(V2ChunkError::ChunkHashMismatch)
+        ));
+        assert_eq!(session.stripes_waiting, stripes_waiting);
         assert_eq!(session.reconstruct().expect("pending reconstruction"), None);
     }
     #[test]
-    fn partial_chunks_are_volatile_and_create_no_files() {
+    fn partial_chunks_are_volatile_across_sessions() {
         let payload = b"volatile bounded chunk acquisition";
         let (context, encoded) = encode_fixture(payload);
-        let temp = tempfile::tempdir().expect("tempdir");
-        let acquisition_root = temp.path().join("v2-chunks");
-        assert!(!acquisition_root.exists());
-        let mut session =
-            V2ChunkSession::open(&acquisition_root, &context, encoded.manifest.clone())
-                .expect("open volatile session");
-        assert!(!acquisition_root.exists());
+        let mut session = V2ChunkSession::open(&context, encoded.manifest.clone())
+            .expect("open volatile session");
         assert_eq!(
             session
                 .admit_bytes(0, &encoded.chunks[0])
                 .expect("buffer one shard"),
             ChunkAdmission::Buffered
         );
-        assert!(!acquisition_root.exists());
         drop(session);
-        let restarted = V2ChunkSession::open(&acquisition_root, &context, encoded.manifest)
+        let mut restarted = V2ChunkSession::open(&context, encoded.manifest)
             .expect("restart with an empty volatile session");
         assert!(restarted.chunks.iter().all(Option::is_none));
         assert_eq!(
             restarted.reconstruct().expect("reconstruction pending"),
             None
         );
-        assert!(!acquisition_root.exists());
+    }
+    #[test]
+    fn noncanonical_data_terminally_rejects_later_shards_without_reconstruction() {
+        let payload = b"a structurally valid manifest can still commit a noncanonical codeword";
+        let (context, encoded) = encode_fixture(payload);
+        let mut noncanonical_chunks = encoded.chunks.clone();
+        noncanonical_chunks[0][0] ^= 0x80;
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            encoded.manifest.round,
+            encoded.manifest.subject,
+            encoded.manifest.payload_size_bytes,
+            &noncanonical_chunks,
+        )
+        .expect("derive a structurally valid noncanonical manifest");
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let stripe_width =
+            usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let mut session = V2ChunkSession::open(&context, manifest).expect("open session");
+        for (index, chunk) in noncanonical_chunks.iter().enumerate() {
+            if index % stripe_width >= data_shards {
+                continue;
+            }
+            session
+                .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                .expect("buffer committed data shard");
+        }
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::PayloadMismatch)
+        ));
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(session.payload_allocation_attempts(), 1);
+        assert!(session.is_terminally_failed());
+        assert!(
+            session.chunks.is_empty(),
+            "poisoning releases shard buffers"
+        );
+
+        assert!(matches!(
+            session.admit_bytes(
+                u32::try_from(data_shards).expect("parity index"),
+                &noncanonical_chunks[data_shards],
+            ),
+            Err(V2ChunkError::PayloadMismatch)
+        ));
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::PayloadMismatch)
+        ));
+        assert_eq!(
+            session.reconstruction_attempts(),
+            1,
+            "a later unique shard cannot reopen deterministic reconstruction"
+        );
+        assert_eq!(
+            session.payload_allocation_attempts(),
+            1,
+            "a later unique shard cannot allocate another payload"
+        );
+    }
+    #[test]
+    fn noncanonical_systematic_padding_terminally_poisoned() {
+        let payload = b"payload whose final systematic shard has trailing padding";
+        let (context, encoded) = encode_fixture(payload);
+        let chunk_size = usize::try_from(context.da_layout.chunk_size_bytes).expect("chunk size");
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let stripe_width =
+            usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let padding_offset = payload.len() % chunk_size;
+        assert_ne!(
+            padding_offset, 0,
+            "fixture must leave trailing zero padding"
+        );
+        let payload_chunk_index = (payload.len() - 1) / chunk_size;
+        let manifest_index =
+            (payload_chunk_index / data_shards) * stripe_width + payload_chunk_index % data_shards;
+
+        let mut noncanonical_chunks = encoded.chunks.clone();
+        noncanonical_chunks[manifest_index][padding_offset] ^= 0x80;
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            encoded.manifest.round,
+            encoded.manifest.subject,
+            encoded.manifest.payload_size_bytes,
+            &noncanonical_chunks,
+        )
+        .expect("derive a manifest committing only noncanonical trailing padding");
+        let mut session = V2ChunkSession::open(&context, manifest).expect("open session");
+        for (index, chunk) in noncanonical_chunks.iter().enumerate() {
+            if index % stripe_width >= data_shards {
+                continue;
+            }
+            session
+                .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                .expect("buffer committed systematic shard");
+        }
+
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(session.payload_allocation_attempts(), 1);
+        assert!(session.is_terminally_failed());
+        assert!(
+            session.chunks.is_empty(),
+            "poisoning releases systematic shard buffers"
+        );
+    }
+    #[test]
+    fn noncanonical_parity_terminally_rejects_later_shards_without_reconstruction() {
+        let payload = b"canonical data can still be paired with noncanonical parity commitments";
+        let (context, encoded) = encode_fixture(payload);
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let stripe_width =
+            usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let mut noncanonical_chunks = encoded.chunks.clone();
+        noncanonical_chunks[data_shards][0] ^= 0x80;
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            encoded.manifest.round,
+            encoded.manifest.subject,
+            encoded.manifest.payload_size_bytes,
+            &noncanonical_chunks,
+        )
+        .expect("derive a structurally valid noncanonical parity manifest");
+        let mut session = V2ChunkSession::open(&context, manifest).expect("open session");
+        for (index, chunk) in noncanonical_chunks.iter().enumerate() {
+            if index % stripe_width >= data_shards {
+                continue;
+            }
+            session
+                .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                .expect("buffer canonical data shard");
+        }
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(session.payload_allocation_attempts(), 1);
+        assert!(session.is_terminally_failed());
+        assert!(
+            session.chunks.is_empty(),
+            "poisoning releases shard buffers"
+        );
+
+        assert!(matches!(
+            session.admit_bytes(
+                u32::try_from(data_shards).expect("parity index"),
+                &noncanonical_chunks[data_shards],
+            ),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(session.payload_allocation_attempts(), 1);
     }
     #[test]
     fn encoding_is_deterministic_and_subject_bound() {

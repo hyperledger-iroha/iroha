@@ -8,6 +8,8 @@ const DOMAIN: &[u8] = b"iroha:sumeragi:v2:consensus-parameters-fingerprint:v1\0"
 /// Version of the canonical v2 consensus-parameters projection.
 pub const FORMAT_VERSION: u16 = 1;
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::fingerprint::ConsensusParametersFingerprintInput")]
 struct ConsensusParametersFingerprintInput {
     format_version: u16,
     protocol_version: u32,
@@ -18,6 +20,8 @@ struct ConsensusParametersFingerprintInput {
     npos: Option<NposGenesisFingerprintInput>,
 }
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::fingerprint::NposGenesisFingerprintInput")]
 struct NposGenesisFingerprintInput {
     epoch_length_blocks: core::num::NonZeroU64,
     epoch_seed: [u8; 32],
@@ -34,11 +38,14 @@ struct NposGenesisFingerprintInput {
 }
 /// Compute the deterministic v2 consensus-parameters fingerprint.
 ///
-/// Only frozen v2 inputs are representable in the encoded projection. Legacy collectors,
-/// per-phase/adaptive timers, the global-RBC enable flag, the BLS domain string, and node-local
-/// fallbacks are deliberately discarded. Live startup therefore cannot fingerprint input that omits
-/// its v2 context. Exact network identity is deliberately not part of this genesis-embedded value:
-/// runtime handshakes authenticate a separate required `NetworkId`, avoiding a self-reference
+/// Only first-release frozen inputs are representable in the encoded
+/// projection: mode, cadence, block bound, signed DA/Nexus context, and NPoS
+/// election parameters. The separately signed, network-independent KAGEMUSHA
+/// mint-finality genesis templates are intentionally excluded from this
+/// secondary fingerprint; they remain authenticated by the genesis metadata
+/// that carries both this digest and the templates. Exact network identity is
+/// likewise not part of this genesis-embedded value: runtime handshakes
+/// authenticate a separate required `NetworkId`, avoiding a self-reference
 /// through the genesis block hash.
 ///
 /// # Errors
@@ -94,7 +101,7 @@ mod tests {
             block_max_transactions: core::num::NonZeroU64::new(512).unwrap(),
             mode: ConsensusGenesisModeParams::Permissioned,
             protocol_version: u32::from(super::super::PROTOCOL_VERSION),
-            v2_context: SumeragiV2GenesisContextParameters::recommended(),
+            v2_context: super::super::test_genesis_context_parameters(),
         }
     }
     fn npos_params() -> ConsensusGenesisParams {
@@ -112,7 +119,7 @@ mod tests {
                 finality_margin_blocks: 8,
                 evidence_horizon_blocks: 7_200,
                 activation_lag_blocks: 1,
-                slashing_delay_blocks: 259_200,
+                slashing_delay_blocks: 3_600,
             });
         params
     }
@@ -196,3 +203,6 @@ mod tests {
         assert_eq!(first, second);
     }
 }
+
+#[cfg(test)]
+mod captured_fingerprint_schema_tests;

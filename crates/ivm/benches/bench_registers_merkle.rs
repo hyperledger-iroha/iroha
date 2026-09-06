@@ -40,7 +40,7 @@ fn bench_registers_merkle(c: &mut Criterion) {
                     regs.set(idx, i as u64);
                 }
                 let idx = bench_register_index(n);
-                std::hint::black_box(regs.merkle_path(idx));
+                std::hint::black_box(regs.merkle_path(idx).unwrap());
             });
         });
         group.bench_function(BenchmarkId::new("set_and_path_each", n), |b| {
@@ -49,7 +49,7 @@ fn bench_registers_merkle(c: &mut Criterion) {
                 for i in 1..=n {
                     let idx = bench_register_index(i);
                     regs.set(idx, i as u64);
-                    std::hint::black_box(regs.merkle_path(idx));
+                    std::hint::black_box(regs.merkle_path(idx).unwrap());
                 }
             });
         });
@@ -87,7 +87,7 @@ fn bench_registers_merkle(c: &mut Criterion) {
             regs.set(idx, i as u64);
         }
         let idx = bench_register_index(n);
-        std::hint::black_box(regs.merkle_path(idx));
+        std::hint::black_box(regs.merkle_path(idx).unwrap());
         let many_then_path_ms = t2.elapsed().as_secs_f64() * 1000.0;
         // Path: set-and-path-each
         let mut regs = Registers::new();
@@ -95,7 +95,7 @@ fn bench_registers_merkle(c: &mut Criterion) {
         for i in 1..=n {
             let idx = bench_register_index(i);
             regs.set(idx, i as u64);
-            std::hint::black_box(regs.merkle_path(idx));
+            std::hint::black_box(regs.merkle_path(idx).unwrap());
         }
         let and_path_each_ms = t3.elapsed().as_secs_f64() * 1000.0;
         let root_ratio = and_root_each_ms / many_then_root_ms.max(1e-9);

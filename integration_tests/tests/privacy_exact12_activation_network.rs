@@ -25,8 +25,6 @@ use iroha_core::{
     privacy_profiles::{
         CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
         compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
-        zk_ams_release_candidate_profile_material_v1,
-        zk_x509_release_candidate_profile_material_v1,
     },
 };
 use iroha_data_model::{
@@ -40,11 +38,9 @@ use iroha_data_model::{
     prelude::QueryBuilderExt,
     privacy::{
         PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-        PrivacyCompiledProfileUnavailableReasonV1, PrivacyEngineIdV1,
-        PrivacyExact12CapabilityManifestV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1,
-        PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        privacy_exact12_fixture_bundle_v1,
+        PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
     },
     query::transaction::prelude::FindTransactions,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
@@ -64,9 +60,9 @@ const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
-const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
-const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
 const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 4] = [
     ZK_ACE_PROTOCOL,
     ZK_AMS_PROTOCOL,
@@ -634,26 +630,6 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             protocol_id.canonical_label()
         );
     }
-    let zk_ams_candidate = zk_ams_release_candidate_profile_material_v1()
-        .wrap_err("derive deterministic but non-activatable ZK-AMS candidate profile")?;
-    let zk_x509_candidate = zk_x509_release_candidate_profile_material_v1()
-        .wrap_err("derive deterministic but non-activatable ZK-X509 candidate profile")?;
-    let mut zk_ace_candidate = compiled_available_profiles()?
-        .into_iter()
-        .next()
-        .ok_or_else(|| eyre!("exact-12 registry contains no executable control profile"))?;
-    zk_ace_candidate.protocol_id = ZK_ACE_PROTOCOL;
-    zk_ace_candidate.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
-    zk_ace_candidate.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri;
-    zk_ace_candidate.protocol_limits = PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0;
-    // This is a structurally valid activation probe, not a Vega profile candidate. The real
-    // candidate stays sealed inside the release-evidence boundary until its authenticated keys
-    // and independent vectors exist.
-    let mut vega_candidate = zk_ace_candidate;
-    vega_candidate.protocol_id = VEGA_PROTOCOL;
-    vega_candidate.proof_system_id = PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
-    vega_candidate.engine_id = PrivacyEngineIdV1::NativeVega;
-    vega_candidate.protocol_limits = PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -712,60 +688,6 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             "ZK-ACE, ZK-AMS, Vega, and ZK-X509 must begin unavailable and unregistered",
         )
         .await?;
-        let grant = instruction_transaction(
-            &client,
-            Grant::account_permission(
-                Permission::from(CanEnactGovernance),
-                client.account.clone(),
-            ),
-        );
-        submit_signed_transaction(&client, &grant, "grant unavailable-profile governance permission")
-            .await?;
-        wait_for_transaction_on_peers(
-            &all_clients,
-            &grant,
-            "unavailable-profile governance grant convergence",
-        )
-        .await?;
-        for candidate in [
-            zk_ace_candidate,
-            zk_ams_candidate,
-            vega_candidate,
-            zk_x509_candidate,
-        ] {
-            let proposal_height = next_incoming_height(&client)?;
-            let activation_height = proposal_height
-                .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-                .ok_or_else(|| eyre!("unavailable-profile activation height overflowed"))?;
-            let protocol_id = candidate.protocol_id;
-            let proposed = proposed_activation(candidate, proposal_height, activation_height);
-            proposed.validate().wrap_err_with(|| {
-                format!(
-                    "construct structurally valid `{}` activation probe",
-                    protocol_id.canonical_label()
-                )
-            })?;
-            let activation = instruction_transaction(
-                &client,
-                RegisterPrivacyProtocolActivationV1::new(proposed),
-            );
-            let activation_error = submit_signed_transaction(
-                &client,
-                &activation,
-                &format!(
-                    "unreleased `{}` candidate activation must reject",
-                    protocol_id.canonical_label()
-                ),
-            )
-            .await
-            .expect_err("unreleased privacy candidate activation was accepted");
-            ensure!(
-                error_chain_contains(&activation_error, "does not match compiled native profile")
-                    && error_chain_contains(&activation_error, "not governance-available"),
-                "candidate activation for `{}` rejected for wrong reason: {activation_error:?}",
-                protocol_id.canonical_label()
-            );
-        }
         let bundle = privacy_exact12_fixture_bundle_v1()
             .wrap_err("construct canonical Exact12 fixture bundle")?;
         let mut unavailable_actions = Vec::with_capacity(UNAVAILABLE_PROTOCOLS.len());
@@ -799,8 +721,10 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             .await
             .expect_err("unreleased privacy production action was accepted");
             ensure!(
-                error_chain_contains(&action_error, "privacy protocol")
-                    && error_chain_contains(&action_error, "is not registered"),
+                error_chain_contains(
+                    &action_error,
+                    "production qualification is not registered"
+                ),
                 "production action for `{}` rejected for wrong reason: {action_error:?}",
                 protocol_id.canonical_label()
             );
@@ -878,8 +802,10 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             .await
             .expect_err("post-restart unreleased privacy action was accepted");
             ensure!(
-                error_chain_contains(&replay_error, "privacy protocol")
-                    && error_chain_contains(&replay_error, "is not registered"),
+                error_chain_contains(
+                    &replay_error,
+                    "production qualification is not registered"
+                ),
                 "post-restart action for `{}` rejected for wrong reason: {replay_error:?}",
                 protocol_id.canonical_label()
             );

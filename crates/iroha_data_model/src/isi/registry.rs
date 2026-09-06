@@ -5,7 +5,7 @@ use crate::{
     isi::{
         InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
         bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
-        identifier, kaigi, ministry, musubi, nexus, offline, oracle, privacy, ram_lfe, repo,
+        identifier, kaigi, ministry, musubi, nexus, oracle, privacy, ram_lfe, repo,
         runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
         space_directory,
         transparent::{
@@ -330,11 +330,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 343;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 351;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 343;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 351;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 327;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 334;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -384,9 +384,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "1771dea20955903e5e77663978ccf3d268bd7cbd7fc104e35d9a0bbb4b6a70bf";
+            "5eac6c5cdf846c53a6372745194b23e342242a0c004debe5461fedb5160a0853";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "998e1d3bb28afe26a7e7f86379ee7db8168e191c855883502d7513eeaaacb054";
+            "4cd2566dc4f63942e1e52b751a1b097747793e32dab67d24bde9420902177abd";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -413,7 +413,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                16,
+                17,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
@@ -422,6 +422,54 @@ mod tests {
                 "complete V1 type-to-wire-ID assignments changed"
             );
         }
+    }
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_instruction_wire_ids_are_exact_and_manual_council_stays_retired() {
+        const PERMITTED_GOVERNANCE_WIRE_IDS: &[&str] = &[
+            "iroha.instruction.v1::governance::ProposeDeployContract",
+            "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance",
+            "iroha.instruction.v1::governance::ProposeContractEmergencyHold",
+            "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance",
+            "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
+            "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
+            "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",
+            "iroha.instruction.v1::governance::ProposeValidationFeePolicy",
+            "iroha.instruction.v1::governance::ProposeValidationFeePayoutLifecycle",
+            "iroha.governance.parliament.attempt.create.v1",
+            "iroha.governance.parliament.transition.submit.v1",
+            "iroha.instruction.v1::governance::CastZkBallot",
+            "iroha.instruction.v1::governance::CastPlainBallot",
+            "iroha.instruction.v1::governance::SlashGovernanceLock",
+            "iroha.instruction.v1::governance::RestituteGovernanceLock",
+            "iroha.instruction.v1::governance::RegisterCitizen",
+            "iroha.instruction.v1::governance::UnregisterCitizen",
+        ];
+
+        let actual = wire_ids::ALL
+            .iter()
+            .filter(|entry| entry.governance_only)
+            .map(|entry| entry.wire_id)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, PERMITTED_GOVERNANCE_WIRE_IDS);
+        let retired_manual_council_wire_id = [
+            "iroha.instruction.v1::governance::",
+            "Persist",
+            "Council",
+            "For",
+            "Epoch",
+        ]
+        .concat();
+        assert!(!PERMITTED_GOVERNANCE_WIRE_IDS.contains(&retired_manual_council_wire_id.as_str()));
+
+        let registry = default();
+        assert!(!registry.contains(&retired_manual_council_wire_id));
+        assert!(
+            registry
+                .decode(&retired_manual_council_wire_id, &[])
+                .is_none(),
+            "the retired caller-selected roster wire ID must remain a tombstone"
+        );
     }
     #[test]
     #[should_panic(expected = "instruction registry key collision")]
@@ -617,93 +665,6 @@ mod tests {
                 registry.contains(wire_id),
                 "replacement alias lifecycle instruction must decode: {wire_id}"
             );
-        }
-    }
-    #[test]
-    fn retired_offline_note_instruction_ids_reject_valid_and_adversarial_payloads() {
-        let registry = default();
-        let valid_instruction = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
-        let raw = raw_instruction_payload(&valid_instruction);
-        let framed = framed_instruction_payload(&valid_instruction);
-        let retired_ids = [
-            "iroha_data_model::isi::offline::IssueOfflineNote",
-            "iroha_data_model::isi::offline::RedeemOfflineNote",
-            "iroha_data_model::isi::offline::AuditOfflineNote",
-            "iroha.offline.note.issue",
-            "iroha.offline.note.redeem",
-            "iroha.offline.note.audit",
-        ];
-        for wire_id in retired_ids {
-            assert!(
-                !registry.contains(wire_id),
-                "retired offline-note instruction id must not be registered: {wire_id}"
-            );
-            assert!(
-                registry.decode(wire_id, &framed).is_none(),
-                "a valid current payload must not revive retired id {wire_id}"
-            );
-            assert!(
-                registry.decode(wire_id, &[0xFF; 64]).is_none(),
-                "adversarial bytes under retired id {wire_id} must remain unknown"
-            );
-            assert!(!is_instruction_wire_id_registered(wire_id));
-            assert!(
-                crate::isi::frame_instruction_payload(wire_id, &raw).is_err(),
-                "public framing must reject retired id {wire_id}"
-            );
-            assert!(
-                crate::isi::decode_instruction_from_pair(wire_id, &framed).is_err(),
-                "public pair decoding must reject retired id {wire_id}"
-            );
-        }
-    }
-    #[test]
-    fn device_attestation_registration_has_stable_wire_id() {
-        let registry = default();
-        let type_name = std::any::type_name::<offline::RegisterOfflineDeviceAttestation>();
-        assert_eq!(
-            registry.wire_id(type_name),
-            Some(offline::RegisterOfflineDeviceAttestation::WIRE_ID)
-        );
-        assert!(registry.contains(offline::RegisterOfflineDeviceAttestation::WIRE_ID));
-    }
-    #[test]
-    fn taira_canary_two_step_has_stable_wire_ids() {
-        let registry = default();
-        for (type_name, wire_id) in [
-            (
-                std::any::type_name::<offline::AuthorizeKagemushaTairaCanaryV4>(),
-                offline::AuthorizeKagemushaTairaCanaryV4::WIRE_ID,
-            ),
-            (
-                std::any::type_name::<offline::RecordKagemushaTairaCanaryV4>(),
-                offline::RecordKagemushaTairaCanaryV4::WIRE_ID,
-            ),
-        ] {
-            assert_eq!(registry.wire_id(type_name), Some(wire_id));
-            assert!(registry.contains(wire_id));
-        }
-    }
-    #[test]
-    fn kagemusha_release_lifecycle_has_stable_wire_ids() {
-        let registry = default();
-        for (type_name, wire_id) in [
-            (
-                std::any::type_name::<offline::EnableKagemushaRecursiveIssuanceV4>(),
-                offline::EnableKagemushaRecursiveIssuanceV4::WIRE_ID,
-            ),
-            (
-                std::any::type_name::<offline::CancelKagemushaRecursiveReleaseV4>(),
-                offline::CancelKagemushaRecursiveReleaseV4::WIRE_ID,
-            ),
-            (
-                std::any::type_name::<offline::DeactivateKagemushaRecursiveIssuanceV4>(),
-                offline::DeactivateKagemushaRecursiveIssuanceV4::WIRE_ID,
-            ),
-        ] {
-            assert_eq!(registry.wire_id(type_name), Some(wire_id));
-            assert!(registry.contains(wire_id));
-            assert!(is_instruction_wire_id_registered(wire_id));
         }
     }
     #[test]
@@ -1443,8 +1404,25 @@ mod tests {
                 "EscrowDispute",
             ]
             .concat(),
+            "iroha.instruction.v1::offline::TopUpKagemushaRecursiveV4".to_owned(),
+            "iroha.instruction.v1::offline::RedeemKagemushaRecursiveV4".to_owned(),
+            "iroha.instruction.v1::offline::ActivateKagemushaRecursiveReleaseV4".to_owned(),
+            "iroha.offline.kagemusha.recursive_release.enable.v1".to_owned(),
+            "iroha.offline.kagemusha.recursive_release.cancel.v1".to_owned(),
+            "iroha.offline.kagemusha.recursive_release.deactivate.v1".to_owned(),
+            "iroha.offline.kagemusha.taira_canary.record.v1".to_owned(),
+            "iroha.offline.kagemusha.taira_canary.authorize.v1".to_owned(),
+            "iroha.offline.device_attestation.register".to_owned(),
+            "iroha.instruction.v1::offline::SetOfflineDeviceAttestationPolicy".to_owned(),
+            "iroha.instruction.v1::sorafs::RegisterSorafsAnonymousServiceNote".to_owned(),
+            "iroha.instruction.v1::sorafs::RegisterSorafsAnonymousJurorCandidacy".to_owned(),
+            "iroha.instruction.v1::sorafs::RefundSorafsAnonymousServiceEscrow".to_owned(),
+            "iroha.instruction.v1::sorafs::SlashSorafsAnonymousServiceEscrow".to_owned(),
         ];
         let registry = default();
+        let current = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let raw_current = raw_instruction_payload(&current);
+        let framed_current = framed_instruction_payload(&current);
         for retired in &retired_wires {
             assert!(
                 !registry.contains(retired),
@@ -1454,20 +1432,15 @@ mod tests {
                 registry.decode(retired, &[]).is_none(),
                 "retired confidential wire must not be dispatchable: {retired}"
             );
-        }
-        for specialized in [
-            std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
-            std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
-        ] {
-            let wire_id = registry
-                .wire_id(specialized)
-                .expect("protocol-bound confidential instruction has a V1 wire ID");
+            assert!(!is_instruction_wire_id_registered(retired));
             assert!(
-                registry.contains(wire_id),
-                "protocol-bound confidential instruction must remain registered: {specialized}"
+                crate::isi::frame_instruction_payload(retired, &raw_current).is_err(),
+                "public framing must reject retired wire: {retired}"
             );
-            assert_ne!(wire_id, specialized);
-            assert!(!registry.contains(specialized));
+            assert!(
+                crate::isi::decode_instruction_from_pair(retired, &framed_current).is_err(),
+                "public pair decoding must reject retired wire: {retired}"
+            );
         }
     }
     #[cfg(feature = "json")]
@@ -1497,7 +1470,6 @@ mod tests {
         for type_name in [
             std::any::type_name::<crate::isi::governance::RegisterCitizen>(),
             std::any::type_name::<crate::isi::governance::UnregisterCitizen>(),
-            std::any::type_name::<crate::isi::governance::RecordCitizenServiceOutcome>(),
         ] {
             assert!(registry.wire_id(type_name).is_some());
             assert!(!registry.contains(type_name));

@@ -735,7 +735,7 @@ impl TestAppealFinanceCheckpointRuntime {
         let signing_key = SigningKey::from_bytes(&[seed; 32]);
         Self {
             identity: AppealFinanceCheckpointRuntimeIdentityV1 {
-                provider_handle: "hsm:appeal-finance-checkpoint-primary".to_owned(),
+                provider_handle: "provider:appeal-finance-checkpoint-primary".to_owned(),
                 public_key: signing_key.verifying_key().to_bytes(),
                 qualification: AppealFinanceRuntimeProviderQualificationV1::new(1, [seed; 32]),
             },
@@ -801,7 +801,7 @@ fn configure_appeal_finance_settlement_submitter(
     signer: &OrderbookAccountFixture,
     state_root: &std::path::Path,
 ) {
-    let handle = "pkcs11:appeal-finance-a".to_owned();
+    let handle = "provider:appeal-finance-a".to_owned();
     let runtime_signer: Arc<dyn crate::SoraFsAppealFinanceTransactionSigner> =
         Arc::new(TestAppealFinanceRuntimeSigner {
             handle: handle.clone(),

@@ -82,7 +82,7 @@ fn context_from_compiled_profile_v1(
     }
 }
 fn context() -> Result<PrivacyStatementContextV1, PqMaspReleaseFixtureErrorV1> {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
+    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV1)
         .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     Ok(context_from_compiled_profile_v1(&profile))
 }
@@ -419,7 +419,7 @@ mod tests {
     use rand::{SeedableRng as _, rngs::StdRng};
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV1)
             .expect("compiled PQ-MASP profile");
         let baseline =
             norito::encode_canonical(&context_from_compiled_profile_v1(&profile)).expect("context");

@@ -217,6 +217,8 @@ isi! {
         pub lane_id: LaneId,
         /// Misbehaving validator account.
         pub validator: AccountId,
+        /// Exact consensus height at which the slashable offence occurred.
+        pub offence_height: u64,
         /// Unique identifier for the slash event.
         pub slash_id: Hash,
         /// Amount of stake to burn or seize.
@@ -487,13 +489,39 @@ mod slice_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+        );
+        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+            version: crate::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    crate::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1 {
+                        validator: validator.validator.clone(),
+                        eq_proof_public_key: [u8::try_from(index + 1)
+                            .expect("small fixture roster");
+                            32],
+                        ep_proof_public_key: [u8::try_from(index + 17)
+                            .expect("small fixture roster");
+                            32],
+                    }
+                })
+                .collect(),
+        };
+        let mint_finality_epoch_id = mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid fixture mint-finality roster");
         let context = HeightContext {
-            network_id: NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
-            ),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: 1,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,

@@ -1953,6 +1953,7 @@ mod tests {
             epoch_id: 1,
             lane_catalog_hash: Hash::new(b"merge-only-catalog"),
             active_lanes: Vec::new(),
+            lane_authority_catalog: crate::merge::MergeLaneAuthorityCatalogV1::default(),
             incarnation_root: Hash::new(b"merge-only-incarnations"),
             activation_root: Hash::new(b"merge-only-activations"),
             lane_snapshots: Vec::new(),

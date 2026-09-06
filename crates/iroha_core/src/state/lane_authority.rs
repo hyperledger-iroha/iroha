@@ -6,7 +6,7 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     block::{BlockExecutionContextBundle, consensus::LaneBlockDescriptorV1},
-    nexus::{DataSpaceId, LaneId, PublicLaneValidatorStatus},
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_primitives::numeric::Quantity;
@@ -19,7 +19,7 @@ use super::{
     lane_claims_autoscale_managed, lane_uses_reserved_autoscale_metadata,
     nexus_active_lane_dataspace_at_height, nexus_lane_active_for_authority,
     nexus_lane_committee_size, nexus_manifest_authority_eligible_lanes_at_height,
-    nexus_staking_authority_lane_at_height, peer_has_live_consensus_key,
+    nexus_staking_authority_lane_at_height, peer_has_live_consensus_key_for_lane,
     public_lane_validator_record_matches_key,
 };
 use crate::governance::manifest::{GovernanceRules, LaneManifestRegistry};
@@ -288,11 +288,13 @@ pub(super) fn manifest_rules_for_lane<'a>(
 /// their immutable peer committee is resolved before this helper.
 fn live_dataspace_stake_candidates(
     world: &impl WorldReadOnly,
+    target_lane: LaneId,
     inputs: &ResolvedLaneAuthorityInputs,
     block_height: u64,
 ) -> Option<Vec<(AccountId, PeerId, Quantity)>> {
     live_stake_candidates_for_lanes(
         world,
+        target_lane,
         &inputs.staking_authority_lanes,
         inputs.staking_owner_lane,
         &inputs.bounded.minimum_stake,
@@ -304,6 +306,7 @@ fn live_dataspace_stake_candidates(
 /// Resolve one canonical live stake projection across dataspace sibling lanes.
 pub(super) fn live_stake_candidates_for_lanes(
     world: &impl WorldReadOnly,
+    target_lane: LaneId,
     source_lanes: &BTreeSet<LaneId>,
     canonical_owner: Option<LaneId>,
     minimum_stake: &Quantity,
@@ -316,14 +319,22 @@ pub(super) fn live_stake_candidates_for_lanes(
     for (key, record) in world.public_lane_validators().iter() {
         if !source_lanes.contains(&key.0)
             || !public_lane_validator_record_matches_key(key, record)
-            || !matches!(record.status, PublicLaneValidatorStatus::Active)
+            || !crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                record,
+                block_height,
+            )
             || !crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
                 minimum_stake,
             )
             .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
-            || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
+            || !peer_has_live_consensus_key_for_lane(
+                world,
+                &record.peer_id,
+                block_height,
+                target_lane,
+            )
         {
             continue;
         }
@@ -391,6 +402,7 @@ pub(super) fn validator_accounts_with_inputs(
         if !rules.validator_bindings.is_empty() {
             let bindings = bounded_authority::live_manifest_validator_bindings(
                 world,
+                lane_id,
                 &rules.validator_bindings,
                 &rules.validators,
                 block_height,
@@ -402,6 +414,7 @@ pub(super) fn validator_accounts_with_inputs(
         }
         return bounded_authority::live_manifest_validator_account_peers(
             world,
+            lane_id,
             &rules.validators,
             block_height,
         )
@@ -425,7 +438,7 @@ pub(super) fn validator_accounts_with_inputs(
             block_height,
         );
     }
-    live_dataspace_stake_candidates(world, inputs, block_height)
+    live_dataspace_stake_candidates(world, lane_id, inputs, block_height)
         .unwrap_or_default()
         .into_iter()
         .map(|(account, _, _)| account)
@@ -452,6 +465,7 @@ pub(super) fn peer_pool_with_inputs(
         if !rules.validator_bindings.is_empty() {
             let bindings = bounded_authority::live_manifest_validator_bindings(
                 world,
+                lane_id,
                 &rules.validator_bindings,
                 &rules.validators,
                 block_height,
@@ -463,6 +477,7 @@ pub(super) fn peer_pool_with_inputs(
         }
         return Ok(bounded_authority::live_manifest_validator_account_peers(
             world,
+            lane_id,
             &rules.validators,
             block_height,
         )
@@ -486,7 +501,8 @@ pub(super) fn peer_pool_with_inputs(
             block_height,
         ));
     }
-    let Some(candidates) = live_dataspace_stake_candidates(world, inputs, block_height) else {
+    let Some(candidates) = live_dataspace_stake_candidates(world, lane_id, inputs, block_height)
+    else {
         return Err(());
     };
     Ok(ranked_stake_peer_pool(candidates))

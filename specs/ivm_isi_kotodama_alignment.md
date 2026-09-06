@@ -151,8 +151,11 @@ stateful effects across the complete call graph.
 
 Lifecycle authorization cannot be weakened in source. ABI V1 maps both
 `hajimari`/`始まり` and `kaizen`/`改善` to the runtime-defined
-`CanRegisterSmartContractCode` permission, while views remain public unless
-they explicitly declare authorization.
+`CanInvokeContractEntrypoint` permission, while views remain public unless they
+explicitly declare authorization. This hook permission is separate from
+revisioned address lifecycle admission: only the current account owner or the
+certified Parliament corridor may activate or deactivate an existing address,
+and raw activation cannot create one.
 
 ---
 

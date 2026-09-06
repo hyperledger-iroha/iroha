@@ -3,6 +3,8 @@
 //! Callers first bind access to a trusted directory with [`AtomicWriteRoot`] and then provide only
 //! a normal relative path. This deliberately prevents a path read from a lockfile or registry
 //! response from becoming an arbitrary filesystem target.
+#[cfg(unix)]
+use iroha_primitives::fs::secure_no_follow_nonblocking_flags;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::AsRawFd as _;
 #[cfg(unix)]
@@ -1965,119 +1967,9 @@ compile_error!("Musubi atomic file reads are not qualified for this Android arch
     ))
 ))]
 compile_error!("Musubi atomic file reads are not qualified for this Unix target");
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-const fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "mips",
-        target_arch = "mips32r6",
-        target_arch = "mips64",
-        target_arch = "mips64r6"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x80
-}
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "sparc", target_arch = "sparc64")
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4000
-}
-#[cfg(any(
-    target_os = "android",
-    all(
-        target_os = "linux",
-        not(any(
-            target_arch = "mips",
-            target_arch = "mips32r6",
-            target_arch = "mips64",
-            target_arch = "mips64r6",
-            target_arch = "sparc",
-            target_arch = "sparc64"
-        ))
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x800
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4
-}
 #[cfg(unix)]
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> =
-    Some(platform_no_follow_flag() | platform_nonblocking_flag());
+    Some(secure_no_follow_nonblocking_flags());
 #[cfg(not(unix))]
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = None;
 #[cfg(test)]

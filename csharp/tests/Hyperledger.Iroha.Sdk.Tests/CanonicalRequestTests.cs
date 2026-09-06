@@ -283,7 +283,7 @@ public sealed class CanonicalRequestTests
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
             accountId: credentials.AccountId,
-            privateKeySeed: credentials.PrivateKeySeed,
+            privateKeySeed: credentials.PrivateKeySeedSpan,
             method: "post",
             path: "/v1/query",
             query: "gas_units=100&cursor_mode=stored",
@@ -307,7 +307,7 @@ public sealed class CanonicalRequestTests
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
             credentials.AccountId,
-            credentials.PrivateKeySeed,
+            credentials.PrivateKeySeedSpan,
             "post",
             "/v1/fees/quote",
             body: Encoding.UTF8.GetBytes("{}"),
@@ -356,31 +356,26 @@ public sealed class CanonicalRequestTests
     }
 
     [Fact]
-    public void CanonicalRequestCredentialsSnapshotsPrivateKeySeedConstructorAndGetterBytes()
+    public void CanonicalRequestCredentialsSnapshotConstructorSeedWithoutExposingIt()
     {
         var seed = FixturePrivateKeySeed.ToArray();
-        var credentials = new CanonicalRequestCredentials(FixtureAccountId, seed);
-        var expectedSeed = credentials.PrivateKeySeed;
+        using var credentials = new CanonicalRequestCredentials(FixtureAccountId, seed);
         var expectedSignature = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
             credentials.AccountId,
-            credentials.PrivateKeySeed,
+            FixturePrivateKeySeed,
             "post",
             "/v1/query",
             timestampMs: 1735000000123,
             nonce: "abcdef0123456789abcdef0123456789").SignatureBase64;
 
         seed[0] ^= 0xff;
-        var returnedSeed = credentials.PrivateKeySeed;
-        returnedSeed[1] ^= 0xff;
-
-        Assert.Equal(expectedSeed, credentials.PrivateKeySeed);
-        Assert.NotSame(returnedSeed, credentials.PrivateKeySeed);
+        Assert.Null(typeof(CanonicalRequestCredentials).GetProperty("PrivateKeySeed"));
 
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
             credentials.AccountId,
-            credentials.PrivateKeySeed,
+            credentials.PrivateKeySeedSpan,
             "post",
             "/v1/query",
             timestampMs: 1735000000123,
@@ -393,21 +388,43 @@ public sealed class CanonicalRequestTests
     {
         var seed = FixturePrivateKeySeed.ToArray();
         var expectedPublicKey = Ed25519Signer.GetPublicKey(seed);
-        var keyPair = Ed25519KeyPair.FromSeed(seed);
-        var expectedSeed = keyPair.PrivateKeySeed;
+        using var keyPair = Ed25519KeyPair.FromSeed(seed);
+        var expectedSeed = keyPair.ExportPrivateKeySeed();
         var expectedAddress = keyPair.ToAccountAddress().ToI105();
 
         seed[0] ^= 0xff;
-        var returnedSeed = keyPair.PrivateKeySeed;
+        var returnedSeed = keyPair.ExportPrivateKeySeed();
         returnedSeed[1] ^= 0xff;
         var returnedPublicKey = keyPair.PublicKey;
         returnedPublicKey[2] ^= 0xff;
 
-        Assert.Equal(expectedSeed, keyPair.PrivateKeySeed);
+        Assert.Equal(expectedSeed, keyPair.ExportPrivateKeySeed());
         Assert.Equal(expectedPublicKey, keyPair.PublicKey);
         Assert.Equal(expectedAddress, keyPair.ToAccountAddress().ToI105());
-        Assert.NotSame(returnedSeed, keyPair.PrivateKeySeed);
+        Assert.NotSame(returnedSeed, keyPair.ExportPrivateKeySeed());
         Assert.NotSame(returnedPublicKey, keyPair.PublicKey);
+    }
+
+    [Fact]
+    public void SecretOwnersRejectUseAfterDispose()
+    {
+        var keyPair = Ed25519KeyPair.FromSeed(FixturePrivateKeySeed);
+        var credentials = new CanonicalRequestCredentials(FixtureAccountId, FixturePrivateKeySeed);
+
+        keyPair.Dispose();
+        credentials.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => keyPair.ExportPrivateKeySeed());
+        Assert.Throws<ObjectDisposedException>(() => keyPair.ToAccountAddress());
+        Assert.Throws<ObjectDisposedException>(() =>
+            CanonicalRequest.BuildHeaders(
+                FixtureNetworkId,
+                credentials.AccountId,
+                credentials.PrivateKeySeedSpan,
+                "post",
+                "/v1/query",
+                timestampMs: 1,
+                nonce: "abcdef0123456789abcdef0123456789"));
     }
 
     [Theory]

@@ -3,6 +3,8 @@
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceLifecycleActionV1")]
 pub enum SoraServiceLifecycleActionV1 {
     /// First-time admission of a service.
     Deploy,
@@ -38,6 +40,8 @@ pub enum SoraServiceLifecycleActionV1 {
 /// Exact authoritative service revision observed by an upgrade signer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceExactCurrentRevisionPreconditionV1")]
 pub struct SoraServiceExactCurrentRevisionPreconditionV1 {
     /// Active service version observed by the signer.
     pub service_version: String,
@@ -60,6 +64,8 @@ pub struct SoraServiceExactCurrentRevisionPreconditionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "condition", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceMutationPreconditionV1")]
 pub enum SoraServiceMutationPreconditionV1 {
     /// A first deployment is valid only while no deployment state exists for
     /// the service name carried by the signed bundle.
@@ -73,6 +79,8 @@ pub enum SoraServiceMutationPreconditionV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraStateMutationOperationV1")]
 pub enum SoraStateMutationOperationV1 {
     /// Create or replace a state entry.
     Upsert,
@@ -84,6 +92,8 @@ pub enum SoraStateMutationOperationV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "stage", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraRolloutStageV1")]
 pub enum SoraRolloutStageV1 {
     /// Candidate revision is serving a canary fraction of traffic.
     #[default]
@@ -97,6 +107,8 @@ pub enum SoraRolloutStageV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceRolloutStateV1")]
 pub struct SoraServiceRolloutStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_ROLLOUT_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -258,6 +270,8 @@ impl SoraServiceRolloutStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceDeploymentStateV1")]
 pub struct SoraServiceDeploymentStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -1132,6 +1146,8 @@ fn validate_bundle_absolute_path(
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceConfigEntryV1")]
 pub struct SoraServiceConfigEntryV1 {
     /// Schema version; must equal [`SORA_SERVICE_CONFIG_ENTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -1210,6 +1226,8 @@ fn canonical_service_config_json_payload(
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceSecretEntryV1")]
 pub struct SoraServiceSecretEntryV1 {
     /// Schema version; must equal [`SORA_SERVICE_SECRET_ENTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -1253,6 +1271,8 @@ impl SoraServiceSecretEntryV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceConfigMutationV1")]
 pub enum SoraServiceConfigMutationV1 {
     /// Create or replace the complete config entry.
     Upsert(SoraServiceConfigEntryV1),
@@ -1297,6 +1317,8 @@ impl SoraServiceConfigMutationV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceSecretMutationV1")]
 pub enum SoraServiceSecretMutationV1 {
     /// Create or replace the complete encrypted-secret entry.
     Upsert(SoraServiceSecretEntryV1),
@@ -1360,6 +1382,8 @@ pub fn derive_soracloud_service_secret_snapshot_hash_v1(
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceStateEntryV1")]
 pub struct SoraServiceStateEntryV1 {
     /// Schema version; must equal [`SORA_SERVICE_STATE_ENTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -1552,6 +1576,8 @@ fn validate_service_state_fhe_bound_metadata(
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraDecryptionRequestRecordV1")]
 pub struct SoraDecryptionRequestRecordV1 {
     /// Schema version; must equal [`SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1606,6 +1632,8 @@ impl SoraDecryptionRequestRecordV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraTrainingJobStatusV1")]
 pub enum SoraTrainingJobStatusV1 {
     /// Job is actively executing and may emit checkpoints.
     Running,
@@ -1621,6 +1649,8 @@ pub enum SoraTrainingJobStatusV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraTrainingJobActionV1")]
 pub enum SoraTrainingJobActionV1 {
     /// A new deterministic training job was created.
     Start,
@@ -1633,6 +1663,8 @@ pub enum SoraTrainingJobActionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraTrainingJobRecordV1")]
 pub struct SoraTrainingJobRecordV1 {
     /// Schema version; must equal [`SORA_TRAINING_JOB_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1840,6 +1872,8 @@ impl SoraTrainingJobRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraTrainingJobAuditEventV1")]
 pub struct SoraTrainingJobAuditEventV1 {
     /// Schema version; must equal [`SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1934,6 +1968,8 @@ impl SoraTrainingJobAuditEventV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelRegistryV1")]
 pub struct SoraModelRegistryV1 {
     /// Schema version; must equal [`SORA_MODEL_REGISTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -1985,6 +2021,8 @@ impl SoraModelRegistryV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelWeightActionV1")]
 pub enum SoraModelWeightActionV1 {
     /// A new weight version was registered.
     Register,
@@ -1998,6 +2036,8 @@ pub enum SoraModelWeightActionV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelProvenanceKindV1")]
 pub enum SoraModelProvenanceKindV1 {
     /// The model was produced by a Soracloud training job.
     TrainingJob,
@@ -2010,6 +2050,8 @@ pub enum SoraModelProvenanceKindV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelProvenanceRefV1")]
 pub struct SoraModelProvenanceRefV1 {
     /// Origin kind.
     pub kind: SoraModelProvenanceKindV1,
@@ -2031,6 +2073,8 @@ impl SoraModelProvenanceRefV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "package_format", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraUploadedModelPackageFormatV1")]
 pub enum SoraUploadedModelPackageFormatV1 {
     /// Canonical normalized Hugging Face-style safetensors repository layout.
     #[default]
@@ -2040,6 +2084,8 @@ pub enum SoraUploadedModelPackageFormatV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1")]
 pub struct SoraUploadedModelPricingPolicyV1 {
     /// Nominal XOR quantity charged for storing uploaded-model bytes.
     pub storage_price: Quantity,
@@ -2048,6 +2094,8 @@ pub struct SoraUploadedModelPricingPolicyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraUploadedModelBundleV1")]
 pub struct SoraUploadedModelBundleV1 {
     /// Schema version; must equal [`SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1`].
     pub schema_version: u16,
@@ -2155,6 +2203,8 @@ impl SoraUploadedModelBundleV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelWeightVersionRecordV1")]
 pub struct SoraModelWeightVersionRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -2290,6 +2340,8 @@ impl SoraModelWeightVersionRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelWeightAuditEventV1")]
 pub struct SoraModelWeightAuditEventV1 {
     /// Schema version; must equal [`SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2365,6 +2417,8 @@ impl SoraModelWeightAuditEventV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelArtifactActionV1")]
 pub enum SoraModelArtifactActionV1 {
     /// A completed training job registered an artifact description.
     Register,
@@ -2373,6 +2427,8 @@ pub enum SoraModelArtifactActionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelArtifactRecordV1")]
 pub struct SoraModelArtifactRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_ARTIFACT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -2502,3 +2558,6 @@ impl SoraModelArtifactRecordV1 {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod captured_deployment_schema_tests;

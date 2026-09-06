@@ -129,7 +129,6 @@ class _MockState:
         self._pipeline_submit_seq = 0
         self.accounts: Dict[str, Dict[str, Any]] = {}
         self.gov_referenda: Dict[str, Dict[str, Any]] = {}
-        self.gov_council_current: Dict[str, Any] = {}
         self.gov_contracts: Dict[str, Dict[str, Any]] = {}
         self.contract_manifests: Dict[str, Dict[str, Any]] = {}
         self.contract_code_bytes: Dict[str, Dict[str, Any]] = {}
@@ -201,8 +200,6 @@ class _MockState:
             return self._gov_ballot_plain(body)
         if method == "POST" and path == "/v1/gov/ballots/zk-v1":
             return self._gov_ballot_zk_v1(body)
-        if method == "GET" and path == "/v1/gov/council/current":
-            return _json_response(HTTPStatus.OK, self.gov_council_current)
         if method == "GET" and path.startswith("/v1/contracts/code-bytes/"):
             code_hash = path.split("/")[-1]
             return self._contracts_code_bytes(code_hash)
@@ -313,7 +310,6 @@ class _MockState:
             self._pipeline_submit_seq = 0
             self.accounts.clear()
             self.gov_referenda.clear()
-            self.gov_council_current = {"epoch": 0, "members": []}
             self.gov_contracts.clear()
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
@@ -379,6 +375,7 @@ class _MockState:
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
                 "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
                 "recent_messages_path": "/v1/sccp/messages/recent",
+                "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
                 "registry_limits": {
                     "max_governed_lanes": 16,
                     "max_live_governed_routes": 64,
@@ -581,13 +578,18 @@ class _MockState:
             required = "destination_proof_b64"
             configured = self.sccp_bridge_proof_response
         else:
-            allowed = common | {"native_proof_b64"}
-            required = "native_proof_b64"
+            allowed = common | {"native_proof_b64", "replay_witness_b64"}
+            required = "native_proof_b64 and replay_witness_b64"
             configured = self.sccp_bridge_message_response
         unknown = next((field for field in payload if field not in allowed), None)
         if unknown is not None:
             raise ValueError(f"unknown or retired bridge submit field `{unknown}`")
-        if "authority" not in payload or "fee_payment" not in payload or required not in payload:
+        missing_artifact = (
+            "destination_proof_b64" not in payload
+            if endpoint == "proof"
+            else "native_proof_b64" not in payload or "replay_witness_b64" not in payload
+        )
+        if "authority" not in payload or "fee_payment" not in payload or missing_artifact:
             raise ValueError(f"authority, fee_payment, and {required} are required")
         from .client import ToriiClient
 
@@ -638,14 +640,6 @@ class _MockState:
                 "ballot_zk_v1": entry.get("ballot_zk_response"),
             }
         self.gov_referenda = new_state
-
-        council_current = payload.get("council_current")
-        if council_current is not None:
-            if not isinstance(council_current, dict):
-                raise ValueError("council_current must be an object")
-            self.gov_council_current = dict(council_current)
-        else:
-            self.gov_council_current = {"epoch": 0, "members": []}
 
         gov_contracts_payload = payload.get("gov_contracts")
         if gov_contracts_payload is not None:
@@ -1007,7 +1001,11 @@ class _MockState:
         if entry is None:
             return _json_response(
                 HTTPStatus.OK,
-                {"found": False, "contract_address": contract_address, "dataspace": None, "code_hash_hex": None},
+                {
+                    "found": False,
+                    "contract_address": contract_address,
+                    "dataspace": "universal",
+                },
             )
         payload = dict(entry)
         payload.setdefault("found", True)
@@ -1454,7 +1452,8 @@ class _MockState:
                         "parent_state_root": _canonical_hash(0x51),
                         "post_state_root": _canonical_hash(0x52),
                         "ordinary_writes_root": _canonical_hash(0x52),
-                        "topup_anchor_count": 0,
+                        "kagemusha_top_up_root": None,
+                        "kagemusha_top_up_count": 0,
                         "native_amx_application_manifest_version": 1,
                         "native_amx_application_manifest_root": (
                             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT

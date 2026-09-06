@@ -114,8 +114,8 @@ mod strict_verifying_key_preparation_tests {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn stark_preparation_rejects_oversized_declared_string_from_tiny_container() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:bounded-vk-test";
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:bounded-vk-test";
         let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
@@ -124,7 +124,6 @@ mod strict_verifying_key_preparation_tests {
             fold_arity: 2,
             queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
         let mut bytes = norito::encode_canonical(&payload).expect("encode canonical STARK key");
         let circuit = circuit_id.as_bytes();

@@ -1,14 +1,10 @@
 //! Relay incentive engine wiring treasury payouts to the XOR ledger.
 //!
 //! This module bridges the SoraNet relay metrics emitted by the runtime with the core reward
-//! calculator implemented in `iroha_core::soranet_incentives`. The orchestrator feeds epoch metrics,
+//! calculator implemented in `soranet_incentives`. The orchestrator feeds epoch metrics,
 //! bond state, and optional metadata into the calculator and converts the resulting reward decision
 //! into deterministic `RelayRewardInstructionV1` payloads that the treasury daemon can execute.
 use hex::encode as hex_encode;
-use iroha_core::soranet_incentives::{
-    RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
-    RewardSkipReason, RewardWeights,
-};
 use iroha_data_model::{
     account::AccountId,
     metadata::Metadata,
@@ -19,8 +15,11 @@ use iroha_data_model::{
         prelude::{Digest32, RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayEpochMetricsV1},
     },
 };
-use iroha_logger::warn;
 use iroha_primitives::{json::Json, numeric::Quantity};
+use soranet_incentives::{
+    RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
+    RewardSkipReason, RewardWeights,
+};
 use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
@@ -29,6 +28,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use thiserror::Error;
+use tracing::warn;
 /// Declarative configuration for the relay reward engine.
 #[derive(Debug, Clone)]
 pub struct RewardConfig {

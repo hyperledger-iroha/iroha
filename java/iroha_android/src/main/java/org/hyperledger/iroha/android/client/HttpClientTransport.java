@@ -56,10 +56,6 @@ import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
-import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels;
-import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
 import org.hyperledger.iroha.android.crypto.Blake3;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
@@ -175,24 +171,6 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   @Override
-  public CompletableFuture<ClientResponse> submitSccpDestinationProof(
-      final SccpDestinationProofSubmitRequest request) {
-    Objects.requireNonNull(request, "request");
-    return executeSccpJsonAccepted(
-        buildBridgeJsonPostRequest("/v1/bridge/proofs/submit", request.toJsonBytes()),
-        "SCCP destination proof submit");
-  }
-
-  @Override
-  public CompletableFuture<ClientResponse> submitSccpNativeMessage(
-      final SccpNativeMessageSubmitRequest request) {
-    Objects.requireNonNull(request, "request");
-    return executeSccpJsonAccepted(
-        buildBridgeJsonPostRequest("/v1/bridge/messages", request.toJsonBytes()),
-        "SCCP native message submit");
-  }
-
-  @Override
   public CompletableFuture<ClientResponse> submitTransactionEntrypoint(
       final byte[] encodedVersionedEntrypoint) {
     final TransportRequest request =
@@ -295,41 +273,6 @@ public final class HttpClientTransport implements IrohaClient {
     return future;
   }
 
-  private CompletableFuture<ClientResponse> executeSccpJsonAccepted(
-      final TransportRequest request, final String errorContext) {
-    notifyRequest(request);
-    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
-    executor
-        .execute(request)
-        .whenComplete(
-            (response, throwable) -> {
-              if (throwable != null) {
-                final Throwable cause =
-                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
-                notifyFailure(request, cause);
-                future.completeExceptionally(
-                    new RuntimeException(errorContext + " request failed", cause));
-                return;
-              }
-              final ClientResponse clientResponse =
-                  new ClientResponse(
-                      response.statusCode(),
-                      response.body(),
-                      response.message(),
-                      null,
-                      extractRejectCode(response));
-              try {
-                requireExactSccpJsonResponse(response, errorContext);
-                notifyResponse(request, clientResponse);
-                future.complete(clientResponse);
-              } catch (final RuntimeException ex) {
-                notifyFailure(request, ex);
-                future.completeExceptionally(ex);
-              }
-            });
-    return future;
-  }
-
   @Override
   public CompletableFuture<Map<String, Object>> waitForTransactionStatus(
       final String hashHex, final PipelineStatusOptions options) {
@@ -359,14 +302,27 @@ public final class HttpClientTransport implements IrohaClient {
     return config.toNoritoRpcClient(executor);
   }
 
-  /** Creates a streaming client wired to this transport's configuration. */
+  /** Creates a streaming client without a canonical account identity. */
   public ToriiEventStreamClient newEventStreamClient() {
+    return newEventStreamClientBuilder().build();
+  }
+
+  /** Creates a streaming client that signs each exact final request URI. */
+  public ToriiEventStreamClient newEventStreamClient(
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return newEventStreamClientBuilder()
+        .canonicalRequestAuth(
+            config.requireLocalSigningContext(),
+            Objects.requireNonNull(canonicalAuth, "canonicalAuth"))
+        .build();
+  }
+
+  private ToriiEventStreamClient.Builder newEventStreamClientBuilder() {
     return ToriiEventStreamClient.builder()
         .setBaseUri(config.baseUri())
         .setTransportExecutor(executor)
         .defaultHeaders(config.defaultHeaders())
-        .observers(config.observers())
-        .build();
+        .observers(config.observers());
   }
 
   /** Creates a typed DA proof client that reuses this transport's configuration. */
@@ -499,26 +455,6 @@ public final class HttpClientTransport implements IrohaClient {
     final TransportRequest request =
         buildJsonGetRequest("/v1/ram-lfe/program-policies", Collections.emptyMap());
     return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
-  }
-
-  /** Fetches the authoritative protocol-v4 Sumeragi status snapshot. */
-  @Override
-  public CompletableFuture<SumeragiV2Status> getSumeragiStatus() {
-    return fetchExactJson(
-        buildExactOperatorJsonGetRequest(
-            "/v1/sumeragi/status", SumeragiStatusModels.STATUS_JSON_MAX_BYTES),
-        SumeragiStatusModels::parseStatus,
-        "Sumeragi status");
-  }
-
-  /** Fetches operational Sumeragi evidence from its separate diagnostics route. */
-  @Override
-  public CompletableFuture<SumeragiDiagnosticsStatus> getSumeragiDiagnostics() {
-    return fetchExactJson(
-        buildExactOperatorJsonGetRequest(
-            "/v1/sumeragi/diagnostics", SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES),
-        SumeragiDiagnosticsModels::parseDiagnostics,
-        "Sumeragi diagnostics");
   }
 
   /** Fetch the exact result-bearing {@code SignedBlockWire} committed at {@code height}. */
@@ -2476,41 +2412,6 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
-  private TransportRequest buildExactOperatorJsonGetRequest(
-      final String path, final long maximumResponseBytes) {
-    for (final String name : config.defaultHeaders().keySet()) {
-      if (name.equalsIgnoreCase("Accept")) {
-        throw new IllegalArgumentException(
-            "Accept must not be overridden for exact JSON requests");
-      }
-    }
-    OperatorRequestSigner.requireGeneratedAuth(config.defaultHeaders());
-    final URI target = resolvePath(path);
-    final Map<String, String> operatorHeaders =
-        OperatorRequestSigner.buildHeaders(
-            config.requireOperatorSigningContext(), "GET", target, new byte[0]);
-    final TransportRequest.Builder builder =
-        TransportRequest.builder()
-            .setUri(target)
-            .setMethod("GET")
-            .addHeader("Accept", APPLICATION_JSON)
-            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
-            .setTimeout(config.requestTimeout());
-    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
-      builder.addHeader(entry.getKey(), entry.getValue());
-    }
-    for (final Map.Entry<String, String> entry : operatorHeaders.entrySet()) {
-      builder.addHeader(entry.getKey(), entry.getValue());
-    }
-    TransportSecurity.requireHttpRequestAllowed(
-        "HttpClientTransport operator GET",
-        config.baseUri(),
-        target,
-        operatorHeaders,
-        null);
-    return builder.build();
-  }
-
   private TransportRequest buildExactNoritoGetRequest(
       final String path, final long maximumResponseBytes) {
     return buildExactNoritoGetRequest(path, maximumResponseBytes, null);
@@ -2637,11 +2538,6 @@ public final class HttpClientTransport implements IrohaClient {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
     return builder.build();
-  }
-
-  private TransportRequest buildBridgeJsonPostRequest(final String path, final byte[] body) {
-    preflightSccpBridgeSubmitJson(body, path);
-    return buildJsonPostRequest(path, body, SCCP_JSON_RESPONSE_MAX_BYTES);
   }
 
   private TransportRequest buildVpnRequest(
@@ -4689,46 +4585,7 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException("authority is required and must be canonical");
     }
     SccpSubmitEncoding.requireCanonicalAuthority((String) fields.get("authority"), "authority");
-    final FeePaymentIntent feePayment =
-        FeePaymentJson.parse(fields.get("fee_payment"), "bridge submit payload.fee_payment");
-    final boolean hasSignature = fields.containsKey("signature_b64");
-    final Object signature = fields.get("signature_b64");
-    if (hasSignature) {
-      if (!(signature instanceof String)) {
-        throw new IllegalArgumentException("signature_b64 must be canonical base64");
-      }
-      SccpSubmitEncoding.normalizeOptionalSignature((String) signature);
-    }
-    final boolean hasTransactionPayload = fields.containsKey("transaction_payload_b64");
-    final Object transactionPayload = fields.get("transaction_payload_b64");
-    if (hasTransactionPayload && !(transactionPayload instanceof String)) {
-      throw new IllegalArgumentException(
-          "transaction_payload_b64 must be canonical padded base64");
-    }
-    final Object creationTime = fields.get("creation_time_ms");
-    Long normalizedCreationTime = null;
-    if (fields.containsKey("creation_time_ms")) {
-      if (!(creationTime instanceof Number)) {
-        throw new IllegalArgumentException("creation_time_ms must be a positive integer");
-      }
-      final Number number = (Number) creationTime;
-      final long value = number.longValue();
-      if (value <= 0 || !number.toString().equals(Long.toString(value))) {
-        throw new IllegalArgumentException("creation_time_ms must be a positive integer");
-      }
-      normalizedCreationTime = value;
-    }
-    SccpSubmitEncoding.validateDetachedSigningState(
-        signature instanceof String ? (String) signature : null,
-        transactionPayload instanceof String ? (String) transactionPayload : null,
-        normalizedCreationTime);
-    if (transactionPayload instanceof String) {
-      SccpSubmitEncoding.normalizeOptionalTransactionPayload(
-          (String) transactionPayload,
-          normalizedCreationTime,
-          (String) fields.get("authority"),
-          feePayment);
-    }
+    FeePaymentJson.parse(fields.get("fee_payment"), "bridge submit payload.fee_payment");
     if ("/v1/bridge/messages".equals(path)) {
       final String nativeProof = requiredSccpArtifact(fields, "native_proof_b64");
       SccpSubmitEncoding.validateCanonicalNoritoBase64(
@@ -4736,6 +4593,10 @@ public final class HttpClientTransport implements IrohaClient {
           "native_proof_b64",
           SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
           SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
+      final String replayWitness = requiredSccpArtifact(fields, "replay_witness_b64");
+      SccpSubmitEncoding.validateCanonicalReplayWitnessBase64(
+          replayWitness,
+          "replay_witness_b64");
       return;
     }
     final String destinationProof = requiredSccpArtifact(fields, "destination_proof_b64");
@@ -4995,18 +4856,13 @@ public final class HttpClientTransport implements IrohaClient {
       java.util.Set.of(
           "authority",
           "fee_payment",
-          "signature_b64",
-          "transaction_payload_b64",
-          "destination_proof_b64",
-          "creation_time_ms");
+          "destination_proof_b64");
   private static final java.util.Set<String> SCCP_MESSAGE_SUBMIT_FIELDS =
       java.util.Set.of(
           "authority",
           "fee_payment",
-          "signature_b64",
-          "transaction_payload_b64",
           "native_proof_b64",
-          "creation_time_ms");
+          "replay_witness_b64");
   private static final long FEE_QUOTE_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;

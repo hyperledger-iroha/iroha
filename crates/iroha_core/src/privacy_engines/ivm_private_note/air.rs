@@ -7,13 +7,13 @@
 use super::{
     codec::{PRIVATE_PROGRAM_BYTES_V1, decode_private_program_v1, encode_private_program_v1},
     relation::{
-        ACCUMULATOR_LEAF_DOMAIN_V1, ACCUMULATOR_NODE_DOMAIN_V1, HASH_FRAME_DOMAIN_V1,
-        IvmPrivateNoteWitnessV1, NOTE_AUTHORITY_DOMAIN_V1, NOTE_COMMITMENT_DOMAIN_V1,
-        NOTE_NULLIFIER_DOMAIN_V1, PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1, PRIVATE_NOTE_TREE_DEPTH_V1,
-        PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PROGRAM_ID_DOMAIN_V1, PrivateInstructionV1,
-        PrivateNoteRelationProfileV1, PrivateOpcodeV1, Sha256InvocationRoleV1, Sha256InvocationV1,
-        namespace_v1, public_balance_sides, validate_private_note_relation_with_profile_v1,
-        validate_statement_with_profile_v1,
+        ACCUMULATOR_LEAF_DOMAIN_V1, ACCUMULATOR_NODE_DOMAIN_V1, AUDIT_INPUT_OPENINGS_DOMAIN_V1,
+        HASH_FRAME_DOMAIN_V1, IvmPrivateNoteWitnessV1, NOTE_AUTHORITY_DOMAIN_V1,
+        NOTE_COMMITMENT_DOMAIN_V1, NOTE_NULLIFIER_DOMAIN_V1, PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1,
+        PRIVATE_NOTE_TREE_DEPTH_V1, PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PROGRAM_ID_DOMAIN_V1,
+        PrivateInstructionV1, PrivateNoteRelationProfileV1, PrivateOpcodeV1,
+        Sha256InvocationRoleV1, Sha256InvocationV1, namespace_v1, public_balance_sides,
+        validate_private_note_relation_with_profile_v1, validate_statement_with_profile_v1,
     },
 };
 use crate::privacy_engines::transparent_stark::{GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F};
@@ -218,6 +218,11 @@ pub(super) enum PrivateNoteFixedRowV1 {
         input: u8,
         level: u8,
         byte: u8,
+    },
+    Membership {
+        input: u8,
+        value_byte: u8,
+        root_chunk: u8,
     },
     Distinct {
         comparison: u8,
@@ -670,6 +675,43 @@ impl<'a> TraceBuilderV1<'a> {
             )?;
         }
         Ok((left, right))
+    }
+    fn push_conditional_membership(
+        &mut self,
+        input: u8,
+        value: [ByteVariableV1; 16],
+        root: [ByteVariableV1; 32],
+    ) -> Result<(), IvmPrivateNoteAirErrorV1> {
+        // Each value byte is already range constrained by its SHA preimage.
+        // Requiring v_j (root_k - public_k) = 0 for every j,k enforces
+        // membership whenever any byte is nonzero, with no free selector.
+        // Three root pairs share each row's value byte and eight copy cells.
+        for (value_byte, value_variable) in value.into_iter().enumerate() {
+            for root_chunk in 0..32_usize.div_ceil(3) {
+                let mut cells = [CopyCellV1::Inactive; PRIVATE_NOTE_COPY_WIDTH_V1];
+                cells[0] = CopyCellV1::Variable(value_variable);
+                for pair in 0..3 {
+                    let byte = root_chunk * 3 + pair;
+                    if byte < root.len() {
+                        cells[1 + pair * 2] = CopyCellV1::Variable(root[byte]);
+                        cells[2 + pair * 2] =
+                            CopyCellV1::Constant(self.statement.state_root.as_bytes()[byte]);
+                    }
+                }
+                self.push_row(
+                    PrivateNoteFixedRowV1::Membership {
+                        input,
+                        value_byte: u8::try_from(value_byte)
+                            .map_err(|_| IvmPrivateNoteAirErrorV1::Resource)?,
+                        root_chunk: u8::try_from(root_chunk)
+                            .map_err(|_| IvmPrivateNoteAirErrorV1::Resource)?,
+                    },
+                    cells,
+                    Self::empty_row(),
+                )?;
+            }
+        }
+        Ok(())
     }
     fn push_distinct(
         &mut self,
@@ -1536,10 +1578,13 @@ fn build_private_note_trace_v1(
                 },
                 node_message,
                 next,
-                (level + 1 == PRIVATE_NOTE_TREE_DEPTH_V1)
+                (level + 1 == PRIVATE_NOTE_TREE_DEPTH_V1 && !profile.allows_zero_input_values())
                     .then_some(*statement.state_root.as_bytes()),
             )?;
             current = next;
+        }
+        if profile.allows_zero_input_values() {
+            builder.push_conditional_membership(input_index, input.note.value, current)?;
         }
         if !profile.allows_zero_input_values() {
             nonzero_components.push(input.note.value.to_vec());
@@ -1551,6 +1596,20 @@ fn build_private_note_trace_v1(
         for sibling in input.path {
             nonzero_components.push(sibling.to_vec());
         }
+    }
+    if let Some(expected) = profile.audit_input_commitment() {
+        let fields = input_variables
+            .iter()
+            .flat_map(|input| note_commitment_fields(&input.note, None))
+            .collect::<Vec<_>>();
+        let message = frame_expressions_v1(AUDIT_INPUT_OPENINGS_DOMAIN_V1, &fields)?;
+        let digest_variables = builder.allocate_bytes(expected);
+        builder.push_hash(
+            Sha256InvocationRoleV1::AuditInputOpenings,
+            message,
+            digest_variables,
+            Some(expected),
+        )?;
     }
     for (index, output) in output_variables.iter_mut().enumerate() {
         let output_index = u8::try_from(index).map_err(|_| IvmPrivateNoteAirErrorV1::Resource)?;
@@ -1692,7 +1751,7 @@ pub(super) fn build_private_note_base_trace_v1(
     build_private_note_trace_v1(
         statement,
         Some(witness),
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 /// Compile a prover trace under one crate-private relation profile.
@@ -1708,7 +1767,10 @@ pub(super) fn build_private_note_base_trace_with_profile_v1(
 pub(super) fn build_private_note_fixed_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<PrivateNoteFixedTraceV1, IvmPrivateNoteAirErrorV1> {
-    build_private_note_fixed_trace_with_profile_v1(statement, PrivateNoteRelationProfileV1::LEGACY)
+    build_private_note_fixed_trace_with_profile_v1(
+        statement,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
 }
 /// Compile verifier-fixed topology under one crate-private relation profile.
 pub(super) fn build_private_note_fixed_trace_with_profile_v1(
@@ -1727,7 +1789,7 @@ pub(super) fn build_private_note_copy_schedule_v1(
 > {
     build_private_note_copy_schedule_with_profile_v1(
         statement,
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 /// Compile the copy schedule under one crate-private relation profile.
@@ -2226,6 +2288,21 @@ fn validate_sha_end_v1(
     {
         if usize::from(*next_invocation) != usize::from(*invocation) + 1 {
             return Err(IvmPrivateNoteAirErrorV1::Topology);
+        }
+    }
+    Ok(())
+}
+fn validate_conditional_membership_v1(row: &[F]) -> Result<(), IvmPrivateNoteAirErrorV1> {
+    ensure_zero_outside(row, &[copy_allowed()])?;
+    for cell in &row[COPY_OFFSET..COPY_OFFSET + PRIVATE_NOTE_COPY_WIDTH_V1] {
+        field_to_u8(*cell)?;
+    }
+    for pair in 0..3 {
+        if row[COPY_OFFSET]
+            .mul(row[COPY_OFFSET + 1 + pair * 2].sub(row[COPY_OFFSET + 2 + pair * 2]))
+            != F::ZERO
+        {
+            return Err(IvmPrivateNoteAirErrorV1::Relation);
         }
     }
     Ok(())
@@ -3012,7 +3089,7 @@ pub(super) fn validate_private_note_base_trace_v1(
     validate_private_note_base_trace_with_profile_v1(
         statement,
         trace,
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 pub(super) fn validate_private_note_base_trace_with_profile_v1(
@@ -3053,6 +3130,9 @@ pub(super) fn validate_private_note_base_trace_with_profile_v1(
             }
             PrivateNoteFixedRowV1::NodeSelect { .. } => {
                 validate_node_select_v1(row)?;
+            }
+            PrivateNoteFixedRowV1::Membership { .. } => {
+                validate_conditional_membership_v1(row)?;
             }
             PrivateNoteFixedRowV1::Distinct { .. } => {
                 validate_distinct_v1(fixed, next_fixed, row, next)?;
@@ -3198,32 +3278,32 @@ mod tests {
         }));
     }
     #[test]
-    fn legacy_trace_helpers_are_byte_for_byte_profile_invariant() {
+    fn canonical_trace_helpers_select_the_ivm_private_note_profile() {
         let value = fixture();
-        let legacy = build_private_note_base_trace_v1(&value.statement, &value.witness)
-            .expect("legacy base trace");
+        let canonical = build_private_note_base_trace_v1(&value.statement, &value.witness)
+            .expect("canonical base trace");
         let profiled = build_private_note_base_trace_with_profile_v1(
             &value.statement,
             &value.witness,
-            PrivateNoteRelationProfileV1::LEGACY,
+            PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
         )
-        .expect("explicit legacy base trace");
-        assert_eq!(legacy, profiled);
+        .expect("explicit IVM private-note base trace");
+        assert_eq!(canonical, profiled);
         assert_eq!(
-            build_private_note_fixed_trace_v1(&value.statement).expect("legacy fixed trace"),
+            build_private_note_fixed_trace_v1(&value.statement).expect("canonical fixed trace"),
             build_private_note_fixed_trace_with_profile_v1(
                 &value.statement,
-                PrivateNoteRelationProfileV1::LEGACY,
+                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
             )
-            .expect("explicit legacy fixed trace")
+            .expect("explicit IVM private-note fixed trace")
         );
         assert_eq!(
-            build_private_note_copy_schedule_v1(&value.statement).expect("legacy copy schedule"),
+            build_private_note_copy_schedule_v1(&value.statement).expect("canonical copy schedule"),
             build_private_note_copy_schedule_with_profile_v1(
                 &value.statement,
-                PrivateNoteRelationProfileV1::LEGACY,
+                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
             )
-            .expect("explicit legacy copy schedule")
+            .expect("explicit IVM private-note copy schedule")
         );
     }
     #[test]
@@ -3274,6 +3354,90 @@ mod tests {
         assert_eq!(
             output_sum_rows, 32,
             "three outputs must use two chained 16-byte checked sums"
+        );
+    }
+
+    #[test]
+    fn virtual_zero_input_trace_retains_fixed_shape_and_enforces_positive_membership() {
+        let mut value = three_output_fixture();
+        value.witness.inputs[1].authentication_path = [[0xC7; 32]; PRIVATE_NOTE_TREE_DEPTH_V1];
+        let trace = build_private_note_base_trace_with_profile_v1(
+            &value.statement,
+            &value.witness,
+            value.profile,
+        )
+        .expect("virtual cover trace without a member leaf");
+        validate_private_note_base_trace_with_profile_v1(&value.statement, &trace, value.profile)
+            .expect("all AIR and copy constraints");
+        assert_eq!(
+            trace.fixed,
+            build_private_note_fixed_trace_with_profile_v1(&value.statement, value.profile)
+                .expect("fixed public topology")
+        );
+        assert_eq!(
+            trace
+                .fixed
+                .rows
+                .iter()
+                .filter(|row| matches!(row, PrivateNoteFixedRowV1::Membership { .. }))
+                .count(),
+            2 * 16 * 11
+        );
+        // Bypass the wallet and trace compiler to exercise the actual equation:
+        // a zero value permits a non-member root, but every positive value byte
+        // rejects the same root even when an adversary chooses the row directly.
+        let mut row = TraceBuilderV1::empty_row();
+        row[COPY_OFFSET + 1] = F(1);
+        row[COPY_OFFSET + 2] = F(2);
+        validate_conditional_membership_v1(&row).expect("zero virtual input");
+        for positive_byte in [1_u64, 128, 255] {
+            row[COPY_OFFSET] = F(positive_byte);
+            assert_eq!(
+                validate_conditional_membership_v1(&row),
+                Err(IvmPrivateNoteAirErrorV1::Relation)
+            );
+        }
+    }
+
+    #[test]
+    fn audited_opening_substitution_fails_air_without_calling_wallet_validation() {
+        let value = three_output_fixture();
+        let mut trace = build_private_note_base_trace_with_profile_v1(
+            &value.statement,
+            &value.witness,
+            value.profile,
+        )
+        .expect("honest proved inputs");
+        let mut claimed = value
+            .witness
+            .inputs
+            .iter()
+            .map(|input| input.note.clone())
+            .collect::<Vec<_>>();
+        claimed[0].value -= 1;
+        claimed[1].value += 1;
+        let PrivateNoteRelationProfileV1::ExactThreeOutputBalanced {
+            output_memo_digests,
+            ..
+        } = value.profile
+        else {
+            unreachable!()
+        };
+        let target = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+            output_memo_digests,
+            super::super::derive_private_note_input_openings_commitment_v1(&claimed)
+                .expect("false audited openings"),
+        );
+        // The attacker keeps actual ownership/nullifier/membership rows and
+        // substitutes a same-total capsule claim. Use verifier-built topology
+        // directly: the wallet's native preflight is deliberately not invoked.
+        trace.fixed = build_private_note_fixed_trace_with_profile_v1(&value.statement, target)
+            .expect("verifier topology");
+        // The SHA rows are internally valid, but their digest disagrees with
+        // the verifier-fixed audited-input assignment.
+        assert_eq!(
+            validate_private_note_base_trace_with_profile_v1(&value.statement, &trace, target),
+            Err(IvmPrivateNoteAirErrorV1::Assignment)
         );
     }
     #[test]

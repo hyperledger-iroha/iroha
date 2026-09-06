@@ -5,7 +5,10 @@ import { blake3 } from "@noble/hashes/blake3";
 import { AccountAddress } from "./address.js";
 import { canonicalizeMultihashHex } from "./normalizers.js";
 import { publicKeyFromPrivate, signEd25519 } from "./crypto.js";
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
 
 const DEFAULT_CHUNK_SIZE = 262_144;
@@ -269,21 +272,47 @@ export function computeDaIngestSigningDigest(requestInput) {
 }
 
 export function deriveDaChunkerHandle(manifestBytes, options = {}) {
+  return deriveDaChunkerHandleWithRuntime(
+    defaultNativeRuntime,
+    manifestBytes,
+    options,
+  );
+}
+
+function deriveDaChunkerHandleWithRuntime(
+  nativeRuntime,
+  manifestBytes,
+  options = {},
+) {
   const record =
     options === undefined || options === null
       ? {}
       : ensureRecord(options, "deriveDaChunkerHandle options");
   assertSupportedOptionKeys(
     record,
-    new Set(["__nativeBinding"]),
+    new Set(),
     "deriveDaChunkerHandle options",
   );
-  const binding = resolveDaNativeBinding(record.__nativeBinding, "daManifestChunkerHandle");
+  const binding = resolveDaNativeBinding(nativeRuntime, "daManifestChunkerHandle");
   const buffer = toBuffer(manifestBytes, "deriveDaChunkerHandle.manifestBytes");
   return binding.daManifestChunkerHandle(buffer);
 }
 
 export function generateDaProofSummary(
+  manifestBytesInput,
+  payloadBytesInput,
+  options = {},
+) {
+  return generateDaProofSummaryWithRuntime(
+    defaultNativeRuntime,
+    manifestBytesInput,
+    payloadBytesInput,
+    options,
+  );
+}
+
+function generateDaProofSummaryWithRuntime(
+  nativeRuntime,
   manifestBytesInput,
   payloadBytesInput,
   options = {},
@@ -301,7 +330,6 @@ export function generateDaProofSummary(
   assertSupportedOptionKeys(
     optionsRecord,
     new Set([
-      "__nativeBinding",
       "sampleCount",
       "sampleSeed",
       "leafIndexes",
@@ -311,15 +339,33 @@ export function generateDaProofSummary(
     ]),
     "generateDaProofSummary options",
   );
-  const { __nativeBinding: injectedBinding, ...rest } = optionsRecord;
-  const binding = resolveDaNativeBinding(injectedBinding, "daGenerateProofs");
-  const nativeOptions = normalizeProofOptions(rest);
+  const binding = resolveDaNativeBinding(nativeRuntime, "daGenerateProofs");
+  const nativeOptions = normalizeProofOptions(optionsRecord);
   const rawSummary = binding.daGenerateProofs(
     manifestBytes,
     payloadBytes,
     nativeOptions,
   );
   return transformDaProofSummary(rawSummary);
+}
+
+/** @internal Source-level DA facade bound to one immutable native runtime. */
+export function _createDataAvailabilityApi(nativeRuntime) {
+  return Object.freeze({
+    deriveDaChunkerHandle: (manifestBytes, options = {}) =>
+      deriveDaChunkerHandleWithRuntime(nativeRuntime, manifestBytes, options),
+    generateDaProofSummary: (
+      manifestBytes,
+      payloadBytes,
+      options = {},
+    ) =>
+      generateDaProofSummaryWithRuntime(
+        nativeRuntime,
+        manifestBytes,
+        payloadBytes,
+        options,
+      ),
+  });
 }
 
 export function buildDaProofSummaryArtifact(summaryInput, options = {}) {
@@ -405,16 +451,7 @@ function resolveClientBlobId(explicit, payloadBuffer) {
       digestHex: bufferToHex(digestBuffer),
     };
   }
-  const binding = getNativeBinding();
-  if (!binding || typeof binding.blake3Hash !== "function") {
-    throw new Error(
-      "blake3 hashing requires the native iroha_js_host binding. Run `npm run build:native` before calling submitDaBlob().",
-    );
-  }
-  const digestBuffer = Buffer.from(binding.blake3Hash(payloadBuffer));
-  if (digestBuffer.length !== 32) {
-    throw new Error("native blake3Hash returned an unexpected digest length");
-  }
+  const digestBuffer = Buffer.from(blake3(payloadBuffer));
   return {
     digestTuple: tupleWrap(encodeFixedBytes(digestBuffer, 32)),
     digestHex: bufferToHex(digestBuffer),
@@ -714,8 +751,8 @@ function encodeTaggedEnum(tag, variant, value) {
   };
 }
 
-function resolveDaNativeBinding(bindingOverride, methodName) {
-  const binding = bindingOverride ?? getNativeBinding();
+function resolveDaNativeBinding(nativeRuntime, methodName) {
+  const binding = resolveNativeRuntimeBinding(nativeRuntime);
   if (!binding || typeof binding[methodName] !== "function") {
     throw new Error(
       `DA helpers require the native iroha_js_host module (${methodName}). Run \`npm run build:native\` before using this helper.`,

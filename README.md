@@ -25,10 +25,14 @@ code-adjacent specifications.
 - [`crates/`](./crates): core Rust crates (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, `ivm`, `norito`, etc.).
 - [`integration_tests/`](./integration_tests): cross-component network/integration tests.
 - [`IrohaSwift/`](./IrohaSwift): Swift SDK package.
-- [`java/iroha_android/`](./java/iroha_android): Android SDK package.
+- [`kotlin/`](./kotlin): Kotlin/JVM SDK for Kotlin and Java consumers, with separate Android client and wallet modules.
+- [`javascript/iroha_js/`](./javascript/iroha_js), [`python/`](./python), and [`csharp/`](./csharp): JavaScript, Python, and .NET SDKs.
 - [`docs/`](./docs): concise repository-local and code-adjacent documentation;
   public Iroha 3 documentation is maintained in
   [`iroha-docs`](https://github.com/hyperledger-iroha/iroha-docs).
+
+Use the [dependency and ownership map](./docs/repository_map.md) to locate
+implementation boundaries, SDK modules, and validation owners.
 
 ## Quickstart
 
@@ -102,6 +106,10 @@ stable `--target-slot` names only when concurrent tasks need isolated Cargo
 locks; creating a fresh dated or temporary target for every build defeats
 incremental reuse. For intentionally cold or isolated lanes, use
 `--no-incremental` to improve `sccache` reuse across targets. The
+wrapper clears the exact single-worker Cargo/CMake fingerprint inherited from
+local automation so its fast defaults can take effect; pass
+`--preserve-build-limits` when those inherited limits are intentional. Explicit
+test-runner limits such as `RUST_TEST_THREADS` are preserved. The
 `local-release` profile and `--stable-local-metadata` are local-development
 tools only; release, packaging, and evidence workflows must keep using the
 unchanged `release` or `deploy` profiles and exact source metadata. Linker
@@ -144,13 +152,15 @@ export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/compose-genesis/genesis.exp
 docker compose -f defaults/docker-compose.yml up
 ```
 
-The checked-in manifest is an explicit deterministic development fixture, so
-prepare those artifacts for its exact seeded validator roster before startup.
-It contains no genesis signing key or runtime signer and fails closed when any
-read-only trust-root input is missing. For a normal generated network, use
-`kagami localnet` followed by `kagami docker` without `--seed`; Kagami validates
-and reuses the authoritative validator bundle, then embeds the three artifact
-paths directly. See the
+The checked-in `defaults/genesis.template.json` is a non-signable source and is
+not consumed by this path. `kagami localnet` creates a complete disposable
+manifest whose mint-finality authority is bound to its generated validator
+topology; it retains the matching development-only authority material in the
+owner-controlled output directory. It contains no production signing key or
+runtime signer and fails closed when any read-only trust-root input is missing.
+For a normal generated network, use `kagami localnet` followed by `kagami docker`
+without `--seed`; Kagami validates and reuses the authoritative validator
+bundle, then embeds the three artifact paths directly. See the
 [Kagami swarm guide](./crates/iroha_kagami/docs/swarm.md).
 
 Use the CLI against the default client config:
@@ -203,15 +213,17 @@ server-side deploy or deploy-bundle route. The maintained public HTTP paths are:
 - `POST /v1/contracts/view/batch` for batched read-only contract queries in one
   round-trip
 
-For the public-safe Torii posture, contract call/view/status routes stay public,
-while higher-risk app-facing surfaces are opt-in:
+For the public-safe Torii posture, contract call/view/status routes stay public.
+The bounded app surfaces ship enabled so a default node exposes its complete
+production API:
 
-- `torii.webhooks_enabled = false` by default
-- `torii.zk_attachments_enabled = false` by default
+- `torii.webhooks_enabled = true` by default, with destination guard rails
+- `torii.zk_attachments_enabled = true` by default, with quotas and sanitization
 - trader/app rollups such as `/v1/contracts/rollups/swaps/fills` and
   `/v1/contracts/rollups/trader/account` remain app-facing surfaces rather than
   part of the public-safe baseline
-- enable them explicitly when the node is meant to expose those app features
+- deployments may explicitly disable either subsystem when policy requires a
+  reduced surface
 
 ## Codex Integration
 

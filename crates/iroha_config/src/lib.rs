@@ -2,7 +2,7 @@
 pub use iroha_config_base as base;
 use log::LevelFilter;
 use thiserror::Error;
-pub mod client_api;
+mod torii;
 pub mod kura;
 pub mod logger;
 pub mod parameters;

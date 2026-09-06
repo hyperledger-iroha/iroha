@@ -46,13 +46,8 @@ pub enum PrivateSettlementAuditCryptoErrorV1 {
     #[error("private-settlement audit canonical encoding failed")]
     CanonicalEncoding,
     /// The canonical plaintext is empty or does not fit the selected padding class.
-    #[error("private-settlement audit plaintext uses {bytes} bytes; expected 1..={maximum} bytes")]
-    InvalidPlaintextSize {
-        /// Actual canonical plaintext length.
-        bytes: usize,
-        /// Maximum canonical plaintext length for the padding class.
-        maximum: usize,
-    },
+    #[error("private-settlement audit plaintext does not fit the selected padding class")]
+    InvalidPlaintextSize,
     /// The supplied AAD commitment does not authenticate the canonical plaintext.
     #[error("private-settlement audit plaintext commitment mismatch")]
     PlaintextCommitmentMismatch,
@@ -136,10 +131,7 @@ pub fn seal_private_settlement_audit_capsule_v1_with_rng<R: TryCryptoRng>(
     validate_aad_against_policy(&aad, policy)?;
     let maximum = maximum_plaintext_bytes(padding);
     if canonical_plaintext.is_empty() || canonical_plaintext.len() > maximum {
-        return Err(PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize {
-            bytes: canonical_plaintext.len(),
-            maximum,
-        });
+        return Err(PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize);
     }
     if private_settlement_audit_plaintext_commitment_v1(canonical_plaintext)?
         != aad.plaintext_commitment
@@ -295,6 +287,8 @@ fn validate_aad_against_policy(
             .as_ref()
             .iter()
             .all(|byte| *byte == 0)
+        || aad.authority_digest.as_ref().iter().all(|byte| *byte == 0)
+        || aad.authority_context_height == 0
         || aad
             .plaintext_commitment
             .as_ref()
@@ -461,6 +455,7 @@ mod tests {
     use super::*;
     use crate::private_settlement::sidecar_store::tests::sidecar_fixture;
     use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair};
+    use iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1;
     use iroha_data_model::nexus::{
         PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
         PrivateSettlementHybridPublicKeyV1,
@@ -520,6 +515,8 @@ mod tests {
             bundle_id: typed_plaintext.bundle_id,
             leg_ordinal: typed_plaintext.leg_ordinal,
             route: typed_plaintext.route,
+            authority_digest: hash(0xA4),
+            authority_context_height: 10,
             audit_policy_digest: policy.policy_digest,
             audit_key_epoch: policy.body.key_epoch,
             plaintext_commitment,
@@ -539,16 +536,29 @@ mod tests {
         let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut rng,
         )
         .expect("capsule seals");
         assert_eq!(
             capsule.ciphertext.len(),
-            PrivateSettlementCapsulePaddingV1::KiB4.ciphertext_bytes()
+            PrivateSettlementCapsulePaddingV1::KiB16.ciphertext_bytes()
         );
         assert_eq!(capsule.wrapped_deks.len(), fixture.recipients.len());
+        assert!(
+            u64::try_from(
+                norito::encode_canonical(&capsule)
+                    .expect("capsule encodes")
+                    .len()
+            )
+            .expect("capsule length fits u64")
+                <= private_settlement_capsule_canonical_upper_bound_v1(
+                    u64::try_from(PrivateSettlementCapsulePaddingV1::KiB16.plaintext_bytes())
+                        .expect("padding fits u64"),
+                    u64::try_from(fixture.recipients.len()).expect("auditor count fits u64"),
+                )
+        );
         capsule
             .validate_against(&fixture.policy)
             .expect("wire remains valid");
@@ -571,7 +581,7 @@ mod tests {
         let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut rng,
         )
@@ -598,7 +608,7 @@ mod tests {
         let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut rng,
         )
@@ -610,6 +620,30 @@ mod tests {
         assert!(
             open_private_settlement_audit_capsule_v1(
                 &aad_tampered,
+                &fixture.policy,
+                auditor_id,
+                recipient.secret(),
+            )
+            .is_err()
+        );
+
+        let mut authority_tampered = capsule.clone();
+        authority_tampered.aad.authority_digest = hash(0xA2);
+        assert!(
+            open_private_settlement_audit_capsule_v1(
+                &authority_tampered,
+                &fixture.policy,
+                auditor_id,
+                recipient.secret(),
+            )
+            .is_err()
+        );
+
+        let mut context_tampered = capsule.clone();
+        context_tampered.aad.authority_context_height += 1;
+        assert!(
+            open_private_settlement_audit_capsule_v1(
+                &context_tampered,
                 &fixture.policy,
                 auditor_id,
                 recipient.secret(),
@@ -656,15 +690,22 @@ mod tests {
         {
             let maximum = maximum_plaintext_bytes(padding);
             let mut rng = iroha_crypto::rng_from_seed_slice(&[0x91 + index as u8]);
-            let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
+            let typed_result = seal_private_settlement_audit_capsule_v1_with_rng(
                 &fixture.plaintext,
                 fixture.aad,
                 padding,
                 &fixture.policy,
                 &mut rng,
-            )
-            .expect("typed plaintext seals");
-            assert_eq!(capsule.ciphertext.len(), padding.ciphertext_bytes());
+            );
+            if fixture.plaintext.len() <= maximum {
+                let capsule = typed_result.expect("fitting typed plaintext seals");
+                assert_eq!(capsule.ciphertext.len(), padding.ciphertext_bytes());
+            } else {
+                assert_eq!(
+                    typed_result.expect_err("undersized padding class must fail"),
+                    PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize
+                );
+            }
 
             let too_large = vec![0xA5; maximum + 1];
             let error = seal_private_settlement_audit_capsule_v1_with_rng(
@@ -677,11 +718,11 @@ mod tests {
             .expect_err("oversized plaintext must fail");
             assert_eq!(
                 error,
-                PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize {
-                    bytes: maximum + 1,
-                    maximum,
-                }
+                PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize
             );
+            let display = error.to_string();
+            assert!(!display.contains(&(maximum + 1).to_string()));
+            assert!(!display.contains(&maximum.to_string()));
         }
 
         let mut rng = iroha_crypto::rng_from_seed_slice(b"empty private settlement capsule");
@@ -695,10 +736,11 @@ mod tests {
         .expect_err("empty plaintext must fail");
         assert_eq!(
             error,
-            PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize {
-                bytes: 0,
-                maximum: maximum_plaintext_bytes(PrivateSettlementCapsulePaddingV1::KiB4),
-            }
+            PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize
+        );
+        assert_eq!(
+            error.to_string(),
+            "private-settlement audit plaintext does not fit the selected padding class"
         );
     }
 
@@ -737,7 +779,7 @@ mod tests {
         let error = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut FailingRng,
         )

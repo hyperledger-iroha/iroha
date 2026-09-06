@@ -19,13 +19,13 @@ from pathlib import Path
 CATALOG = Path("crates/iroha_telemetry/src/metrics/catalog_v2.tsv")
 SOURCE = Path("crates/iroha_telemetry/src/metrics.rs")
 HEADER = "# iroha-telemetry-metric-catalog-v2"
-CATALOG_BYTES = 102_830
-CATALOG_SHA256 = "643a9ef28e62678ff352edff4983f52419d779b762fc875c84a9a93079f39750"
-CATALOG_BLAKE3 = "d1b8e6f8ce308c0648a1c20322b7649aaa9ecf04b1e33213dbf151389cd43512"
-ROWS = 756
-REGISTERED = 713
-LEDGER_BYTES = 223_683
-LEDGER_SHA256 = "2116ee9eb10117ff82670b567a877aebf706086004c280674aecc6f6df8a7ccd"
+CATALOG_BYTES = 100_865
+CATALOG_SHA256 = "8ea72f45e6ffa8750296e516d717a1b37a88797f2b9bccde08e7ab361917d629"
+CATALOG_BLAKE3 = "b13a790c3cf529faef56087ac0358384c0aa7a938eda8219e61103126374f3ae"
+ROWS = 742
+REGISTERED = 699
+LEDGER_BYTES = 219_628
+LEDGER_SHA256 = "e01958b79aca050e6aed19b933417b60a8013dc00411c6edceceae272902065a"
 DSL_MACROS_TOKENS_SHA256 = "879271505b3c3259b930122d4e79f6b8e9eb4b725a1cc267d6397a116ab84fb9"
 FACTORY_TOKENS_SHA256 = "41a07ee3fc3e40d3c0d18b7dd9200f5a11d75f1e3fe1bf074fe36b380be8c19f"
 SUFFIX_TOKENS_SHA256 = "f4f80f55c7d9abcfec0cfe322525122e1d21e580bb6277b78f8b105a562998a0"
@@ -33,13 +33,13 @@ METHOD_COUNTS = {
     "float_counter_vec": 6,
     "float_gauge": 11,
     "float_gauge_vec": 32,
-    "gauge": 247,
+    "gauge": 241,
     "gauge_vec": 82,
     "histogram_vec": 2,
     "histogram_vec_with_buckets": 48,
     "histogram_with_buckets": 26,
-    "int_counter": 66,
-    "int_counter_vec": 202,
+    "int_counter": 65,
+    "int_counter_vec": 195,
     "int_gauge": 12,
     "int_gauge_vec": 22,
 }
@@ -54,6 +54,20 @@ RETIRED_CONSENSUS_VRF_METRICS = (
     "sumeragi_vrf_no_participation_by_signer",
     "sumeragi_vrf_rejects_total_by_reason",
 )
+
+RETIRED_LEGACY_DA_GATE_METRICS = (
+    "sumeragi_da_gate_block_total",
+    "sumeragi_da_gate_last_reason",
+    "sumeragi_da_gate_last_satisfied",
+    "sumeragi_da_gate_satisfied_total",
+    "sumeragi_da_manifest_guard_total",
+    "sumeragi_da_manifest_cache_total",
+    "sumeragi_da_spool_cache_total",
+    "sumeragi_da_pin_intent_spool_total",
+    "sumeragi_da_votes_ingested_total",
+)
+
+RETIRED_METRICS = RETIRED_CONSENSUS_VRF_METRICS + RETIRED_LEGACY_DA_GATE_METRICS
 
 DSL_MACROS_START = "macro_rules! metric_field_type {"
 DSL_MACROS_END = "define_metrics! {"
@@ -570,9 +584,9 @@ def check_contents(catalog_raw: bytes, source: str) -> list[str]:
     if "catalog_v1.tsv" in source:
         findings.append("obsolete catalog_v1 consumer remains")
     expected_literals = (
-        "const METRIC_CATALOG_V2_ROWS: usize = 756;",
-        "const METRIC_CATALOG_V2_REGISTERED: usize = 713;",
-        "const METRIC_CATALOG_V2_BYTES: usize = 102_830;",
+        "const METRIC_CATALOG_V2_ROWS: usize = 742;",
+        "const METRIC_CATALOG_V2_REGISTERED: usize = 699;",
+        "const METRIC_CATALOG_V2_BYTES: usize = 100_865;",
         CATALOG_BLAKE3,
     )
     for literal in expected_literals:
@@ -581,11 +595,11 @@ def check_contents(catalog_raw: bytes, source: str) -> list[str]:
     catalog_keys = {row[0] for row in rows}
     catalog_names = {row[1] for row in rows}
     compacted_source = _compact_rust(source)
-    for retired in RETIRED_CONSENSUS_VRF_METRICS:
+    for retired in RETIRED_METRICS:
         if retired in catalog_keys or retired in catalog_names:
-            findings.append(f"retired consensus-VRF catalog row returned: {retired}")
+            findings.append(f"retired metric catalog row returned: {retired}")
         if re.search(r"\b" + re.escape(retired) + r"\b", compacted_source):
-            findings.append(f"retired consensus-VRF metric source returned: {retired}")
+            findings.append(f"retired metric source returned: {retired}")
 
     if len(calls) != ROWS:
         findings.append(f"DSL factory calls: expected {ROWS}, got {len(calls)}")
@@ -671,6 +685,17 @@ def self_test(root: Path) -> list[str]:
     baseline = check_contents(catalog, source)
     if baseline:
         return ["self-test baseline failed: " + "; ".join(baseline)]
+
+    retired_probe = RETIRED_LEGACY_DA_GATE_METRICS[0]
+    retired_findings = check_contents(
+        catalog,
+        source + f'\nconst RETIRED_METRIC_PROBE: &str = "{retired_probe}";\n',
+    )
+    expected_retired_finding = f"retired metric source returned: {retired_probe}"
+    if expected_retired_finding not in retired_findings:
+        failures.append(
+            "self-test failed to reject a retired legacy DA-gate metric source token"
+        )
 
     mutations = [
         (

@@ -1,7 +1,7 @@
 const CLEANUP_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const CLEANUP_CONTRACT_ASSET_LEN: usize = 51_407;
+const CLEANUP_CONTRACT_ASSET_LEN: usize = 53_080;
 const CLEANUP_CONTRACT_ASSET_SHA3_256: &str =
-    "7f9fe2f45abefaa78fbf6b44687366f9dd51a827928f1bfa78a8a14c14dafa3e";
+    "b770cd3980853578a1c3d7efedd5b96e97b29162e4a1b0484e1b6a9e751cf528";
 const CLEANUP_CONTRACT_ASSET: &[u8] =
     include_bytes!("generalized_bulletproof_secret_cleanup_contracts_v1.txt");
 
@@ -380,18 +380,18 @@ fn secret_scalar_owner_clears_constructor_and_transfer_slots() {
 fn proof_scalar_one_attempt_returns_only_owned_candidates() {
     let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
     CLEAR_CALLS.store(0, Ordering::SeqCst);
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
     let mut success = FixedRandom(7);
     let sampled = TrackingScalar::random(&mut success)
         .expect("fixed entropy succeeds")
         .expect("fixed entropy is canonical");
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
     drop(sampled);
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
 
     CLEAR_CALLS.store(0, Ordering::SeqCst);
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
     let mut zero = FixedRandom(0);
     let sampled = TrackingScalar::random(&mut zero)
         .expect("zero entropy succeeds")
@@ -400,10 +400,10 @@ fn proof_scalar_one_attempt_returns_only_owned_candidates() {
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
     drop(sampled);
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
 
     CLEAR_CALLS.store(0, Ordering::SeqCst);
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
     let mut rejected = FixedRandom(u8::MAX);
     assert!(
         TrackingScalar::random(&mut rejected)
@@ -411,10 +411,10 @@ fn proof_scalar_one_attempt_returns_only_owned_candidates() {
             .is_none()
     );
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
 
     CLEAR_CALLS.store(0, Ordering::SeqCst);
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
     let mut failure = ScriptedRandom {
         requests: 0,
         fail_at: Some(0),
@@ -424,10 +424,10 @@ fn proof_scalar_one_attempt_returns_only_owned_candidates() {
         Err(GeneralizedBulletproofErrorV1::RandomnessUnavailable)
     ));
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
 
     CLEAR_CALLS.store(0, Ordering::SeqCst);
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
     let returned_owner_unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut random = FixedRandom(11);
         let _sampled = TrackingScalar::random(&mut random)
@@ -437,10 +437,10 @@ fn proof_scalar_one_attempt_returns_only_owned_candidates() {
     }));
     assert!(returned_owner_unwind.is_err());
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
 
     CLEAR_CALLS.store(0, Ordering::SeqCst);
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
     let entropy_unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut random = PanickingRandom {
             requests: 0,
@@ -450,7 +450,7 @@ fn proof_scalar_one_attempt_returns_only_owned_candidates() {
     }));
     assert!(entropy_unwind.is_err());
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
 
     let production = include_str!("generalized_bulletproof.rs")
         .split_once("#[cfg(test)]\nmod secret_cleanup_tests")
@@ -1145,6 +1145,7 @@ fn secret_builder_matches_public_and_naive_msm_across_chunks() {
 }
 #[test]
 fn public_two_term_straus_matches_independent_scaling_at_scalar_edges() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
     let scalars = [
         0_u64,
         1,
@@ -1550,7 +1551,7 @@ fn secret_builder_unwind_wipes_terms_encodings_tables_and_named_points() {
     CLEAR_CALLS.store(0, Ordering::SeqCst);
     POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
     POINT_ADD_CALLS.store(0, Ordering::SeqCst);
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
 
     // Exercise the same owner-first encoding transfer directly so the
     // vacated source and retained bytes remain observable before Drop.
@@ -1560,13 +1561,13 @@ fn secret_builder_unwind_wipes_terms_encodings_tables_and_named_points() {
     core::mem::swap(&mut retained.0[1], &mut source.0);
     assert_eq!(source.0, [0_u8; 32]);
     assert_eq!(retained.0[1], [0x5a_u8; 32]);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 0);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 0);
     drop(source);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
     drop(retained);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 257);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 257);
 
-    SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
     // Two 16-entry tables require 30 additions. Panic on the first
     // scalar-dependent accumulator addition after its nibble was extracted.
     PANIC_ON_POINT_ADD.store(31, Ordering::SeqCst);
@@ -1584,7 +1585,7 @@ fn secret_builder_unwind_wipes_terms_encodings_tables_and_named_points() {
     PANIC_ON_POINT_ADD.store(usize::MAX, Ordering::SeqCst);
     assert!(unwind.is_err());
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
-    assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 258);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 258);
     assert!(POINT_CLEAR_CALLS.load(Ordering::SeqCst) > 40);
 }
 #[test]
@@ -1719,7 +1720,7 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
     assert_ne!(product.0.as_ptr(), left_pointer);
     assert_ne!(product.0.as_ptr(), right_pointer);
     assert_eq!(product.len(), left.len());
-    assert!(product.0.capacity() >= product.len());
+    assert_eq!(product.0.capacity(), product.len());
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
     drop(product);
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
@@ -1798,7 +1799,7 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
     );
     assert_eq!(
         borrowed_product
-            .matches("debug_assert_eq!(product.0.capacity(), allocation_capacity);")
+            .matches("debug_assert_eq!(product.0.capacity(), exact_len);")
             .count(),
         2
     );
@@ -2259,4 +2260,23 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
     assert!(right_handoff_index < right_product_index);
     assert!(right_product_index < right_drop && right_drop < witness_drop);
     assert!(!prover[right_handoff_index + right_handoff.len()..].contains("witness.a_r"));
+}
+
+#[test]
+fn secret_byte_cleanup_accounting_is_isolated_between_threads() {
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(0));
+    let mut bytes = [0x5a; 32];
+    clear_secret_bytes(&mut bytes);
+    assert_eq!(bytes, [0; 32]);
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
+    std::thread::spawn(|| {
+        assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 0);
+        let mut bytes = [0xa5; 64];
+        clear_secret_bytes(&mut bytes);
+        assert_eq!(bytes, [0; 64]);
+        assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
+    })
+    .join()
+    .expect("independent cleanup accounting thread");
+    assert_eq!(SECRET_BYTE_CLEAR_CALLS.with(core::cell::Cell::get), 1);
 }

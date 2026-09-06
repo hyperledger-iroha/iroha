@@ -111,6 +111,7 @@ enum NoritoBridgeLoader {
         "connect_norito_alias_instruction_round_trip_v1",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
+        "iroha_privacy_validate_exact12_capability_manifest_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_fixture_bundle_v1",
         "iroha_privacy_free_buffer",
@@ -120,7 +121,35 @@ enum NoritoBridgeLoader {
         "connect_norito_sorafs_reference_validate_governance_dag_block_json",
         "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
         "connect_norito_validation_fee_hijiri_quote_request_v1",
-        "connect_norito_validation_fee_hijiri_quote_response_verify_v1"
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+        "connect_norito_private_settlement_committee_proof_response_verify_v1",
+        "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
+        "connect_norito_private_settlement_audit_approval_response_verify_v1",
+        "connect_norito_kagemusha_v1_payment_request_validate",
+        "connect_norito_kagemusha_v1_payment_validate",
+        "connect_norito_kagemusha_v1_acknowledgement_validate",
+        "connect_norito_kagemusha_v1_complete_exchange_validate",
+        "connect_norito_kagemusha_v1_mint_authorization_validate",
+        "connect_norito_kagemusha_v1_mint_credit_validate",
+        "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
+        "connect_norito_kagemusha_v1_redemption_voucher_validate",
+        "connect_norito_kagemusha_v1_payment_request_text_validate",
+        "connect_norito_kagemusha_v1_payment_text_validate",
+        "connect_norito_kagemusha_v1_acknowledgement_text_validate",
+        "connect_norito_kagemusha_v1_complete_exchange_text_validate",
+        "connect_norito_kagemusha_v1_mint_authorization_text_validate",
+        "connect_norito_kagemusha_v1_mint_credit_text_validate",
+        "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
+        "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+        "connect_norito_kagemusha_contract_vector_v1",
+        "connect_norito_kagemusha_core_coordinator_contract_v1",
+        "connect_norito_kagemusha_core_coordinator_open_v1",
+        "connect_norito_kagemusha_core_coordinator_invoke_v1",
+        "connect_norito_kagemusha_device_capabilities_v1",
+        "connect_norito_kagemusha_device_execute_v1",
+        "connect_norito_kagemusha_device_response_authenticator_v1_verify",
+        "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+        "connect_norito_kagemusha_device_mint_stage_result_v1_validate"
     ] + parliamentTimedOvnWalletRequiredSymbols
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -739,17 +768,7 @@ enum NativeBridgeError: Error, Equatable {
     case proofAttachment
     case invalidNullifiers
     case invalidRootHint
-    case offlineReceiver
-    case offlineAsset
-    case offlineNonce
-    case offlineSerialize
-    case offlineCommitment
-    case offlineBlinding
-    case kagemushaProve
-    case kagemushaRecursiveSpendV4Unavailable
-    case kagemushaRecursiveSpendV4Artifact
-    case kagemushaBusy
-    case invalidKagemushaVerifierOutput
+    case kagemushaV1
     case unsupportedAlgorithm
     case metadataTarget
     case metadataKey
@@ -808,16 +827,7 @@ enum NativeBridgeError: Error, Equatable {
         case -29: return .hex
         case -30: return .accountList
         case -34: return .feePayment
-        case -300: return .offlineReceiver
-        case -301: return .offlineAsset
-        case -303: return .offlineNonce
-        case -304: return .offlineSerialize
-        case -305: return .offlineCommitment
-        case -306: return .offlineBlinding
-        case -311: return .kagemushaProve
-        case -316: return .kagemushaRecursiveSpendV4Unavailable
-        case -317: return .kagemushaRecursiveSpendV4Artifact
-        case -318: return .kagemushaBusy
+        case -311: return .kagemushaV1
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -408: return .accountOnboardingBody
@@ -863,7 +873,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         processHandle ?? currentHandle
     }
 
-    func resolveKagemushaV2Symbol<T>(_ symbol: String, as type: T.Type) -> T? {
+    func resolveNativeSymbol<T>(_ symbol: String, as type: T.Type) -> T? {
         #if canImport(Darwin)
         guard let bridgeHandle, let address = dlsym(bridgeHandle, symbol) else { return nil }
         return unsafeBitCast(address, to: type)
@@ -874,24 +884,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    static func copyKagemushaNativeArchiveOutput(
-        pointer: UnsafeMutablePointer<UInt8>?,
-        length: CUnsignedLong,
-        free: (UnsafeMutablePointer<UInt8>?) -> Void
-    ) throws -> Data {
-        guard let pointer else {
-            throw NativeBridgeError.nullPointer
-        }
-        defer {
-            free(pointer)
-        }
-        guard length <= CUnsignedLong(
-            KagemushaRecursiveSpend.artifactMaximumInMemoryArchiveBytes
-        ) else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        return Data(bytes: pointer, count: Int(length))
-    }
     #endif
 
     static let privacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024
@@ -1264,37 +1256,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UInt8,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeGovernancePersistCouncilFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UInt64,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeGovernancePersistCouncilWithAlgFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UInt64,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -1957,8 +1918,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeGovernanceCastPlainBallotWithAlgFn: EncodeGovernanceCastPlainBallotWithAlgFn? = nil
     private var encodeGovernanceCastZkBallotFn: EncodeGovernanceCastZkBallotFn? = nil
     private var encodeGovernanceCastZkBallotWithAlgFn: EncodeGovernanceCastZkBallotWithAlgFn? = nil
-    private var encodeGovernancePersistCouncilFn: EncodeGovernancePersistCouncilFn? = nil
-    private var encodeGovernancePersistCouncilWithAlgFn: EncodeGovernancePersistCouncilWithAlgFn? = nil
     private var decodeSignedFn: DecodeSignedFn? = nil
     private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var decodeAssetIdFn: DecodeAssetIdFn? = nil
@@ -2060,6 +2019,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCompiledProfileCatalogFn: PrivacyCompiledProfileCatalogFn? = nil
     private var privacyValidateCompiledProfileCatalogFn: PrivacyValidateCompiledProfileCatalogFn? = nil
+    private var privacyValidateExact12CapabilityManifestFn: PrivacyValidateCompiledProfileCatalogFn? = nil
     private var privacyExact12FixtureBundleFn: PrivacyExact12FixtureBundleFn? = nil
     private var privacyValidateExact12FixtureBundleFn: PrivacyValidateExact12FixtureBundleFn? = nil
     // Privacy outputs point past a private allocation header. Only the dedicated
@@ -2091,8 +2051,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeGovernanceCastPlainBallotWithAlgFn: Any? = nil
     private let encodeGovernanceCastZkBallotFn: Any? = nil
     private let encodeGovernanceCastZkBallotWithAlgFn: Any? = nil
-    private let encodeGovernancePersistCouncilFn: Any? = nil
-    private let encodeGovernancePersistCouncilWithAlgFn: Any? = nil
     private let decodeSignedFn: Any? = nil
     private let decodeAssetIdFn: Any? = nil
     private let freeFn: Any? = nil
@@ -2186,6 +2144,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCompiledProfileCatalogFn: Any? = nil
     private let privacyValidateCompiledProfileCatalogFn: Any? = nil
+    private let privacyValidateExact12CapabilityManifestFn: Any? = nil
     private let privacyExact12FixtureBundleFn: Any? = nil
     private let privacyValidateExact12FixtureBundleFn: Any? = nil
     private let privacyFreeFn: Any? = nil
@@ -2200,6 +2159,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard let handle else {
             self.privacyCompiledProfileCatalogFn = nil
             self.privacyValidateCompiledProfileCatalogFn = nil
+            self.privacyValidateExact12CapabilityManifestFn = nil
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
@@ -2223,6 +2183,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.privacyValidateCompiledProfileCatalogFn = nil
+        }
+        if let validateCapabilitySymbol = dlsym(
+            handle,
+            "iroha_privacy_validate_exact12_capability_manifest_v1"
+        ) {
+            self.privacyValidateExact12CapabilityManifestFn = unsafeBitCast(
+                validateCapabilitySymbol,
+                to: PrivacyValidateCompiledProfileCatalogFn.self
+            )
+        } else {
+            self.privacyValidateExact12CapabilityManifestFn = nil
         }
         if let fixtureSymbol = dlsym(handle, "iroha_privacy_exact12_fixture_bundle_v1") {
             self.privacyExact12FixtureBundleFn = unsafeBitCast(
@@ -2682,16 +2653,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.encodeGovernanceCastZkBallotWithAlgFn = unsafeBitCast(castZkAlgSymbol, to: EncodeGovernanceCastZkBallotWithAlgFn.self)
             } else {
                 self.encodeGovernanceCastZkBallotWithAlgFn = nil
-            }
-            if let persistSymbol = dlsym(handle, "connect_norito_encode_governance_persist_council_signed_transaction") {
-                self.encodeGovernancePersistCouncilFn = unsafeBitCast(persistSymbol, to: EncodeGovernancePersistCouncilFn.self)
-            } else {
-                self.encodeGovernancePersistCouncilFn = nil
-            }
-            if let persistAlgSymbol = dlsym(handle, "connect_norito_encode_governance_persist_council_signed_transaction_alg") {
-                self.encodeGovernancePersistCouncilWithAlgFn = unsafeBitCast(persistAlgSymbol, to: EncodeGovernancePersistCouncilWithAlgFn.self)
-            } else {
-                self.encodeGovernancePersistCouncilWithAlgFn = nil
             }
             if let decodeSymbol = dlsym(handle, "connect_norito_decode_signed_transaction_json") {
                 self.decodeSignedFn = unsafeBitCast(decodeSymbol, to: DecodeSignedFn.self)
@@ -3181,8 +3142,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeGovernanceCastPlainBallotWithAlgFn = nil
             self.encodeGovernanceCastZkBallotFn = nil
             self.encodeGovernanceCastZkBallotWithAlgFn = nil
-            self.encodeGovernancePersistCouncilFn = nil
-            self.encodeGovernancePersistCouncilWithAlgFn = nil
             self.decodeSignedFn = nil
             self.decodeReceiptFn = nil
             self.decodeAssetIdFn = nil
@@ -3228,6 +3187,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.parliamentTimedOvnBallotFromProofFn = nil
             self.privacyCompiledProfileCatalogFn = nil
             self.privacyValidateCompiledProfileCatalogFn = nil
+            self.privacyValidateExact12CapabilityManifestFn = nil
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
@@ -3796,25 +3756,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 23 exposes the complete selector-free V4 Kagemusha surface.
-    public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
-        #if canImport(Darwin)
-        guard bridgeEnabledForRuntime else { return false }
-        return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
-            && hasKagemushaRecursiveSpendV4Symbols(
-                KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
-            )
-        #else
-        return false
-        #endif
-    }
-
     public var isPrivacyNativeAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion
             && privacyCompiledProfileCatalogFn != nil
             && privacyValidateCompiledProfileCatalogFn != nil
+            && privacyValidateExact12CapabilityManifestFn != nil
             && privacyExact12FixtureBundleFn != nil
             && privacyValidateExact12FixtureBundleFn != nil
             && privacyFreeFn != nil
@@ -5816,109 +5764,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    func encodeGovernancePersistCouncil(
-        networkId: NetworkId,
-        authority: String,
-        creationTimeMs: UInt64,
-        ttlMs: UInt64?,
-        epoch: UInt64,
-        membersJson: Data,
-        feePaymentJSON: Data,
-        privateKey: Data,
-        algorithm: SigningAlgorithm = .ed25519
-    ) throws -> NativeSignedTransaction? {
-        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
-        #if canImport(Darwin)
-        guard let freeFn else { return nil }
-        let feePaymentBytes = feePaymentJSON as NSData
-        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
-        let ttlValue = ttlMs ?? 0
-        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
-        let useAlg = algorithm != .ed25519 && encodeGovernancePersistCouncilWithAlgFn != nil
-        guard useAlg || encodeGovernancePersistCouncilFn != nil else { return nil }
-
-        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var signedLen: UInt = 0
-        var hashBytes = [UInt8](repeating: 0, count: 32)
-        let hashLength = UInt(hashBytes.count)
-        let algorithmRaw = algorithm.noritoDiscriminant
-
-        let status = try withAuthorityChainDiscriminant(authority: authority) {
-            networkId.literal.withCString { networkIdPtr in
-            authority.withCString { authorityPtr in
-                membersJson.withUnsafeBytes { membersBuffer -> Int32 in
-                    guard let membersPtr = membersBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                        return -1
-                    }
-                    return privateKey.withUnsafeBytes { keyBuffer -> Int32 in
-                        guard let keyPtr = keyBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                            return -1
-                        }
-                        return hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                            guard let hashPtr = hashBuffer.baseAddress else {
-                                return -1
-                            }
-                            return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                if useAlg, let encodeGovernancePersistCouncilWithAlgFn {
-                                    return encodeGovernancePersistCouncilWithAlgFn(
-                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
-                                        authorityPtr, UInt(authority.utf8.count),
-                                        creationTimeMs,
-                                        ttlValue,
-                                        ttlFlag,
-                                        epoch,
-                                        membersPtr, UInt(membersJson.count),
-                                        feePaymentPtr, UInt(feePaymentJSON.count),
-                                        keyPtr, UInt(privateKey.count),
-                                        algorithmRaw,
-                                        signedPtrPtr,
-                                        signedLenPtr,
-                                        hashPtr,
-                                        hashLength
-                                    )
-                                } else if let encodeGovernancePersistCouncilFn {
-                                    return encodeGovernancePersistCouncilFn(
-                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
-                                        authorityPtr, UInt(authority.utf8.count),
-                                        creationTimeMs,
-                                        ttlValue,
-                                        ttlFlag,
-                                        epoch,
-                                        membersPtr, UInt(membersJson.count),
-                                        feePaymentPtr, UInt(feePaymentJSON.count),
-                                        keyPtr, UInt(privateKey.count),
-                                        signedPtrPtr,
-                                        signedLenPtr,
-                                        hashPtr,
-                                        hashLength
-                                    )
-                                } else {
-                                    return -1
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        if status != 0 {
-            if let signedPtr { freeFn(signedPtr) }
-            try throwOnStatus(status)
-            return nil
-        }
-        guard let signedPtr else { return nil }
-
-        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
-        freeFn(signedPtr)
-        let hashData = Data(hashBytes)
-        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
-        #else
-        return nil
-        #endif
-    }
-
     func applyAccelerationSettings(_ settings: AccelerationSettings) {
         #if canImport(Darwin)
         guard isAvailable else {
@@ -6225,6 +6070,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         return archive.withUnsafeBytes { bytes in
             privacyValidateCompiledProfileCatalogFn(
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(archive.count)
+            )
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    func privacyExact12CapabilityManifestValidationStatusV1(_ archive: Data) -> Int32? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let privacyValidateExact12CapabilityManifestFn,
+              archive.count <= PrivacyNativeBridge.exact12CapabilityManifestArchiveMaximumBytes else {
+            return nil
+        }
+        return archive.withUnsafeBytes { bytes in
+            privacyValidateExact12CapabilityManifestFn(
                 bytes.bindMemory(to: UInt8.self).baseAddress,
                 CUnsignedLong(archive.count)
             )

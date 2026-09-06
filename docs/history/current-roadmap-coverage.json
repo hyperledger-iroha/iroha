@@ -1,0 +1,617 @@
+{
+  "schema_version": 1,
+  "archive": "docs/history/2026-09-06",
+  "original_source": "roadmap.md",
+  "original_sha256": "ba0930ff8fa9cb9ee45b8c6d31ac67c571452e78d9d7696b568a808cb3509835",
+  "current_source": "roadmap.md",
+  "meaning": "All original areas map to outstanding current outcomes; this mapping is not a completion claim.",
+  "areas": [
+    {
+      "heading": "First-release architecture redesign",
+      "original_anchor": "first-release-architecture-redesign",
+      "record": "1997a07734bef10975baa4b887499c5df120a6538dfc8d7bc44e56b0a9f4c1c1",
+      "outcomes": [
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+        "A5",
+        "A6",
+        "A7",
+        "A8"
+      ]
+    },
+    {
+      "heading": "KAGEMUSHA product coordinator and durable recovery",
+      "original_anchor": "kagemusha-product-coordinator-and-durable-recovery",
+      "record": "87b862d2432f3ab4fcb646561f5a0482493172e59f38e9b4ffd355939abd23d5",
+      "outcomes": [
+        "S7",
+        "S8"
+      ]
+    },
+    {
+      "heading": "Android native device integration",
+      "original_anchor": "android-native-device-integration",
+      "record": "6ae57e65e9ee5a56a5ced930a1037963b5f2f5d2e5f1b651b88af9228c40bf67",
+      "outcomes": [
+        "S6",
+        "S9"
+      ]
+    },
+    {
+      "heading": "Additive SNS dataspace bootstrap qualification",
+      "original_anchor": "additive-sns-dataspace-bootstrap-qualification",
+      "record": "d925ec7f3aa62d0cd18be20dedb9fac66fba3564781573d6645067f1d93cfc82",
+      "outcomes": [
+        "N3"
+      ]
+    },
+    {
+      "heading": "Python SDK first-release follow-up",
+      "original_anchor": "python-sdk-first-release-follow-up",
+      "record": "e3a0e597b4858cd5aa181a81409737b434651057f0aef890fb59cf5c07ed0b08",
+      "outcomes": [
+        "S1"
+      ]
+    },
+    {
+      "heading": "JavaScript SDK first-release follow-up",
+      "original_anchor": "javascript-sdk-first-release-follow-up",
+      "record": "fef41c7bb66bf1a137803de51fe3e57eed7c52d475b1bb167be91740cb88f0e5",
+      "outcomes": [
+        "S2"
+      ]
+    },
+    {
+      "heading": "C# SDK release qualification",
+      "original_anchor": "c-sdk-release-qualification",
+      "record": "525e941458b1e44230dde287827746a97d071a82576ef0909abe3b9b63b0f35a",
+      "outcomes": [
+        "S3"
+      ]
+    },
+    {
+      "heading": "Revision-4 DA/RBC release qualification",
+      "original_anchor": "revision-4-darbc-release-qualification",
+      "record": "721bffd59e2a51a1ff0d48bb4ffe05f9455966f5315ac86568f0b83104c3e4d1",
+      "outcomes": [
+        "N1",
+        "N2"
+      ]
+    },
+    {
+      "heading": "SORA Parliament release qualification",
+      "original_anchor": "sora-parliament-release-qualification",
+      "record": "cb13f7e39e4b1539434f17a47b735b7b81bbd783600f415e66ca0434d675b8f0",
+      "outcomes": [
+        "P1",
+        "N10",
+        "R2"
+      ]
+    },
+    {
+      "heading": "Default-on capability follow-up",
+      "original_anchor": "default-on-capability-follow-up",
+      "record": "2bf3d306cf0b260b41696e447ce2897472468605d139d1f34d4b0b3fc7d1742c",
+      "outcomes": [
+        "P4",
+        "P11"
+      ]
+    },
+    {
+      "heading": "Security-audit release qualification",
+      "original_anchor": "security-audit-release-qualification",
+      "record": "bb62a9c10c6414df9abac2fdd5ac35ac308aef6d395bcb406bad05bd651ea9ec",
+      "outcomes": [
+        "R1",
+        "R2"
+      ]
+    },
+    {
+      "heading": "Atomic private settlement release qualification",
+      "original_anchor": "atomic-private-settlement-release-qualification",
+      "record": "83c77ac6268405965ff5cb85bcc0d77bb5f90dad500e0489e801ca031531a17e",
+      "outcomes": [
+        "N11",
+        "C5",
+        "R1"
+      ]
+    },
+    {
+      "heading": "Telemetry first-release closure",
+      "original_anchor": "telemetry-first-release-closure",
+      "record": "6d2d0f9a90238235a87760f3c8ba31eebafeca4b9e3b51e23107303d62931f32",
+      "outcomes": [
+        "N9"
+      ]
+    },
+    {
+      "heading": "Derive/proc-macro first-release closure",
+      "original_anchor": "deriveproc-macro-first-release-closure",
+      "record": "e573a1385f6014f938780ed89871c3d610d090de528cb8e910e21c1f1cc33602",
+      "outcomes": [
+        "C1"
+      ]
+    },
+    {
+      "heading": "Mochi first-release closure",
+      "original_anchor": "mochi-first-release-closure",
+      "record": "942a5982e3c8d37f0e54ab3fddb54b3eae2a915e6ec6018dc070e7f05a9244ee",
+      "outcomes": [
+        "P11"
+      ]
+    },
+    {
+      "heading": "Iroha configuration first-release closure",
+      "original_anchor": "iroha-configuration-first-release-closure",
+      "record": "46b04aeb6273d60e87594bc65bb4fac8ce1b6d151165f7c5675ac13d8200c63f",
+      "outcomes": [
+        "N8"
+      ]
+    },
+    {
+      "heading": "Kagami first-release closure",
+      "original_anchor": "kagami-first-release-closure",
+      "record": "9a64e40891502efba2175ae21cf5e544258d8f72e5db60e1694b5ccc446dd94e",
+      "outcomes": [
+        "P11"
+      ]
+    },
+    {
+      "heading": "Digital-signature release qualification",
+      "original_anchor": "digital-signature-release-qualification",
+      "record": "a1f5bc5283b3f5c0e21a76c9f5d7b065bf607b32d5032556dbbe5065475d301f",
+      "outcomes": [
+        "C3",
+        "S9"
+      ]
+    },
+    {
+      "heading": "Iroha crypto first-release closure",
+      "original_anchor": "iroha-crypto-first-release-closure",
+      "record": "d545f503dfec200e016344b706beb6511ebaddbbfb8078ee309ab123c452eb33",
+      "outcomes": [
+        "C3",
+        "C7"
+      ]
+    },
+    {
+      "heading": "SDK first-release closure",
+      "original_anchor": "sdk-first-release-closure",
+      "record": "7b211e9dfb51fc5426743e9f63079573688cc165bcd440c9ed10da4962642dbc",
+      "outcomes": [
+        "S4",
+        "S6",
+        "A7"
+      ]
+    },
+    {
+      "heading": "Iroha Core first-release closure",
+      "original_anchor": "iroha-core-first-release-closure",
+      "record": "a94faab561091217c5e39b36e2c131484c38bd842ce56a9c1af55a418aba1330",
+      "outcomes": [
+        "A4",
+        "N4"
+      ]
+    },
+    {
+      "heading": "P2P first-release closure",
+      "original_anchor": "p2p-first-release-closure",
+      "record": "ae668e73833a0cb1f376a5cbe4c58a6d4c8b8b5be26830a5c168daf6dbcd3c4f",
+      "outcomes": [
+        "P4"
+      ]
+    },
+    {
+      "heading": "Sumeragi first-release closure",
+      "original_anchor": "sumeragi-first-release-closure",
+      "record": "abeb1a5dcaacefb277d02f7a2aa602f9a895b02601f1513afd771991fad050e7",
+      "outcomes": [
+        "N1",
+        "N2"
+      ]
+    },
+    {
+      "heading": "IVM first-release closure",
+      "original_anchor": "ivm-first-release-closure",
+      "record": "fd57eb39e3436e10a590a487f0dc701aa3e9d47f9a569dbea8680b0b64f59527",
+      "outcomes": [
+        "C2"
+      ]
+    },
+    {
+      "heading": "Kura emergency-start closure",
+      "original_anchor": "kura-emergency-start-closure",
+      "record": "483409e2328fd132198abb6e070f9e11d71911bc2834d54095d8d09268073197",
+      "outcomes": [
+        "N6"
+      ]
+    },
+    {
+      "heading": "Norito archive API closure",
+      "original_anchor": "norito-archive-api-closure",
+      "record": "bf8ff550d7e13d78c32e0c3fef33554fe586922aabde7d974a8f31466dbcb087",
+      "outcomes": [
+        "C1"
+      ]
+    },
+    {
+      "heading": "Torii first-release closure",
+      "original_anchor": "torii-first-release-closure",
+      "record": "9c38d61b1d6b65167fc3d373373c0184e26fe1b550df4064a7c9c8a20584c5ae",
+      "outcomes": [
+        "A4",
+        "P6",
+        "P10"
+      ]
+    },
+    {
+      "heading": "Taikai first-release closure",
+      "original_anchor": "taikai-first-release-closure",
+      "record": "e40b44d28d1d582a3532db61744ee4a7fcde0598f8d32405ae923c858f940ad1",
+      "outcomes": [
+        "P6"
+      ]
+    },
+    {
+      "heading": "Data-model first-release closure",
+      "original_anchor": "data-model-first-release-closure",
+      "record": "01cfec196832d8ad8acba4489e0a4b4f5c734c1c8a4c618501b3fb17535033e3",
+      "outcomes": [
+        "N5",
+        "R2"
+      ]
+    },
+    {
+      "heading": "Generated HF isolated execution",
+      "original_anchor": "generated-hf-isolated-execution",
+      "record": "11c49efd369322ecc4d3b01c2db1484e14fcde550f8f1c2ec38deafaffe888ee",
+      "outcomes": [
+        "P8"
+      ]
+    },
+    {
+      "heading": "Merged-candidate compile recovery",
+      "original_anchor": "merged-candidate-compile-recovery",
+      "record": "3dd449171c9b45b2bfd3845fa08e8d0846ebda55afefd55806e90612b66a291e",
+      "outcomes": [
+        "N10",
+        "R2"
+      ]
+    },
+    {
+      "heading": "SORA Parliament hardening",
+      "original_anchor": "sora-parliament-hardening",
+      "record": "79f28b80fef0958b690d85c67b9247097a7cbc4c733366eeff25414d3f944f44",
+      "outcomes": [
+        "P1",
+        "C3"
+      ]
+    },
+    {
+      "heading": "ZK algorithm release qualification",
+      "original_anchor": "zk-algorithm-release-qualification",
+      "record": "2619311276e1ec58aab7dfebe54b2549e0ee4b6bd61e75fd6c7dcf990a14611c",
+      "outcomes": [
+        "C4",
+        "C5",
+        "C7",
+        "C8"
+      ]
+    },
+    {
+      "heading": "Inrou V1 release qualification",
+      "original_anchor": "inrou-v1-release-qualification",
+      "record": "38679ba9eb1a575a025153a1dd61678beb0a31dcb313ebc8fd56be5004f84167",
+      "outcomes": [
+        "P8",
+        "P9",
+        "R1"
+      ]
+    },
+    {
+      "heading": "SoraNet first-release security qualification",
+      "original_anchor": "soranet-first-release-security-qualification",
+      "record": "9c6eed8499b14f862d833c15c3fd3c3514f58e9898508a82c76c38278e471ff7",
+      "outcomes": [
+        "P4"
+      ]
+    },
+    {
+      "heading": "KAGEMUSHA V1 release completion",
+      "original_anchor": "kagemusha-v1-release-completion",
+      "record": "78bdc4a7ca9db1d5af58c3fd9526ba2a656850c5709989cd7b371128e72034a6",
+      "outcomes": [
+        "S7",
+        "S8",
+        "S9"
+      ]
+    },
+    {
+      "heading": "MKHE and Figure 9 evidence-gated completion",
+      "original_anchor": "mkhe-and-figure-9-evidence-gated-completion",
+      "record": "0ff775b0d366b78314daec5e6ebbfe5a3ac44dba9793224bfba471d5a7e34911",
+      "outcomes": [
+        "C6",
+        "C7"
+      ]
+    },
+    {
+      "heading": "First-release hard-cut closeout",
+      "original_anchor": "first-release-hard-cut-closeout",
+      "record": "99384def184ef5fcc74be96cf3df2c8b4c7e71fe80d3e0e24ed576ed25f79a3f",
+      "outcomes": [
+        "A5",
+        "N2",
+        "R1",
+        "R2"
+      ]
+    },
+    {
+      "heading": "Workspace review closure",
+      "original_anchor": "workspace-review-closure",
+      "record": "4a3dbbd41d761574bb331c487b1defba81947d4ef5e89c3f5a1d54ee081738f3",
+      "outcomes": [
+        "N7",
+        "N2",
+        "S4",
+        "C3",
+        "C5",
+        "C7",
+        "R1"
+      ]
+    },
+    {
+      "heading": "Nexus topology model closure",
+      "original_anchor": "nexus-topology-model-closure",
+      "record": "58c29285ca2b4d0d4867fc8f0be753bfc0e9b4f4ad95ca986a02046a56c39d5e",
+      "outcomes": [
+        "N3"
+      ]
+    },
+    {
+      "heading": "Build-efficiency closeout",
+      "original_anchor": "build-efficiency-closeout",
+      "record": "6491d9de098e123bbf423e8b9ed3ffb9ebda8778390531d8d0a40cbc630ee460",
+      "outcomes": [
+        "A5",
+        "A6",
+        "R1"
+      ]
+    },
+    {
+      "heading": "Exact network identity completion",
+      "original_anchor": "exact-network-identity-completion",
+      "record": "b014cec3380ec155257ac3fd2df781ff66ad516769c237330aa4b1c6c5291e55",
+      "outcomes": [
+        "N7"
+      ]
+    },
+    {
+      "heading": "Native Torii MCP release qualification",
+      "original_anchor": "native-torii-mcp-release-qualification",
+      "record": "a9f25c74f1125dd1d65b62e110042673534277c1c751c44369e109cfcb59e35a",
+      "outcomes": [
+        "P10",
+        "R2"
+      ]
+    },
+    {
+      "heading": "Sumeragi v2 revision-4 release gates",
+      "original_anchor": "sumeragi-v2-revision-4-release-gates",
+      "record": "ee3b65699c268c402b8559f0aa7ddd9c8ded75739f03a5b57c6f3b388cc41c2c",
+      "outcomes": [
+        "N1",
+        "N2",
+        "R2"
+      ]
+    },
+    {
+      "heading": "Musubi first-release registry and developer ecosystem reset",
+      "original_anchor": "musubi-first-release-registry-and-developer-ecosystem-reset",
+      "record": "8f404caa97ef74d270b01c4789fab39964aba9dd364ce5fdff66a637626cc71e",
+      "outcomes": [
+        "A2",
+        "P5"
+      ]
+    },
+    {
+      "heading": "First-release security remediation validation",
+      "original_anchor": "first-release-security-remediation-validation",
+      "record": "64cef74910761fcdb2aeabd78751777a5b5afd2a2b445438dacdc7c5272c7a7f",
+      "outcomes": [
+        "R1",
+        "R2"
+      ]
+    },
+    {
+      "heading": "SoraFS V1 Governance DAG deployment closure",
+      "original_anchor": "sorafs-v1-governance-dag-deployment-closure",
+      "record": "18be783fe52db4f02eb18618c7b8966bd924d9bc1252410bf3c1f7b0f4a53748",
+      "outcomes": [
+        "P3"
+      ]
+    },
+    {
+      "heading": "Repository structure follow-ups",
+      "original_anchor": "repository-structure-follow-ups",
+      "record": "a602bda12c3f3a0f415b06de0c3d38ad3ea6d82160477e6a01ee2ffd6c0e4f09",
+      "outcomes": [
+        "A4",
+        "A5",
+        "A6",
+        "A8"
+      ]
+    },
+    {
+      "heading": "Public Taira node onboarding",
+      "original_anchor": "public-taira-node-onboarding",
+      "record": "9c4e75e4776f063b9d01264eb702608774a102b2ed62306fe4c4d15f65d3bf73",
+      "outcomes": [
+        "P9"
+      ]
+    },
+    {
+      "heading": "Disposable Taira-compatible development networks",
+      "original_anchor": "disposable-taira-compatible-development-networks",
+      "record": "3457d6f720b76711d9d8bdfcb375d8e55b0a1141508e36425110b0850b31c8a3",
+      "outcomes": [
+        "P9",
+        "P8"
+      ]
+    },
+    {
+      "heading": "ZK-ACE JavaScript signed-transaction parity",
+      "original_anchor": "zk-ace-javascript-signed-transaction-parity",
+      "record": "a58552b75091ca8a26b9037c9a7954ed3b9ce9866f82a94aee01d32e26ad9a31",
+      "outcomes": [
+        "S10"
+      ]
+    },
+    {
+      "heading": "JavaScript governance private-file release closure",
+      "original_anchor": "javascript-governance-private-file-release-closure",
+      "record": "b2ca62f7139af639dfda909e19d4365e7b818fab2c68e953d3ecde9f4a2d0025",
+      "outcomes": [
+        "S10"
+      ]
+    },
+    {
+      "heading": "Sumeragi V2 production multilane release closure",
+      "original_anchor": "sumeragi-v2-production-multilane-release-closure",
+      "record": "87736892db47251724036ec2be0bc9b3fff5b7f601514c947f7ccf0e8e7c83d5",
+      "outcomes": [
+        "N2"
+      ]
+    },
+    {
+      "heading": "SoraFS V1 production closure",
+      "original_anchor": "sorafs-v1-production-closure",
+      "record": "98e13eaa065dc4812321ef11d903a353e56e4572d79e2f042e4a9e8d201cb0c1",
+      "outcomes": [
+        "P2",
+        "P3"
+      ]
+    },
+    {
+      "heading": "Memory-containment follow-ups",
+      "original_anchor": "memory-containment-follow-ups",
+      "record": "7dcf7aaac3cd3dbb150fb16d145e33d5cc280d4c43cc5050d844060e89be7f2d",
+      "outcomes": [
+        "A5",
+        "S9",
+        "C1"
+      ]
+    },
+    {
+      "heading": "Peer transport V1 release evidence",
+      "original_anchor": "peer-transport-v1-release-evidence",
+      "record": "d4edf6497d1878ac4e12aad5c2ba8da0651a3aff4ce1cffa8cc617660a9431ad",
+      "outcomes": [
+        "S5",
+        "S9"
+      ]
+    },
+    {
+      "heading": "Wallet activity query follow-ups",
+      "original_anchor": "wallet-activity-query-follow-ups",
+      "record": "cad5e77c5167f14c4cbb855d2b1a0ef30e3ccb33eaee64fb6d2e69135c1a89c6",
+      "outcomes": [
+        "S4"
+      ]
+    },
+    {
+      "heading": "Alias/SNS release evidence",
+      "original_anchor": "aliassns-release-evidence",
+      "record": "dda62b5c682c2832a296e048869628f6428f1db9493210eafd2423f91bb0f91a",
+      "outcomes": [
+        "S6"
+      ]
+    },
+    {
+      "heading": "SORA Economic Constitution",
+      "original_anchor": "sora-economic-constitution",
+      "record": "9c962731bc03e974d717fe460bd192092ea0c5a2b2edcef9ad9820467dac1a5c",
+      "outcomes": [
+        "P12"
+      ]
+    },
+    {
+      "heading": "SCCP Launch Scope",
+      "original_anchor": "sccp-launch-scope",
+      "record": "bce712e84d1feeaef947dff99073c93e97784084fe401195d4facae0cb0dd7fb",
+      "outcomes": [
+        "P7"
+      ]
+    },
+    {
+      "heading": "Release and Stabilization",
+      "original_anchor": "release-and-stabilization",
+      "record": "29220a05cdb26c26b15390a5b2f77f6df96907b3ddb5d8207ccff70088916db7",
+      "outcomes": [
+        "N4",
+        "N5",
+        "N7",
+        "C3",
+        "C5",
+        "S4",
+        "P10",
+        "R1"
+      ]
+    },
+    {
+      "heading": "SORA Nexus and Taira",
+      "original_anchor": "sora-nexus-and-taira",
+      "record": "546855dbada73ecf30e753da8ea22b52b8ac8a22bfb4a687aba263d079377279",
+      "outcomes": [
+        "N2",
+        "N3",
+        "N7",
+        "P9"
+      ]
+    },
+    {
+      "heading": "IVM, Kotodama, and Norito",
+      "original_anchor": "ivm-kotodama-and-norito",
+      "record": "85bb8b5265b2647edd37606c16afa0e740080d8518243100a32d42fc0ffcd6cf",
+      "outcomes": [
+        "C1",
+        "C2",
+        "S6"
+      ]
+    },
+    {
+      "heading": "Privacy, ZK, and FHE",
+      "original_anchor": "privacy-zk-and-fhe",
+      "record": "0dce200149da4e57e5c7e6a1177d493c46d48fdd0167721f3b24ab0a1f299599",
+      "outcomes": [
+        "C5",
+        "C6",
+        "C8",
+        "S4"
+      ]
+    },
+    {
+      "heading": "Consensus, Performance, and Operations",
+      "original_anchor": "consensus-performance-and-operations",
+      "record": "ccdde6451ecd2eb52e38982c9e76d00fa6a2ea28913c8b8b610f5a7b50b6750c",
+      "outcomes": [
+        "N1",
+        "N2",
+        "A5",
+        "R1"
+      ]
+    },
+    {
+      "heading": "Community and Governance",
+      "original_anchor": "community-and-governance",
+      "record": "2dfd0444e926cae83058c4f14a41cf36542aa844bdf657b0132e7fd32e483015",
+      "outcomes": [
+        "R3",
+        "P1",
+        "C3"
+      ]
+    }
+  ]
+}

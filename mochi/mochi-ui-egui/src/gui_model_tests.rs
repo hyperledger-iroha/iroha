@@ -34,10 +34,10 @@ use iroha_data_model::{
     role::RoleId,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use mochi_core::{
-    ExposedPrivateKey, TelemetryStatus, ToriiError, TxGossipSnapshot,
-    torii::{GovernanceStatus, StatusMetrics, Uptime},
+use iroha_torii_shared::status::{
+    GovernanceStatus, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
 };
+use mochi_core::{ExposedPrivateKey, ToriiError, torii::StatusMetrics};
 use norito::json::{self, Value};
 use std::{
     collections::VecDeque,
@@ -1583,7 +1583,7 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
     let mut view = PeerStatusView::default();
     let now = Instant::now();
     let status = TelemetryStatus {
-        da_receipt_cursors: vec![iroha_telemetry::metrics::DaReceiptCursorStatus {
+        da_receipt_cursors: vec![iroha_torii_shared::status::DaReceiptCursorStatus {
             lane_id: 0,
             epoch: 2,
             highest_sequence: 7,

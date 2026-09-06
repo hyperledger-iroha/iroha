@@ -9,13 +9,14 @@ use crate::{
         INCENTIVE_MAX_ACTIVE_EPOCHS_V1, INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1,
     },
 };
-use iroha_data_model::soranet::incentives::RelayEpochMetricsV1;
+use iroha_data_model::{account::AccountId, soranet::incentives::RelayEpochMetricsV1};
 use norito::{
     core::to_bytes_bounded,
     derive::{JsonDeserialize, JsonSerialize},
 };
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     fs,
     io::Write,
     path::PathBuf,
@@ -25,6 +26,8 @@ use std::{
 use thiserror::Error;
 /// First-release maximum encoded incentive snapshot size.
 pub const INCENTIVE_SNAPSHOT_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+/// Maximum number of trusted measurement verifiers accepted by one relay.
+pub const INCENTIVE_MAX_TRUSTED_VERIFIERS_V1: usize = 64;
 /// Errors surfaced while persisting incentive snapshots.
 #[derive(Debug, Error)]
 pub enum IncentiveLogError {
@@ -57,6 +60,9 @@ pub struct IncentiveLogConfig {
     /// Maximum distinct measurement IDs retained in any one epoch.
     #[norito(default = "IncentiveLogConfig::default_max_measurements_per_epoch")]
     pub max_measurements_per_epoch: usize,
+    /// Canonical set of accounts allowed to sign bandwidth measurements.
+    #[norito(default)]
+    pub trusted_verifier_ids: BTreeSet<AccountId>,
 }
 impl Default for IncentiveLogConfig {
     fn default() -> Self {
@@ -65,6 +71,7 @@ impl Default for IncentiveLogConfig {
             spool_dir: None,
             max_active_epochs: Self::default_max_active_epochs(),
             max_measurements_per_epoch: Self::default_max_measurements_per_epoch(),
+            trusted_verifier_ids: BTreeSet::new(),
         }
     }
 }
@@ -105,6 +112,18 @@ impl IncentiveLogConfig {
                 self.max_measurements_per_epoch
             )));
         }
+        if self.trusted_verifier_ids.len() > INCENTIVE_MAX_TRUSTED_VERIFIERS_V1 {
+            return Err(IncentiveLogError::Config(format!(
+                "incentives.trusted_verifier_ids contains {} entries; the first-release limit is {INCENTIVE_MAX_TRUSTED_VERIFIERS_V1}",
+                self.trusted_verifier_ids.len()
+            )));
+        }
+        if self.enable && self.trusted_verifier_ids.is_empty() {
+            return Err(IncentiveLogError::Config(
+                "incentives.trusted_verifier_ids must contain at least one account when incentive ingestion is enabled"
+                    .to_owned(),
+            ));
+        }
         let retained = self
             .max_active_epochs
             .checked_mul(self.max_measurements_per_epoch)
@@ -137,6 +156,7 @@ impl IncentiveLogConfig {
             relay_id_hex,
             config.max_active_epochs,
             config.max_measurements_per_epoch,
+            config.trusted_verifier_ids,
         )?))
     }
 }
@@ -147,6 +167,7 @@ pub struct IncentiveLogger {
     relay_id_hex: String,
     max_seen_epochs: usize,
     max_measurements_per_epoch: usize,
+    trusted_verifier_ids: BTreeSet<AccountId>,
     /// Sorted, fully preallocated `(epoch, digest)` cache.
     seen: Mutex<Vec<(u32, [u8; 32])>>,
 }
@@ -156,6 +177,7 @@ impl IncentiveLogger {
         relay_id_hex: &str,
         max_seen_epochs: usize,
         max_measurements_per_epoch: usize,
+        trusted_verifier_ids: BTreeSet<AccountId>,
     ) -> Result<Self, IncentiveLogError> {
         if relay_id_hex.len() != 64
             || !relay_id_hex
@@ -186,8 +208,14 @@ impl IncentiveLogger {
             max_seen_epochs,
             max_measurements_per_epoch: max_measurements_per_epoch
                 .clamp(1, INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1),
+            trusted_verifier_ids,
             seen: Mutex::new(seen),
         })
+    }
+    /// Return whether the account belongs to the startup-validated verifier roster.
+    #[must_use]
+    pub fn trusts_verifier(&self, verifier_id: &AccountId) -> bool {
+        self.trusted_verifier_ids.contains(verifier_id)
     }
     /// Persist a snapshot if it has changed since the last write.
     pub fn write_snapshot(&self, metrics: &RelayEpochMetricsV1) -> Result<(), IncentiveLogError> {
@@ -304,6 +332,7 @@ mod tests {
             &"ab".repeat(32),
             max_seen_epochs,
             max_measurements_per_epoch,
+            BTreeSet::new(),
         )
         .expect("create logger")
     }

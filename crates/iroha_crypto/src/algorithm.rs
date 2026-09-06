@@ -55,6 +55,8 @@ crate::ffi::ffi_item! {
         Encode,
         TypeId
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_crypto::algorithm::Algorithm")]
     #[repr(u8)]
     pub enum Algorithm {
         /// Ed25519 digital signature scheme

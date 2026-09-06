@@ -80,22 +80,22 @@ fn plain_ballot_locks_bond_into_escrow() {
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanSubmitGovernanceBallot");
-    // Seed a plain referendum record so the ballot can open it.
+    // Seed the already-open plain referendum visible at this block height.
     stx.world.governance_referenda_mut().insert(
         "rid-bond-lock".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 1,
             h_end: 5,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
     let instr = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "rid-bond-lock".to_string(),
         owner: ALICE_ID.clone(),
+        direction: 0,
         amount: 10_u64.into(),
         duration_blocks: 200,
-        direction: 0,
     };
     instr
         .clone()
@@ -125,9 +125,9 @@ fn plain_ballot_locks_bond_into_escrow() {
     let self_custodied = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "rid-bond-lock".to_string(),
         owner: BOB_ID.clone(),
+        direction: 0,
         amount: 10_u64.into(),
         duration_blocks: 200,
-        direction: 0,
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("the configured custody account must not create a nominal self-lock");

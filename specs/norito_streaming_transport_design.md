@@ -110,7 +110,7 @@ the same broadcast share the PSK without out-of-band exchange.
    bits intersect, the viewer rejects the connection with
    `TransportError::MissingHpkeSuite`.
 3. `supports_datagram` resolves to true only when both endpoints set the flag.
-   When false, publishers send segment chunks on ordered bidirectional streams
+   When false, publishers send segment chunks on ordered unidirectional streams
    with the priority weights described below.
 4. `max_segment_datagram_size` resolves to the minimum value advertised. The
    publisher MUST fragment chunks accordingly so all viewers see identical
@@ -140,9 +140,12 @@ requesting bits outside the advertised mask MUST be rejected by the handshake.
   4 MiB per-frame and 16 MiB aggregate payload bound. Stream offsets remain
   strictly increasing so retransmissions are QUIC-managed. The transport
   advertises 16 unidirectional streams: one permanent control stream and at
-  most 15 unfinished media windows.
+  most 15 unfinished media windows. It advertises no bidirectional streams.
+  Opening/accepting a window through its final QUIC FIN shares one absolute
+  transfer deadline capped at 30 seconds and derived from the configured idle
+  timeout; timeout or transport failure closes the connection.
 - Control messages (`KeyUpdate`, `FeedbackHint`, `ReceiverReport`) travel on a
-  dedicated bidirectional stream with priority weight 256. Media streams use
+  dedicated unidirectional stream in each direction with priority weight 256. Media streams use
   weight 128, and archival/manifest streams use weight 64. This hierarchy keeps
   rekey and feedback deterministic under scheduler pressure.
 

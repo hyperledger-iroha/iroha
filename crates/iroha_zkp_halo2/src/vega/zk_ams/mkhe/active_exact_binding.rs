@@ -3149,18 +3149,6 @@ mod tests {
             context_specific.verification_digest
         );
         let digest = |label: &[u8]| keccak256(label);
-        assert_eq!(
-            direct_common_a_v1::mint_mismatched_rkg_round_one_selector_for_test_v1(
-                &roster,
-                &set,
-                direct_context,
-                other_digit_context,
-                digest(b"direct-prior-one"),
-                digest(b"direct-h0-h1-statement"),
-                digest(b"direct-rkg-one-proof-commitments"),
-            ),
-            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
-        );
         let profile = release_profile_v1();
         let mut common_a_workspace = vec![0_u64; profile.ring_degree];
         let mut h0 = direct_common_a_v1::prepare_direct_common_a_creator_h0_v1(

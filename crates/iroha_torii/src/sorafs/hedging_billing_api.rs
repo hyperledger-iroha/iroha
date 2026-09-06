@@ -92,6 +92,7 @@ struct HedgingBillingApiErrorResponseV1 {
 enum QueryInputError {
     TooLong,
     TooManyParameters,
+    NonCanonical,
     UnknownParameter,
     DuplicateParameter,
     MissingParameter,
@@ -105,6 +106,7 @@ impl QueryInputError {
         match self {
             Self::TooLong => "query_too_long",
             Self::TooManyParameters => "too_many_query_parameters",
+            Self::NonCanonical => "noncanonical_query",
             Self::UnknownParameter => "unknown_query_parameter",
             Self::DuplicateParameter => "duplicate_query_parameter",
             Self::MissingParameter => "required_query_parameter_missing",
@@ -579,10 +581,12 @@ where
                 "hedging_billing_runtime_busy",
             )
         })?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(operation)
-    })
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
+            let _permit = permit;
+            operation()
+        },
+    ))
     .await
     .map_err(|_| runtime_unavailable_response())?
     .map_err(runtime_error_response)
@@ -599,16 +603,16 @@ where
                 "hedging_billing_runtime_busy",
             )
         })?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(|| {
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
+            let _permit = permit;
             let bytes = norito::to_bytes(&value).map_err(|_| ())?;
             if bytes.len() > max_bytes {
                 return Err(());
             }
             Ok(bytes)
-        })
-    })
+        },
+    ))
     .await
     .map_err(|_| runtime_unavailable_response())?
     .map_err(|()| runtime_unavailable_response())
@@ -768,15 +772,30 @@ fn server_time_unix() -> Result<u64, Response> {
     Ok(now)
 }
 fn bounded_query_pairs(raw: Option<&str>) -> Result<Vec<(String, String)>, QueryInputError> {
-    let raw = raw.unwrap_or_default();
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
     if raw.len() > MAX_QUERY_BYTES_V1 {
         return Err(QueryInputError::TooLong);
     }
-    let pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    if pairs.len() > MAX_QUERY_PARAMETERS_V1 {
-        return Err(QueryInputError::TooManyParameters);
+    if raw.is_empty() || raw.bytes().any(|byte| matches!(byte, b'%' | b'+')) {
+        return Err(QueryInputError::NonCanonical);
+    }
+    let mut pairs = Vec::new();
+    for (index, segment) in raw.split('&').enumerate() {
+        if index >= MAX_QUERY_PARAMETERS_V1 {
+            return Err(QueryInputError::TooManyParameters);
+        }
+        if segment.is_empty() {
+            return Err(QueryInputError::NonCanonical);
+        }
+        let Some((key, value)) = segment.split_once('=') else {
+            return Err(QueryInputError::NonCanonical);
+        };
+        if key.is_empty() || value.is_empty() || value.contains('=') {
+            return Err(QueryInputError::NonCanonical);
+        }
+        pairs.push((key.to_owned(), value.to_owned()));
     }
     Ok(pairs)
 }
@@ -826,7 +845,7 @@ fn reject_query(raw: Option<&str>) -> Result<(), QueryInputError> {
     }
 }
 fn require_method(actual: &Method, expected: Method) -> Result<(), Response> {
-    if actual == &expected || (expected == Method::GET && actual == Method::HEAD) {
+    if actual == &expected {
         Ok(())
     } else {
         Err(fixed_error(
@@ -950,6 +969,26 @@ mod tests {
             OwnerStatementPageQueryV1::parse(Some(&duplicate)),
             Err(QueryInputError::DuplicateParameter)
         );
+        let noncanonical = [
+            "",
+            "limit",
+            "limit=",
+            "=1",
+            "limit=1&",
+            "&limit=1",
+            "limit=1&&after_statement_id=abc",
+            "limit=%31",
+            "lim%69t=1",
+            "limit=+1",
+            "limit=1=1",
+        ];
+        for raw in noncanonical {
+            assert_eq!(
+                bounded_query_pairs(Some(raw)),
+                Err(QueryInputError::NonCanonical),
+                "query unexpectedly accepted: {raw:?}"
+            );
+        }
     }
     #[test]
     fn page_limit_requires_canonical_decimal_in_exact_range() {
@@ -964,12 +1003,17 @@ mod tests {
         assert_eq!(parse_page_limit("100"), Ok(100));
     }
     #[test]
-    fn get_routes_accept_implicit_head_but_post_does_not() {
+    fn routes_require_the_exact_http_method() {
         assert!(require_method(&Method::GET, Method::GET).is_ok());
-        assert!(require_method(&Method::HEAD, Method::GET).is_ok());
         assert_eq!(
-            require_method(&Method::HEAD, Method::POST)
-                .expect_err("POST routes have no implicit HEAD")
+            require_method(&Method::HEAD, Method::GET)
+                .expect_err("HEAD must not dispatch a GET operation")
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+        assert_eq!(
+            require_method(&Method::GET, Method::POST)
+                .expect_err("GET must not dispatch a POST operation")
                 .status(),
             StatusCode::METHOD_NOT_ALLOWED
         );

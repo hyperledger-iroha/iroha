@@ -4011,6 +4011,15 @@ impl RelayConfig {
             guard.apply_defaults()?;
         }
         if let Some(constant_rate) = self.constant_rate_capability.as_ref() {
+            if constant_rate.enabled
+                && constant_rate.strict
+                && self.constant_rate_profile != ConstantRateProfileName::Core
+            {
+                return Err(ConfigError::ConstantRateCapability(format!(
+                    "strict constant-rate mode requires constant_rate_profile `core` (5 ms); configured profile `{}` is not compatible",
+                    self.constant_rate_profile
+                )));
+            }
             constant_rate.validate()?;
         }
         self.exit_routing.validate()?;

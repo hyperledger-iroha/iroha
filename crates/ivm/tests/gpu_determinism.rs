@@ -82,8 +82,8 @@ fn merkle_root_accel_matches_cpu_for_large_input() {
         eprintln!("CUDA not available; skipping merkle accel test");
         return;
     }
-    let t_cpu = ivm::ByteMerkleTree::from_bytes_parallel(&data, chunk);
-    let root_gpu = ivm::ByteMerkleTree::root_from_bytes_accel(&data, chunk);
+    let t_cpu = ivm::ByteMerkleTree::from_bytes_parallel(&data, chunk).unwrap();
+    let root_gpu = ivm::ByteMerkleTree::root_from_bytes_accel(&data, chunk).unwrap();
     assert_eq!(t_cpu.root(), root_gpu);
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -99,8 +99,8 @@ fn merkle_root_accel_metal_matches_cpu_for_large_input() {
     for (i, byte) in data.iter_mut().enumerate() {
         *byte = (i as u8).wrapping_mul(17).wrapping_add(3);
     }
-    let t_cpu = ivm::ByteMerkleTree::from_bytes_parallel(&data, chunk);
-    let root_gpu = ivm::ByteMerkleTree::root_from_bytes_accel(&data, chunk);
+    let t_cpu = ivm::ByteMerkleTree::from_bytes_parallel(&data, chunk).unwrap();
+    let root_gpu = ivm::ByteMerkleTree::root_from_bytes_accel(&data, chunk).unwrap();
     assert_eq!(t_cpu.root(), root_gpu);
 }
 #[cfg(feature = "cuda")]

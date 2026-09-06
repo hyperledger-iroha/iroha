@@ -310,6 +310,23 @@ account existence, and the committed single-key or weighted-multisig controller
 before any quota accounting. Rust, JavaScript, and Swift builders share a
 golden digest vector.
 
+### Exact post-ingest pin authorization
+
+`DaPinScopeV1` binds the original network, owner, authorization digest, lane,
+epoch and sequence to the durable storage ticket, manifest digest and optional
+alias. `request_authorization_digest` is a `BlobDigest` containing all 32 raw
+BLAKE3 bytes from `DaIngestAuthorizationV1::signing_digest()`. No marker bit is
+inserted or normalized. Its binary field uses the ordinary DA digest encoding;
+JSON uses the canonical DA fixed-byte representation. This is the sole field
+representation, and matching compares every digest byte.
+
+The producer's scope witnesses sign the domain-separated pin-scope transcript.
+Changing any digest bit, storage ticket, manifest or alias invalidates those
+witnesses. The SDK preserves the original ingest request and adds its scope
+witness for one explicit follow-up submission. It checks the returned scope and
+durable receipt against those exact inputs; a second pending result is returned
+to the caller rather than replayed in a loop.
+
 ### Governed producer and epoch admission
 
 The consensus-visible custom parameter

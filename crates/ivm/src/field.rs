@@ -1,8 +1,7 @@
-//! Minimal Goldilocks field arithmetic used by the mock cryptographic gadgets.
+//! Goldilocks field arithmetic used by the IVM field opcodes.
 //!
-//! The mock circuits operate on the 64-bit "Goldilocks" prime field with
-//! modulus `p = 2^64 - 2^32 + 1`. These helpers keep the operations lightweight
-//! and deterministic so tests model the intended arithmetic exactly.
+//! Operations use the prime `p = 2^64 - 2^32 + 1` and reduce every register
+//! input canonically so execution remains deterministic across hosts.
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 const MODULUS: u128 = 0xffff_ffff_0000_0001;
 /// Goldilocks prime as `u64`.

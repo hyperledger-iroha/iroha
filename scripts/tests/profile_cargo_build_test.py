@@ -47,29 +47,8 @@ def _fake_profile_fixture(
     toolchain_bin.mkdir(parents=True)
     rustup_home.chmod(0o700)
 
-    source_action = (
-        'chmod u+w "$PWD/source.rs"\nprintf "snapshot changed\\n" > "$PWD/source.rs"\n'
-        if mutate_source_snapshot
-        else ""
-    )
     cargo = toolchain_bin / "cargo"
-    cargo.write_text(
-        "#!/bin/sh\n"
-        'if [ "${1:-}" = "-Vv" ]; then printf "fake cargo 1.0\\n"; exit 0; fi\n'
-        + source_action
-        + 'printf "private cache write\\n" > "$CARGO_HOME/build-write"\n'
-        + 'mkdir -p "$CARGO_TARGET_DIR/cargo-timings"\n'
-        + 'printf "timing\\n" > "$CARGO_TARGET_DIR/cargo-timings/cargo-timing.html"\n'
-        + "exit 0\n",
-        encoding="utf-8",
-    )
     rustc = toolchain_bin / "rustc"
-    rustc.write_text(
-        "#!/bin/sh\nprintf 'fake rustc 1.0\\n'\n",
-        encoding="utf-8",
-    )
-    cargo.chmod(0o700)
-    rustc.chmod(0o700)
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -104,13 +83,15 @@ def _fake_profile_fixture(
     )
     git.chmod(0o700)
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
-    return {
+    fixture = {
         "root": root,
         "cargo_home": cargo_home,
         "rustup_home": rustup_home,
         "target": tmp_path / "target",
         "report": tmp_path / "reports" / "report.json",
     }
+    _enable_fake_compilation(fixture, "source" if mutate_source_snapshot else "none")
+    return fixture
 
 
 def test_normalized_cargo_args_adds_reproducible_defaults() -> None:
@@ -519,6 +500,87 @@ def test_bounded_tree_copy_rejects_absolute_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="absolute target"):
         MODULE.copy_bounded_tree(source, tmp_path / "copy")
+
+
+@pytest.mark.parametrize("target", ["missing", "absent/nested/artifact"])
+def test_source_snapshot_preserves_missing_internal_artifact(
+    tmp_path: Path, target: str
+) -> None:
+    """Unavailable optional artifacts remain absent and bound by the source seal."""
+    root = tmp_path / "repo"
+    (root / "sdk").mkdir(parents=True)
+    link = root / "sdk" / "bridge"
+    link.symlink_to(target)
+    snapshot = tmp_path / "snapshot"
+
+    fingerprint = MODULE.capture_source_snapshot(root, ["sdk/bridge"], snapshot)
+
+    copied = snapshot / "sdk" / "bridge"
+    assert copied.is_symlink()
+    assert str(copied.readlink()) == target
+    assert not copied.exists()
+    assert fingerprint == MODULE.source_fingerprint(snapshot, ["sdk/bridge"])
+    link.unlink()
+    link.symlink_to("different")
+    assert fingerprint != MODULE.source_fingerprint(root, ["sdk/bridge"])
+
+
+def test_cache_snapshot_rejects_missing_artifact(tmp_path: Path) -> None:
+    """Writable tool and dependency caches require complete link targets."""
+    source = tmp_path / "cache"
+    source.mkdir()
+    (source / "proxy").symlink_to("missing")
+
+    with pytest.raises(ValueError, match="target is unavailable"):
+        MODULE.copy_bounded_tree(source, tmp_path / "copy")
+
+
+@pytest.mark.parametrize("target", ["/missing/artifact", "../../missing"])
+def test_source_snapshot_rejects_missing_external_artifact(
+    tmp_path: Path, target: str
+) -> None:
+    """An unavailable target never permits an absolute or escaping source link."""
+    root = tmp_path / "repo"
+    (root / "sdk").mkdir(parents=True)
+    (root / "sdk" / "bridge").symlink_to(target)
+    snapshot = tmp_path / "snapshot"
+
+    with pytest.raises(ValueError, match="absolute target|escapes its input root"):
+        MODULE.capture_source_snapshot(root, ["sdk/bridge"], snapshot)
+
+    assert not snapshot.exists()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_symlink_parent_traversal_resolves_links_before_dotdot(
+    tmp_path: Path, missing: bool
+) -> None:
+    """Lexical normalization must not hide an escape through an earlier link."""
+    root = tmp_path / "repo"
+    (root / "nested").mkdir(parents=True)
+    (root / "nested" / "up").symlink_to("..")
+    (root / "payload").write_text("inside\n", encoding="utf-8")
+    payload = "missing" if missing else "payload"
+    (root / "escape").symlink_to(f"nested/up/../{payload}")
+
+    with pytest.raises(ValueError, match="escapes its input root"):
+        MODULE.capture_source_snapshot(root, ["escape", "nested/up"], tmp_path / "copy")
+
+
+def test_source_snapshot_preserves_internal_link_chain(tmp_path: Path) -> None:
+    """Resolution follows nested relative targets from their containing directory."""
+    root = tmp_path / "repo"
+    (root / "nested" / "deeper").mkdir(parents=True)
+    (root / "nested" / "deeper" / "up").symlink_to("..")
+    (root / "nested" / "payload").write_text("payload\n", encoding="utf-8")
+    (root / "bridge").symlink_to("nested/deeper/up/payload")
+    paths = ["bridge", "nested/deeper/up", "nested/payload"]
+    snapshot = tmp_path / "snapshot"
+
+    fingerprint = MODULE.capture_source_snapshot(root, paths, snapshot)
+
+    assert (snapshot / "bridge").read_text(encoding="utf-8") == "payload\n"
+    assert fingerprint == MODULE.source_fingerprint(snapshot, paths)
 
 
 def test_bounded_tree_copy_rejects_relative_symlink_chain_escape(
@@ -953,11 +1015,13 @@ def test_parse_cargo_messages_has_stable_unit_inventory() -> None:
     artifact_a = {
         "reason": "compiler-artifact",
         "package_id": "path+file:///repo/crates/a#a@0.1.0",
-        "target": {"name": "a", "kind": ["lib"], "crate_types": ["lib"]},
+        "manifest_path": "/repo/crates/a/Cargo.toml",
+        "target": {"name": "a", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/repo/crates/a/src/lib.rs"},
         "profile": {
             "opt_level": "0",
             "debuginfo": 2,
             "debug_assertions": True,
+            "overflow_checks": True,
             "test": False,
         },
         "features": ["z", "a"],
@@ -967,7 +1031,8 @@ def test_parse_cargo_messages_has_stable_unit_inventory() -> None:
     artifact_b = {
         **artifact_a,
         "package_id": "registry+https://example.invalid#index#b@1.0.0",
-        "target": {"name": "b", "kind": ["proc-macro"], "crate_types": ["proc-macro"]},
+        "manifest_path": "/cache/b/Cargo.toml",
+        "target": {"name": "b", "kind": ["proc-macro"], "crate_types": ["proc-macro"], "src_path": "/cache/b/src/lib.rs"},
         "features": [],
         "filenames": ["/two/target/debug/libb.so"],
         "fresh": True,
@@ -981,9 +1046,20 @@ def test_parse_cargo_messages_has_stable_unit_inventory() -> None:
     assert [unit["name"] for unit in units] == ["a", "b"]
     assert units[0]["package_id"] == "workspace#a@0.1.0"
     assert units[0]["features"] == ["a", "z"]
+    assert units[0]["source_path"] == "src/lib.rs"
+    assert units[0]["profile"] == artifact_a["profile"]
     assert fresh == 1
     assert compiled == 1
     assert all("filenames" not in unit for unit in units)
+
+
+def test_cargo_abbreviated_path_ids_retain_distinct_package_names() -> None:
+    for base in ("/source", "/another%20checkout"):
+        assert MODULE.normalized_package_id(f"path+file://{base}/crates/model#1.0.0") == "workspace#model@1.0.0"
+        assert MODULE.normalized_package_id(f"path+file://{base}/crates/client#1.0.0") == "workspace#client@1.0.0"
+        assert MODULE.normalized_package_id(f"path+file://{base}/core#mochi-core@1.0.0") == "workspace#mochi-core@1.0.0"
+    with pytest.raises(ValueError, match="version"):
+        MODULE.normalized_package_id("path+file:///source/model")
 
 
 @pytest.mark.parametrize(
@@ -1050,7 +1126,7 @@ def test_main_isolates_source_cache_and_rustup_and_cleans_state(
 
     report = json.loads(fixture["report"].read_text(encoding="utf-8"))
     assert returncode == MODULE.INPUT_DRIFT_EXIT_CODE
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 4
     assert report["valid"] is False
     assert report["result"]["returncode"] == 0
     assert report["input_validation"]["stable"] is False
@@ -1135,3 +1211,183 @@ def test_main_cleans_every_owned_path_when_late_manifest_resolution_fails(
     assert returncode == 2
     assert not MODULE.private_state_path(fixture["report"]).exists()
     assert all(not path.exists() for path in MODULE.report_paths(fixture["report"]))
+
+
+def _enable_fake_compilation(fixture: dict[str, Path], mutation: str) -> None:
+    """Make fake Cargo launch the private wrapper and emit an actual artifact."""
+    tools = fixture["rustup_home"] / "toolchains" / "test" / "bin"
+    compiler = tools / "rustc"
+    compiler.write_text(
+        f"#!{sys.executable}\n"
+        "import json, pathlib, sys\n"
+        "if '-Vv' in sys.argv:\n"
+        "    print('fake rustc 1.0'); sys.exit(0)\n"
+        "out = pathlib.Path(sys.argv[sys.argv.index('--out-dir') + 1]) / 'libfixture.rlib'\n"
+        "out.parent.mkdir(parents=True, exist_ok=True)\n"
+        "out.write_bytes(b'compiled artifact')\n"
+        "print(json.dumps({'artifact': str(out), 'emit': 'link'}), file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    cargo = tools / "cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, subprocess, sys\n"
+        "if '-Vv' in sys.argv:\n"
+        "    print('fake cargo 1.0'); sys.exit(0)\n"
+        f"mutation = {mutation!r}\n"
+        "root = pathlib.Path.cwd()\n"
+        "if mutation == 'source':\n"
+        "    source = root / 'source.rs'; source.chmod(0o600); source.write_text('snapshot changed\\n')\n"
+        "pathlib.Path(os.environ['CARGO_HOME'], 'build-write').write_text('private cache write\\n')\n"
+        "timings = pathlib.Path(os.environ['CARGO_TARGET_DIR']) / 'cargo-timings'\n"
+        "timings.mkdir(parents=True, exist_ok=True); (timings / 'cargo-timing.html').write_text('timing\\n')\n"
+        "if mutation == 'no-artifacts':\n"
+        "    print(json.dumps({'reason':'build-finished','success':True})); sys.exit(0)\n"
+        "out_dir = pathlib.Path(os.environ['CARGO_TARGET_DIR']) / 'debug'\n"
+        "out_dir.mkdir(parents=True, exist_ok=True)\n"
+        "artifact = out_dir / 'libfixture.rlib'\n"
+        "if mutation == 'ignored-wrapper-error':\n"
+        "    subprocess.run([os.environ['RUSTC'], '--unsupported-fixture'])\n"
+        "if mutation == 'missing':\n"
+        "    artifact.write_bytes(b'compiled artifact')\n"
+        "else:\n"
+        "    os.environ['CARGO_MANIFEST_DIR'] = str(root)\n"
+        "    result = subprocess.run([os.environ['RUSTC'],\n"
+        "        '--crate-name', 'fixture', str(root / 'source.rs'), '--crate-type', 'lib',\n"
+        "        '--error-format=json', '--json=diagnostic-rendered-ansi', '--out-dir', str(out_dir)])\n"
+        "    if result.returncode: sys.exit(result.returncode)\n"
+        "profile = {'opt_level':'0','debuginfo':0,'debug_assertions':True,'overflow_checks':True,'test':False}\n"
+        "if mutation == 'profile': profile['opt_level'] = '3'\n"
+        "if mutation == 'artifact': artifact.write_bytes(b'drifted artifact')\n"
+        "if mutation == 'helper':\n"
+        "    helper = pathlib.Path(os.environ['RUSTC']).parent / 'profile_rustc.py'\n"
+        "    helper.chmod(0o600); helper.write_text('# changed helper\\n')\n"
+        "print(json.dumps({'reason':'compiler-artifact', 'package_id':'path+file://' + str(root) + '#fixture@1.0.0',\n"
+        "    'manifest_path': str(root / 'Cargo.toml'),\n"
+        "    'target': {'name':'fixture', 'kind':['lib'], 'crate_types':['lib'], 'src_path':str(root / 'source.rs')},\n"
+        "    'profile':profile, 'features':[], 'filenames':[str(artifact)], 'fresh':False}))\n"
+        "if mutation != 'no-completion': print(json.dumps({'reason':'build-finished','success':True}))\n",
+        encoding="utf-8",
+    )
+
+    compiler.chmod(0o700)
+    cargo.chmod(0o700)
+
+
+@pytest.mark.parametrize("mutation", ["none", "missing", "profile", "artifact", "helper", "no-artifacts", "no-completion", "ignored-wrapper-error"])
+def test_main_requires_complete_matching_compiler_measurements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    fixture = _fake_profile_fixture(tmp_path, monkeypatch)
+    _enable_fake_compilation(fixture, mutation)
+    code = MODULE.main([
+        "--root", str(fixture["root"]), "--target-dir", str(fixture["target"]),
+        "--out", str(fixture["report"]), "--cargo-home", str(fixture["cargo_home"]),
+        "--rustup-home", str(fixture["rustup_home"]), "--", "build",
+    ])
+    report = json.loads(fixture["report"].read_text(encoding="utf-8"))
+    assert code == (0 if mutation == "none" else MODULE.MEASUREMENT_EXIT_CODE)
+    assert report["valid"] is (mutation == "none")
+    assert report["result"]["returncode"] == 0
+    if mutation == "ignored-wrapper-error":
+        assert "instrumentation failed" in report["result"]["compiler_measurement_error"]
+    assert report["result"]["cargo_process_peak_rss_bytes"] > 0
+    assert "max_rss_raw" not in report["result"]
+    assert report["input"]["compiler_measurement"]["method"] == "wait4-per-compiler"
+    if mutation == "none":
+        evidence = report["result"]["compiler_measurements"]
+        assert report["result"]["compiler_measurements_sha256"] == MODULE.sha256_bytes(MODULE.canonical_json_bytes(evidence))
+        compiled = evidence["compiled"]
+        assert len(compiled) == 1
+        assert compiled[0]["unit"] == report["result"]["unit_inventory"][0]
+        assert compiled[0]["unit"]["source_path"] == "source.rs"
+        assert compiled[0]["peak_rss_bytes"] > 0
+        assert report["result"]["compiler_measurement_error"] is None
+    else:
+        assert report["result"]["compiler_measurement_error"] is not None
+    records = report["result"]["compiler_records"]
+    if mutation in ("none", "missing", "profile", "artifact", "no-artifacts"):
+        assert isinstance(records, list)
+        assert report["result"]["compiler_records_sha256"] == MODULE.sha256_bytes(MODULE.canonical_json_bytes(records))
+    if mutation in ("profile", "artifact"):
+        assert len(records) == 1
+        assert records[0]["peak_rss_bytes"] > 0
+        assert report["result"]["compiler_measurements"] is None
+    assert not MODULE.private_state_path(fixture["report"]).exists()
+
+
+def test_measurement_binds_profiler_outside_frozen_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Separate instrumentation is identified and must not drift during the run."""
+    entrypoint = tmp_path / "profiler.py"
+    entrypoint.write_text("# pinned profiler\n", encoding="utf-8")
+    monkeypatch.setattr(MODULE, "__file__", str(entrypoint))
+    state = MODULE.create_private_state(tmp_path / "profile.state")
+    try:
+        identity = MODULE.prepare_compiler_measurement(state, "/private/rustc", {})
+        assert identity["profiler"] == MODULE.RUSTC_PROFILE.stable_file_identity(entrypoint)
+        assert MODULE.verify_compiler_measurement(state, identity, "/private/rustc") == identity
+        entrypoint.write_text("# changed profiler\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="profiler entry point changed"):
+            MODULE.verify_compiler_measurement(state, identity, "/private/rustc")
+    finally:
+        MODULE.remove_private_state(state)
+
+
+@pytest.mark.parametrize("fill_missing", [False, True])
+def test_main_seals_dangling_source_links_and_detects_new_target_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fill_missing: bool
+) -> None:
+    """Optional native links survive capture; build-time source additions invalidate it."""
+    fixture = _fake_profile_fixture(tmp_path, monkeypatch)
+    (fixture["root"] / "bridge").symlink_to("missing-native")
+    git = tmp_path / "fake-bin" / "git"
+    git.write_text(
+        git.read_text(encoding="utf-8").replace("source.rs\\0", "source.rs\\0bridge\\0"),
+        encoding="utf-8",
+    )
+    if fill_missing:
+        cargo = fixture["rustup_home"] / "toolchains" / "test" / "bin" / "cargo"
+        cargo.write_text(
+            cargo.read_text(encoding="utf-8").replace(
+                "root = pathlib.Path.cwd()\n",
+                "root = pathlib.Path.cwd()\nroot.chmod(0o700)\n"
+                "(root / 'missing-native').write_bytes(b'new native bytes')\n",
+            ), encoding="utf-8",
+        )
+    code = MODULE.main([
+        "--root", str(fixture["root"]), "--target-dir", str(fixture["target"]),
+        "--out", str(fixture["report"]), "--cargo-home", str(fixture["cargo_home"]),
+        "--rustup-home", str(fixture["rustup_home"]), "--", "build",
+    ])
+    report = json.loads(fixture["report"].read_text(encoding="utf-8"))
+    assert code == (MODULE.INPUT_DRIFT_EXIT_CODE if fill_missing else 0)
+    assert report["valid"] is (not fill_missing)
+    assert report["input"]["source"]["files"] == 4
+    assert report["result"]["returncode"] == 0
+    assert report["input_validation"]["stable"] is (not fill_missing)
+    assert (fixture["root"] / "bridge").is_symlink()
+    assert not (fixture["root"] / "missing-native").exists()
+
+
+@pytest.mark.parametrize("field", ["source", "profile", "manifest", "feature", "kind"])
+def test_artifact_unit_rejects_incomplete_identity(field: str) -> None:
+    message = {
+        "reason": "compiler-artifact", "package_id": "workspace#fixture@1.0.0",
+        "manifest_path": "/source/Cargo.toml",
+        "target": {"src_path": "/source/lib.rs", "name": "fixture", "kind": ["lib"], "crate_types": ["lib"]},
+        "profile": {"opt_level": "0", "debuginfo": 0, "debug_assertions": True, "overflow_checks": True, "test": False},
+        "features": [],
+    }
+    if field == "source":
+        del message["target"]["src_path"]
+    elif field == "kind":
+        message["target"]["kind"] = []
+    elif field == "profile":
+        del message["profile"]["overflow_checks"]
+    elif field == "feature":
+        message["features"] = None
+    else:
+        del message["manifest_path"]
+    assert MODULE.artifact_unit(message) is None

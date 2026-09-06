@@ -36,14 +36,14 @@ network_id = NetworkId.parse(
 )
 instruction = Instruction.register_domain("wonderland")
 
-client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
-envelope, status = client.build_and_submit_transaction(
-    network_id=network_id,
-    authority=authority,
-    private_key=pair.private_key,
-    instructions=[instruction],
-    wait=True,
-)
+with ToriiClient("http://127.0.0.1:8080", auth_token="dev-token") as client:
+    envelope, status = client.build_and_submit_transaction(
+        network_id=network_id,
+        authority=authority,
+        private_key=pair.private_key,
+        instructions=[instruction],
+        wait=True,
+    )
 
 print("Final status:", status)
 
@@ -64,6 +64,24 @@ client = create_torii_client(
     resolved_config=resolved,
 )
 ```
+
+### First-release defaults
+
+- Torii base URLs are origins, request paths stay on that origin, and redirects
+  are disabled. Automatic retries are limited to idempotent methods by default;
+  mutation helpers dispatch once.
+- A client owns and closes only the HTTP session it creates. Prefer the context
+  manager form shown above. Caller-supplied sessions remain caller-owned.
+- Public configuration and network-time reads return validated dataclasses from
+  their unsuffixed method names. There are no duplicate raw/`*_typed` variants
+  for those routes; use the generic transport only when raw JSON is truly
+  required.
+- Resolved configuration and transaction configuration snapshot mutable inputs.
+  Authentication tokens and private key material are omitted from object
+  representations, and private keys require exact immutable bytes or canonical
+  lowercase hex.
+- The wheel ships a `py.typed` marker, so type checkers consume the SDK's inline
+  annotations without extra stub packages.
 
 Account onboarding uses a dedicated credential in addition to any global
 `X-API-Token`. V1 is explicitly plan, prepare, then exact submit; there is no
@@ -147,11 +165,53 @@ mantissa plus an explicit scale. Higher-level ledger helpers additionally
 accept `Decimal` because it is a lossless host value and normalize it before
 calling the codec.
 
-## Kagemusha lifecycle support
+## KAGEMUSHA
 
-The Python package intentionally exposes no offline-spend lifecycle. The first-release typed
-Kagemusha lifecycle is supported by the Swift and JVM SDKs; Python keeps only generic online
-transaction, query, and privacy primitives.
+`Kagemusha` is the sole typed Python codec/orchestration namespace for the
+KAGEMUSHA wire-version-1 request, committed payment, and acknowledgement
+exchange. A request binds one positive exact amount and the recipient's
+hardware-backed encryption key. A committed payment binds the request, sender
+before/after commitments, unique credit ID, trusted commit time, encrypted
+credit, hardware commit certificate, and constant-size recursive
+`PaymentProof`. The acknowledgement binds the request and payment to a durable
+inbox receipt. Payment and redemption values expose nullifiers and hiding
+commitments, never private balance openings or replay paths. The namespace also
+covers mint authorization/credit binding, terminal redemption vouchers, and
+typed encrypted-credit opening, AAD, and envelope values.
+
+IPM1 uses only the frozen one-byte tags `1..=3` exposed by
+`Kagemusha.ipm1_payload_kinds`; `decode_ipm1_payload` is the single generic
+peer-message decoder. Canonical Norito and unpadded `kgm1:` parsers enforce
+per-message bounds before decoding. `validate_complete_exchange` enforces the
+sole complete three-message bound of 9,211 raw / 12,288 `kgm1:` text bytes.
+There is no intent/ticket decoder, compatibility alias, or alternate text
+prefix.
+
+Monetary proving, signing, encryption, decryption, and secure-device state
+changes remain native-only. Python exposes no public predecessor/successor
+state links and no software money-crypto fallback.
+
+`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 16 at
+the host/native boundary. `encode_device_mint_stage_command_shape` and
+`decode_device_mint_stage_command_shape_exact` validate the exact nested
+authorization and mint-credit archives, their derived credit ID, and their
+public bindings. The command is bounded to 65,536 bytes, each nested archive
+to 7,936 bytes, and the result to 128 bytes. Result codecs optionally bind the
+credit ID to a supplied command. They do not execute a device transition or
+authenticate a result; the qualified native response authenticator remains
+mandatory, and private openings and complete Guard certificates stay native.
+
+`Kagemusha.build_top_up_instruction(request)` builds the sole
+`iroha.kagemusha.v1.top_up` instruction. Its `to_instruction()` method crosses
+the standard native `Instruction` boundary so the payer can include exactly
+that instruction in a normal signed transaction; `encode_top_up_instruction`
+and `decode_top_up_instruction` provide the exact framed `InstructionBox`
+codec. The embedded request ceiling is 16 KiB, which accommodates the complete
+paired mint-authorization proof. No unsigned or server-signed top-up envelope
+exists. `Kagemusha.top_up_instruction_wire_id` is the exact
+`iroha.kagemusha.v1.top_up` registry ID. The standard `TransactionBuilder`
+signature-binds `QueuePlanSynced`; KAGEMUSHA top-ups must not use ordinary
+queue admission.
 
 
 ## Native Privacy Bridge
@@ -167,13 +227,13 @@ local `privacy_capabilities_v1()` alias, generic request/build/verify
 dispatcher, or legacy algorithm alias.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
-`zk-ace-pq-authorization-v0`, `anonymous-pgc-k-out-of-n-v1`,
+`zk-ace-pq-authorization-v1`, `anonymous-pgc-k-out-of-n-v1`,
 `verange-transparent-range-v1`, `iroha-zk-ams-v1`,
-`vega-existing-credential-zk-v0`, `iroha-zk-x509-stark-p256-v0`,
-`iroha-jindo-polynomial-commitment-v0`,
+`vega-existing-credential-zk-v1`, `iroha-zk-x509-stark-p256-v1`,
+`iroha-jindo-polynomial-commitment-v1`,
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
-`pq-masp-stark-v0`. The parser rejects unknown fields, duplicate JSON keys,
+`pq-masp-stark-v1`. The parser rejects unknown fields, duplicate JSON keys,
 non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
 and malformed nested policy or profile data.
 
@@ -190,12 +250,14 @@ same authenticated process boundary. Call
 `import_private_settlement_credential()` with an owner-only native `APWB`
 file, then `prove_private_settlement()` with only canonical public Norito
 manifest, fixed-shape statement, encrypted audit capsule, governed audit
-policy, genesis hash, and height. Python receives the public statement,
-self-verified proof, encrypted capsule, and binding digests; note spending
-secrets, audit plaintext, and membership paths are decoded and wiped in Rust
-and never cross the Python API or worker pipe. Settlement handles occupy a
-separate opaque namespace and are consumed even when terminal native proving
-fails.
+policy, genesis hash, authoritative height, and the public successor root from
+the wallet's authenticated accumulator view. Rust derives the complete
+fixed-shape delta after self-verifying the proof. Python receives only canonical
+Norito statement, proof, delta, encrypted capsule, and binding digests; note
+spending secrets, audit plaintext, and membership paths are decoded and wiped
+in Rust and never cross the Python API or worker pipe. Settlement handles
+occupy a separate opaque namespace and are consumed even when terminal native
+proving fails.
 
 Reserve-backed ZK-ACE, Orchard, and private-IVM actions always bind one exact
 transparent balance bucket. Their worker-owned public action requires
@@ -405,7 +467,7 @@ equality of all 17 verifying-key record fields. Register/update fail before the
 request when `local_signing_context` is absent; there is no label, bare-hash,
 per-call, or server-derived fallback.
 
-Kagemusha-capable assets can be registered without shelling out to JavaScript
+Confidential assets can be registered without shelling out to JavaScript
 tooling. The `register_fee_payment` below is the recommended intent returned by
 `/v1/fees/quote` for that exact unsigned payload:
 
@@ -420,13 +482,9 @@ signing_client.register_zk_asset_and_wait(
 )
 ```
 
-The first-release SDK exposes no generic confidential transfer or withdrawal
-instruction. Public-to-confidential ingress and public redemption use the
-proof-bound Kagemusha V4 top-up/redemption protocol so escrow provenance and
-drawdown remain inseparable from settlement. Asset registration binds only the
-optional shield and unshield verifier roles: `vk_shield` names the Kagemusha
-top-up verifier, and `vk_unshield` names its redemption verifier. Kagemusha
-owns its global transfer-v2 verifier independently.
+Asset registration binds the optional confidential shield and unshield
+verifier roles. KAGEMUSHA V1 uses its own reserve-backed mint-fold and
+redemption-voucher protocol rather than those confidential-asset instructions.
 
 ## Dataspace lifecycle helpers
 
@@ -1727,6 +1785,7 @@ from iroha_python import (
     create_torii_client,
     GovernanceReferendumResult,
     GovernanceTally,
+    ToriiCanonicalRequestAuth,
 )
 
 client = create_torii_client(
@@ -1734,23 +1793,33 @@ client = create_torii_client(
     auth_token="admin-token",
     api_token="torii-token",
 )
+canonical_auth = ToriiCanonicalRequestAuth(
+    network_id=exact_network_id,
+    account_id=canonical_i105_account_id,
+    signer=wallet.sign,
+)
 
 client.set_protected_namespaces(["apps", "system"])
 # Namespace labels are exact printable-ASCII tokens; whitespace and non-ASCII
 # aliases are rejected before dispatch rather than trimmed.
-protected = client.get_protected_namespaces()
+protected = client.get_protected_namespaces(canonical_auth=canonical_auth)
 governed_contract = client.get_governance_contract_typed(
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    canonical_auth=canonical_auth,
 )
-council = client.get_governance_council_current()
-audit = client.get_governance_council_audit(epoch=42)
-proposal = client.get_governance_proposal_typed("ab" * 32)
-referendum = client.get_governance_referendum_typed("ref-1")
-tally = client.get_governance_tally_typed("ref-1")
+proposal = client.get_governance_proposal_typed(
+    "ab" * 32, canonical_auth=canonical_auth
+)
+referendum = client.get_governance_referendum_typed(
+    "ref-1", canonical_auth=canonical_auth
+)
+tally = client.get_governance_tally_typed("ref-1", canonical_auth=canonical_auth)
 assert proposal.found is False
 assert referendum == GovernanceReferendumResult(found=False, referendum=None)
-locks = client.get_governance_locks_typed("ref-1")
-unlock_stats_typed = client.get_governance_unlock_stats_typed()
+locks = client.get_governance_locks_typed("ref-1", canonical_auth=canonical_auth)
+unlock_stats_typed = client.get_governance_unlock_stats_typed(
+    canonical_auth=canonical_auth
+)
 print("Referendum found:", referendum.found)
 print("Aye votes:", tally.approve)
 print("Lock owners:", list(locks.locks))
@@ -1825,10 +1894,10 @@ peers = operator_client.list_peers_typed()
 for peer in peers:
     print(peer.address, peer.id.public_key, peer.metadata)
 
-now = client.get_time_now_typed()
+now = client.get_time_now()
 print("cluster time:", now.now_ms, "offset", now.offset_ms)
 
-status = operator_client.get_time_status_typed()
+status = operator_client.get_time_status()
 for sample in status.samples:
     print(sample.peer, sample.last_offset_ms, sample.last_rtt_ms, sample.count)
 print("RTT buckets:", status.rtt.buckets)
@@ -1922,31 +1991,15 @@ diagnostic cap rather than materializing an unbounded registry. Keep the
 operator key runtime-only; the Kaigi SSE feed retains its separate streaming
 authentication contract.
 
-For configuration changes, the client now mirrors the `/v1/configuration` contract so
-admin scripts can stage updates without hand-editing JSON blobs. For example:
-
-```python
-# Update gossip fan-out/intervals while preserving the existing logger/queue/gas sections.
-client.set_network_gossip_config(
-    block_gossip_size=8,
-    block_gossip_period_ms=200,
-    transaction_gossip_size=32,
-    transaction_gossip_period_ms=75,
-)
-
-# Resize the transaction queue deterministically.
-client.set_queue_capacity(capacity=512)
-```
-
-Both helpers fetch the latest configuration, reuse unchanged sections for parity evidence,
-and raise `ValueError` when invalid parameters are supplied, keeping
-admin-surface updates reproducible.
+`/v1/configuration` is a read-only diagnostic snapshot. Runtime configuration
+changes require editing the node configuration and restarting the node, so the
+client intentionally exposes no mutation helper.
 
 Configuration snapshots also expose the active Norito-RPC transport policy without
 requiring callers to parse raw JSON:
 
 ```python
-snapshot = client.get_configuration_typed()
+snapshot = client.get_configuration()
 transport = snapshot.transport
 if transport and transport.norito_rpc:
     print("Norito-RPC stage:", transport.norito_rpc.stage)
@@ -2169,20 +2222,25 @@ integration`.
 ## Norito RPC helper
 
 Use `NoritoRpcClient` to call Torii endpoints that speak the Norito RPC surface.
-The helper wraps `requests.Session`, automatically attaches Norito headers, and
-shares retry/auth configuration with the HTTP client.
+The helper is a bounded binary facade over the same fail-closed transport as
+`ToriiClient`. It automatically attaches Norito headers, rejects cross-origin
+targets and redirects, disables automatic retries, and closes every response.
 
 ```python
 from iroha_python.norito_rpc import NoritoRpcClient, NoritoRpcConfig
 
-config = NoritoRpcConfig(base_url="http://127.0.0.1:8080")
+config = NoritoRpcConfig(
+    base_url="http://127.0.0.1:8080",
+    max_response_bytes=8 * 1024 * 1024,
+)
 with NoritoRpcClient(config) as rpc:
     response_bytes = rpc.call("/v1/pipeline/transactions", payload_bytes)
 ```
 
-Override headers, query parameters, or target URLs per call via keyword
-arguments. The pytest suite (`tests/test_norito_rpc.py`) provides additional
-usage examples.
+Callers may supply non-authentication headers and query parameters, but every
+route must be an origin-relative path. Pass bearer and API tokens explicitly
+on `NoritoRpcConfig`; they are redacted from its representation. The pytest
+suite (`tests/norito_rpc_test.py`) provides additional usage examples.
 
 ### Norito RPC smoke tests
 
@@ -2422,10 +2480,11 @@ rejected before dispatch.
 ## Configuration & overrides
 
 `resolve_torii_client_config` keeps Python clients aligned with the operational
-policy embedded in `iroha_config`. It merges (1) the parsed config file, (2)
-developer overrides supplied via environment variables, and (3) inline overrides
-passed directly to the resolver/`create_torii_client`. The following environment
-variables are available for local tweaking:
+policy embedded in `iroha_config`. It merges a parsed config file with explicit
+inline overrides. Ambient process environment is deliberately ignored: pass an
+`env` mapping when a development tool intentionally opts into environment
+configuration. This keeps tests and production startup deterministic. The
+following keys are recognized in that explicit mapping:
 
 | Variable | Purpose |
 |----------|---------|
@@ -2440,7 +2499,8 @@ variables are available for local tweaking:
 | `IROHA_TORII_API_TOKEN` | Default `X-API-Token` header |
 
 Environment overrides are meant for development convenience; production nodes
-should rely on the canonical `iroha_config`.
+should rely on the canonical `iroha_config`. Explicit keyword arguments passed
+to `create_torii_client` take precedence over a resolved configuration.
 
 The test harness automatically loads this library when the file is present, so
 no environment variables need to be exported.
@@ -2514,6 +2574,10 @@ no environment variables need to be exported.
 - Surface pipeline recovery sidecars (`/v1/pipeline/recovery/{height}`), Sumeragi evidence listing/counting,
   and pipeline/witness event filters with streaming helpers so Python operators can monitor ledger history
   without reimplementing the Rust toolchain.
+  Evidence reads use the closed first-release `SumeragiV2Equivocation` shape,
+  require a non-null consensus admission height and an exact penalty lifecycle,
+  reject missing, extra, or retired response fields, and stream responses under
+  a 1 KiB count ceiling and 1 MiB JSON-list ceiling.
 - Extend the Torii client with transaction submission/status helpers so signed
   envelopes can be delivered directly to `/v1/pipeline/transactions`.
 - Provide a `submit_transaction_envelope_and_wait` helper that submits a signed

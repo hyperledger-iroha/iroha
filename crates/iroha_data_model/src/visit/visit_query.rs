@@ -124,6 +124,8 @@ fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_sorafs_pop_revocation_by_nonce_commitment(FindSorafsPopRevocationByNonceCommitment),
         visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence),
         visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus),
+        visit_find_sorafs_citizen_bond_by_serial_commitment(FindSorafsCitizenBondBySerialCommitment),
+        visit_find_sorafs_citizen_bond_snapshot(FindSorafsCitizenBondSnapshot),
         visit_find_sorafs_pin_manifest(FindSorafsPinManifest),
         visit_find_sorafs_pin_manifests(FindSorafsPinManifests),
         visit_find_sorafs_repair_task(FindSorafsRepairTask),
@@ -442,6 +444,12 @@ macro_rules! query_visitors {
             visit_find_sorafs_pop_registry_status(
                 &$crate::query::sorafs::prelude::FindSorafsPopRegistryStatus
             ),
+            visit_find_sorafs_citizen_bond_by_serial_commitment(
+                &$crate::query::sorafs::prelude::FindSorafsCitizenBondBySerialCommitment
+            ),
+            visit_find_sorafs_citizen_bond_snapshot(
+                &$crate::query::sorafs::prelude::FindSorafsCitizenBondSnapshot
+            ),
             visit_find_sorafs_pin_manifest(
                 &$crate::query::sorafs::prelude::FindSorafsPinManifest
             ),
@@ -662,6 +670,8 @@ mod tests {
             SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_) => {}
             SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
             SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
+            SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_) => {}
+            SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {}
             SingularQueryBox::FindSorafsPinManifest(_) => {}
             SingularQueryBox::FindSorafsPinManifests(_) => {}
             SingularQueryBox::FindSorafsRepairTask(_) => {}

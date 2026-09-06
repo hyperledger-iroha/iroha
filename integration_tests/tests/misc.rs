@@ -3,8 +3,8 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
-use iroha_telemetry::metrics::Status;
 use iroha_test_network::*;
+use iroha_torii_shared::status::Status;
 use sandbox::start_network_async_or_skip;
 use tokio::task::spawn_blocking;
 fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {

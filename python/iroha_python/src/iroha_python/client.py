@@ -10,7 +10,6 @@ import hmac
 import json
 import logging
 import math
-import os
 import re
 import secrets
 import time
@@ -19,7 +18,7 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -41,6 +40,9 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
 from blake3 import blake3
+from iroha_torii_client.canonical_request_v1 import (
+    require_zero_retry_adapter as _require_zero_retry_adapter,
+)
 from iroha_torii_client.canonical_transport import (
     CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
 )
@@ -56,7 +58,7 @@ from iroha_torii_client.client import (
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineStatus,
+    KagemushaReadinessV1,
     SorafsOrderbookSubmissionAmbiguousError,
     SorafsOrderbookSubmissionIdentity,
     SorafsOrderbookSubmissionReceipt,
@@ -121,6 +123,9 @@ from iroha_torii_client.client import (
 from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
+from iroha_torii_client.client import (
+    ToriiLocalSigningContext as _BaseLocalSigningContext,
+)
 from iroha_torii_client.client_status_models import (
     TransportConfig,
     TransportNoritoRpcConfig,
@@ -128,9 +133,20 @@ from iroha_torii_client.client_status_models import (
 )
 from iroha_torii_client.governance_proposals import (
     GovernanceCanonicalObject,
+    GovernanceContractLifecycleAction,
+    GovernanceContractLifecycleActionKind,
+    GovernanceContractLifecycleActionPayload,
+    GovernanceContractLifecycleActivate,
+    GovernanceContractLifecycleDeactivate,
+    GovernanceContractLifecycleEmergencyHoldRetrospective,
+    GovernanceContractLifecycleOfferOwnership,
+    GovernanceGlobalDataTriggerPermissionAction,
     GovernanceManifestProvenance,
     GovernanceMusubiActionKind,
+    GovernanceProposalContractEmergencyHold,
+    GovernanceProposalContractLifecycleGovernance,
     GovernanceProposalDeployContract,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
     GovernanceProposalLifecycleStatus,
@@ -392,6 +408,7 @@ _ROUTE_SECRET_HEADER_NAMES = frozenset(
         "x-auth-token",
     }
 )
+_HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 
 def _require_account_onboarding_token(value: Any) -> str:
@@ -404,6 +421,40 @@ def _require_account_onboarding_token(value: Any) -> str:
             "without spaces or normalization"
         )
     return value
+
+
+def _require_route_token(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a string")
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{context} must contain printable ASCII without spaces") from exc
+    if not 1 <= len(encoded) <= 4096 or any(byte < 0x21 or byte > 0x7E for byte in encoded):
+        raise ValueError(
+            f"{context} must contain 1..4096 printable ASCII bytes without spaces"
+        )
+    return value
+
+
+def _copy_http_headers(headers: Mapping[str, Any], context: str) -> Dict[str, str]:
+    if not isinstance(headers, Mapping):
+        raise TypeError(f"{context} must be a mapping")
+    result: Dict[str, str] = {}
+    normalized_names: set[str] = set()
+    for name, value in headers.items():
+        if not isinstance(name, str) or _HTTP_HEADER_NAME_RE.fullmatch(name) is None:
+            raise ValueError(f"{context} contains an invalid HTTP header name")
+        lower_name = name.lower()
+        if lower_name in normalized_names:
+            raise ValueError(f"{context} contains duplicate HTTP header {name!r}")
+        if not isinstance(value, str):
+            raise TypeError(f"{context}[{name!r}] must be a string")
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+            raise ValueError(f"{context}[{name!r}] must not contain control characters")
+        normalized_names.add(lower_name)
+        result[name] = value
+    return result
 
 
 def _set_exact_header(headers: MutableMapping[str, str], name: str, value: str) -> None:
@@ -1965,17 +2016,6 @@ def _normalize_exact_any_i105_account_id(value: Any, context: str) -> str:
     return literal
 
 
-def _normalize_string_list(value: Any, context: str) -> List[str]:
-    if not isinstance(value, (list, tuple)):
-        raise TypeError(f"{context} must be an array of strings")
-    normalized: List[str] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, str):
-            raise TypeError(f"{context}[{index}] must be a string")
-        normalized.append(item)
-    return normalized
-
-
 def _bytes_like_to_hex(value: Any, context: str) -> str:
     if isinstance(value, (bytes, bytearray, memoryview)):
         return bytes(value).hex()
@@ -2267,62 +2307,6 @@ def _normalize_space_directory_manifest_payload(
     return _parse_space_directory_manifest(manifest, context=context)
 
 
-def _normalize_authority_credentials(
-    payload: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, str]:
-    if not isinstance(payload, Mapping):
-        raise TypeError(f"{context} must be an object")
-    _reject_alias_keys(
-        payload,
-        {
-            "account": "authority",
-            "privateKey": "private_key",
-            "privateKeyMultihash": "private_key_multihash",
-            "privateKeyHex": "private_key_hex",
-            "privateKeyBytes": "private_key_bytes",
-            "privateKeySeed": "private_key_seed",
-            "privateKeyAlgorithm": "private_key_algorithm",
-        },
-        context=context,
-    )
-    authority_raw = payload.get("authority")
-    authority = _require_non_empty_string(authority_raw, f"{context}.authority")
-    private_key_literal = payload.get("private_key")
-    if private_key_literal is not None:
-        private_key = _require_non_empty_string(private_key_literal, f"{context}.private_key")
-    else:
-        multihash = payload.get("private_key_multihash")
-        if multihash is not None:
-            private_key = _require_non_empty_string(multihash, f"{context}.private_key_multihash")
-        else:
-            hex_literal = payload.get("private_key_hex")
-            bytes_literal = payload.get("private_key_bytes") or payload.get("private_key_seed")
-            if hex_literal is None and bytes_literal is None:
-                raise TypeError(f"{context}.private_key is required")
-            if hex_literal is not None:
-                hex_value = _normalize_hex_string(
-                    hex_literal,
-                    f"{context}.private_key_hex",
-                    expected_length=64,
-                )
-            else:
-                hex_value = _bytes_like_to_hex(
-                    bytes_literal,
-                    f"{context}.private_key_bytes",
-                )
-                if len(hex_value) != 64:
-                    raise ValueError(f"{context}.private_key_bytes must contain 32 bytes")
-            algorithm = payload.get("private_key_algorithm") or "ed25519"
-            algorithm_literal = _require_non_empty_string(
-                algorithm,
-                f"{context}.private_key_algorithm",
-            )
-            private_key = f"{algorithm_literal}:{hex_value.lower()}"
-    return {"authority": authority, "private_key": private_key}
-
-
 def _normalize_publish_space_directory_manifest_request(
     request: Mapping[str, Any],
 ) -> Dict[str, Any]:
@@ -2466,18 +2450,6 @@ def _normalize_base64_payload(
     if isinstance(source, (bytes, bytearray, memoryview)):
         return base64.b64encode(bytes(source)).decode("ascii")
     raise TypeError(f"{context} must be bytes or a base64 string")
-
-
-_MISSING = object()
-
-
-def _first_present(source: Mapping[str, Any], *keys: str) -> Any:
-    present = [key for key in keys if key in source and source[key] is not None]
-    if len(present) > 1:
-        raise TypeError(f"ambiguous aliases: {', '.join(present)}")
-    if not present:
-        return _MISSING
-    return source[present[0]]
 
 
 def _normalize_sorafs_reputation_snapshot_id_hex(value: Any, context: str) -> str:
@@ -4283,7 +4255,7 @@ _CRYPTO_MODULE: Optional[ModuleType] = None
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W(0[1-9]|[1-4][0-9]|5[0-3])$")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ResolvedToriiClientConfig:
     """Fully merged Torii client configuration."""
 
@@ -4294,10 +4266,62 @@ class ResolvedToriiClientConfig:
     max_backoff: float
     retry_statuses: frozenset[int]
     retry_methods: frozenset[str]
-    default_headers: Dict[str, str]
-    auth_token: Optional[str]
-    api_token: Optional[str]
+    default_headers: Mapping[str, str]
+    auth_token: Optional[str] = field(repr=False, compare=False)
+    api_token: Optional[str] = field(repr=False, compare=False)
     sorafs_alias_policy: SorafsAliasPolicy
+
+    def __post_init__(self) -> None:
+        timeout = _require_positive_finite_float(self.timeout, "timeout")
+        max_retries = _require_retry_count(self.max_retries)
+        backoff_initial = _require_non_negative_finite_float(
+            self.backoff_initial,
+            "backoff_initial",
+        )
+        backoff_multiplier = _require_positive_finite_float(
+            self.backoff_multiplier,
+            "backoff_multiplier",
+        )
+        max_backoff = _require_non_negative_finite_float(
+            self.max_backoff,
+            "max_backoff",
+        )
+        if backoff_multiplier < 1.0:
+            raise ValueError("backoff_multiplier must be at least 1")
+        if max_backoff < backoff_initial:
+            raise ValueError("max_backoff must be greater than or equal to backoff_initial")
+        object.__setattr__(self, "timeout", timeout)
+        object.__setattr__(self, "max_retries", max_retries)
+        object.__setattr__(self, "backoff_initial", backoff_initial)
+        object.__setattr__(self, "backoff_multiplier", backoff_multiplier)
+        object.__setattr__(self, "max_backoff", max_backoff)
+        object.__setattr__(
+            self,
+            "retry_statuses",
+            _normalize_retry_statuses(self.retry_statuses),
+        )
+        object.__setattr__(
+            self,
+            "retry_methods",
+            _normalize_retry_methods(self.retry_methods),
+        )
+        default_headers = _copy_http_headers(self.default_headers, "default_headers")
+        _reject_reserved_default_headers(default_headers, "default_headers")
+        object.__setattr__(self, "default_headers", MappingProxyType(default_headers))
+        if self.auth_token is not None:
+            object.__setattr__(
+                self,
+                "auth_token",
+                _require_route_token(self.auth_token, "auth_token"),
+            )
+        if self.api_token is not None:
+            object.__setattr__(
+                self,
+                "api_token",
+                _require_route_token(self.api_token, "api_token"),
+            )
+        if not isinstance(self.sorafs_alias_policy, SorafsAliasPolicy):
+            raise TypeError("sorafs_alias_policy must be a SorafsAliasPolicy")
 
 
 @dataclass(frozen=True)
@@ -4800,13 +4824,84 @@ class ExplorerRwasPage:
 
 
 @dataclass(frozen=True)
+class IsoStatusHistoryRecord:
+    """One immutable transition retained in an ISO schema-V3 record."""
+
+    status: str
+    pacs002_code: str
+    updated_at_ms: Optional[int]
+    detail: Optional[str]
+    reason_code: Optional[str]
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> "IsoStatusHistoryRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be a JSON object")
+        status = _normalize_iso_status(payload.get("status"), f"{context}.status")
+        pacs002_code = _normalize_pacs002_code(
+            payload.get("pacs002_code"),
+            f"{context}.pacs002_code",
+        )
+        if pacs002_code is None:
+            raise ValueError(f"{context}.pacs002_code must be present")
+        updated_at_field = payload.get("updated_at_ms")
+        updated_at_ms = (
+            None
+            if updated_at_field is None
+            else _normalize_positive_int(
+                updated_at_field,
+                f"{context}.updated_at_ms",
+                allow_zero=True,
+            )
+        )
+        return cls(
+            status=status,
+            pacs002_code=pacs002_code,
+            updated_at_ms=updated_at_ms,
+            detail=_normalize_iso_optional_string(
+                payload.get("detail"),
+                f"{context}.detail",
+                allow_empty=True,
+            ),
+            reason_code=_normalize_iso_optional_string(
+                payload.get("reason_code"),
+                f"{context}.reason_code",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class IsoSubmissionRecord:
-    """Normalized ISO 20022 bridge status payload."""
+    """Normalized ISO record with immutable V3 replay and policy provenance.
+
+    Torii returns the record only to its original parties or to a separately
+    configured read-only ISO audit administrator.
+    """
 
     message_id: str
     status: str
     pacs002_code: Optional[str]
     transaction_hash: Optional[str]
+    profile_id: Optional[str]
+    message_type: Optional[str]
+    business_service: Optional[str]
+    business_message_id: Optional[str]
+    uetr: Optional[str]
+    payload_hash: Optional[str]
+    reference_snapshot_id: Optional[str]
+    embedded_signature_detected: bool
+    originator_participant_id: Optional[str]
+    counterparty_participant_id: Optional[str]
+    admitting_participant_id: Optional[str]
+    admitting_operator_key: Optional[str]
+    pinned_profile_id: Optional[str]
+    pinned_signature_policy: Optional[str]
+    status_history: Tuple[IsoStatusHistoryRecord, ...]
     hold_reason_code: Optional[str]
     change_reason_codes: Tuple[str, ...]
     rejection_reason_code: Optional[str]
@@ -4817,6 +4912,26 @@ class IsoSubmissionRecord:
     target_account_address: Optional[str]
     asset_definition_id: Optional[str]
     asset_id: Optional[str]
+    settlement_amount: Optional[str]
+    settlement_currency: Optional[str]
+    settlement_date: Optional[str]
+    settlement_quantity: Optional[str]
+    settlement_movement_type: Optional[str]
+    settlement_payment_type: Optional[str]
+    security_instrument_id: Optional[str]
+    collateral_obligation_id: Optional[str]
+    collateral_original_amount: Optional[str]
+    collateral_original_currency: Optional[str]
+    collateral_original_instrument_id: Optional[str]
+    collateral_substitute_amount: Optional[str]
+    collateral_substitute_currency: Optional[str]
+    collateral_substitute_instrument_id: Optional[str]
+    collateral_effective_date: Optional[str]
+    collateral_substitution_type: Optional[str]
+    collateral_haircut: Optional[str]
+    collateral_reason_code: Optional[str]
+    plan_execution_order: Optional[str]
+    plan_atomicity: Optional[str]
     detail: Optional[str]
     updated_at_ms: Optional[int]
 
@@ -4839,6 +4954,71 @@ class IsoSubmissionRecord:
             record.get("transaction_hash"),
             f"{context}.transaction_hash",
         )
+        profile_id = _normalize_iso_optional_string(
+            record.get("profile_id"),
+            f"{context}.profile_id",
+        )
+        message_type = _normalize_iso_optional_string(
+            record.get("message_type"),
+            f"{context}.message_type",
+        )
+        business_service = _normalize_iso_optional_string(
+            record.get("business_service"),
+            f"{context}.business_service",
+        )
+        business_message_id = _normalize_iso_optional_string(
+            record.get("business_message_id"),
+            f"{context}.business_message_id",
+        )
+        uetr = _normalize_iso_optional_string(record.get("uetr"), f"{context}.uetr")
+        payload_hash = _normalize_iso_optional_string(
+            record.get("payload_hash"),
+            f"{context}.payload_hash",
+        )
+        reference_snapshot_id = _normalize_iso_optional_string(
+            record.get("reference_snapshot_id"),
+            f"{context}.reference_snapshot_id",
+        )
+        embedded_signature_detected = record.get("embedded_signature_detected", False)
+        if not isinstance(embedded_signature_detected, bool):
+            raise TypeError(f"{context}.embedded_signature_detected must be a boolean")
+        originator_participant_id = _normalize_iso_optional_string(
+            record.get("originator_participant_id"),
+            f"{context}.originator_participant_id",
+        )
+        counterparty_participant_id = _normalize_iso_optional_string(
+            record.get("counterparty_participant_id"),
+            f"{context}.counterparty_participant_id",
+        )
+        admitting_participant_id = _normalize_iso_optional_string(
+            record.get("admitting_participant_id"),
+            f"{context}.admitting_participant_id",
+        )
+        admitting_operator_key = _normalize_iso_optional_string(
+            record.get("admitting_operator_key"),
+            f"{context}.admitting_operator_key",
+        )
+        pinned_profile_id = _normalize_iso_optional_string(
+            record.get("pinned_profile_id"),
+            f"{context}.pinned_profile_id",
+        )
+        pinned_signature_policy = _normalize_iso_optional_string(
+            record.get("pinned_signature_policy"),
+            f"{context}.pinned_signature_policy",
+        )
+        status_history_field = record.get("status_history")
+        if status_history_field is None:
+            status_history: Tuple[IsoStatusHistoryRecord, ...] = ()
+        elif isinstance(status_history_field, list):
+            status_history = tuple(
+                IsoStatusHistoryRecord.from_payload(
+                    entry,
+                    context=f"{context}.status_history[{index}]",
+                )
+                for index, entry in enumerate(status_history_field)
+            )
+        else:
+            raise TypeError(f"{context}.status_history must be an array")
         hold_reason_code = _normalize_iso_optional_string(
             record.get("hold_reason_code"),
             f"{context}.hold_reason_code",
@@ -4873,6 +5053,34 @@ class IsoSubmissionRecord:
             f"{context}.asset_definition_id",
         )
         asset_id = _normalize_iso_optional_string(record.get("asset_id"), f"{context}.asset_id")
+        v3_status_fields = {
+            field_name: _normalize_iso_optional_string(
+                record.get(field_name),
+                f"{context}.{field_name}",
+            )
+            for field_name in (
+                "settlement_amount",
+                "settlement_currency",
+                "settlement_date",
+                "settlement_quantity",
+                "settlement_movement_type",
+                "settlement_payment_type",
+                "security_instrument_id",
+                "collateral_obligation_id",
+                "collateral_original_amount",
+                "collateral_original_currency",
+                "collateral_original_instrument_id",
+                "collateral_substitute_amount",
+                "collateral_substitute_currency",
+                "collateral_substitute_instrument_id",
+                "collateral_effective_date",
+                "collateral_substitution_type",
+                "collateral_haircut",
+                "collateral_reason_code",
+                "plan_execution_order",
+                "plan_atomicity",
+            )
+        }
         detail = _normalize_iso_optional_string(
             record.get("detail"),
             f"{context}.detail",
@@ -4892,6 +5100,21 @@ class IsoSubmissionRecord:
             status=status,
             pacs002_code=pacs002_code,
             transaction_hash=transaction_hash,
+            profile_id=profile_id,
+            message_type=message_type,
+            business_service=business_service,
+            business_message_id=business_message_id,
+            uetr=uetr,
+            payload_hash=payload_hash,
+            reference_snapshot_id=reference_snapshot_id,
+            embedded_signature_detected=embedded_signature_detected,
+            originator_participant_id=originator_participant_id,
+            counterparty_participant_id=counterparty_participant_id,
+            admitting_participant_id=admitting_participant_id,
+            admitting_operator_key=admitting_operator_key,
+            pinned_profile_id=pinned_profile_id,
+            pinned_signature_policy=pinned_signature_policy,
+            status_history=status_history,
             hold_reason_code=hold_reason_code,
             change_reason_codes=change_reason_codes,
             rejection_reason_code=rejection_reason_code,
@@ -4902,6 +5125,7 @@ class IsoSubmissionRecord:
             target_account_address=target_account_address,
             asset_definition_id=asset_definition_id,
             asset_id=asset_id,
+            **v3_status_fields,
             detail=detail,
             updated_at_ms=updated_at_ms,
         )
@@ -5428,49 +5652,6 @@ def _configuration_snapshot_to_dict(snapshot: ConfigurationSnapshot) -> Dict[str
     return result
 
 
-def _configuration_update_payload(snapshot: ConfigurationSnapshot) -> Dict[str, Any]:
-    payload = _configuration_snapshot_to_dict(snapshot)
-    payload.pop("public_key", None)
-    payload.pop("transport", None)
-    payload.pop("confidential_gas", None)
-    return payload
-
-
-def _network_time_snapshot_to_dict(snapshot: NetworkTimeSnapshot) -> Dict[str, int]:
-    return {
-        "now": snapshot.now_ms,
-        "offset_ms": snapshot.offset_ms,
-        "confidence_ms": snapshot.confidence_ms,
-    }
-
-
-def _network_time_status_to_dict(status: NetworkTimeStatus) -> Dict[str, Any]:
-    samples = [
-        {
-            "peer": sample.peer,
-            "last_offset_ms": sample.last_offset_ms,
-            "last_rtt_ms": sample.last_rtt_ms,
-            "count": sample.count,
-        }
-        for sample in status.samples
-    ]
-    rtt: Dict[str, Any] = {
-        "buckets": [
-            {"le": bucket.upper_bound_ms, "count": bucket.count} for bucket in status.rtt_buckets
-        ],
-        "sum_ms": status.rtt_sum_ms,
-        "count": status.rtt_count,
-    }
-    payload: Dict[str, Any] = {
-        "peers": status.peers,
-        "samples": samples,
-        "rtt": rtt,
-    }
-    if status.note is not None:
-        payload["note"] = status.note
-    return payload
-
-
 @dataclass(frozen=True)
 class GovernanceReferendumResult:
     """Wrapper for `/v1/gov/referenda/{id}` responses."""
@@ -5525,33 +5706,315 @@ class GovernanceTally:
 
 
 @dataclass(frozen=True)
+class GovernanceContractEmergencyHoldRecord:
+    """Retained bounded Parliament emergency-hold projection."""
+
+    incident_digest_hex: str
+    proposal_content_id_hex: str
+    governance_attempt_id_hex: str
+    reason: str
+    imposed_at_height: int
+    expires_at_height: int
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any], *, context: str
+    ) -> "GovernanceContractEmergencyHoldRecord":
+        expected = {
+            "incident_digest_hex",
+            "proposal_content_id_hex",
+            "governance_attempt_id_hex",
+            "reason",
+            "imposed_at_height",
+            "expires_at_height",
+        }
+        if set(payload) != expected:
+            raise TypeError(f"{context} must contain exactly the first-release hold fields")
+
+        def hash_field(name: str) -> str:
+            value = payload.get(name)
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise TypeError(f"{context}.{name} must be exact lowercase 32-byte hex")
+            return value
+
+        imposed = _require_u64(
+            payload.get("imposed_at_height"),
+            f"{context}.imposed_at_height",
+        )
+        expires = _require_u64(
+            payload.get("expires_at_height"),
+            f"{context}.expires_at_height",
+        )
+        if imposed == 0:
+            raise ValueError(f"{context}.imposed_at_height must be positive")
+        if expires <= imposed:
+            raise ValueError(f"{context}.expires_at_height must follow imposed_at_height")
+        return cls(
+            incident_digest_hex=hash_field("incident_digest_hex"),
+            proposal_content_id_hex=hash_field("proposal_content_id_hex"),
+            governance_attempt_id_hex=hash_field("governance_attempt_id_hex"),
+            reason=_require_exact_non_empty_string(payload.get("reason"), f"{context}.reason"),
+            imposed_at_height=imposed,
+            expires_at_height=expires,
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycleRecord:
+    """Complete retained ownership and lifecycle projection for one contract."""
+
+    version: int
+    origin: str
+    origin_account: str
+    origin_proposal_content_id_hex: Optional[str]
+    origin_governance_attempt_id_hex: Optional[str]
+    owner: str
+    pending_owner: Optional[str]
+    parliament_delegated: bool
+    active_code_hash_hex: Optional[str]
+    revision: int
+    emergency_hold: Optional[GovernanceContractEmergencyHoldRecord]
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any], *, context: str
+    ) -> "GovernanceContractLifecycleRecord":
+        expected = {
+            "version",
+            "origin",
+            "origin_account",
+            "origin_proposal_content_id_hex",
+            "origin_governance_attempt_id_hex",
+            "owner",
+            "pending_owner",
+            "parliament_delegated",
+            "active_code_hash_hex",
+            "revision",
+            "emergency_hold",
+        }
+        if set(payload) != expected:
+            raise TypeError(f"{context} must contain exactly the first-release lifecycle fields")
+        version = _require_u64(payload.get("version"), f"{context}.version")
+        if version != 1:
+            raise ValueError(f"{context}.version must be exactly 1")
+
+        def optional_hash(name: str) -> Optional[str]:
+            value = payload.get(name)
+            if value is None:
+                return None
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise TypeError(f"{context}.{name} must be exact lowercase 32-byte hex or null")
+            return value
+
+        origin = _require_exact_non_empty_string(payload.get("origin"), f"{context}.origin")
+        if origin not in {"direct", "parliament"}:
+            raise ValueError(f"{context}.origin must be direct or parliament")
+        revision = _require_u64(payload.get("revision"), f"{context}.revision")
+        if revision == 0:
+            raise ValueError(f"{context}.revision must be positive")
+        parliament_delegated = payload.get("parliament_delegated")
+        if not isinstance(parliament_delegated, bool):
+            raise TypeError(f"{context}.parliament_delegated must be a boolean")
+        pending_owner = payload.get("pending_owner")
+        if pending_owner is not None:
+            pending_owner = _require_exact_non_empty_string(
+                pending_owner, f"{context}.pending_owner"
+            )
+        hold_value = payload.get("emergency_hold")
+        if hold_value is not None and not isinstance(hold_value, Mapping):
+            raise TypeError(f"{context}.emergency_hold must be an object or null")
+        origin_proposal_content_id_hex = optional_hash("origin_proposal_content_id_hex")
+        origin_governance_attempt_id_hex = optional_hash(
+            "origin_governance_attempt_id_hex"
+        )
+        if origin == "direct" and (
+            origin_proposal_content_id_hex is not None
+            or origin_governance_attempt_id_hex is not None
+        ):
+            raise ValueError(f"{context} direct origin must not carry Parliament identifiers")
+        if origin == "parliament" and (
+            origin_proposal_content_id_hex is None
+            or origin_governance_attempt_id_hex is None
+        ):
+            raise ValueError(
+                f"{context} Parliament origin requires both governance identifiers"
+            )
+
+        def owner(field: str) -> str:
+            value = payload.get(field)
+            if value == "parliament":
+                return "parliament"
+            return _normalize_exact_any_i105_account_id(value, f"{context}.{field}")
+
+        return cls(
+            version=version,
+            origin=origin,
+            origin_account=_normalize_exact_any_i105_account_id(
+                payload.get("origin_account"), f"{context}.origin_account"
+            ),
+            origin_proposal_content_id_hex=origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex=origin_governance_attempt_id_hex,
+            owner=owner("owner"),
+            pending_owner=None if pending_owner is None else owner("pending_owner"),
+            parliament_delegated=parliament_delegated,
+            active_code_hash_hex=optional_hash("active_code_hash_hex"),
+            revision=revision,
+            emergency_hold=(
+                GovernanceContractEmergencyHoldRecord.from_payload(
+                    hold_value, context=f"{context}.emergency_hold"
+                )
+                if hold_value is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class GovernanceContractRecord:
     """Governance binding returned by `GET /v1/gov/contracts/{contract_address}`."""
 
     found: bool
     contract_address: str
+    contract_subject_account: Optional[str]
     dataspace: Optional[str]
+    active: Optional[bool]
+    lifecycle: Optional[GovernanceContractLifecycleRecord]
+    emergency_hold_active: Optional[bool]
     code_hash_hex: Optional[str]
+    abi_hash_hex: Optional[str]
+    public_entrypoints: Optional[Tuple[str, ...]]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceContractRecord":
         if not isinstance(payload, Mapping):
             raise TypeError("governance contract payload must be an object")
-        found = bool(payload.get("found", False))
+        allowed = {
+            "found",
+            "contract_address",
+            "contract_subject_account",
+            "dataspace",
+            "active",
+            "lifecycle",
+            "emergency_hold_active",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "public_entrypoints",
+        }
+        if not {"found", "contract_address"}.issubset(payload) or set(payload) - allowed:
+            raise TypeError("governance contract payload has an incompatible first-release shape")
+        found = payload.get("found")
+        if not isinstance(found, bool):
+            raise TypeError("governance contract payload `found` must be a boolean")
         contract_address = payload.get("contract_address")
         if not isinstance(contract_address, str):
             raise TypeError("governance contract payload missing string `contract_address` field")
-        dataspace = payload.get("dataspace")
-        if dataspace is not None and not isinstance(dataspace, str):
-            raise TypeError("governance contract payload `dataspace` must be a string or null")
-        code_hash_hex = payload.get("code_hash_hex")
-        if code_hash_hex is not None and not isinstance(code_hash_hex, str):
-            raise TypeError("governance contract payload `code_hash_hex` must be a string or null")
+        active = payload.get("active")
+        if found and not isinstance(active, bool):
+            raise TypeError("governance contract payload `active` must be a boolean or null")
+        expected_fields = (
+            allowed
+            if active is True
+            else {
+                "found",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "active",
+                "lifecycle",
+                "emergency_hold_active",
+            }
+            if found
+            else {"found", "contract_address", "dataspace"}
+        )
+        if set(payload) != expected_fields:
+            raise TypeError("governance contract payload has an incompatible first-release shape")
+        contract_address = _require_exact_non_empty_string(
+            contract_address, "governance contract payload.contract_address"
+        )
+        dataspace = _require_exact_non_empty_string(
+            payload.get("dataspace"), "governance contract payload.dataspace"
+        )
+        subject = (
+            _normalize_exact_any_i105_account_id(
+                payload.get("contract_subject_account"),
+                "governance contract payload.contract_subject_account",
+            )
+            if found
+            else None
+        )
+        hold_active = payload.get("emergency_hold_active")
+        if found and not isinstance(hold_active, bool):
+            raise TypeError("governance contract payload hold state must be a boolean or null")
+        lifecycle_value = payload.get("lifecycle")
+        if lifecycle_value is not None and not isinstance(lifecycle_value, Mapping):
+            raise TypeError("governance contract payload `lifecycle` must be an object or null")
+
+        def optional_hash(name: str) -> Optional[str]:
+            value = payload.get(name)
+            if value is None:
+                return None
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise TypeError(f"governance contract payload `{name}` must be exact lowercase 32-byte hex")
+            return value
+
+        lifecycle = (
+            GovernanceContractLifecycleRecord.from_payload(
+                lifecycle_value, context="governance contract payload.lifecycle"
+            )
+            if lifecycle_value is not None
+            else None
+        )
+        code_hash_hex = optional_hash("code_hash_hex")
+        abi_hash_hex = optional_hash("abi_hash_hex")
+        entrypoints_value = payload.get("public_entrypoints")
+        if entrypoints_value is None:
+            public_entrypoints = None
+        elif isinstance(entrypoints_value, list):
+            public_entrypoints = tuple(
+                _require_exact_non_empty_string(
+                    entrypoint, f"governance contract payload.public_entrypoints[{index}]"
+                )
+                for index, entrypoint in enumerate(entrypoints_value)
+            )
+            if not public_entrypoints:
+                raise TypeError("governance contract payload.public_entrypoints must not be empty")
+            for index, entrypoint in enumerate(public_entrypoints):
+                if re.fullmatch(r"[a-z][a-z0-9_]{0,127}", entrypoint) is None:
+                    raise TypeError(
+                        "governance contract payload.public_entrypoints"
+                        f"[{index}] must be a canonical public entrypoint name"
+                    )
+            if public_entrypoints != tuple(sorted(set(public_entrypoints))):
+                raise TypeError(
+                    "governance contract payload.public_entrypoints must be sorted and unique"
+                )
+        else:
+            raise TypeError("governance contract payload `public_entrypoints` must be an array or null")
+        if found:
+            if subject is None or dataspace is None or active is None or lifecycle is None or hold_active is None:
+                raise TypeError("found governance contract payload must contain lifecycle identity and status")
+            if active:
+                if code_hash_hex is None or abi_hash_hex is None or public_entrypoints is None:
+                    raise TypeError("active governance contract payload must contain artifact fields")
+                if lifecycle.active_code_hash_hex != code_hash_hex:
+                    raise ValueError("governance lifecycle active code hash must match code_hash_hex")
+            elif lifecycle.active_code_hash_hex is not None:
+                raise TypeError(
+                    "inactive governance lifecycle must not carry an active code hash"
+                )
+            if hold_active and lifecycle.emergency_hold is None:
+                raise TypeError("active emergency-hold state requires a retained hold record")
         return cls(
             found=found,
             contract_address=contract_address,
+            contract_subject_account=subject,
             dataspace=dataspace,
+            active=active,
+            lifecycle=lifecycle,
+            emergency_hold_active=hold_active,
             code_hash_hex=code_hash_hex,
+            abi_hash_hex=abi_hash_hex,
+            public_entrypoints=public_entrypoints,
         )
 
 
@@ -9193,46 +9656,187 @@ class TriggerCompletionList:
 
 
 @dataclass(frozen=True)
-class SumeragiEvidenceRecord:
-    """Evidence record returned by `/v1/sumeragi/evidence`."""
+class SumeragiEvidencePenaltyDetails:
+    """Committed block height for an applied or cancelled penalty."""
 
-    kind: str
+    height: int
+
+
+@dataclass(frozen=True)
+class SumeragiEvidencePendingPenaltyStatus:
+    """Penalty lifecycle state for evidence awaiting a committed outcome."""
+
+    status: Literal["pending"]
+    details: None
+
+
+@dataclass(frozen=True)
+class SumeragiEvidenceAppliedPenaltyStatus:
+    """Penalty lifecycle state for evidence applied in a committed block."""
+
+    status: Literal["applied"]
+    details: SumeragiEvidencePenaltyDetails
+
+
+@dataclass(frozen=True)
+class SumeragiEvidenceCancelledPenaltyStatus:
+    """Penalty lifecycle state for evidence cancelled in a committed block."""
+
+    status: Literal["cancelled"]
+    details: SumeragiEvidencePenaltyDetails
+
+
+SumeragiEvidencePenaltyStatus = Union[
+    SumeragiEvidencePendingPenaltyStatus,
+    SumeragiEvidenceAppliedPenaltyStatus,
+    SumeragiEvidenceCancelledPenaltyStatus,
+]
+
+
+def _parse_sumeragi_evidence_penalty_status(
+    payload: Any,
+) -> SumeragiEvidencePenaltyStatus:
+    context = "sumeragi evidence penalty_status"
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be an object")
+    _require_wire_fields(
+        payload,
+        required=("status", "details"),
+        context=context,
+    )
+    status = payload["status"]
+    if not isinstance(status, str):
+        raise TypeError(f"{context}.status must be a string")
+    if status == "pending":
+        if payload["details"] is not None:
+            raise TypeError(f"{context}.details must be null when status is pending")
+        return SumeragiEvidencePendingPenaltyStatus(status="pending", details=None)
+    if status not in {"applied", "cancelled"}:
+        raise ValueError(f"{context}.status must be pending, applied, or cancelled")
+    details = payload["details"]
+    if not isinstance(details, Mapping):
+        raise TypeError(f"{context}.details must be an object")
+    _require_wire_fields(
+        details,
+        required=("height",),
+        context=f"{context}.details",
+    )
+    typed_details = SumeragiEvidencePenaltyDetails(
+        height=_require_u64(details["height"], f"{context}.details.height")
+    )
+    if status == "applied":
+        return SumeragiEvidenceAppliedPenaltyStatus(
+            status="applied",
+            details=typed_details,
+        )
+    return SumeragiEvidenceCancelledPenaltyStatus(
+        status="cancelled",
+        details=typed_details,
+    )
+
+
+@dataclass(frozen=True)
+class SumeragiEvidenceRecord:
+    """Exact first-release evidence record returned by `/v1/sumeragi/evidence`."""
+
+    kind: Literal["SumeragiV2Equivocation"]
+    class_: Literal["proposal", "phase_vote", "timeout_vote"]
+    height: int
+    view: int
+    epoch: int
+    signer: int
+    context_id: str
+    artifact_hash_1: str
+    artifact_hash_2: str
     recorded_height: int
     recorded_view: int
     recorded_ms: int
-    data: Dict[str, Any]
-    raw: Dict[str, Any]
+    consensus_admitted_height: int
+    penalty_status: SumeragiEvidencePenaltyStatus
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiEvidenceRecord":
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi evidence record must be an object")
-        kind = payload.get("kind")
-        if not isinstance(kind, str):
-            raise TypeError("sumeragi evidence record missing string `kind` field")
-        height_raw = payload.get("recorded_height")
-        view_raw = payload.get("recorded_view")
-        recorded_ms_raw = payload.get("recorded_ms")
-        if height_raw is None or view_raw is None or recorded_ms_raw is None:
-            raise TypeError("sumeragi evidence record missing timing fields")
-        try:
-            recorded_height = int(height_raw)
-            recorded_view = int(view_raw)
-            recorded_ms = int(recorded_ms_raw)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi evidence timing fields must be numeric") from exc
-        extras = {
-            key: value
-            for key, value in payload.items()
-            if key not in {"kind", "recorded_height", "recorded_view", "recorded_ms"}
-        }
+        required_fields = (
+            "kind",
+            "class",
+            "height",
+            "view",
+            "epoch",
+            "signer",
+            "context_id",
+            "artifact_hash_1",
+            "artifact_hash_2",
+            "recorded_height",
+            "recorded_view",
+            "recorded_ms",
+            "consensus_admitted_height",
+            "penalty_status",
+        )
+        _require_wire_fields(
+            payload,
+            required=required_fields,
+            context="sumeragi evidence record",
+        )
+        if payload["kind"] != "SumeragiV2Equivocation":
+            raise ValueError(
+                "sumeragi evidence record.kind must be SumeragiV2Equivocation"
+            )
+        evidence_class = payload["class"]
+        if not isinstance(evidence_class, str) or evidence_class not in {
+            "proposal",
+            "phase_vote",
+            "timeout_vote",
+        }:
+            raise ValueError(
+                "sumeragi evidence record.class must be proposal, phase_vote, or timeout_vote"
+            )
+
+        def hash32(field_name: str) -> str:
+            value = payload[field_name]
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError(
+                    f"sumeragi evidence record.{field_name} must be exactly 32 lowercase hexadecimal bytes"
+                )
+            return value
+
+        artifact_hash_1 = hash32("artifact_hash_1")
+        artifact_hash_2 = hash32("artifact_hash_2")
+        if artifact_hash_1 == artifact_hash_2:
+            raise ValueError(
+                "sumeragi evidence record artifact hashes must identify distinct artifacts"
+            )
         return cls(
-            kind=kind,
-            recorded_height=recorded_height,
-            recorded_view=recorded_view,
-            recorded_ms=recorded_ms,
-            data=extras,
-            raw=dict(payload),
+            kind="SumeragiV2Equivocation",
+            class_=evidence_class,
+            height=_require_u64(payload["height"], "sumeragi evidence record.height"),
+            view=_require_u64(payload["view"], "sumeragi evidence record.view"),
+            epoch=_require_u64(payload["epoch"], "sumeragi evidence record.epoch"),
+            signer=_sumeragi_v2_uint(
+                payload["signer"],
+                "sumeragi evidence record.signer",
+                maximum=(1 << 32) - 1,
+            ),
+            context_id=hash32("context_id"),
+            artifact_hash_1=artifact_hash_1,
+            artifact_hash_2=artifact_hash_2,
+            recorded_height=_require_u64(
+                payload["recorded_height"], "sumeragi evidence record.recorded_height"
+            ),
+            recorded_view=_require_u64(
+                payload["recorded_view"], "sumeragi evidence record.recorded_view"
+            ),
+            recorded_ms=_require_u64(
+                payload["recorded_ms"], "sumeragi evidence record.recorded_ms"
+            ),
+            consensus_admitted_height=_require_u64(
+                payload["consensus_admitted_height"],
+                "sumeragi evidence record.consensus_admitted_height",
+            ),
+            penalty_status=_parse_sumeragi_evidence_penalty_status(
+                payload["penalty_status"]
+            ),
         )
 
 
@@ -9244,19 +9848,37 @@ class SumeragiEvidenceListPage:
     total: int
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiEvidenceListPage":
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> "SumeragiEvidenceListPage":
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi evidence payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
+        _require_wire_fields(
+            payload,
+            required=("total", "items"),
+            context="sumeragi evidence payload",
+        )
+        items_payload = payload["items"]
         if not isinstance(items_payload, list):
             raise TypeError("sumeragi evidence `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi evidence `total` must be numeric") from exc
+        total = _require_u64(payload["total"], "sumeragi evidence payload.total")
         items = [SumeragiEvidenceRecord.from_payload(entry) for entry in items_payload]
+        if len(items) > limit:
+            raise ValueError(
+                f"sumeragi evidence payload.items must contain at most {limit} records"
+            )
+        if total < len(items):
+            raise ValueError(
+                "sumeragi evidence payload.total must cover the returned items"
+            )
+        if items and total < offset + len(items):
+            raise ValueError(
+                "sumeragi evidence payload.total must cover offset plus returned items"
+            )
         return cls(items=items, total=total)
 
 
@@ -10462,6 +11084,8 @@ _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
+_SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
+_SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
@@ -10609,8 +11233,8 @@ class SumeragiV2ExecutionCommitment:
     parent_state_root: str
     post_state_root: str
     ordinary_writes_root: str
-    topup_anchor_root: Optional[str]
-    topup_anchor_count: int
+    kagemusha_top_up_root: Optional[str]
+    kagemusha_top_up_count: int
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
@@ -10629,8 +11253,8 @@ class SumeragiV2ExecutionCommitment:
                 "parent_state_root",
                 "post_state_root",
                 "ordinary_writes_root",
-                "topup_anchor_root",
-                "topup_anchor_count",
+                "kagemusha_top_up_root",
+                "kagemusha_top_up_count",
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
@@ -10644,21 +11268,24 @@ class SumeragiV2ExecutionCommitment:
         for field_name in ("lane_finality_manifest", "merge_carrier"):
             if field_name not in payload:
                 raise TypeError(f"{context}.{field_name} is required")
-        topup_anchor_count = _sumeragi_v2_uint(
-            payload.get("topup_anchor_count"),
-            f"{context}.topup_anchor_count",
-            maximum=16,
+        kagemusha_top_up_count = _sumeragi_v2_uint(
+            payload.get("kagemusha_top_up_count"),
+            f"{context}.kagemusha_top_up_count",
+            maximum=(1 << 32) - 1,
         )
-        topup_anchor_root_value = payload.get("topup_anchor_root")
-        topup_anchor_root = (
+        kagemusha_top_up_root_value = payload.get("kagemusha_top_up_root")
+        kagemusha_top_up_root = (
             None
-            if topup_anchor_root_value is None
-            else _sumeragi_v2_string(topup_anchor_root_value, f"{context}.topup_anchor_root")
+            if kagemusha_top_up_root_value is None
+            else _sumeragi_v2_string(
+                kagemusha_top_up_root_value,
+                f"{context}.kagemusha_top_up_root",
+            )
         )
-        if (topup_anchor_count == 0) != (topup_anchor_root is None):
+        if (kagemusha_top_up_count == 0) != (kagemusha_top_up_root is None):
             raise ValueError(
-                f"{context}.topup_anchor_root must be present exactly when "
-                "topup_anchor_count is positive"
+                f"{context}.kagemusha_top_up_root must be present exactly when "
+                "kagemusha_top_up_count is positive"
             )
         native_manifest_version = _sumeragi_v2_uint(
             payload.get("native_amx_application_manifest_version"),
@@ -10724,8 +11351,8 @@ class SumeragiV2ExecutionCommitment:
                 payload.get("ordinary_writes_root"),
                 f"{context}.ordinary_writes_root",
             ),
-            topup_anchor_root=topup_anchor_root,
-            topup_anchor_count=topup_anchor_count,
+            kagemusha_top_up_root=kagemusha_top_up_root,
+            kagemusha_top_up_count=kagemusha_top_up_count,
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
@@ -10865,8 +11492,8 @@ class SumeragiStatusSnapshot:
             parent_state_root=execution_commitment.parent_state_root,
             post_state_root=execution_commitment.post_state_root,
             ordinary_writes_root=execution_commitment.ordinary_writes_root,
-            topup_anchor_root=execution_commitment.topup_anchor_root,
-            topup_anchor_count=execution_commitment.topup_anchor_count,
+            kagemusha_top_up_root=execution_commitment.kagemusha_top_up_root,
+            kagemusha_top_up_count=execution_commitment.kagemusha_top_up_count,
             native_amx_application_manifest_version=(
                 execution_commitment.native_amx_application_manifest_version
             ),
@@ -11152,11 +11779,14 @@ class SumeragiEvidenceCount:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiEvidenceCount":
         if not isinstance(payload, Mapping):
             raise TypeError("evidence count payload must be an object")
-        try:
-            count = int(payload.get("count", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("evidence count must be numeric") from exc
-        return cls(count=count)
+        _require_wire_fields(
+            payload,
+            required=("count",),
+            context="sumeragi evidence count payload",
+        )
+        return cls(
+            count=_require_u64(payload["count"], "sumeragi evidence count payload.count")
+        )
 
 
 @dataclass(frozen=True)
@@ -12481,6 +13111,14 @@ def resolve_torii_client_config(
 ) -> ResolvedToriiClientConfig:
     """Merge Torii client settings from config files, environment variables, and overrides."""
 
+    for source_name, source in (
+        ("config", config),
+        ("env", env),
+        ("overrides", overrides),
+    ):
+        if source is not None and not isinstance(source, Mapping):
+            raise TypeError(f"{source_name} must be a mapping")
+
     state: Dict[str, Any] = {
         "timeout": _DEFAULT_RESOLVED_CONFIG.timeout,
         "max_retries": _DEFAULT_RESOLVED_CONFIG.max_retries,
@@ -12518,6 +13156,16 @@ def resolve_torii_client_config(
             },
             context="torii_client config",
         )
+        for milliseconds_key, seconds_key in (
+            ("timeout_ms", "timeout"),
+            ("backoff_initial_ms", "backoff_initial"),
+            ("max_backoff_ms", "max_backoff"),
+        ):
+            if source.get(milliseconds_key) is not None and source.get(seconds_key) is not None:
+                raise TypeError(
+                    f"torii_client config cannot contain both {milliseconds_key} "
+                    f"and {seconds_key}"
+                )
         timeout = _coerce_timeout_seconds(
             source.get("timeout_ms"),
             default_value=source.get("timeout"),
@@ -12543,7 +13191,9 @@ def resolve_torii_client_config(
             allow_zero=False,
         )
         if backoff_multiplier is not None:
-            state["backoff_multiplier"] = max(backoff_multiplier, 1.0)
+            if backoff_multiplier < 1.0:
+                raise ValueError("backoff_multiplier must be at least 1")
+            state["backoff_multiplier"] = backoff_multiplier
         max_backoff = _coerce_duration_seconds(
             source.get("max_backoff_ms"),
             default_value=source.get("max_backoff"),
@@ -12556,15 +13206,18 @@ def resolve_torii_client_config(
         methods = _parse_retry_methods(source.get("retry_methods"))
         if methods is not None:
             state["retry_methods"] = methods
-        headers = _normalize_headers(source.get("default_headers"))
-        if headers:
-            state["default_headers"].update(headers)
+        headers = _copy_http_headers(
+            _normalize_headers(source.get("default_headers")),
+            "default_headers",
+        )
+        for name, value in headers.items():
+            _set_exact_header(state["default_headers"], name, value)
         auth_token = source.get("auth_token")
         if auth_token is not None:
-            state["auth_token"] = str(auth_token)
+            state["auth_token"] = _require_route_token(auth_token, "auth_token")
         api_token = source.get("api_token")
         if api_token is not None:
-            state["api_token"] = str(api_token)
+            state["api_token"] = _require_route_token(api_token, "api_token")
         policy_override = source.get("sorafs_alias_policy")
         if policy_override is not None:
             state["sorafs_alias_policy"] = _coerce_sorafs_policy_value(
@@ -12577,43 +13230,42 @@ def resolve_torii_client_config(
         if "toriiConfig" in config:
             raise TypeError("toriiConfig is not supported; use torii")
         torii_section = config.get("torii")
+        if "torii" in config and not isinstance(torii_section, Mapping):
+            raise TypeError("config['torii'] must be a mapping")
         token = _pick_api_token(torii_section)
         if token and not state["api_token"]:
             state["api_token"] = token
 
-    env_vars = os.environ if env is None else env
-    apply_source(
-        {
-            "timeout_ms": env_vars.get(_TORII_ENV_KEYS["timeout_ms"]),
-            "max_retries": env_vars.get(_TORII_ENV_KEYS["max_retries"]),
-            "backoff_initial_ms": env_vars.get(_TORII_ENV_KEYS["backoff_initial_ms"]),
-            "backoff_multiplier": env_vars.get(_TORII_ENV_KEYS["backoff_multiplier"]),
-            "max_backoff_ms": env_vars.get(_TORII_ENV_KEYS["max_backoff_ms"]),
-            "retry_statuses": env_vars.get(_TORII_ENV_KEYS["retry_statuses"]),
-            "retry_methods": env_vars.get(_TORII_ENV_KEYS["retry_methods"]),
-            "api_token": env_vars.get(_TORII_ENV_KEYS["api_token"]),
-            "auth_token": env_vars.get(_TORII_ENV_KEYS["auth_token"]),
-        }
-    )
+    if env is not None:
+        apply_source(
+            {
+                "timeout_ms": env.get(_TORII_ENV_KEYS["timeout_ms"]),
+                "max_retries": env.get(_TORII_ENV_KEYS["max_retries"]),
+                "backoff_initial_ms": env.get(_TORII_ENV_KEYS["backoff_initial_ms"]),
+                "backoff_multiplier": env.get(_TORII_ENV_KEYS["backoff_multiplier"]),
+                "max_backoff_ms": env.get(_TORII_ENV_KEYS["max_backoff_ms"]),
+                "retry_statuses": env.get(_TORII_ENV_KEYS["retry_statuses"]),
+                "retry_methods": env.get(_TORII_ENV_KEYS["retry_methods"]),
+                "api_token": env.get(_TORII_ENV_KEYS["api_token"]),
+                "auth_token": env.get(_TORII_ENV_KEYS["auth_token"]),
+            }
+        )
 
     apply_source(overrides)
 
     headers = dict(state["default_headers"])
     if not any(key.lower() == "accept" for key in headers):
         headers["Accept"] = "application/json"
-
-    max_backoff = state["max_backoff"]
-    if max_backoff <= 0:
-        max_backoff = math.inf
+    _reject_reserved_default_headers(headers, "default_headers")
 
     return ResolvedToriiClientConfig(
-        timeout=max(state["timeout"], 0.0),
-        max_retries=max(0, int(state["max_retries"])),
-        backoff_initial=max(state["backoff_initial"], 0.0),
-        backoff_multiplier=max(state["backoff_multiplier"], 1.0),
-        max_backoff=max_backoff,
-        retry_statuses=frozenset(int(code) for code in state["retry_statuses"]),
-        retry_methods=frozenset(method.upper() for method in state["retry_methods"]),
+        timeout=state["timeout"],
+        max_retries=state["max_retries"],
+        backoff_initial=state["backoff_initial"],
+        backoff_multiplier=state["backoff_multiplier"],
+        max_backoff=state["max_backoff"],
+        retry_statuses=frozenset(state["retry_statuses"]),
+        retry_methods=frozenset(state["retry_methods"]),
         default_headers=headers,
         auth_token=state["auth_token"],
         api_token=state["api_token"],
@@ -12624,12 +13276,15 @@ def resolve_torii_client_config(
 def _extract_torii_client_section(config: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
     if not config:
         return {}
-    if isinstance(config, Mapping):
-        if "toriiClient" in config:
-            raise TypeError("toriiClient is not supported; use torii_client")
-        nested = config.get("torii_client")
-        if isinstance(nested, Mapping):
-            return nested
+    if not isinstance(config, Mapping):
+        raise TypeError("config must be a mapping")
+    if "toriiClient" in config:
+        raise TypeError("toriiClient is not supported; use torii_client")
+    if "torii_client" in config:
+        nested = config["torii_client"]
+        if not isinstance(nested, Mapping):
+            raise TypeError("config['torii_client'] must be a mapping")
+        return nested
     return config
 
 
@@ -12734,10 +13389,16 @@ def _pick_api_token(torii_section: Optional[Mapping[str, Any]]) -> Optional[str]
     if "apiTokens" in torii_section:
         raise TypeError("apiTokens is not supported; use api_tokens")
     tokens = torii_section.get("api_tokens")
-    if isinstance(tokens, (list, tuple)) and tokens:
-        return str(tokens[0])
+    if isinstance(tokens, (list, tuple)):
+        normalized = [
+            _require_route_token(token, f"torii.api_tokens[{index}]")
+            for index, token in enumerate(tokens)
+        ]
+        return normalized[0] if normalized else None
     if isinstance(tokens, str):
-        return tokens
+        return _require_route_token(tokens, "torii.api_tokens")
+    if tokens is not None and not isinstance(tokens, (list, tuple)):
+        raise TypeError("torii.api_tokens must be a string or sequence of strings")
     return None
 
 
@@ -12902,7 +13563,7 @@ __all__ = [
     "NetworkTimeStatus",
     "NetworkTimeSample",
     "NetworkTimeRttBucket",
-    "OfflineStatus",
+    "KagemushaReadinessV1",
     "NodeCapabilities",
     "NodeAdminSnapshot",
     "TransportConfig",
@@ -12915,6 +13576,7 @@ __all__ = [
     "ExplorerMetricsSnapshot",
     "ExplorerAccountQrSnapshot",
     "IsoSubmissionRecord",
+    "IsoStatusHistoryRecord",
     "IsoMessageTimeoutError",
     "AccountAsset",
     "AccountAssetsPage",
@@ -12938,6 +13600,11 @@ __all__ = [
     "SubscriptionListItem",
     "SubscriptionListPage",
     "SubscriptionActionResult",
+    "SumeragiEvidencePenaltyDetails",
+    "SumeragiEvidencePendingPenaltyStatus",
+    "SumeragiEvidenceAppliedPenaltyStatus",
+    "SumeragiEvidenceCancelledPenaltyStatus",
+    "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "SumeragiPrfStatus",
@@ -12988,9 +13655,23 @@ __all__ = [
     "RuntimeInstruction",
     "RuntimeUpgradeActionResponse",
     "GovernanceCanonicalObject",
+    "GovernanceContractEmergencyHoldRecord",
+    "GovernanceContractLifecycleRecord",
+    "GovernanceContractRecord",
+    "GovernanceContractLifecycleAction",
+    "GovernanceContractLifecycleActionKind",
+    "GovernanceContractLifecycleActionPayload",
+    "GovernanceContractLifecycleActivate",
+    "GovernanceContractLifecycleDeactivate",
+    "GovernanceContractLifecycleEmergencyHoldRetrospective",
+    "GovernanceContractLifecycleOfferOwnership",
+    "GovernanceGlobalDataTriggerPermissionAction",
     "GovernanceManifestProvenance",
     "GovernanceMusubiActionKind",
     "GovernanceProposalDeployContract",
+    "GovernanceProposalContractEmergencyHold",
+    "GovernanceProposalContractLifecycleGovernance",
+    "GovernanceProposalGlobalDataTriggerPermissionGovernance",
     "GovernanceProposalKind",
     "GovernanceProposalKindTag",
     "GovernanceProposalMusubiRegistryGovernance",
@@ -13037,9 +13718,10 @@ __all__ = [
 _PIPELINE_STATUS_KINDS = frozenset(
     {"Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"}
 )
-_DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
+_DEFAULT_RETRY_STATUSES = frozenset({429, 502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v0"
+_HTTP_METHODS = frozenset({"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"})
+_ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v1"
 _CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 = b"iroha:contract-call-batch-binding:v1\0"
 _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 = b"iroha:contract-call-batch-arguments:v1\0"
 _CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1 = (
@@ -13050,6 +13732,110 @@ _CONTRACT_CALL_RESERVED_METADATA_PREFIXES = ("contract_", "validation_fee_")
 _CONTRACT_CALL_RESERVED_METADATA_KEYS = frozenset(
     {"fee_sponsor", "fee_sponsor_account", "gas_asset_id", "gas_limit"}
 )
+
+
+def _normalize_torii_base_url(value: Any) -> str:
+    """Return an origin-only HTTP(S) URL suitable for Torii requests."""
+
+    if not isinstance(value, str):
+        raise TypeError("base_url must be a string")
+    if not value or value != value.strip():
+        raise ValueError("base_url must be a non-empty URL without surrounding whitespace")
+    if "\\" in value or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError("base_url must not contain backslashes, spaces, or control characters")
+    parsed = urlparse(value)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("base_url must use http or https")
+    if not parsed.netloc or parsed.hostname is None:
+        raise ValueError("base_url must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("base_url must not include credentials")
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("base_url must contain only an origin, without a path, query, or fragment")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("base_url contains an invalid port") from exc
+    return urlunparse((parsed.scheme.lower(), parsed.netloc, "", "", "", ""))
+
+
+def _normalize_request_path(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError("path must be a string")
+    if not value.startswith("/") or value.startswith("//"):
+        raise ValueError("path must be an origin-relative path beginning with one slash")
+    if "\\" in value or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError("path must not contain backslashes, spaces, or control characters")
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        raise ValueError("path must not contain an origin or fragment")
+    return value
+
+
+def _normalize_http_method(value: Any) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise TypeError("method must be a non-empty HTTP method string")
+    normalized = value.upper()
+    if normalized not in _HTTP_METHODS:
+        raise ValueError(f"unsupported HTTP method {value!r}")
+    return normalized
+
+
+def _require_positive_finite_float(value: Any, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{context} must be a finite positive number")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized <= 0.0:
+        raise ValueError(f"{context} must be a finite positive number")
+    return normalized
+
+
+def _require_non_negative_finite_float(value: Any, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{context} must be a finite non-negative number")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"{context} must be a finite non-negative number")
+    return normalized
+
+
+def _require_retry_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("max_retries must be a non-negative integer")
+    if value < 0:
+        raise ValueError("max_retries must be a non-negative integer")
+    return value
+
+
+def _normalize_retry_statuses(value: Optional[Iterable[Any]]) -> frozenset[int]:
+    if value is None:
+        return _DEFAULT_RETRY_STATUSES
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("retry_on_status must be an iterable of HTTP status integers")
+    result: set[int] = set()
+    for status in value:
+        if isinstance(status, bool) or not isinstance(status, int):
+            raise TypeError("retry_on_status entries must be HTTP status integers")
+        if not 400 <= status <= 599:
+            raise ValueError("retry_on_status entries must be HTTP error statuses (400..599)")
+        result.add(status)
+    return frozenset(result)
+
+
+def _normalize_retry_methods(value: Optional[Iterable[Any]]) -> frozenset[str]:
+    if value is None:
+        return _DEFAULT_RETRY_METHODS
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("retry_on_methods must be an iterable of HTTP method strings")
+    result: set[str] = set()
+    for method in value:
+        if not isinstance(method, str) or not method or method != method.strip():
+            raise TypeError("retry_on_methods entries must be non-empty HTTP method strings")
+        normalized = method.upper()
+        if normalized not in _HTTP_METHODS:
+            raise ValueError(f"retry_on_methods contains unsupported HTTP method {method!r}")
+        result.add(normalized)
+    return frozenset(result)
 
 
 def _transaction_wait_seconds(value: Any, *, context: str) -> float:
@@ -13194,15 +13980,8 @@ class ToriiClient(
     _ToriiClientStreamingQueryMixin,
     _BaseToriiClient,
 ):
-    """Convenience wrapper that exposes Torii attachment/prover APIs under `iroha_python`.
+    """Typed, fail-closed HTTP client for Torii's first-release API."""
 
-    The implementation delegates to :class:`iroha_torii_client.client.ToriiClient`
-    so existing behaviour stays intact while we grow a richer, higher-level SDK.
-    """
-
-    # NOTE: `iroha_torii_client.client.ToriiClient` already implements the full
-    # API surface. This subclass only exists to document the export location and
-    # to leave room for SDK-specific conveniences (e.g., auth interceptors).
     def __init__(
         self,
         base_url: str,
@@ -13214,12 +13993,11 @@ class ToriiClient(
         auth_token: Optional[str] = None,
         api_token: Optional[str] = None,
         default_headers: Optional[Mapping[str, str]] = None,
-        timeout: Optional[float] = 30.0,
+        timeout: float = 30.0,
         max_retries: int = 3,
-        backoff_factor: float = 0.5,
-        backoff_initial_ms: Optional[int] = None,
-        max_backoff_ms: Optional[int] = None,
-        backoff_multiplier: Optional[float] = None,
+        backoff_initial: float = 0.5,
+        backoff_max: float = 5.0,
+        backoff_multiplier: float = 2.0,
         retry_on_status: Optional[Sequence[int]] = None,
         retry_on_methods: Optional[Sequence[str]] = None,
         chain_discriminant: Optional[int] = None,
@@ -13227,69 +14005,116 @@ class ToriiClient(
         sorafs_alias_warning: Optional[Callable[[SorafsAliasWarning], None]] = None,
         sorafs_alias_logger: Optional[logging.Logger] = None,
     ) -> None:
-        super().__init__(base_url, session=session)
-        _reject_session_route_secrets(self._session)
+        if session is not None and not isinstance(session, requests.Session):
+            raise TypeError("session must be a requests.Session")
         if (
             local_signing_context is not None
             and not isinstance(local_signing_context, LocalSigningContext)
         ):
             raise TypeError("local_signing_context must be a LocalSigningContext")
-        self.__local_signing_context = local_signing_context
-        self._install_operator_signing_context(operator_signing_context)
-        if canonical_request_auth is not None:
-            canonical_request_auth = self._require_canonical_auth(
-                canonical_request_auth, "canonical_request_auth"
+        base_local_signing_context = (
+            None
+            if local_signing_context is None
+            else _BaseLocalSigningContext(
+                network_id=local_signing_context.network_id.literal,
             )
-            self._require_exact_i105_account_id(
+        )
+        normalized_base_url = _normalize_torii_base_url(base_url)
+        if operator_signing_context is not None and not isinstance(
+            operator_signing_context,
+            OperatorSigningContext,
+        ):
+            raise TypeError(
+                "operator_signing_context must be an OperatorSigningContext"
+            )
+        if canonical_request_auth is not None:
+            if not isinstance(canonical_request_auth, ToriiCanonicalRequestAuth):
+                raise TypeError(
+                    "canonical_request_auth must be a ToriiCanonicalRequestAuth"
+                )
+            _BaseToriiClient._require_exact_i105_account_id(
                 canonical_request_auth.account_id,
                 "canonical_request_auth.account_id",
             )
-        self._canonical_request_auth = canonical_request_auth
-        self._chain_discriminant = normalize_i105_discriminant(
+        normalized_chain_discriminant = normalize_i105_discriminant(
             DEFAULT_I105_DISCRIMINANT if chain_discriminant is None else chain_discriminant,
             "chain_discriminant",
         )
-        self._timeout = timeout
-        self._max_retries = max(0, int(max_retries))
-        self._retry_statuses = (
-            set(retry_on_status) if retry_on_status is not None else set(_DEFAULT_RETRY_STATUSES)
+        normalized_timeout = _require_positive_finite_float(timeout, "timeout")
+        normalized_max_retries = _require_retry_count(max_retries)
+        normalized_retry_statuses = _normalize_retry_statuses(retry_on_status)
+        normalized_retry_methods = _normalize_retry_methods(retry_on_methods)
+        normalized_headers: Dict[str, str] = {"Accept": "application/json"}
+        if default_headers is not None:
+            copied_headers = _copy_http_headers(default_headers, "default_headers")
+            _reject_reserved_default_headers(copied_headers, "default_headers")
+            for name, value in copied_headers.items():
+                _set_exact_header(normalized_headers, name, value)
+        normalized_auth_token = (
+            None
+            if auth_token is None
+            else _require_route_token(auth_token, "auth_token")
         )
-        self._retry_methods = {
-            method.upper()
-            for method in (
-                retry_on_methods if retry_on_methods is not None else _DEFAULT_RETRY_METHODS
-            )
-        }
-        self._default_headers: Dict[str, str] = {"Accept": "application/json"}
-        if default_headers:
-            _reject_reserved_default_headers(default_headers, "default_headers")
-            self._default_headers.update(default_headers)
-        self._auth_token: Optional[str] = None
-        self._api_token: Optional[str] = None
-        self._status_state = _ToriiStatusState()
-        if auth_token:
-            self.set_auth_token(auth_token)
-        if api_token:
-            self.set_api_token(api_token)
-        if (
-            backoff_initial_ms is not None
-            or max_backoff_ms is not None
-            or backoff_multiplier is not None
-        ):
-            self._backoff_initial = max(0.0, (backoff_initial_ms or 0) / 1000.0)
+        normalized_api_token = (
+            None
+            if api_token is None
+            else _require_route_token(api_token, "api_token")
+        )
+        normalized_backoff_initial = _require_non_negative_finite_float(
+            backoff_initial,
+            "backoff_initial",
+        )
+        normalized_backoff_max = _require_non_negative_finite_float(
+            backoff_max,
+            "backoff_max",
+        )
+        normalized_backoff_multiplier = _require_positive_finite_float(
+            backoff_multiplier,
+            "backoff_multiplier",
+        )
+        if normalized_backoff_multiplier < 1.0:
+            raise ValueError("backoff_multiplier must be at least 1")
+        if normalized_backoff_max < normalized_backoff_initial:
+            raise ValueError("backoff_max must be greater than or equal to backoff_initial")
+        normalized_sorafs_alias_policy = _normalize_sorafs_policy_config(
+            sorafs_alias_policy
+        )
 
-            self._backoff_multiplier = max(
-                1.0, backoff_multiplier if backoff_multiplier is not None else 2.0
+        self._owns_session = session is None
+        effective_session = session if session is not None else requests.Session()
+        if self._owns_session:
+            effective_session.trust_env = False
+        try:
+            super().__init__(
+                normalized_base_url,
+                session=effective_session,
+                local_signing_context=base_local_signing_context,
             )
-            if max_backoff_ms is None or max_backoff_ms <= 0:
-                self._backoff_cap = math.inf
-            else:
-                self._backoff_cap = max(0.0, max_backoff_ms / 1000.0)
-        else:
-            self._backoff_initial = max(0.0, float(backoff_factor))
-            self._backoff_multiplier = 2.0
-            self._backoff_cap = math.inf
-        self._sorafs_alias_policy = _normalize_sorafs_policy_config(sorafs_alias_policy)
+            _reject_session_route_secrets(self._session)
+        except BaseException:
+            if self._owns_session:
+                effective_session.close()
+            raise
+        self.__local_signing_context = local_signing_context
+        self._install_operator_signing_context(operator_signing_context)
+        self._canonical_request_auth = canonical_request_auth
+        self._chain_discriminant = normalized_chain_discriminant
+        self._timeout = normalized_timeout
+        self._max_retries = normalized_max_retries
+        self._retry_statuses = normalized_retry_statuses
+        self._retry_methods = normalized_retry_methods
+        self._default_headers = normalized_headers
+        self._auth_token = normalized_auth_token
+        self._api_token = normalized_api_token
+        self._status_state = _ToriiStatusState()
+        if normalized_auth_token is not None:
+            self._default_headers["Authorization"] = f"Bearer {normalized_auth_token}"
+        if normalized_api_token is not None:
+            self._default_headers["X-API-Token"] = normalized_api_token
+        self._backoff_initial = normalized_backoff_initial
+        self._backoff_cap = normalized_backoff_max
+        self._backoff_multiplier = normalized_backoff_multiplier
+        self._sorafs_alias_policy = normalized_sorafs_alias_policy
         self._sorafs_alias_warning_hook = sorafs_alias_warning
         self._sorafs_alias_logger = sorafs_alias_logger or logging.getLogger(
             "iroha_python.sorafs.client"
@@ -13298,6 +14123,21 @@ class ToriiClient(
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
         self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
+
+    def close(self) -> None:
+        """Close the internally created HTTP session.
+
+        A caller-supplied session remains owned by the caller and is not closed.
+        """
+
+        if self._owns_session:
+            self._session.close()
+
+    def __enter__(self) -> "ToriiClient":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        self.close()
 
     @property
     def local_signing_context(self) -> Optional[LocalSigningContext]:
@@ -13660,13 +14500,19 @@ class ToriiClient(
         if (private_key is None) == (private_key_hex is None):
             raise ValueError("provide exactly one of private_key or private_key_hex")
         if private_key_hex is not None:
-            try:
-                return bytes.fromhex(private_key_hex)
-            except ValueError as error:
-                raise ValueError("private_key_hex must be valid hexadecimal") from error
-        if not isinstance(private_key, (bytes, bytearray, memoryview)):
-            raise TypeError("private_key must be bytes-like")
-        return bytes(private_key)
+            if (
+                type(private_key_hex) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", private_key_hex) is None
+            ):
+                raise ValueError(
+                    "private_key_hex must contain exactly 64 lowercase hexadecimal characters"
+                )
+            return bytes.fromhex(private_key_hex)
+        if type(private_key) is not bytes:
+            raise TypeError("private_key must be exact immutable bytes")
+        if len(private_key) != 32:
+            raise ValueError("private_key must contain exactly 32 bytes")
+        return private_key
 
     @staticmethod
     def _native_query_response_bytes(
@@ -14002,14 +14848,12 @@ class ToriiClient(
         *,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
-        instructions: Optional[Iterable["Instruction"]] = None,
-        **sign_overrides: Any,
     ) -> tuple["SignedTransactionEnvelope", Optional[Any]]:
         """Sign a :class:`TransactionDraft` and submit it to Torii.
 
-        Exactly one of ``private_key`` or ``private_key_hex`` must be provided. Additional
-        keyword arguments are forwarded to :meth:`TransactionDraft.sign`, allowing callers to
-        override fields such as ``creation_time_ms`` or ``ttl_ms``.
+        Exactly one of ``private_key`` or ``private_key_hex`` must be provided.
+        The signed payload is exactly the immutable config and staged entries on
+        ``draft``; submission-time transaction overrides are not accepted.
         """
 
         if (private_key is None) and (private_key_hex is None):
@@ -14021,8 +14865,6 @@ class ToriiClient(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
-            instructions=instructions,
-            **sign_overrides,
         )
         status = self.submit_transaction_envelope(envelope)
         return envelope, status
@@ -14039,12 +14881,10 @@ class ToriiClient(
         *,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
-        instructions: Optional[Iterable["Instruction"]] = None,
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
-        **sign_overrides: Any,
     ) -> Any:
         """Sign a draft, submit it, and wait for the transaction to reach a terminal status."""
 
@@ -14052,8 +14892,6 @@ class ToriiClient(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
-            instructions=instructions,
-            **sign_overrides,
         )
         return self.submit_transaction_envelope_and_wait(
             envelope,
@@ -14069,8 +14907,6 @@ class ToriiClient(
         *,
         private_key: Optional[bytes],
         private_key_hex: Optional[str],
-        instructions: Optional[Iterable["Instruction"]],
-        **sign_overrides: Any,
     ) -> "SignedTransactionEnvelope":
         if private_key is None and private_key_hex is None:
             raise ValueError("provide either `private_key` or `private_key_hex`")
@@ -14078,17 +14914,9 @@ class ToriiClient(
             raise ValueError("provide only one of `private_key` or `private_key_hex`")
 
         if private_key_hex is not None:
-            return draft.sign_hex_private_key(
-                private_key_hex,
-                instructions=instructions,
-                **sign_overrides,
-            )
+            return draft.sign_hex_private_key(private_key_hex)
         assert private_key is not None
-        return draft.sign(
-            private_key,
-            instructions=instructions,
-            **sign_overrides,
-        )
+        return draft.sign(private_key)
 
     def submit_transaction_json_and_wait(
         self,
@@ -14138,28 +14966,32 @@ class ToriiClient(
     def set_auth_token(self, token: Optional[str]) -> None:
         """Configure (or clear) the Authorization bearer token."""
 
-        if token:
-            self._auth_token = token
-            self._default_headers["Authorization"] = f"Bearer {token}"
-        else:
+        if token is None:
             self._auth_token = None
             self._default_headers.pop("Authorization", None)
+            return
+        normalized = _require_route_token(token, "auth_token")
+        self._auth_token = normalized
+        self._default_headers["Authorization"] = f"Bearer {normalized}"
 
     def set_api_token(self, token: Optional[str]) -> None:
         """Configure (or clear) the Torii `X-API-Token` header."""
 
-        if token:
-            self._api_token = token
-            self._default_headers["X-API-Token"] = token
-        else:
+        if token is None:
             self._api_token = None
             self._default_headers.pop("X-API-Token", None)
+            return
+        normalized = _require_route_token(token, "api_token")
+        self._api_token = normalized
+        self._default_headers["X-API-Token"] = normalized
 
     def update_default_headers(self, headers: Mapping[str, str]) -> None:
         """Merge `headers` into the default header set applied to every request."""
 
-        _reject_reserved_default_headers(headers, "headers")
-        self._default_headers.update(headers)
+        copied_headers = _copy_http_headers(headers, "headers")
+        _reject_reserved_default_headers(copied_headers, "headers")
+        for name, value in copied_headers.items():
+            _set_exact_header(self._default_headers, name, value)
 
     def request_json(
         self,
@@ -14304,15 +15136,56 @@ class ToriiClient(
     # Explorer APIs
     # -------------------------
 
+    def _get_dataspace_visible_response(
+        self,
+        path: str,
+        *,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> requests.Response:
+        """Issue one optionally account-signed dataspace-visible GET.
+
+        A configured canonical signer is bound after Requests prepares the final
+        path and query. Without one, public dataspaces remain available through
+        the ordinary anonymous request path.
+        """
+
+        canonical_auth = self._canonical_request_auth
+        headers = self._canonical_request_headers(
+            "GET",
+            path,
+            b"",
+            canonical_auth=canonical_auth,
+            headers={"Accept": "application/json"},
+            has_body=False,
+        )
+        return self._request(
+            "GET",
+            path,
+            params=params,
+            headers=headers,
+            allow_retry=canonical_auth is None,
+            allow_redirects=False,
+        )
+
+    def _get_explorer_response(
+        self,
+        path: str,
+        *,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> requests.Response:
+        """Issue one optionally account-signed Explorer GET.
+
+        A configured canonical signer is bound after Requests prepares the final
+        path and query. Without one, Explorer's public projection remains an
+        ordinary anonymous request.
+        """
+
+        return self._get_dataspace_visible_response(path, params=params)
+
     def get_explorer_metrics(self) -> Optional[Any]:
         """Fetch `/v1/explorer/metrics`. Returns `None` when telemetry is gated."""
 
-        response = self._request(
-            "GET",
-            "/v1/explorer/metrics",
-            headers={"Accept": "application/json"},
-            allow_retry=True,
-        )
+        response = self._get_explorer_response("/v1/explorer/metrics")
         if response.status_code in {403, 404, 503}:
             return None
         self._expect_status(response, (200,))
@@ -14335,12 +15208,11 @@ class ToriiClient(
         """Fetch explorer QR metadata via `GET /v1/explorer/accounts/{account_id}/qr`."""
 
         canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        payload = self.request_json(
-            "GET",
-            f"/v1/explorer/accounts/{quote(canonical_account_id, safe='')}/qr",
-            headers={"Accept": "application/json"},
-            expected_status=(200,),
+        response = self._get_explorer_response(
+            f"/v1/explorer/accounts/{quote(canonical_account_id, safe='')}/qr"
         )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
         if payload is None:
             raise RuntimeError("explorer account qr endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -14379,13 +15251,12 @@ class ToriiClient(
         domain_value = _normalize_optional_string(domain, "list_explorer_rwas.domain")
         if domain_value is not None:
             params["domain"] = domain_value
-        payload = self.request_json(
-            "GET",
+        response = self._get_explorer_response(
             "/v1/explorer/rwas",
             params=params or None,
-            headers={"Accept": "application/json"},
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
         if payload is None:
             raise RuntimeError("explorer RWA endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -14417,12 +15288,11 @@ class ToriiClient(
         rwa_id_value = _normalize_optional_string(rwa_id, "get_explorer_rwa_detail.rwa_id")
         if rwa_id_value is None:
             raise ValueError("get_explorer_rwa_detail.rwa_id must be a non-empty string")
-        payload = self.request_json(
-            "GET",
-            f"/v1/explorer/rwas/{quote(rwa_id_value, safe='')}",
-            headers={"Accept": "application/json"},
-            expected_status=(200,),
+        response = self._get_explorer_response(
+            f"/v1/explorer/rwas/{quote(rwa_id_value, safe='')}"
         )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
         if payload is None:
             raise RuntimeError("explorer RWA detail endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -14864,6 +15734,11 @@ class ToriiClient(
         )
 
     def _sorafs_orderbook_native_verifier(self) -> ModuleType:
+        return _require_crypto()
+
+    def _private_settlement_native_verifier(self) -> ModuleType:
+        """Return the pinned Rust verifier for restricted settlement responses."""
+
         return _require_crypto()
 
     def _sorafs_orderbook_expected_network_id(self, value: Any, context: str) -> NetworkId:
@@ -15510,8 +16385,6 @@ class ToriiClient(
             max_retries=0,
             decode_json=True,
             allow_resume=False,
-            allow_redirects=False,
-            strict_utf8=True,
             maximum_event_bytes=_SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES,
             json_loader=_decode_sorafs_reputation_sse_json,
             expected_content_type="text/event-stream",
@@ -16584,14 +17457,8 @@ class ToriiClient(
 
         return self.request_json("GET", "/v1/health", expected_status=(200,))
 
-    def get_configuration(self) -> Mapping[str, Any]:
-        """Return the current node configuration as a JSON mapping."""
-
-        snapshot = self.get_configuration_typed()
-        return _configuration_snapshot_to_dict(snapshot)
-
-    def get_configuration_typed(self) -> ConfigurationSnapshot:
-        """Typed operator-authenticated node configuration snapshot."""
+    def get_configuration(self) -> ConfigurationSnapshot:
+        """Return the validated operator-authenticated node configuration."""
 
         response = self._operator_get(
             "/v1/configuration",
@@ -16604,72 +17471,11 @@ class ToriiClient(
             raise TypeError("configuration response must be a JSON object")
         return ConfigurationSnapshot.from_payload(payload)
 
-    def get_confidential_gas_schedule(self) -> Optional[Mapping[str, int]]:
-        """Return the read-only confidential gas schedule as a mapping, when available."""
+    def get_confidential_gas_schedule(self) -> Optional[ConfidentialGasSchedule]:
+        """Return the validated confidential verification gas schedule, when available."""
 
-        schedule = self.get_confidential_gas_schedule_typed()
-        if schedule is None:
-            return None
-        return schedule.to_payload()
-
-    def get_confidential_gas_schedule_typed(self) -> Optional[ConfidentialGasSchedule]:
-        """Typed read-only confidential verification gas schedule."""
-
-        snapshot = self.get_configuration_typed()
+        snapshot = self.get_configuration()
         return snapshot.confidential_gas
-
-    def set_network_gossip_config(
-        self,
-        *,
-        block_gossip_size: int,
-        block_gossip_period_ms: int,
-        transaction_gossip_size: int,
-        transaction_gossip_period_ms: int,
-    ) -> Mapping[str, Any]:
-        """Update Torii gossip fan-out and interval parameters.
-
-        The helper fetches the latest configuration, preserves the mutable logger/queue sections,
-        and posts the updated `network` payload so PY6 admin-surface evidence can remain deterministic.
-        """
-
-        snapshot = self.get_configuration_typed()
-        payload = _configuration_update_payload(snapshot)
-        payload["network"] = {
-            "block_gossip_size": _normalize_positive_int(
-                block_gossip_size, "network.block_gossip_size", allow_zero=False
-            ),
-            "block_gossip_period_ms": _normalize_positive_int(
-                block_gossip_period_ms, "network.block_gossip_period_ms", allow_zero=False
-            ),
-            "transaction_gossip_size": _normalize_positive_int(
-                transaction_gossip_size, "network.transaction_gossip_size", allow_zero=False
-            ),
-            "transaction_gossip_period_ms": _normalize_positive_int(
-                transaction_gossip_period_ms,
-                "network.transaction_gossip_period_ms",
-                allow_zero=False,
-            ),
-        }
-        return self.update_configuration(payload)
-
-    def set_queue_capacity(self, *, capacity: int) -> Mapping[str, Any]:
-        """Update the transaction queue capacity exposed by `/v1/configuration`.
-
-        The payload reuses the current mutable logger/network configuration so the queue change
-        mirrors the node's existing state. Confidential gas is startup-only and is omitted.
-        """
-
-        snapshot = self.get_configuration_typed()
-        payload = _configuration_update_payload(snapshot)
-        payload["queue"] = {
-            "capacity": _normalize_positive_int(capacity, "queue.capacity", allow_zero=False)
-        }
-        return self.update_configuration(payload)
-
-    def update_configuration(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Update mutable node configuration (`POST /v1/configuration`)."""
-
-        return super().update_configuration(payload)
 
     def get_metrics(self, *, as_text: bool = False) -> Optional[Any]:
         """Fetch Torii metrics (`GET /v1/metrics`)."""
@@ -16828,25 +17634,13 @@ class ToriiClient(
             raise TypeError("kaigi relays health response must be an object")
         return KaigiRelayHealthSnapshot.from_payload(payload)
 
-    def get_time_now(self) -> Mapping[str, int]:
-        """Return the Network Time Service snapshot as a mapping."""
-
-        snapshot = self.get_time_now_typed()
-        return _network_time_snapshot_to_dict(snapshot)
-
-    def get_time_now_typed(self) -> NetworkTimeSnapshot:
-        """Typed Network Time Service snapshot."""
+    def get_time_now(self) -> NetworkTimeSnapshot:
+        """Return the validated Network Time Service snapshot."""
 
         return super().get_time_now()
 
-    def get_time_status(self) -> Mapping[str, Any]:
-        """Return Network Time Service diagnostics as a mapping."""
-
-        status = self.get_time_status_typed()
-        return _network_time_status_to_dict(status)
-
-    def get_time_status_typed(self) -> NetworkTimeStatus:
-        """Typed operator-authenticated node-local Network Time Service diagnostics."""
+    def get_time_status(self) -> NetworkTimeStatus:
+        """Return validated operator-authenticated Network Time Service diagnostics."""
 
         response = self._operator_get(
             "/v1/time/status",
@@ -16985,12 +17779,12 @@ class ToriiClient(
         asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        return self.request_json(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets",
             params=params or None,
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_account_assets_typed(
         self,
@@ -17035,12 +17829,12 @@ class ToriiClient(
         )
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        return self.request_json(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions",
             params=params or None,
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_account_transactions_typed(
         self,
@@ -17488,26 +18282,42 @@ class ToriiClient(
         json_body: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
         allow_retry: bool = True,
-        allow_redirects: bool = True,
+        allow_redirects: bool = False,
         stream: bool = False,
     ) -> requests.Response:
         if json_body is not None and data is not None:
             raise ValueError("provide either `json_body` or `data`, not both")
+        if params is not None and not isinstance(params, Mapping):
+            raise TypeError("params must be a mapping")
+        if json_body is not None and not isinstance(json_body, Mapping):
+            raise TypeError("json_body must be a mapping")
+        if data is not None and type(data) is not bytes:
+            raise TypeError("data must be exact immutable bytes")
+
+        normalized_path = _normalize_request_path(path)
 
         final_headers: Dict[str, str] = dict(self._default_headers)
-        if headers:
-            for name, value in headers.items():
-                _set_exact_header(final_headers, str(name), str(value))
+        if headers is not None:
+            for name, value in _copy_http_headers(headers, "headers").items():
+                _set_exact_header(final_headers, name, value)
 
         payload: Optional[bytes]
         if json_body is not None:
-            payload = json.dumps(json_body).encode("utf-8")
+            payload = json.dumps(
+                json_body,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
             final_headers.setdefault("Content-Type", "application/json")
         else:
             payload = data
 
-        method_upper = method.upper()
-        request_timeout = timeout if timeout is not None else self._timeout
+        method_upper = _normalize_http_method(method)
+        request_timeout = (
+            self._timeout
+            if timeout is None
+            else _require_positive_finite_float(timeout, "timeout")
+        )
         if isinstance(headers, _CanonicalRequestHeaderPlan):
             signed_headers: Mapping[str, str] = _CanonicalRequestHeaderPlan(
                 final_headers,
@@ -17525,7 +18335,7 @@ class ToriiClient(
             response = _BaseToriiClient._request(
                 self,
                 method_upper,
-                path,
+                normalized_path,
                 params=params,
                 headers=signed_headers,
                 data=payload,
@@ -17539,7 +18349,8 @@ class ToriiClient(
 
         retry_enabled = allow_retry and method_upper in self._retry_methods
         max_attempts = 1 + (self._max_retries if retry_enabled else 0)
-        url = f"{self._base_url}{path}"
+        url = f"{self._base_url}{normalized_path}"
+        _require_zero_retry_adapter(self._session, url)
 
         delay = self._backoff_initial
         for attempt in range(max_attempts):
@@ -17565,6 +18376,7 @@ class ToriiClient(
                 and response.status_code in self._retry_statuses
                 and attempt < max_attempts - 1
             ):
+                response.close()
                 delay = self._apply_backoff(delay)
                 continue
 
@@ -17582,9 +18394,7 @@ class ToriiClient(
         if delay <= 0.0:
             return 0.0
         next_delay = delay * self._backoff_multiplier
-        if self._backoff_cap != math.inf:
-            next_delay = min(self._backoff_cap, next_delay)
-        return next_delay
+        return min(self._backoff_cap, next_delay)
 
     def build_and_submit_transaction(
         self,
@@ -17964,14 +18774,11 @@ class ToriiClient(
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
-        **sign_overrides: Any,
     ) -> Mapping[str, Any]:
         envelope = self._sign_transaction_draft(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
-            instructions=None,
-            **sign_overrides,
         )
         hash_hex = self._envelope_hash_hex(envelope)
         try:
@@ -19103,8 +19910,7 @@ class ToriiClient(
         """Fetch an account by exact id, returning ``None`` when it is absent."""
 
         literal = _require_non_empty_string(account_id, "account_id")
-        response = self._request(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(literal, safe='')}",
         )
         if response.status_code == 404:
@@ -19153,8 +19959,7 @@ class ToriiClient(
         asset_id_value = _normalize_optional_string(asset_id, "find_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        response = self._request(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(literal, safe='')}/assets",
             params=params or None,
         )
@@ -20934,12 +21739,12 @@ class ToriiClient(
 
         canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
         params = self._pagination_params(limit=limit, offset=offset)
-        return self.request_json(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/permissions",
             params=params or None,
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_account_permissions_typed(
         self,
@@ -21950,20 +22755,15 @@ class ToriiClient(
             raise TypeError("leader response must be a JSON object")
         return SumeragiLeaderSnapshot.from_payload(payload)
 
-    def get_sumeragi_evidence_count(self) -> Optional[Any]:
-        """Return total persisted evidence records (`GET /v1/sumeragi/evidence/count`)."""
+    def get_sumeragi_evidence_count(self) -> SumeragiEvidenceCount:
+        """Return the exact committed evidence count."""
 
-        return self._sumeragi_operator_json(
+        payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/evidence/count",
             context="sumeragi evidence count",
+            maximum_body_bytes=_SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES,
+            parser=parse_sumeragi_json_object,
         )
-
-    def get_sumeragi_evidence_count_typed(self) -> SumeragiEvidenceCount:
-        """Typed wrapper for :meth:`get_sumeragi_evidence_count`."""
-
-        payload = self.get_sumeragi_evidence_count()
-        if not isinstance(payload, Mapping):
-            raise TypeError("evidence count response must be a JSON object")
         return SumeragiEvidenceCount.from_payload(payload)
 
     def list_sumeragi_evidence(
@@ -21972,39 +22772,44 @@ class ToriiClient(
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         kind: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List evidence records with optional filters (`GET /v1/sumeragi/evidence`)."""
+    ) -> SumeragiEvidenceListPage:
+        """List the exact first-release evidence records."""
 
         params: Dict[str, Any] = {}
+        page_limit = 50
+        page_offset = 0
         if limit is not None:
-            params["limit"] = int(limit)
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise TypeError("sumeragi evidence limit must be an integer")
+            if not 1 <= limit <= 1_000:
+                raise ValueError("sumeragi evidence limit must be in 1..=1000")
+            params["limit"] = limit
+            page_limit = limit
         if offset is not None:
-            params["offset"] = int(offset)
+            if isinstance(offset, bool) or not isinstance(offset, int):
+                raise TypeError("sumeragi evidence offset must be an integer")
+            if not 0 <= offset <= 10_000:
+                raise ValueError("sumeragi evidence offset must be in 0..=10000")
+            params["offset"] = offset
+            page_offset = offset
         if kind is not None:
-            params["kind"] = str(kind)
-        target = "/v1/sumeragi/evidence"
-        if params:
-            target = f"{target}?{urlencode(sorted(params.items()))}"
-        return self._sumeragi_operator_json(
-            target,
+            if kind != "SumeragiV2Equivocation":
+                raise ValueError(
+                    "sumeragi evidence kind must be SumeragiV2Equivocation"
+                )
+            params["kind"] = kind
+        payload = self._get_sumeragi_operator_json_object(
+            "/v1/sumeragi/evidence",
             context="sumeragi evidence list",
+            params=params or None,
+            maximum_body_bytes=_SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES,
+            parser=parse_sumeragi_json_object,
         )
-
-    def list_sumeragi_evidence_typed(
-        self,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        kind: Optional[str] = None,
-    ) -> SumeragiEvidenceListPage:
-        """Typed wrapper for :meth:`list_sumeragi_evidence`."""
-
-        payload = self.list_sumeragi_evidence(limit=limit, offset=offset, kind=kind)
-        if payload is None:
-            return SumeragiEvidenceListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("sumeragi evidence endpoint returned non-object payload")
-        return SumeragiEvidenceListPage.from_payload(payload)
+        return SumeragiEvidenceListPage.from_payload(
+            payload,
+            limit=page_limit,
+            offset=page_offset,
+        )
 
     def get_sumeragi_params(self) -> Optional[Any]:
         """Fetch operator-authenticated on-chain Sumeragi parameters."""
@@ -22055,19 +22860,6 @@ class ToriiClient(
             "/v1/gov/protected-namespaces",
             canonical_auth=canonical_auth,
             context="protected namespaces",
-            expected_status=(200,),
-        )
-
-    def get_governance_council_current(
-        self, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> Optional[Any]:
-        """GET `/v1/gov/council/current`."""
-
-        return self._account_request_json(
-            "GET",
-            "/v1/gov/council/current",
-            canonical_auth=canonical_auth,
-            context="governance council current",
             expected_status=(200,),
         )
 
@@ -22311,9 +23103,19 @@ class ToriiClient(
             else:
                 on_event(event.data, event.id)
 
+        path = "/v1/events/sse"
+        event_headers = self._canonical_request_headers(
+            "GET",
+            path,
+            b"",
+            canonical_auth=self._canonical_request_auth,
+            headers={"Accept": "text/event-stream"},
+            has_body=False,
+        )
         iterator = self._stream_sse(
-            "/v1/events/sse",
+            path,
             params=params,
+            headers=event_headers,
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
@@ -22328,13 +23130,26 @@ class ToriiClient(
         self,
         *,
         timeout: Optional[float] = None,
-        max_retries: int = 3,
+        max_retries: int = 0,
         backoff_base: float = 0.5,
         on_event: Optional[Callable[..., None]] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream `/v1/sumeragi/status/sse` live consensus metrics."""
+        """Stream one operator-authenticated Sumeragi status subscription.
+
+        Operator request authentication is one-shot, so redirects and
+        automatic reconnects are forbidden. Call this method again to create a
+        fresh signed subscription after a disconnect.
+        """
+
+        if max_retries != 0:
+            raise ValueError("stream_sumeragi_status max_retries must be zero")
+        operator_context = self.operator_signing_context
+        if operator_context is None:
+            raise ValueError(
+                "stream_sumeragi_status requires immutable operator_signing_context"
+            )
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -22346,8 +23161,12 @@ class ToriiClient(
 
         iterator = self._stream_sse(
             "/v1/sumeragi/status/sse",
+            headers=_OperatorRequestHeaderPlan(
+                {"Accept": "text/event-stream"},
+                operator_context,
+            ),
             timeout=timeout,
-            max_retries=max_retries,
+            max_retries=0,
             backoff_base=backoff_base,
             decode_json=decode_json,
             on_event=_handle if on_event is not None else None,
@@ -22835,23 +23654,38 @@ def create_torii_client(
     session: Optional[requests.Session] = None,
     local_signing_context: Optional[LocalSigningContext] = None,
     operator_signing_context: Optional[OperatorSigningContext] = None,
+    canonical_request_auth: Optional[ToriiCanonicalRequestAuth] = None,
     auth_token: Optional[str] = None,
     api_token: Optional[str] = None,
     default_headers: Optional[Mapping[str, str]] = None,
-    timeout: Optional[float] = 30.0,
-    max_retries: int = 3,
-    backoff_factor: float = 0.5,
+    timeout: Optional[float] = None,
+    max_retries: Optional[int] = None,
+    backoff_initial: Optional[float] = None,
+    backoff_max: Optional[float] = None,
+    backoff_multiplier: Optional[float] = None,
     retry_on_status: Optional[Sequence[int]] = None,
     retry_on_methods: Optional[Sequence[str]] = None,
     config: Optional[Mapping[str, Any]] = None,
     env: Optional[Mapping[str, str]] = None,
     overrides: Optional[Mapping[str, Any]] = None,
     resolved_config: Optional[ResolvedToriiClientConfig] = None,
+    chain_discriminant: Optional[int] = None,
     sorafs_alias_policy: Optional[Union[SorafsAliasPolicy, Mapping[str, Any]]] = None,
     sorafs_alias_warning: Optional[Callable[[SorafsAliasWarning], None]] = None,
     sorafs_alias_logger: Optional[logging.Logger] = None,
 ) -> ToriiClient:
-    """Return a :class:`ToriiClient` instance with the given base URL."""
+    """Create a client with deterministic config, then explicit keyword overrides."""
+
+    if resolved_config is not None and not isinstance(
+        resolved_config, ResolvedToriiClientConfig
+    ):
+        raise TypeError("resolved_config must be a ResolvedToriiClientConfig")
+    if resolved_config is not None and any(
+        source is not None for source in (config, env, overrides)
+    ):
+        raise ValueError(
+            "resolved_config cannot be combined with config, env, or overrides"
+        )
     resolved = resolved_config
     if resolved is None and (config is not None or overrides is not None or env is not None):
         resolved = resolve_torii_client_config(config=config, env=env, overrides=overrides)
@@ -22859,8 +23693,12 @@ def create_torii_client(
     header_merge: Dict[str, str] = (
         dict(resolved.default_headers) if resolved is not None else {"Accept": "application/json"}
     )
-    if default_headers:
-        header_merge.update(default_headers)
+    if default_headers is not None:
+        for name, value in _copy_http_headers(
+            default_headers,
+            "default_headers",
+        ).items():
+            _set_exact_header(header_merge, name, value)
 
     auth_value = (
         auth_token if auth_token is not None else (resolved.auth_token if resolved else None)
@@ -22869,6 +23707,21 @@ def create_torii_client(
     timeout_value = timeout if timeout is not None else (resolved.timeout if resolved else 30.0)
     max_retries_value = (
         max_retries if max_retries is not None else (resolved.max_retries if resolved else 3)
+    )
+    backoff_initial_value = (
+        backoff_initial
+        if backoff_initial is not None
+        else (resolved.backoff_initial if resolved else 0.5)
+    )
+    backoff_max_value = (
+        backoff_max
+        if backoff_max is not None
+        else (resolved.max_backoff if resolved else 5.0)
+    )
+    backoff_multiplier_value = (
+        backoff_multiplier
+        if backoff_multiplier is not None
+        else (resolved.backoff_multiplier if resolved else 2.0)
     )
     retry_statuses = (
         retry_on_status
@@ -22880,17 +23733,6 @@ def create_torii_client(
         if retry_on_methods is not None
         else (list(resolved.retry_methods) if resolved else None)
     )
-    if resolved is not None:
-        backoff_initial_ms = int(resolved.backoff_initial * 1000)
-        max_backoff_ms = (
-            None if math.isinf(resolved.max_backoff) else int(resolved.max_backoff * 1000)
-        )
-        backoff_mult = resolved.backoff_multiplier
-    else:
-        backoff_initial_ms = None
-        max_backoff_ms = None
-        backoff_mult = None
-
     policy_value: Optional[Union[SorafsAliasPolicy, Mapping[str, Any]]] = sorafs_alias_policy
     if policy_value is None and resolved is not None:
         policy_value = resolved.sorafs_alias_policy
@@ -22900,17 +23742,18 @@ def create_torii_client(
         session=session,
         local_signing_context=local_signing_context,
         operator_signing_context=operator_signing_context,
+        canonical_request_auth=canonical_request_auth,
         auth_token=auth_value,
         api_token=api_value,
         default_headers=header_merge,
         timeout=timeout_value,
         max_retries=max_retries_value,
-        backoff_factor=backoff_factor,
-        backoff_initial_ms=backoff_initial_ms,
-        max_backoff_ms=max_backoff_ms,
-        backoff_multiplier=backoff_mult,
+        backoff_initial=backoff_initial_value,
+        backoff_max=backoff_max_value,
+        backoff_multiplier=backoff_multiplier_value,
         retry_on_status=retry_statuses,
         retry_on_methods=retry_methods,
+        chain_discriminant=chain_discriminant,
         sorafs_alias_policy=policy_value,
         sorafs_alias_warning=sorafs_alias_warning,
         sorafs_alias_logger=sorafs_alias_logger,

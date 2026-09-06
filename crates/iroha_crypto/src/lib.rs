@@ -1,7 +1,11 @@
 //! This module contains structures and implementations related to the cryptographic parts of the Iroha.
 #![allow(unexpected_cfgs)]
 mod algorithm;
+#[cfg(test)]
+mod captured_schema_tests;
 mod confidential;
+#[cfg(feature = "pqc")]
+pub mod confidential_memo;
 /// Authenticated, process-local spooling for bounded confidential chunks.
 pub mod confidential_spool;
 #[cfg(feature = "bls")]
@@ -15,6 +19,8 @@ mod hash;
 #[cfg(feature = "pqc")]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
 pub mod hybrid;
+/// Qualified-provider cryptography for KAGEMUSHA V1 credit envelopes.
+pub mod kagemusha;
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
@@ -158,6 +164,17 @@ use crate::secrecy::Secret;
 pub use algorithm::{Algorithm, ED_25519, SECP_256_K1};
 #[cfg(feature = "bls")]
 pub use algorithm::{BLS_NORMAL, BLS_SMALL};
+
+/// Securely wipe a supported value before confidential discard.
+///
+/// This bridge lets dependent crates erase scalars and containers using
+/// [`zeroize::Zeroize`]'s volatile writes and compiler fences without taking a
+/// separate dependency on `zeroize`. The value may intentionally become
+/// invalid and must not be used after this call.
+pub fn zeroize_value_for_confidential_discard<T: Zeroize + ?Sized>(value: &mut T) {
+    <T as Zeroize>::zeroize(value);
+}
+
 /// Domain separator for BLS Proof-of-Possession over a validator public key.
 /// Message = Hash("iroha:bls:pop:v1" || `pk_bytes`)
 #[cfg(feature = "bls")]
@@ -852,7 +869,8 @@ impl TryFrom<&PublicKeyCompact> for PublicKeyFull {
 /// In case signature verification is needed, it will be decoded.
 ///
 /// Invariant: `payload` is valid, that is conversion to full form must not give error.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::PublicKeyCompact")]
 #[repr(transparent)]
 pub struct PublicKeyCompact {
     // First byte corresponds to algorithm
@@ -861,6 +879,14 @@ pub struct PublicKeyCompact {
     // This is non-optimized version of this struct:
     // algorithm: Algorithm,
     // payload: ConstVec<u8>,
+}
+
+impl Zeroize for PublicKeyCompact {
+    fn zeroize(&mut self) {
+        let mut bytes = core::mem::take(&mut self.algorithm_and_payload).into_vec();
+        bytes.zeroize();
+        self.algorithm_and_payload = ConstVec::from(bytes);
+    }
 }
 /// Parsed Ed25519 public key for hot-path verification reuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1994,6 +2020,8 @@ ffi::ffi_item! {
     /// );
     /// ```
     #[derive(Clone, PartialEq, Eq, TypeId)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_crypto::PublicKey")]
     #[repr(transparent)]
     #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     pub struct PublicKey(PublicKeyCompact);
@@ -2002,6 +2030,15 @@ ffi::ffi_item! {
 impl PublicKey {
     fn new(inner: PublicKeyFull) -> Self {
         Self(inner.into())
+    }
+    /// Wipe the compact key bytes before discarding a confidential copy.
+    ///
+    /// The key intentionally becomes invalid and must not be used after this
+    /// call. This is for restricted plaintext containers whose account or
+    /// authorization identifiers are confidential even though public keys are
+    /// not secrets in ordinary ledger state.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.0.zeroize();
     }
     /// Creates a new public key from raw bytes received from elsewhere.
     ///
@@ -2113,6 +2150,12 @@ impl PublicKey {
     /// [`Self::try_algorithm`] in fallible paths.
     pub fn algorithm(&self) -> Algorithm {
         self.try_algorithm().expect("Invalid PublicKey::algorithm")
+    }
+}
+
+impl Zeroize for PublicKey {
+    fn zeroize(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 impl PublicKey {
@@ -2983,7 +3026,8 @@ impl norito::json::JsonSerialize for PrivateKey {
 /// [`Debug`] is always redacted so that embedding this type in another debug-formatted
 /// value cannot disclose key material. [`Display`], JSON/Norito serialization, and the
 /// named export methods expose the private key deliberately and must not be used in logs.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ExposedPrivateKey")]
 pub struct ExposedPrivateKey(pub PrivateKey);
 impl FromStr for ExposedPrivateKey {
     type Err = ParseError;

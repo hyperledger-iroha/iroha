@@ -15,9 +15,9 @@ eligible-citizen snapshot in its `SortitionRequestV1`; that request is committed
 before a strictly future finalized threshold-beacon pulse. The first consumed
 pulse covers all initially required bodies as one simultaneous draw batch.
 Roster sealing follows authenticated invitation responses. Reads never derive a
-missing roster from assets, epoch council state, module names, or another
-attempt. The independently maintained epoch-council projection is not an input
-to Parliament certification.
+missing roster from assets, module names, configuration, or another attempt.
+The first-release state schema contains no standing council or detached
+Parliament-roster snapshot; the attempt reducer is the sole roster authority.
 Every governance lock likewise carries its immutable asset, escrow, and slash
 custody binding; missing-custody JSON/Norito records are rejected and runtime
 configuration is never used to reconstruct retained lock custody.
@@ -49,8 +49,8 @@ Overview
 - This boundary covers the ZK roots, Merkle-path and vote-tally reads; active ABI,
   runtime-metrics, node/privacy-capability and projection-checkpoint reads; the
   Ministry draft/read routes; governance proposal, capability, citizen, lock,
-  referendum, tally, protected-namespace, unlock, governed-contract, and epoch-
-  council reads/drafts; and all typed validation-fee proof/proposal routes.
+  referendum, tally, protected-namespace, unlock, and governed-contract
+  reads/drafts; and all typed validation-fee proof/proposal routes.
   The Ministry agenda `authority`, citizenship-draft `owner`, and validation-fee
   proposal-draft `proposal_operator` must equal the verified account before
   state access.
@@ -191,8 +191,10 @@ locally signed transaction pipeline using two closed Norito instructions:
   cannot select their consensus result: Core accepts them only when the exact
   persisted height, corpus, pulse, proof, and state bindings match. Attempt
   creation, risk/qualification intent, sortition-request registration, body
-  phase intent, ballot creation, and the proof-heavy ballot-corpus upload retain
-  the exact unit `CanManageParliament` permission.
+  phase intent, and ballot creation retain the exact unit
+  `CanManageParliament` permission. Proof-heavy ballot-corpus chunks are
+  permissionless progress triggers because Core derives their exact next
+  survivor offset and accepts them only after verifying every record.
 
 Sortition requests must carry `request_height` equal to the containing block,
 the complete Core-derived eligible-citizen snapshot, and a strictly later pulse
@@ -206,8 +208,14 @@ atomically commits its exact Core-derived candidate snapshot, configured target,
 current request height, and deterministic future logical-beacon slot alongside
 the Policy result. Later eligibility changes therefore cannot strand the active
 attempt before its first Confirmation draw. Hidden-ballot sortition requires at
-least two eligible candidates; the Policy and Confirmation Jury configuration
-sizes therefore also have a minimum of two.
+least three eligible candidates; the Policy and Confirmation Jury configuration
+sizes therefore also have a minimum of three.
+The first-release citizen registry is capped at 65,536 entries, and one
+canonical Norito candidate-snapshot payload is capped at 8 MiB. Core checks the
+registry cardinality before collection and the running encoded size before
+cloning each eligible account. These are fail-closed complete-electorate bounds:
+Core never truncates, samples, or otherwise biases the eligible set, and restore
+plus reducer admission revalidate the same limits.
 
 The public threshold-key lifecycle instruction carries an exact-roster
 `2f + 1` certificate over the network, ordered roster, threshold, complete
@@ -217,9 +225,12 @@ global beacon, an install or retirement included in block `H` is effective at
 `H + 1`; the session active at pulse height `H`, rather than the singleton
 successor pointer after transaction execution, verifies and persists a pulse
 authorized from `H`'s parent state. This prevents a same-block rotation from
-invalidating or reinterpreting either an optional Parliament pulse or a
-consensus-required NPoS pulse. TLE cutover remains immediate and separately
-retains predecessor public state for ballots already bound to it.
+invalidating or reinterpreting either a consensus-required Parliament pulse or
+an NPoS pulse. TLE lifecycle changes use the same one-block
+boundary: an instruction in block
+`H` keeps the predecessor selectable through `H` and activates its successor at
+`H + 1`. Predecessor public state remains available for ballots already bound
+to it.
 The fail-safe Initial executor admits this proof-carrying instruction, and the
 validation-fee guard classifies it as balance-neutral control-plane state. This
 does not delegate lifecycle authority to the transaction signer: Core always
@@ -272,14 +283,13 @@ one maximum-cost registration per block), at least `max_corpus_entries`
 survivor-freeze blocks, and at least `ceil(max_corpus_entries / 32)` commitment
 blocks. A standard default-genesis block can therefore carry the worst-case
 bounded transition traffic and still complete every policy-valid corpus.
-Because every chunk contains
-attacker-controlled proofs, each append requires exact `CanManageParliament`
-authorization before parsing or cryptographic validation. The manager still
-cannot forge, omit, reorder, overlap, or alter a survivor's ballot. Core enforces
-fixed record widths, the 32-record chunk cap, the frozen 1,000-survivor total,
-exact coverage, and immutable roots. Snapshot restoration discards trust in
-the cache: it replays the raw registration and ballot evidence and rejects any
-cached mask, prefix aggregate, or duplicate set that differs. Before
+Every chunk is permissionless, but the relayer cannot forge, omit, reorder,
+overlap, or alter a survivor's ballot: Core derives the exact next offset and
+enforces fixed record widths, every one-hot proof, the 32-record chunk cap, the
+frozen 1,000-survivor total, exact coverage, and immutable roots. Snapshot
+restoration discards trust in the cache: it replays the raw registration and
+ballot evidence and rejects any cached mask, prefix aggregate, or duplicate set
+that differs. Before
 registration close, survivor freeze, or a corpus append, Core checks the
 reducer-owned active ballot, lifecycle phase, body binding, predecessor
 checkpoint, and containing-height window using bounded scalar state.
@@ -305,10 +315,11 @@ manual release, or fallback electorate.
 eligible failure class and evidence commitment from persisted phase state and
 current height; the caller cannot select either. In particular, Core derives
 release-pulse availability from the authoritative committed
-network/session/height pulse lookup. An absent pulse can produce
-`ReleasePulseUnavailable` only after its release height and no later than the
-inclusive opening deadline, while a ballot still awaiting release or opening
-after that deadline produces
+network/session/height pulse lookup. Every committed Parliament pulse request
+is consensus-mandatory, so a fresh-genesis chain cannot advance past an absent
+release pulse or selectively omit one to obtain a retry;
+`ReleasePulseUnavailable` is retained only as a fail-closed malformed-restore
+classification. A ballot still awaiting release or opening after its deadline produces
 `OpeningDeadlineExpired`. A retry must use the exact next sequence and fresh
 TLE session and cannot exceed the frozen retry limit (default three retries
 after the initial attempt; protocol cap 16). `NoResult` on the final permitted
@@ -325,7 +336,10 @@ compare-and-set head. Head drift produces `Superseded` without effect. With an
 equal head, Core applies the typed effect in a rollback-isolated transaction and
 records `Enacted`. If the effect rejects, Core drops that transaction and uses a
 fresh transaction to record `ExecutionFailed` with a deterministic failure root
-derived from the certificate and due height.
+derived from the certificate and due height. A snapshot-skipped index maps exact
+enactment heights to certified attempt ids; it is rebuilt from validated attempts
+on restore and updated with every attempt transition, so block construction does
+not scan historical reducer payloads to discover the current due set.
 
 Certificate construction and all three terminal outcomes are consensus-owned;
 none is a manager action or a variant accepted by
@@ -358,17 +372,20 @@ this count-only projection.
 
 `GovernanceParliamentLifecycleTransitionApplied` carries the closed transition
 kind, an optional `no_result_kind`, and an optional typed
-`automatic_outcome`. The nine-variant `ParliamentNoResultKindV1` distinguishes
+`automatic_outcome`. The ten-variant `ParliamentNoResultKindV1` distinguishes
 final sortition retry exhaustion, public-finding quorum impossibility/deadline
 expiry, the five phase/release private-ballot failures, and
-`ConfirmationJuryCapacityUnavailable`. Before committing a narrow Policy Jury
+`ConfirmationJuryCapacityUnavailable`, and proposal-wide randomness-redraw
+exhaustion before a required Confirmation draw. Before committing a narrow Policy Jury
 approval, Core derives the current eligible citizen snapshot, removes every
-sealed Policy Jury member, and requires at least two remaining candidates. A
-count of zero or one persists with the verified narrow opening and terminally
-rejects the attempt as typed `NoResult`; it does not commit the Policy body
-binding or append an unfillable Confirmation stage. With at least two, the same
-atomic transition freezes and registers the disjoint Confirmation snapshot and
-future pulse request. Its sequence-zero request height must equal the Policy
+sealed Policy Jury member, and requires at least three remaining candidates. A
+count below three persists with the verified narrow opening and terminally
+rejects the attempt as typed `ConfirmationJuryCapacityUnavailable`; it does not
+commit the Policy body binding or append an unfillable Confirmation stage. At
+the proposal-wide redraw ceiling, a count of at least three instead persists the
+same opening as typed `RandomnessRedrawBudgetExhausted` before the fresh draw is
+attempted. Otherwise, the same atomic transition freezes and registers the
+disjoint Confirmation snapshot and future pulse request. Its sequence-zero request height must equal the Policy
 result height; restore rejects a missing, backdated, or delayed initial request.
 Ordinary initial-body and retry request intent remains manager-gated. Core sets
 the classification only when the accepted transition
@@ -427,15 +444,19 @@ committed public transcript, selects only the context's key session, and drops
 retired shares only after the session is no longer consensus-selectable and the
 committed height is strictly past the maximum opening deadline across every
 referencing ballot and retry. Consensus stores every admitted public session
-with its exact ordered `PeerId` roster and one active TLE key-session pointer.
-Admission and restore require a bijection between sessions and rosters, reject
-empty or duplicate-seat rosters, and rederive both committee size and roster
-hash. Installing a validated public session atomically selects it for new
-ballots, while replacement or explicit retirement makes the predecessor
-ineligible but retains its public transcript and frozen roster for already
-committed ballots. Validator startup scans the active session plus every
-historical session whose greatest committed opening deadline has not passed,
-using an inclusive deadline boundary. It derives the local one-based seat from
+with its exact ordered `PeerId` roster, a certified-head pointer, and separate
+V1 lifecycle metadata containing activation, expiry, inclusive cutover, and
+fresh-ballot use bounds. Admission and restore require a bijection among all
+three per-session records, reject empty or duplicate-seat rosters, rederive both
+committee size and roster hash, and recount use counters from committed ballot
+history. An install or rotation committed at `H` retains the predecessor for
+new ballots through `H` and activates the successor at `H + 1`; registration
+fails closed outside the selected interval or at the use ceiling. Replacement
+or explicit retirement retains the public transcript, frozen roster, and
+historical lifecycle record for already committed ballots. Validator startup
+scans the session selectable at the committed height plus every historical
+session whose greatest committed opening deadline has not passed, using an
+inclusive deadline boundary. It derives the local one-based seat from
 each session's frozen roster rather than the current topology. A seated local
 validator must obtain a live, non-signing capability attestation from the same
 runtime signer later used for release; the returned key-session id, transcript
@@ -443,20 +464,23 @@ hash, and participant index must all match independently. The authenticated
 external-provider operation requalifies before and after the lookup and poisons
 the session on a substituted result. The active session must additionally match
 the exact startup network and topology. This attestation proves only a
-point-in-time exact custody lookup, not future availability, HSM provenance, or
-secure erasure. An opaque Core
+point-in-time exact custody lookup, not future availability, hardware backing,
+or secure erasure. An opaque Core
 authorization can produce one bounded Norito broker projection containing the
 complete public transcript and exact fixed release payload, digest, and height
 bindings. The broker revalidates those bindings into a nonserializable projected
 signer input, but that public projection does not prove committed-state origin;
 an operational transport must authenticate and scope the daemon, and the daemon
-must independently verify the returned share. This is not an OS, HSM,
-secure-erasure, or operational-availability guarantee. A qualified authenticated
-broker transport/HSM, restart evidence, and four-peer execution of the
-source-implemented canonical multi-peer collection and operator transaction
-signing remain release gates. Aggregate opening is therefore not yet an operationally
-automatic four-peer runtime path, and the intended V1 corridor remains
-operator-coordinated rather than a daemon signing with account keys.
+must independently verify the returned share. This is not an OS-custody,
+hardware-backed, secure-erasure, or operational-availability guarantee.
+Qualification of the deployment-selected signer—software custody or an
+authenticated external broker—plus restart evidence and four-peer execution of
+the source-implemented canonical multi-peer collection and operator transaction
+signing remain release gates. Signer implementation details are deployment-owned, and neither
+signer mode permits a plaintext ballot or manual-release fallback. Aggregate
+opening is therefore not yet an operationally automatic four-peer runtime path,
+and the intended V1 corridor remains operator-coordinated rather than a daemon
+signing with account keys.
 
 The app-signed
 `GET /v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context` source path
@@ -468,7 +492,15 @@ only when its finalized height `H` lies in the exact reducer window:
 `registered_at <= H < registration_close`,
 `registration_close <= H < survivor_freeze`, or
 `survivor_freeze <= H < commitment_close`, respectively. A persisted schedule
-that is not strictly increasing through the release height is rejected. The response also
+that is not strictly increasing through the release height is rejected. Compact
+snapshot construction reads a snapshot-skipped
+`BallotAttemptId -> ParliamentTimedOvnCastingCandidateV1` index derived from the
+active hidden-ballot reducer state. Each row carries the exact governance
+attempt and one of those half-open phase windows; attempt replacement and
+restore rebuild keep it exact. Core filters the window before point lookups,
+then rejects a missing or cross-bound attempt/evidence row instead of scanning
+all historical timed-OVN evidence.
+The response also
 carries the sole padded-standard-base64 encoding of the canonical
 `ParliamentTimedOvnCastingContextArchiveV1`, whose complete header-framed Norito
 encoding is bounded at 4,194,304 bytes. The archive's public validator replays
@@ -515,7 +547,7 @@ wrong-network, wrong-context, wrong-ballot, intermediate-page, and archive-bindi
 tampering. These checks are not native artifact execution: native Cargo
 qualification and a rebuilt same-source ABI-23 XCFramework remain required. The
 packaged ABI-21 XCFramework is intentionally not relabeled. Four-peer end-to-end
-evidence also remains a release gate. No OS/HSM-backed erasure of caller or
+evidence also remains a release gate. No OS-backed erasure of caller or
 cryptographic-library temporaries is claimed.
 
 - POST `/v1/gov/proposals/deploy-contract`
@@ -581,7 +613,9 @@ Code Size Cap
 
 - POST `/v1/gov/ballots/plain`
   - Request: { "authority": "<i105-account-id>", "network_id": "hash:<64-uppercase-hex>#<CRC16>", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": "6000", "direction": "Aye|Nay|Abstain" }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Success (`200`): { "drafted": true, "tx_instructions": [{…}] }
+  - Invalid requests return the standard Torii `ErrorEnvelope` with HTTP `400`;
+    a failed draft never returns a successful response with an embedded rejection.
   - Scope: standalone referenda only. This route builds
     `CastPlainBallot`; it does not cast a Parliament body ballot and its tally
     cannot authorize a typed proposal or be embedded in
@@ -590,6 +624,9 @@ Code Size Cap
     lock’s amount or expiry. The `owner` must equal the transaction authority.
     Minimum duration is `conviction_step_blocks`, and the resulting lock must
     remain active through the referendum's inclusive `h_end`.
+    Both conviction parameters are non-zero, and one standalone PLAIN
+    referendum retains at most 1,000 voter locks; replacement ballots do not
+    consume another slot. This bounds the exact pre-admission tally scan.
     Context identifiers use the canonical first-release governance selector
     grammar: 1–128 RFC 3986 unreserved ASCII bytes without a leading dot.
     `amount` uses the same
@@ -605,6 +642,21 @@ Code Size Cap
   certificate, and executes the bound proposal at the exact due block height;
   no client-supplied finalization or enactment instruction exists.
 
+- `ContractLifecycleGovernance` action tag
+  `CompleteEmergencyHoldRetrospective` is the only transition that removes a
+  retained emergency hold. Its strict payload is
+  `hold_proposal_content_id`, `hold_governance_attempt_id`,
+  `incident_digest`, and `retrospective_finding_root`, each exactly 32 bytes;
+  the finding root must be non-zero. This action is append-only Norito variant
+  index `5`. Admission and exact-due certificate execution both require the
+  first three fields to equal the stored hold and require the containing height
+  to have reached the hold's exclusive `expires_at_height`. Enactment clears
+  only that hold, increments the lifecycle revision, and emits
+  `EmergencyHoldRetrospectiveCompleted` with the complete prior hold, finding
+  root, revision, and post-state. There is no direct clear instruction or
+  expired-hold garbage-collection path; a later independent emergency hold is
+  admissible only after this certified retrospective completes.
+
 - GET `/v1/gov/proposals/{id}`
   - Path `{id}`: exact lowercase proposal id hex (64 chars); `0x`, uppercase,
     whitespace, and control-character aliases are rejected before lookup.
@@ -616,8 +668,10 @@ Code Size Cap
     and `ExecutionFailed`; `Approved` is not a status. `ProposalKind` is closed
     over `DeployContract`, `RuntimeUpgrade`, `SccpRouteGovernance`,
     `ValidationFeePolicy`, `ValidationFeePayoutLifecycle`,
-    `MusubiRegistryGovernance`, and `SorafsProviderGovernance`. Unknown fields,
-    unknown tags, externally tagged legacy kinds, and retired proposal
+    `MusubiRegistryGovernance`, `SorafsProviderGovernance`,
+    `ContractLifecycleGovernance`, `ContractEmergencyHold`, and
+    `GlobalDataTriggerPermissionGovernance`. Unknown fields, unknown tags,
+    externally tagged legacy kinds, and retired proposal
     pipeline/snapshot/finalization fields are rejected rather than projected.
     Every proposal-owned `u64` emitted as a JSON number, plus
     `created_height`, is bounded by `9,007,199,254,740,991` at draft,
@@ -637,13 +691,24 @@ Code Size Cap
     the result. Live/post-window PLAIN tallies use the same inclusive `h_end`
     eligibility boundary as consensus, and finalized ZK projections include
     the optional abstain slot. None is a Parliament certificate projection.
-
-- GET `/v1/gov/council/current`
-  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
-  - Notes: Returns the latest persisted independent epoch council through the ordered council
-    index. When none exists, returns the constant empty state; it never derives
-    a roster by scanning account assets, and the attempt reducer never consults
-    this response.
+  - A selector that is exactly a stored typed-proposal fingerprint is rejected
+    in lower-, upper-, or mixed-case hexadecimal form, with or without `0x` or
+    `0X`; typed-proposal admission and restore enforce the inverse collision
+    guard across standalone referenda, locks, slashes, and elections.
+    Standalone closure emits `ReferendumDecided` under the original selector and
+    produces referendum/lock/tally stream updates only, never a typed
+    `ProposalUpdated` identity.
+  - PLAIN directions are the closed numeric set `0 = Aye`, `1 = Nay`, and
+    `2 = Abstain`. Core uses checked category and turnout accumulation and an
+    exact wide threshold comparison. `min_turnout` counts all three categories,
+    but approval is measured over `Aye + Nay`; an empty decisive tally rejects.
+    Restored locks are rejected if their owner/key, direction, integer amount,
+    or configured aggregate tally is invalid.
+  - A standalone ZK referendum that reaches `h_end + 1` without a finalized
+    tally becomes durably `Closed` without a decision. A subsequently verified
+    tally emits the deferred `ReferendumDecided` once; replay is rejected by the
+    finalized election state. If tally finalization happens first, normal
+    closure emits the same event instead.
 
 - POST `/v1/gov/parliament/ballots` is retired and is not registered. Parliament
   jury participation uses only the authority-bound timed-OVN lifecycle above;
@@ -651,8 +716,7 @@ Code Size Cap
 
 ### Governance defaults (iroha_config `gov.*`)
 
-Governance execution is parameterised via `iroha_config`; these settings do not
-make the current-council read endpoint derive an implicit roster:
+Governance execution is parameterised via `iroha_config`:
 
 ```toml
 [gov]
@@ -660,6 +724,7 @@ make the current-council read endpoint derive an implicit roster:
   parliament_sortition_pulse_delay_blocks = 4
   parliament_invitation_phase_blocks = 3600
   parliament_public_finding_phase_blocks = 3600
+  parliament_alternate_size = 21
   citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
   citizenship_bond_amount = "10000"
 
@@ -668,11 +733,11 @@ make the current-council read endpoint derive an implicit roster:
   vk_ballot.name    = "ballot_v1"
   vk_tally.backend  = "halo2/ipa"
   vk_tally.name     = "tally_v1"
-  plain_voting_enabled = false
+  plain_voting_enabled = true
   conviction_step_blocks = 100
   max_conviction = 6
-  approval_q_num = 1
-  approval_q_den = 2
+  approval_threshold_q_num = 1
+  approval_threshold_q_den = 2
   min_turnout = 0
   voting_asset_id = "61CtjvNd9T3THAR65GsMVHr82Bjc"         # governance bond asset (Sora Nexus default)
   min_bond_amount = "150"              # exact Quantity of voting_asset_id
@@ -681,7 +746,6 @@ make the current-council read endpoint derive an implicit roster:
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
-  parliament_term_blocks = 43200
 
 [gov.parliament_timed_ovn]
   registration_phase_blocks = 3600
@@ -691,19 +755,34 @@ make the current-council read endpoint derive an implicit roster:
   opening_phase_blocks = 600
   max_ballot_retries = 3
   max_corpus_entries = 1000
+
+[gov.parliament_tle_key_lifecycle]
+  session_lifetime_blocks = 37600
+  max_fresh_ballots_per_session = 1
 ```
 
 `registration_phase_blocks` must be at least `max_corpus_entries + 1`,
 `survivor_freeze_phase_blocks` must be at least `max_corpus_entries`, and
 `commitment_phase_blocks` must be at least
 `ceil(max_corpus_entries / 32)`. The corpus bound must cover both configured
-jury sizes. Configuration, reducer admission, restored state, and certificate
-validation fail closed when any window cannot carry its maximum bounded work.
+jury sizes and must itself be at least the canonical V1 hidden-ballot floor of
+three. Policy and Confirmation targets, candidate snapshots, sealed rosters,
+frozen survivors, accepted ballot corpora, openings, and exact tallies must all
+meet that same floor. Configuration, reducer admission, restored state, and
+certificate validation fail closed when any window cannot carry its maximum
+bounded work.
 Every active hidden ballot also reserves its closed registration-through-
 commitment and release-through-opening windows globally. A new or restored
 ballot whose reservation intersects another nonterminal ballot is rejected, so
 nominally valid per-ballot schedules cannot oversubscribe consensus transition
 capacity.
+
+`parliament_tle_key_lifecycle` is also consensus-critical and has no
+environment-variable overrides. Both values must be non-zero. The lifetime is
+an inclusive finalized-height span beginning at mandatory next-height
+activation; the use limit counts first-time committed ballot registrations,
+not later transitions or idempotent replay. The conservative V1 default
+requires a fresh certified DKG session for each fresh ballot.
 
 Governance monetary parameters are canonical non-negative `Quantity` values. TOML
 uses their exact decimal string form (for example `"150"` or `"0.5"`), so the
@@ -717,11 +796,10 @@ land and released on expiry; their bond lifecycle is emitted via
 use the sealed body roster and immutable original-seat quorum denominator; they
 do not derive weight from a public conviction lock.
 
-`parliament_term_blocks` defines the epoch length for independent council
-persistence. Attempt sortition freezes its own complete eligible-citizen
-snapshot and the one future pulse at exactly
+Attempt sortition freezes its own complete eligible-citizen snapshot and the
+one future pulse at exactly
 `request_height + parliament_sortition_pulse_delay_blocks`; it does not reuse
-that epoch council. The delay is consensus-hashed, nonzero, frozen into the
+any standing roster. The delay is consensus-hashed, nonzero, frozen into the
 attempt, and checked with overflow rejection at admission and restore.
 `parliament_invitation_phase_blocks` fixes the response window;
 `parliament_public_finding_phase_blocks` independently fixes the endorsement
@@ -765,10 +843,11 @@ RBAC
     - Proposals: `CanProposeContractDeployment{ contract_address }`
     - Runtime-upgrade proposals: `CanProposeRuntimeUpgrade{ abi_version, abi_hash }`
     - SCCP proposals: a registered citizen or `CanProposeSccpRouteGovernance`
+    - Global data-trigger permission proposals: a registered bonded citizen
     - Standalone ballots: `CanSubmitGovernanceBallot{ referendum_id }`
     - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
-    - Citizen service outcomes: `CanRecordCitizenService{ owner }`
-    - Council management: `CanManageParliament`
+    - Remaining managed Parliament and standalone ZK-election transitions:
+      `CanManageParliament`
 - Scoped governance capabilities are bootstrapped by genesis and thereafter
   delegable only by an existing holder of the exact same scope. In particular,
   direct native ISIs require the exact encoded target (not only the permission
@@ -779,7 +858,7 @@ RBAC
   permission. Core validates the complete retained certificate, exact due
   height, proposal effect, and compare-and-set head before applying it.
 - The fail-safe Initial executor admits the public native proposal, ballot,
-  slashing, restitution, and citizen-service instructions only because Core
+  slashing, and restitution instructions only because Core
   enforces those exact scopes before mutation. The lower-level
   `zk::SubmitBallot` vendor instruction is not part of that signed native
   surface: an IVM host must first consume the one-shot
@@ -787,6 +866,18 @@ RBAC
   ballot scope as defense in depth.
 - Slashing/appeals:
   - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
+    Both ballot instructions must be the sole direct instruction in their
+    signed transaction; nested and mixed carriers fail closed. The ballot
+    retains its ordinary instruction-error result. When the rejected overlay
+    prevalidated a nonzero slash, Core applies the exact amount in a fresh block
+    rejection transaction before rejected-fee settlement, so `LockSlashed` and
+    `BallotRejected` persist even if fee settlement later fails; no
+    `BallotAccepted` event is emitted. Rejected proof attempts retain their
+    block operation/verifier/proof-byte and gas charges across live and prepared
+    overlay execution, and sealed reveals replay-protect both the carrier and
+    enclosed signed transaction identities in ordinary and autonomous-merge
+    admission. Transaction reads resolve either identity to the canonical outer
+    carrier.
   - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.
 
 Protected Namespaces
@@ -849,8 +940,10 @@ CLI Helpers
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
 Governed Contract Lookup
-- GET `/v1/gov/contracts/{contract_address}` — returns the active governance binding for a canonical contract address.
-  - Response: { "found": bool, "contract_address": "irohac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
+- GET `/v1/gov/contracts/{contract_address}` — returns the retained revisioned lifecycle for a canonical contract address, including inactive addresses.
+  - `found` reports whether the address has ever been deployed; `active` reports whether `lifecycle.active_code_hash_hex` is present.
+  - Found responses expose immutable deployment origin, current and pending owner, revocable Parliament delegation, lifecycle revision, active-code hash, retained emergency-hold evidence, and whether that hold is active at the queried height. Expiry makes the hold inactive but does not erase it; the record remains visible until its exact certified retrospective clears it.
+  - Artifact-only `code_hash_hex`, `abi_hash_hex`, and `public_entrypoints` are present only while the address is active and the authenticated artifact cross-check succeeds.
 
 Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
@@ -873,7 +966,8 @@ Unlock Sweep (Operator/Audit)
       "direction": "Aye|Nay|Abstain?",
       "nullifier": "blake2b32:…64hex?"
     }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Success (`200`): { "drafted": true, "tx_instructions": [{…}] }
+  - Invalid requests return the standard Torii `ErrorEnvelope` with HTTP `400`.
   - Notes:
     - `network_id` is the mandatory typed canonical hash of the genesis header.
       `authority`, `election_id`, and `backend` are exact non-empty tokens;
@@ -915,9 +1009,7 @@ Unlock Sweep (Operator/Audit)
     }
   - Response:
     {
-      "ok": true,
-      "accepted": true,
-      "reason": "build transaction skeleton",
+      "drafted": true,
       "tx_instructions": [
         { "wire_id": "CastZkBallot", "payload_hex": "…" }
       ]
@@ -925,6 +1017,8 @@ Unlock Sweep (Operator/Audit)
   - Notes:
     - The strict request has no private-key field; Torii returns only an
       unsigned instruction skeleton for local signing.
+    - Invalid ballot fields return the standard Torii `ErrorEnvelope` with
+      HTTP `400`; `drafted: true` is emitted only when the skeleton exists.
     - A supplied ballot owner must equal the authenticated request authority;
       Torii rejects mismatches before returning a skeleton.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
@@ -936,7 +1030,7 @@ Standalone `CastZkBallot` Verification Path
 - If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
 - The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
 - Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
-- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
+- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof`. The instruction fails deterministically; when it applied a configured nonzero slash, the block rejection corridor commits the exact penalty separately from the failed ballot and subsequent fee settlement.
 - The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
 - Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
 
@@ -956,7 +1050,10 @@ Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default
 `7200` blocks) bounds accepted record age; `activation_lag_blocks` and
 `slashing_delay_blocks` in the same on-chain record delay enactment so
 governance can cancel penalties before they apply. These are governed chain
-values, not local `[sumeragi]` configuration.
+values, not local `[sumeragi]` configuration. The first-release evidence
+horizon, slashing delay, and epoch length become immutable after their initial
+signed installation; horizon plus delay cannot exceed three epochs, so the
+bounded WSV table can always retain four complete validator rosters.
 
 Legacy VRF participation records and penalty effects are retired; production
 derives no VRF jail action. Automatic delayed slashing applies only to canonical
@@ -975,7 +1072,7 @@ Operators and tooling can inspect the bounded audit projection through:
 Governance must treat the evidence bytes as canonical proof:
 
 1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
-2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
+2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record transitions to `penalty_status = cancelled` with the canonical cancellation height, and no slashing applies.
 3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
 4. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Commit the governed successor-mode and activation-height record with the updated roster; do not attempt to express the transition through local Sumeragi configuration.
 5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
@@ -986,7 +1083,7 @@ Joint consensus guarantees that the outgoing <i105-account-id> set finalises the
 
 - The governed `next_mode` and `mode_activation_height` staging fields must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag. An incomplete pair is rejected with `mode_activation_height requires next_mode to be set in the same block`.
 - Governed `SumeragiNposParameters.reconfig.activation_lag_blocks` (default `1`) prevents zero-lag hand-offs.
-- Governed `SumeragiNposParameters.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
+- Governed `SumeragiNposParameters.reconfig.slashing_delay_blocks` (default `3600`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
@@ -1006,7 +1103,7 @@ Any script that rotates <i105-account-id>s or applies slashing **must not** atte
 - Prometheus metrics export governance activity:
   - `governance_parliament_transitions_total{transition}` counts accepted
     Parliament transitions using the closed transition-kind vocabulary.
-  - `governance_parliament_no_result_total{class}` counts the nine bounded
+  - `governance_parliament_no_result_total{class}` counts the ten bounded
     sortition/public-finding/private-ballot `ParliamentNoResultKindV1` classes
     only.
   - `governance_parliament_attempts_by_status{status}` and

@@ -4,6 +4,7 @@ pragma experimental ABIEncoderV2;
 
 import "./ISccpMessageVerifier.sol";
 import "./SccpExactTransferCodec.sol";
+import "./SccpSha256ReplayForest.sol";
 
 interface ITairaXorExactEvmToken {
     function bridge() external view returns (address);
@@ -12,6 +13,55 @@ interface ITairaXorExactEvmToken {
     function balanceOf(address account) external view returns (uint256);
     function mint(address to, uint256 value) external returns (bool);
     function burnFrom(address from, uint256 value) external returns (bool);
+}
+
+/** Route-bound, one-way 3-of-5 controller for stopping new wrapped mints. */
+contract SccpEvmMintBreaker {
+    address public immutable route;
+    address public immutable guardian0;
+    address public immutable guardian1;
+    address public immutable guardian2;
+    address public immutable guardian3;
+    address public immutable guardian4;
+    mapping(address => bool) public hasVoted;
+    uint8 public voteCount;
+    bool public mintingDisabled;
+
+    event MintDisableVote(address indexed guardian, uint8 voteCount);
+    event MintingDisabled(address indexed route);
+
+    constructor(address[5] memory guardians) {
+        for (uint256 i = 0; i < guardians.length; i++) {
+            require(guardians[i] != address(0), "SC_BREAKER");
+            for (uint256 j = 0; j < i; j++) {
+                require(guardians[i] != guardians[j], "SC_BREAKER");
+            }
+        }
+        route = msg.sender;
+        guardian0 = guardians[0];
+        guardian1 = guardians[1];
+        guardian2 = guardians[2];
+        guardian3 = guardians[3];
+        guardian4 = guardians[4];
+    }
+
+    function disableMinting() external {
+        require(!mintingDisabled, "SC_BREAKER");
+        require(
+            msg.sender == guardian0 || msg.sender == guardian1 || msg.sender == guardian2
+                || msg.sender == guardian3 || msg.sender == guardian4,
+            "SC_BREAKER"
+        );
+        require(!hasVoted[msg.sender], "SC_BREAKER");
+        hasVoted[msg.sender] = true;
+        uint8 votes = voteCount + 1;
+        voteCount = votes;
+        emit MintDisableVote(msg.sender, votes);
+        if (votes == 3) {
+            mintingDisabled = true;
+            emit MintingDisabled(route);
+        }
+    }
 }
 
 /**
@@ -38,17 +88,28 @@ abstract contract TairaXorExactEvmSccpBridge {
         uint32 externalDomain;
         uint8 networkProfile;
         uint32 routeRevision;
-        uint256 maxWrappedSupply;
         uint256 externalChainId;
         bytes32 sourceLaneHash;
         bytes32 destinationLaneHash;
+        address replayVerifierAddress;
+        bytes32 replayVerifierCodeHash;
+        address mintBreakerAddress;
+        bytes32 mintBreakerCodeHash;
+        uint256 maxWrappedSupply;
     }
 
     uint32 internal constant DOMAIN_SORA = 0;
     uint32 internal constant DOMAIN_ETHEREUM = 1;
     uint32 internal constant DOMAIN_BSC = 2;
-    uint8 internal constant CODEC_TEXT = 1;
-    uint8 internal constant CODEC_EVM20 = 2;
+    uint8 internal constant CODEC_TEXT = 0;
+    uint8 internal constant CODEC_EVM20 = 1;
+    uint32 private constant REPLAY_NETWORK_SORA = 0x40;
+    uint32 private constant REPLAY_NETWORK_ETHEREUM = 0x41;
+    uint32 private constant REPLAY_NETWORK_BSC = 0x42;
+    uint8 private constant REPLAY_ACTOR_EVM = 1;
+    uint8 private constant REPLAY_PRINCIPAL_EVM = 1;
+    uint8 private constant REPLAY_EVM_SOURCE_BURN = 0x10;
+    uint8 private constant REPLAY_EVM_DESTINATION_MINT = 0x11;
     uint256 internal constant TAIRA_TO_TOKEN_SCALE = 1000000000;
     uint256 private constant MAX_U128 = (uint256(1) << 128) - 1;
     bytes private constant ASSET_ID = "xor";
@@ -66,7 +127,6 @@ abstract contract TairaXorExactEvmSccpBridge {
     uint32 public immutable externalDomain;
     uint8 public immutable networkProfile;
     uint32 public immutable routeRevision;
-    uint256 public immutable maxWrappedSupply;
     uint256 public immutable externalChainId;
     bytes32 public immutable tokenCodeHash;
     bytes32 public immutable verifierCodeHash;
@@ -77,10 +137,20 @@ abstract contract TairaXorExactEvmSccpBridge {
     bytes32 public immutable destinationLaneHash;
     bytes32 public immutable routeConfigHash;
     bytes32 public immutable destinationBindingHash;
+    SccpSha256ReplayForest public immutable replayVerifier;
+    bytes32 public immutable replayVerifierCodeHash;
+    bytes32 private immutable emptyReplayShardRoot;
+    bytes32 private immutable sourceReplayDomainHash;
+    bytes32 private immutable destinationReplayDomainHash;
+    SccpEvmMintBreaker public immutable mintBreaker;
+    bytes32 public immutable mintBreakerCodeHash;
+    uint256 public immutable maxWrappedSupply;
 
     mapping(address => uint64) public transferNonces;
-    mapping(bytes32 => bool) public usedSourceMessages;
-    mapping(bytes32 => bool) public usedDestinationMessages;
+    bytes32[256] private sourceReplayRoots;
+    bytes32[256] private destinationReplayRoots;
+    uint64 private sourceReplayCount;
+    uint64 private destinationReplayCount;
     uint256 private reentrancyState = 1;
 
     event SccpTransfer(
@@ -99,15 +169,26 @@ abstract contract TairaXorExactEvmSccpBridge {
         bytes32 payloadHash
     );
 
+    event SccpReplayDeltaV1(
+        bytes32 indexed domainHash,
+        uint8 indexed shard,
+        bytes32 indexed key,
+        bytes32 recordDigest,
+        bytes32 oldRoot,
+        bytes32 newRoot,
+        uint64 leafCount,
+        uint64 updateSequence
+    );
+
     modifier nonReentrant() {
-        require(reentrancyState == 1, "Reentrant bridge call");
+        require(reentrancyState == 1, "SC_REENTRY");
         reentrancyState = 2;
         _;
         reentrancyState = 1;
     }
 
     modifier onExpectedChain() {
-        require(_chainId() == externalChainId, "Wrong EVM chain id");
+        require(_chainId() == externalChainId, "SC_CHAIN");
         _;
     }
 
@@ -117,87 +198,118 @@ abstract contract TairaXorExactEvmSccpBridge {
         uint32 configuredExternalDomain,
         uint8 configuredNetworkProfile,
         uint32 configuredRouteRevision,
+        address[5] memory configuredMintGuardians,
         uint256 configuredMaxWrappedSupply
     ) {
         require(
             tokenAddress != address(0) && configuredVerifierPolicy.verifierAddress != address(0),
-            "Zero bridge address"
+            "SC_DEPLOY"
         );
         require(tokenAddress != configuredVerifierPolicy.verifierAddress,
-            "Bridge roles must differ");
+            "SC_DEPLOY");
         require(_profileDomain(configuredNetworkProfile) == configuredExternalDomain,
-            "Profile/domain mismatch");
-        require(configuredRouteRevision != 0, "Route revision is required");
+            "SC_DEPLOY");
+        require(configuredRouteRevision != 0, "SC_DEPLOY");
         require(
             configuredMaxWrappedSupply != 0 && configuredMaxWrappedSupply <= MAX_U128,
-            "Invalid wrapped supply cap"
+            "SC_DEPLOY"
         );
         require(
             configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
-            "Semantic proof profile hash is required"
+            "SC_DEPLOY"
         );
         require(
             configuredVerifierPolicy.soraFinalityAnchorHash != bytes32(0),
-            "SORA finality anchor hash is required"
+            "SC_DEPLOY"
         );
         require(
             configuredVerifierPolicy.semanticProofProfileHash !=
                 configuredVerifierPolicy.soraFinalityAnchorHash,
-            "Semantic profile and finality anchor must differ"
+            "SC_DEPLOY"
         );
         uint256 expectedChainId = _profileChainId(configuredNetworkProfile);
-        require(_chainId() == expectedChainId, "Wrong EVM chain id");
-
-        ITairaXorExactEvmToken configuredToken = ITairaXorExactEvmToken(tokenAddress);
-        require(configuredToken.bridge() == address(this), "Token route mismatch");
-        require(configuredToken.decimals() == 18, "Unexpected token decimals");
-        require(configuredToken.totalSupply() == 0, "Token supply must start at zero");
-        bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
-        require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
-            "Token contract is required");
-        _validateVerifierPolicy(configuredVerifierPolicy);
-        _requireDistinctDeploymentHashRoles(actualTokenCodeHash, configuredVerifierPolicy);
-        bytes32 inboundLaneHash;
-        bytes32 outboundLaneHash;
-        {
-            bytes memory externalNetwork = _network(configuredNetworkProfile);
-            bytes memory taira = SccpExactTransferCodec.tairaNetwork();
-            inboundLaneHash = SccpExactTransferCodec.laneHashEvm(
-                SccpExactTransferCodec.lane(externalNetwork, taira)
-            );
-            outboundLaneHash = SccpExactTransferCodec.laneHashEvm(
-                SccpExactTransferCodec.lane(taira, externalNetwork)
-            );
-        }
+        require(_chainId() == expectedChainId, "SC_CHAIN");
 
         RouteDeploymentV1 memory deployment;
         deployment.tokenAddress = tokenAddress;
-        deployment.tokenCodeHash = actualTokenCodeHash;
         deployment.verifierPolicy = configuredVerifierPolicy;
         deployment.externalDomain = configuredExternalDomain;
         deployment.networkProfile = configuredNetworkProfile;
         deployment.routeRevision = configuredRouteRevision;
-        deployment.maxWrappedSupply = configuredMaxWrappedSupply;
         deployment.externalChainId = expectedChainId;
-        deployment.sourceLaneHash = inboundLaneHash;
-        deployment.destinationLaneHash = outboundLaneHash;
+        deployment.maxWrappedSupply = configuredMaxWrappedSupply;
+        ITairaXorExactEvmToken configuredToken = ITairaXorExactEvmToken(tokenAddress);
+        require(configuredToken.bridge() == address(this), "SC_DEPLOY");
+        require(configuredToken.decimals() == 18, "SC_DEPLOY");
+        require(configuredToken.totalSupply() == 0, "SC_DEPLOY");
+        deployment.tokenCodeHash = _codeHash(tokenAddress);
+        require(
+            deployment.tokenCodeHash != bytes32(0)
+                && deployment.tokenCodeHash != EMPTY_CODE_HASH,
+            "SC_DEPLOY");
+        _validateVerifierPolicy(configuredVerifierPolicy);
+        deployment.replayVerifierAddress = address(new SccpSha256ReplayForest());
+        deployment.replayVerifierCodeHash = _codeHash(deployment.replayVerifierAddress);
+        require(
+            deployment.replayVerifierCodeHash != bytes32(0)
+                && deployment.replayVerifierCodeHash != EMPTY_CODE_HASH,
+            "SC_DEPLOY"
+        );
+        deployment.mintBreakerAddress = address(new SccpEvmMintBreaker(
+            configuredMintGuardians
+        ));
+        deployment.mintBreakerCodeHash = _codeHash(deployment.mintBreakerAddress);
+        _requireDistinctDeploymentHashRoles(
+            deployment.tokenCodeHash,
+            deployment.replayVerifierCodeHash,
+            deployment.mintBreakerCodeHash,
+            configuredVerifierPolicy
+        );
+        {
+            bytes memory externalNetwork = _network(configuredNetworkProfile);
+            bytes memory taira = SccpExactTransferCodec.tairaNetwork();
+            deployment.sourceLaneHash = SccpExactTransferCodec.laneHashEvm(
+                SccpExactTransferCodec.lane(externalNetwork, taira)
+            );
+            deployment.destinationLaneHash = SccpExactTransferCodec.laneHashEvm(
+                SccpExactTransferCodec.lane(taira, externalNetwork)
+            );
+        }
+        bytes32 exactDestinationBindingHash = _destinationBinding(deployment);
+        bytes32 exactRouteConfigHash = _routeConfigurationHash(deployment);
+        (bytes32 exactSourceReplayDomainHash, bytes32 exactDestinationReplayDomainHash) =
+            _replayDomainHashes(
+                deployment.replayVerifierAddress,
+                configuredNetworkProfile,
+                configuredRouteRevision,
+                exactRouteConfigHash
+            );
 
         token = configuredToken;
         verifier = ISccpMessageVerifier(configuredVerifierPolicy.verifierAddress);
         externalDomain = configuredExternalDomain;
         networkProfile = configuredNetworkProfile;
         routeRevision = configuredRouteRevision;
-        maxWrappedSupply = configuredMaxWrappedSupply;
         externalChainId = expectedChainId;
-        tokenCodeHash = actualTokenCodeHash;
+        tokenCodeHash = deployment.tokenCodeHash;
         verifierCodeHash = configuredVerifierPolicy.verifierCodeHash;
         verifierKeyHash = configuredVerifierPolicy.verifierKeyHash;
         semanticProofProfileHash = configuredVerifierPolicy.semanticProofProfileHash;
         soraFinalityAnchorHash = configuredVerifierPolicy.soraFinalityAnchorHash;
-        sourceLaneHash = inboundLaneHash;
-        destinationLaneHash = outboundLaneHash;
-        destinationBindingHash = _destinationBinding(deployment);
-        routeConfigHash = _routeConfigurationHash(deployment);
+        sourceLaneHash = deployment.sourceLaneHash;
+        destinationLaneHash = deployment.destinationLaneHash;
+        replayVerifier = SccpSha256ReplayForest(deployment.replayVerifierAddress);
+        replayVerifierCodeHash = deployment.replayVerifierCodeHash;
+        emptyReplayShardRoot = SccpSha256ReplayForest(
+            deployment.replayVerifierAddress
+        ).emptyShardRoot();
+        sourceReplayDomainHash = exactSourceReplayDomainHash;
+        destinationReplayDomainHash = exactDestinationReplayDomainHash;
+        mintBreaker = SccpEvmMintBreaker(deployment.mintBreakerAddress);
+        mintBreakerCodeHash = deployment.mintBreakerCodeHash;
+        maxWrappedSupply = configuredMaxWrappedSupply;
+        destinationBindingHash = exactDestinationBindingHash;
+        routeConfigHash = exactRouteConfigHash;
     }
 
     function _routeConfigurationHash(RouteDeploymentV1 memory deployment)
@@ -212,7 +324,11 @@ abstract contract TairaXorExactEvmSccpBridge {
             deployment.verifierPolicy.verifierCodeHash,
             deployment.verifierPolicy.verifierKeyHash,
             deployment.verifierPolicy.semanticProofProfileHash,
-            deployment.verifierPolicy.soraFinalityAnchorHash
+            deployment.verifierPolicy.soraFinalityAnchorHash,
+            deployment.replayVerifierAddress,
+            deployment.replayVerifierCodeHash,
+            deployment.mintBreakerAddress,
+            deployment.mintBreakerCodeHash
         ));
         bytes32 assetRouteConfigHash = keccak256(abi.encode(
             keccak256(ASSET_ID),
@@ -233,8 +349,39 @@ abstract contract TairaXorExactEvmSccpBridge {
         ));
     }
 
+    function _replayDomainHashes(
+        address configuredReplayVerifier,
+        uint8 configuredNetworkProfile,
+        uint32 configuredRouteRevision,
+        bytes32 configuredRouteHash
+    ) private view returns (bytes32 source, bytes32 destination) {
+        bytes memory actor = abi.encodePacked(address(this));
+        source = SccpSha256ReplayForest(configuredReplayVerifier).domainHash(
+            uint32(configuredNetworkProfile),
+            REPLAY_NETWORK_SORA,
+            REPLAY_EVM_SOURCE_BURN,
+            configuredRouteRevision,
+            configuredRouteHash,
+            REPLAY_ACTOR_EVM,
+            actor
+        );
+        destination = SccpSha256ReplayForest(configuredReplayVerifier).domainHash(
+            REPLAY_NETWORK_SORA,
+            uint32(configuredNetworkProfile),
+            REPLAY_EVM_DESTINATION_MINT,
+            configuredRouteRevision,
+            configuredRouteHash,
+            REPLAY_ACTOR_EVM,
+            actor
+        );
+    }
+
     /** Burn wrapped XOR and emit one exact external-EVM-to-Taira statement. */
-    function transferToTaira(bytes calldata tairaRecipient, uint256 tokenAmount)
+    function transferToTaira(
+        bytes calldata tairaRecipient,
+        uint256 tokenAmount,
+        bytes calldata replayWitness
+    )
         external
         onExpectedChain
         nonReentrant
@@ -243,15 +390,15 @@ abstract contract TairaXorExactEvmSccpBridge {
         bytes memory recipient = tairaRecipient;
         require(
             SccpExactTransferCodec.isCanonicalTairaRecipient(recipient),
-            "Noncanonical Taira recipient"
+            "SC_TRANSFER"
         );
         require(tokenAmount != 0 && tokenAmount % TAIRA_TO_TOKEN_SCALE == 0,
-            "Amount is not aligned to Taira scale");
+            "SC_TRANSFER");
         uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
-        require(tairaAmount != 0 && tairaAmount <= MAX_U128, "Amount exceeds SCCP u128");
+        require(tairaAmount != 0 && tairaAmount <= MAX_U128, "SC_TRANSFER");
         uint64 currentNonce = transferNonces[msg.sender];
-        require(currentNonce != type(uint64).max, "Transfer nonce exhausted");
-        require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
+        require(currentNonce != type(uint64).max, "SC_TRANSFER");
+        require(_codeHash(address(token)) == tokenCodeHash, "SC_TOKEN");
 
         uint64 nonce = currentNonce;
         SccpExactTransferCodec.TransferFields memory fields;
@@ -276,10 +423,19 @@ abstract contract TairaXorExactEvmSccpBridge {
         bytes32 eventDigest = SccpExactTransferCodec.sourceEventDigest(
             sourceLaneHash, messageId, canonicalPayloadHash
         );
-        require(!usedSourceMessages[messageId], "Source message already used");
 
         transferNonces[msg.sender] = nonce + 1;
-        usedSourceMessages[messageId] = true;
+        SccpSha256ReplayForest.SccpAddressReplayRecord memory replayRecord =
+            SccpSha256ReplayForest.SccpAddressReplayRecord({
+                operation: REPLAY_EVM_SOURCE_BURN,
+                replayId: messageId,
+                payloadSha256: sha256(payload),
+                amountScale9: uint128(tairaAmount),
+                principalKind: REPLAY_PRINCIPAL_EVM,
+                principal: msg.sender,
+                auxiliaryIdentitySha256: sha256(abi.encodePacked(eventDigest))
+            });
+        _occupyReplay(true, replayRecord, replayWitness);
         _mutateTokenExact(msg.sender, tokenAmount, false);
         emit SccpTransfer(
             sourceLaneHash,
@@ -296,30 +452,88 @@ abstract contract TairaXorExactEvmSccpBridge {
         bytes calldata proofBytes,
         bytes32[6] calldata publicInputs,
         bytes32 statementHash,
-        bytes calldata canonicalPayloadBytes
+        bytes calldata canonicalPayloadBytes,
+        bytes calldata replayWitness
     ) external onExpectedChain nonReentrant returns (bytes32 messageId) {
-        require(statementHash != bytes32(0), "Statement hash is required");
-        require(publicInputs[2] == bytes32(uint256(externalDomain)), "Unexpected target domain");
-        require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
+        require(
+            _codeHash(address(mintBreaker)) == mintBreakerCodeHash,
+            "SC_BREAKER"
+        );
+        require(!mintBreaker.mintingDisabled(), "SC_BREAKER");
+        require(statementHash != bytes32(0), "SC_PROOF");
+        require(publicInputs[2] == bytes32(uint256(externalDomain)), "SC_PROOF");
+        require(_codeHash(address(token)) == tokenCodeHash, "SC_TOKEN");
         bytes memory payload = canonicalPayloadBytes;
         (address recipient, uint256 tairaAmount) = _parseTairaToEvmTransfer(payload);
         bytes32 canonicalPayloadHash = SccpExactTransferCodec.payloadHashEvm(payload);
-        require(publicInputs[1] == canonicalPayloadHash, "Payload hash mismatch");
+        require(publicInputs[1] == canonicalPayloadHash, "SC_PROOF");
         bytes32 expectedMessageId = _destinationMessageId(payload);
-        require(publicInputs[0] == expectedMessageId, "Message id mismatch");
+        require(publicInputs[0] == expectedMessageId, "SC_PROOF");
         messageId = _verifyDestinationProof(
             proofBytes, publicInputs, statementHash, expectedMessageId
         );
-        require(!usedDestinationMessages[messageId], "Destination message already used");
         require(
             tairaAmount <= type(uint256).max / TAIRA_TO_TOKEN_SCALE,
-            "Token amount overflow"
+            "SC_TRANSFER"
         );
         uint256 tokenAmount = tairaAmount * TAIRA_TO_TOKEN_SCALE;
 
-        usedDestinationMessages[messageId] = true;
+        SccpSha256ReplayForest.SccpAddressReplayRecord memory replayRecord =
+            SccpSha256ReplayForest.SccpAddressReplayRecord({
+                operation: REPLAY_EVM_DESTINATION_MINT,
+                replayId: messageId,
+                payloadSha256: sha256(payload),
+                amountScale9: uint128(tairaAmount),
+                principalKind: REPLAY_PRINCIPAL_EVM,
+                principal: recipient,
+                auxiliaryIdentitySha256: sha256(abi.encodePacked(destinationBindingHash))
+            });
+        _occupyReplay(false, replayRecord, replayWitness);
         _mutateTokenExact(recipient, tokenAmount, true);
         emit TairaXorMintFinalized(messageId, recipient, tokenAmount, canonicalPayloadHash);
+    }
+
+    function _occupyReplay(
+        bool source,
+        SccpSha256ReplayForest.SccpAddressReplayRecord memory record,
+        bytes calldata witness
+    ) private {
+        require(
+            _codeHash(address(replayVerifier)) == replayVerifierCodeHash,
+            "SC_REPLAY"
+        );
+        bytes32 domainHash = source ? sourceReplayDomainHash : destinationReplayDomainHash;
+        uint8 shard;
+        bytes32 key;
+        bytes32 recordDigest;
+        bytes32 oldRoot;
+        bytes32 newRoot;
+        (shard, key, recordDigest, oldRoot, newRoot) =
+            replayVerifier.prepareAddressOccupation(
+                domainHash, record, witness
+        );
+        require(oldRoot == _replayShardRoot(source, shard), "SC_REPLAY");
+
+        uint64 currentCount = source ? sourceReplayCount : destinationReplayCount;
+        require(currentCount != type(uint64).max, "SC_REPLAY");
+        uint64 nextCount = currentCount + 1;
+        if (source) {
+            sourceReplayRoots[shard] = newRoot;
+            sourceReplayCount = nextCount;
+        } else {
+            destinationReplayRoots[shard] = newRoot;
+            destinationReplayCount = nextCount;
+        }
+        emit SccpReplayDeltaV1(
+            domainHash,
+            shard,
+            key,
+            recordDigest,
+            oldRoot,
+            newRoot,
+            nextCount,
+            nextCount
+        );
     }
 
     function _mutateTokenExact(address account, uint256 amount, bool minting) private {
@@ -329,24 +543,21 @@ abstract contract TairaXorExactEvmSccpBridge {
             require(
                 amount <= maxWrappedSupply
                     && expectedSupply <= maxWrappedSupply - amount,
-                "Wrapped supply cap exceeded"
+                "SC_TOKEN"
             );
-            require(
-                expectedSupply <= type(uint256).max - amount
-                    && expectedBalance <= type(uint256).max - amount
-            );
+            require(expectedBalance <= type(uint256).max - amount);
             expectedSupply += amount;
             expectedBalance += amount;
-            require(token.mint(account, amount), "Token mint failed");
+            require(token.mint(account, amount), "SC_TOKEN");
         } else {
             require(expectedSupply >= amount && expectedBalance >= amount);
             expectedSupply -= amount;
             expectedBalance -= amount;
-            require(token.burnFrom(account, amount), "Token burn failed");
+            require(token.burnFrom(account, amount), "SC_TOKEN");
         }
         require(
             token.totalSupply() == expectedSupply && token.balanceOf(account) == expectedBalance,
-            "Token delta mismatch"
+            "SC_TOKEN"
         );
     }
 
@@ -370,24 +581,54 @@ abstract contract TairaXorExactEvmSccpBridge {
         return _destinationMessageId(payload);
     }
 
+    /** Return the complete constant-size state needed to build a strict witness. */
+    function replayForestState(bool source, uint8 shard)
+        external
+        view
+        returns (bytes32, bytes32, uint64, uint64)
+    {
+        uint64 count = source ? sourceReplayCount : destinationReplayCount;
+        return (
+            source ? sourceReplayDomainHash : destinationReplayDomainHash,
+            _replayShardRoot(source, shard),
+            count,
+            count
+        );
+    }
+
+    function _replayShardRoot(bool source, uint8 shard) private view returns (bytes32) {
+        bytes32 root = source ? sourceReplayRoots[shard] : destinationReplayRoots[shard];
+        return root == bytes32(0) ? emptyReplayShardRoot : root;
+    }
+
     function _destinationBinding(RouteDeploymentV1 memory deployment)
         private
         view
         returns (bytes32)
     {
-        return keccak256(abi.encode(
+        // Every field is one static ABI word. Splitting the encoder input keeps
+        // the exact preimage while avoiding Solidity 0.7.4's 16-slot codegen
+        // limit for one large `abi.encode` expression.
+        bytes memory prefix = abi.encode(
             DESTINATION_BINDING_SEPARATOR,
             VERIFIER_BACKEND_HASH,
             bytes32(deployment.externalChainId),
             uint256(DOMAIN_SORA),
             uint256(deployment.externalDomain),
             deployment.verifierPolicy.verifierAddress,
-            address(this),
+            address(this)
+        );
+        bytes memory suffix = abi.encode(
             deployment.verifierPolicy.verifierCodeHash,
             deployment.verifierPolicy.verifierKeyHash,
             deployment.verifierPolicy.semanticProofProfileHash,
-            deployment.verifierPolicy.soraFinalityAnchorHash
-        ));
+            deployment.verifierPolicy.soraFinalityAnchorHash,
+            deployment.replayVerifierAddress,
+            deployment.replayVerifierCodeHash,
+            deployment.mintBreakerAddress,
+            deployment.mintBreakerCodeHash
+        );
+        return keccak256(abi.encodePacked(prefix, suffix));
     }
 
     function _destinationMessageId(bytes memory payload) private view returns (bytes32) {
@@ -405,60 +646,60 @@ abstract contract TairaXorExactEvmSccpBridge {
         bytes32 statementHash,
         bytes32 expectedMessageId
     ) private view returns (bytes32 messageId) {
-        require(_codeHash(address(verifier)) == verifierCodeHash, "Verifier code changed");
-        require(_verifyingKeyHash(address(verifier)) == verifierKeyHash, "Verifier key changed");
+        require(_codeHash(address(verifier)) == verifierCodeHash, "SC_PROOF");
+        require(_verifyingKeyHash(address(verifier)) == verifierKeyHash, "SC_PROOF");
         require(
             _semanticProofProfileHash(address(verifier)) == semanticProofProfileHash,
-            "Semantic proof profile changed"
+            "SC_PROOF"
         );
         require(
             _soraFinalityAnchorHash(address(verifier)) == soraFinalityAnchorHash,
-            "SORA finality anchor changed"
+            "SC_PROOF"
         );
         uint32 sourceDomain;
         bytes32 commitmentRoot;
         (messageId, sourceDomain, commitmentRoot) = verifier.verifySccpMessageProof(
             proofBytes, publicInputs, statementHash, destinationBindingHash, routeConfigHash
         );
-        require(messageId == expectedMessageId, "Verifier message mismatch");
-        require(sourceDomain == DOMAIN_SORA, "Unexpected source domain");
+        require(messageId == expectedMessageId, "SC_PROOF");
+        require(sourceDomain == DOMAIN_SORA, "SC_PROOF");
         require(commitmentRoot == publicInputs[3] && commitmentRoot != bytes32(0),
-            "Commitment root mismatch");
+            "SC_PROOF");
     }
 
     function _parseTairaToEvmTransfer(bytes memory payload)
         private view returns (address recipient, uint256 amount)
     {
         uint256 offset = 0;
-        require(_readU8(payload, offset++) == 2, "Not a Transfer payload");
-        require(_readU8(payload, offset++) == 1, "Unsupported payload version");
-        require(_readU32Le(payload, offset) == DOMAIN_SORA, "Wrong source domain"); offset += 4;
-        require(_readU32Le(payload, offset) == externalDomain, "Wrong destination domain"); offset += 4;
+        require(_readU8(payload, offset++) == 0, "SC_PAYLOAD");
+        require(_readU8(payload, offset++) == 1, "SC_PAYLOAD");
+        require(_readU32Le(payload, offset) == DOMAIN_SORA, "SC_PAYLOAD"); offset += 4;
+        require(_readU32Le(payload, offset) == externalDomain, "SC_PAYLOAD"); offset += 4;
         offset += 8; // nonce is committed by the exact lane message id
-        require(_readU32Le(payload, offset) == routeRevision, "Wrong route revision"); offset += 4;
-        require(_readU32Le(payload, offset) == DOMAIN_SORA, "Wrong asset home"); offset += 4;
-        require(_readU8(payload, offset++) == CODEC_TEXT, "Wrong asset codec");
+        require(_readU32Le(payload, offset) == routeRevision, "SC_PAYLOAD"); offset += 4;
+        require(_readU32Le(payload, offset) == DOMAIN_SORA, "SC_PAYLOAD"); offset += 4;
+        require(_readU8(payload, offset++) == CODEC_TEXT, "SC_PAYLOAD");
         uint256 start; uint256 length;
         (start, length, offset) = _readVec(payload, offset);
-        require(_equals(payload, start, length, ASSET_ID), "Wrong asset");
+        require(_equals(payload, start, length, ASSET_ID), "SC_PAYLOAD");
         amount = _readU128Le(payload, offset); offset += 16;
-        require(amount != 0, "Zero amount");
-        require(_readU8(payload, offset++) == CODEC_TEXT, "Wrong sender codec");
+        require(amount != 0, "SC_PAYLOAD");
+        require(_readU8(payload, offset++) == CODEC_TEXT, "SC_PAYLOAD");
         (start, length, offset) = _readVec(payload, offset);
-        require(_canonicalTairaSenderRange(payload, start, length), "Noncanonical sender");
-        require(_readU8(payload, offset++) == CODEC_EVM20, "Wrong recipient codec");
+        require(_canonicalTairaSenderRange(payload, start, length), "SC_PAYLOAD");
+        require(_readU8(payload, offset++) == CODEC_EVM20, "SC_PAYLOAD");
         (start, length, offset) = _readVec(payload, offset);
-        require(length == 20, "Wrong recipient length");
+        require(length == 20, "SC_PAYLOAD");
         uint160 raw;
         for (uint256 i = 0; i < 20; i++) {
             raw = (raw << 8) | uint160(uint8(payload[start + i]));
         }
-        require(raw != 0, "Zero recipient");
+        require(raw != 0, "SC_PAYLOAD");
         recipient = address(raw);
-        require(_readU8(payload, offset++) == CODEC_TEXT, "Wrong route codec");
+        require(_readU8(payload, offset++) == CODEC_TEXT, "SC_PAYLOAD");
         (start, length, offset) = _readVec(payload, offset);
-        require(_equals(payload, start, length, _routeId()), "Wrong route");
-        require(offset == payload.length, "Trailing payload bytes");
+        require(_equals(payload, start, length, _routeId()), "SC_PAYLOAD");
+        require(offset == payload.length, "SC_PAYLOAD");
     }
 
     function _routeId() private view returns (bytes memory) {
@@ -467,82 +708,95 @@ abstract contract TairaXorExactEvmSccpBridge {
 
     function _routeIdForDomain(uint32 domain) private pure returns (bytes memory) {
         if (domain == DOMAIN_ETHEREUM) return ETHEREUM_ROUTE_ID;
-        require(domain == DOMAIN_BSC, "Unsupported EVM domain");
+        require(domain == DOMAIN_BSC, "SC_DEPLOY");
         return BSC_ROUTE_ID;
     }
 
     function _network(uint8 profile) private pure returns (bytes memory) {
-        if (profile == 2 || profile == 3) return SccpExactTransferCodec.ethereumNetwork(profile);
-        if (profile == 4 || profile == 5) return SccpExactTransferCodec.bscNetwork(profile);
-        revert("Unsupported EVM profile");
+        if (profile == REPLAY_NETWORK_ETHEREUM) {
+            return SccpExactTransferCodec.ethereumNetwork(profile);
+        }
+        if (profile == REPLAY_NETWORK_BSC) return SccpExactTransferCodec.bscNetwork(profile);
+        revert("SC_DEPLOY");
     }
 
     function _profileDomain(uint8 profile) private pure returns (uint32) {
-        if (profile == 2 || profile == 3) return DOMAIN_ETHEREUM;
-        if (profile == 4 || profile == 5) return DOMAIN_BSC;
-        revert("Unsupported EVM profile");
+        if (profile == REPLAY_NETWORK_ETHEREUM) return DOMAIN_ETHEREUM;
+        if (profile == REPLAY_NETWORK_BSC) return DOMAIN_BSC;
+        revert("SC_DEPLOY");
     }
 
     function _profileChainId(uint8 profile) private pure returns (uint256) {
-        if (profile == 2) return 1;
-        if (profile == 3) return 11155111;
-        if (profile == 4) return 56;
-        if (profile == 5) return 97;
-        revert("Unsupported EVM profile");
+        if (profile == REPLAY_NETWORK_ETHEREUM) return 1;
+        if (profile == REPLAY_NETWORK_BSC) return 56;
+        revert("SC_DEPLOY");
     }
 
     function _validateVerifierPolicy(VerifierPolicyV1 memory policy) private view {
         bytes32 actualCodeHash = _codeHash(policy.verifierAddress);
         require(policy.verifierCodeHash != bytes32(0)
             && actualCodeHash == policy.verifierCodeHash
-            && actualCodeHash != EMPTY_CODE_HASH, "Verifier code hash mismatch");
+            && actualCodeHash != EMPTY_CODE_HASH, "SC_DEPLOY");
         require(policy.verifierKeyHash != bytes32(0)
             && _verifyingKeyHash(policy.verifierAddress) == policy.verifierKeyHash,
-            "Verifier key hash mismatch");
+            "SC_DEPLOY");
         require(
             _semanticProofProfileHash(policy.verifierAddress) ==
                 policy.semanticProofProfileHash,
-            "Semantic proof profile hash mismatch"
+            "SC_DEPLOY"
         );
         require(
             _soraFinalityAnchorHash(policy.verifierAddress) == policy.soraFinalityAnchorHash,
-            "SORA finality anchor hash mismatch"
+            "SC_DEPLOY"
         );
     }
 
     function _requireDistinctDeploymentHashRoles(
         bytes32 configuredTokenCodeHash,
+        bytes32 configuredReplayVerifierCodeHash,
+        bytes32 configuredMintBreakerCodeHash,
         VerifierPolicyV1 memory policy
     ) private pure {
         require(
-            configuredTokenCodeHash != policy.verifierCodeHash
+            configuredTokenCodeHash != configuredReplayVerifierCodeHash
+                && configuredTokenCodeHash != configuredMintBreakerCodeHash
+                && configuredReplayVerifierCodeHash != configuredMintBreakerCodeHash
+                && configuredTokenCodeHash != policy.verifierCodeHash
                 && configuredTokenCodeHash != policy.verifierKeyHash
                 && configuredTokenCodeHash != policy.semanticProofProfileHash
                 && configuredTokenCodeHash != policy.soraFinalityAnchorHash
+                && configuredReplayVerifierCodeHash != policy.verifierCodeHash
+                && configuredReplayVerifierCodeHash != policy.verifierKeyHash
+                && configuredReplayVerifierCodeHash != policy.semanticProofProfileHash
+                && configuredReplayVerifierCodeHash != policy.soraFinalityAnchorHash
+                && configuredMintBreakerCodeHash != policy.verifierCodeHash
+                && configuredMintBreakerCodeHash != policy.verifierKeyHash
+                && configuredMintBreakerCodeHash != policy.semanticProofProfileHash
+                && configuredMintBreakerCodeHash != policy.soraFinalityAnchorHash
                 && policy.verifierCodeHash != policy.verifierKeyHash
                 && policy.verifierCodeHash != policy.semanticProofProfileHash
                 && policy.verifierCodeHash != policy.soraFinalityAnchorHash
                 && policy.verifierKeyHash != policy.semanticProofProfileHash
                 && policy.verifierKeyHash != policy.soraFinalityAnchorHash
                 && policy.semanticProofProfileHash != policy.soraFinalityAnchorHash,
-            "Deployment hash roles must differ"
+            "SC_DEPLOY"
         );
     }
 
     function _readU8(bytes memory value, uint256 offset) private pure returns (uint8) {
-        require(offset < value.length, "Truncated payload");
+        require(offset < value.length, "SC_PAYLOAD");
         return uint8(value[offset]);
     }
 
     function _readU32Le(bytes memory value, uint256 offset) private pure returns (uint32 out) {
-        require(offset <= value.length && value.length - offset >= 4, "Truncated payload");
+        require(offset <= value.length && value.length - offset >= 4, "SC_PAYLOAD");
         for (uint256 i = 0; i < 4; i++) {
             out |= uint32(uint8(value[offset + i])) << uint32(i * 8);
         }
     }
 
     function _readU128Le(bytes memory value, uint256 offset) private pure returns (uint256 out) {
-        require(offset <= value.length && value.length - offset >= 16, "Truncated payload");
+        require(offset <= value.length && value.length - offset >= 16, "SC_PAYLOAD");
         for (uint256 i = 0; i < 16; i++) {
             out |= uint256(uint8(value[offset + i])) << (i * 8);
         }
@@ -553,7 +807,7 @@ abstract contract TairaXorExactEvmSccpBridge {
     {
         length = _readU32Le(value, offset);
         start = offset + 4;
-        require(start <= value.length && value.length - start >= length, "Truncated vector");
+        require(start <= value.length && value.length - start >= length, "SC_PAYLOAD");
         next = start + length;
     }
 
@@ -585,7 +839,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         (bool success, bytes memory data) = account.staticcall(
             abi.encodeWithSignature("verifyingKeyHash()")
         );
-        require(success && data.length == 32, "Verifier key unavailable");
+        require(success && data.length == 32, "SC_PROOF");
         keyHash = abi.decode(data, (bytes32));
     }
 
@@ -593,7 +847,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         (bool success, bytes memory data) = account.staticcall(
             abi.encodeWithSignature("semanticProofProfileHash()")
         );
-        require(success && data.length == 32, "Semantic proof profile unavailable");
+        require(success && data.length == 32, "SC_PROOF");
         profileHash = abi.decode(data, (bytes32));
     }
 
@@ -601,7 +855,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         (bool success, bytes memory data) = account.staticcall(
             abi.encodeWithSignature("soraFinalityAnchorHash()")
         );
-        require(success && data.length == 32, "SORA finality anchor unavailable");
+        require(success && data.length == 32, "SC_PROOF");
         anchorHash = abi.decode(data, (bytes32));
     }
 }

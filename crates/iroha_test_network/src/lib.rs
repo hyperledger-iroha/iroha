@@ -8,8 +8,10 @@ use color_eyre::eyre::{Context, Report, Result, eyre};
 pub use config::chain_id;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
-    ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
-    NativeAmxFaultAck, NativeAmxFaultPhase,
+    ConsensusMessageControlEvidence, ConsensusMessageControlHeld, ConsensusMessageControlKind,
+    ConsensusMessageControlRule, NativeAmxFaultAck, NativeAmxFaultCommand, NativeAmxFaultPhase,
+    PrivateSettlementRouteControlAck, PrivateSettlementRouteControlAction,
+    PrivateSettlementRouteControlCommand, PrivateSettlementRouteControlPhase,
 };
 use core::{fmt, future::Future, time::Duration};
 use fslock::LockFile;
@@ -36,7 +38,6 @@ use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
     sha256_reader_bounded,
 };
-#[cfg(test)]
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
@@ -73,11 +74,11 @@ use iroha_primitives::{
     time::TimeSource,
     unique_vec::UniqueVec,
 };
-use iroha_telemetry::metrics::Status;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, PEER_KEYPAIR, REAL_GENESIS_ACCOUNT_KEYPAIR,
     SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
+use iroha_torii_shared::status::Status;
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value as JsonValue};
@@ -159,6 +160,31 @@ pub fn genesis_factory_with_post_topology(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
     )
 }
+
+/// Build a signed custom genesis with post-topology instructions and defer
+/// transaction execution to [`NetworkBuilder`].
+///
+/// Use this only as the return value of [`NetworkBuilder::with_genesis_block`]
+/// or [`NetworkBuilder::with_genesis_block_and_observers`] when the instructions
+/// require the builder's final pipeline, Nexus, or ZK configuration. The builder
+/// normalizes and pre-executes the block under that fully merged configuration
+/// before publishing identical prepared bytes to every peer. The returned block
+/// is not prepared genesis on its own.
+pub fn unexecuted_genesis_factory_with_post_topology(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+) -> GenesisBlock {
+    crate::config::genesis_unexecuted_with_keypair_and_post_topology(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+    )
+}
+
 fn test_domain_dataspace_id(domain: &DomainId) -> Result<DataSpaceId> {
     iroha_core::sns::dataspace_id_for_sns_alias(domain.dataspace().as_ref()).ok_or_else(|| {
         eyre!(
@@ -469,7 +495,17 @@ const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
 /// Low-priority `/status` fallback cadence after startup has already been observed.
 const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 type GenesisBuilderFn = Arc<
-    dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
+    dyn Fn(
+            UniqueVec<PeerId>,
+            Vec<GenesisTopologyEntry>,
+            Vec<PeerId>,
+            Vec<GenesisTopologyEntry>,
+            Vec<PeerId>,
+            Vec<GenesisTopologyEntry>,
+        ) -> GenesisBlock
+        + Send
+        + Sync
+        + 'static,
 >;
 fn revision4_committee_at_least(min_peers: usize) -> Option<usize> {
     (MIN_VALIDATORS_PER_HEIGHT..=MAX_VALIDATORS_PER_HEIGHT)
@@ -1043,6 +1079,7 @@ const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
 const IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_SOURCE_MANIFEST_SHA256";
 const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256";
 const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
+const IROHA_RELEASE_ARTIFACT_ROOT_ENV: &str = "IROHA_RELEASE_ARTIFACT_ROOT";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
 const SUMERAGI_V2_RELEASE_TARGET_SUBDIR: &str = "sumeragi-v2-release";
 const SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
@@ -1153,6 +1190,59 @@ fn exact_env_value(key: &str) -> color_eyre::Result<Option<String>> {
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(eyre!("{key} must contain valid Unicode")),
     }
+}
+#[cfg(unix)]
+fn authenticate_release_artifact_root(repo: &Path, raw: &str) -> color_eyre::Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let configured = PathBuf::from(raw);
+    if !configured.is_absolute() {
+        return Err(eyre!(
+            "release binary resolution requires an absolute {IROHA_RELEASE_ARTIFACT_ROOT_ENV}"
+        ));
+    }
+    let metadata = fs::symlink_metadata(&configured).wrap_err_with(|| {
+        eyre!(
+            "failed to inspect release artifact root {}",
+            configured.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must name a real directory, not a symlink"
+        ));
+    }
+    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o7777 != 0o700 {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must be an effective-user-owned private directory with exact mode 0700"
+        ));
+    }
+    let canonical = configured.canonicalize().wrap_err_with(|| {
+        eyre!(
+            "failed to canonicalize release artifact root {}",
+            configured.display()
+        )
+    })?;
+    if canonical != configured {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must be absolute, normalized, and contain no symlinked components"
+        ));
+    }
+    let canonical_repo = repo
+        .canonicalize()
+        .wrap_err("failed to canonicalize repository root for release artifact isolation")?;
+    if canonical.starts_with(&canonical_repo) || canonical_repo.starts_with(&canonical) {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must not overlap repository source"
+        ));
+    }
+    Ok(canonical)
+}
+#[cfg(not(unix))]
+fn authenticate_release_artifact_root(_repo: &Path, _raw: &str) -> color_eyre::Result<PathBuf> {
+    Err(eyre!(
+        "release artifact root authentication requires Unix ownership and mode semantics"
+    ))
 }
 #[cfg(unix)]
 fn validate_published_mode_and_links(
@@ -1558,8 +1648,11 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
             "release binary resolution requires an absolute {IROHA_TEST_TARGET_DIR_ENV}"
         ));
     }
-    let expected_programs_root = repo
-        .join("target")
+    let artifact_root_raw = exact_env_value(IROHA_RELEASE_ARTIFACT_ROOT_ENV)?.ok_or_else(|| {
+        eyre!("release binary resolution requires inherited {IROHA_RELEASE_ARTIFACT_ROOT_ENV}")
+    })?;
+    let artifact_root = authenticate_release_artifact_root(repo, &artifact_root_raw)?;
+    let expected_programs_root = artifact_root
         .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
         .join(&source_manifest_sha256)
         .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR);
@@ -1604,6 +1697,11 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
                 expected_programs_root.display()
             )
         })?;
+    if canonical_expected_programs_root != expected_programs_root {
+        return Err(eyre!(
+            "manifest-addressed release programs root must contain no symlinked or non-canonical components"
+        ));
+    }
     if canonical_target_dir.parent() != Some(canonical_expected_programs_root.as_path()) {
         return Err(eyre!(
             "{IROHA_TEST_TARGET_DIR_ENV} resolves outside the manifest-addressed release target"
@@ -3036,6 +3134,9 @@ pub struct Network {
     // support and many consensus tests intentionally use its length as quorum
     // input.
     peers: Vec<NetworkPeer>,
+    // Configured Validator processes that can serve participant-lane
+    // committees but are excluded from the signed global roster.
+    committee_validators: Vec<NetworkPeer>,
     observers: Vec<NetworkPeer>,
     observer_advertised_p2p_addresses: HashMap<PeerId, SocketAddr>,
     observer_slow_reader_relays: Option<ObserverSlowReaderRelays>,
@@ -3070,10 +3171,17 @@ impl Drop for Network {
         if self
             .peers
             .iter()
+            .chain(&self.committee_validators)
             .chain(&self.observers)
             .any(NetworkPeer::is_running)
         {
-            let peers = self.peers.iter().chain(&self.observers).cloned().collect();
+            let peers = self
+                .peers
+                .iter()
+                .chain(&self.committee_validators)
+                .chain(&self.observers)
+                .cloned()
+                .collect();
             let dir = self.env.dir.clone();
             let keep = keep_tempdir;
             std::thread::spawn(move || match runtime::Runtime::new() {
@@ -3124,6 +3232,8 @@ async fn shutdown_peers_for_drop(peers: Vec<NetworkPeer>) {
 #[derive(Debug, Clone)]
 struct ConsensusBootstrapProfile {
     params: ConsensusGenesisParams,
+    kagemusha_mint_finality:
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     mode_tag: &'static str,
     bls_domain: &'static str,
     chain_id: ChainId,
@@ -3135,8 +3245,25 @@ impl ConsensusBootstrapProfile {
             .expect("test-network consensus profile must be canonical")
     }
 }
-fn status_reaches_block_height(status: &iroha::client::Status, target_height: u64) -> bool {
+fn status_reaches_block_height(
+    status: &iroha_torii_shared::status::Status,
+    target_height: u64,
+) -> bool {
     status.blocks >= target_height
+}
+async fn run_peer_bootstrap_stages<G, C, O, GV, CV, OV, E>(
+    global_validators: G,
+    committee_validators: C,
+    observers: O,
+) -> std::result::Result<(), E>
+where
+    G: Future<Output = std::result::Result<GV, E>>,
+    C: Future<Output = std::result::Result<CV, E>>,
+    O: Future<Output = std::result::Result<OV, E>>,
+{
+    tokio::try_join!(global_validators, committee_validators)?;
+    observers.await?;
+    Ok(())
 }
 impl Network {
     /// Path to the temporary directory holding configs and logs for this network.
@@ -3151,8 +3278,13 @@ impl Network {
         let handshake_fingerprint = self.consensus_profile.fingerprint();
         debug!(
             validators = self.peers.len(),
+            committee_validators = self.committee_validators.len(),
             observers = self.observers.len(),
-            total_peers = self.peers.len().saturating_add(self.observers.len()),
+            total_peers = self
+                .peers
+                .len()
+                .saturating_add(self.committee_validators.len())
+                .saturating_add(self.observers.len()),
             consensus_block_cadence_ms = self.consensus_profile.params.block_cadence_ms.get(),
             "sumeragi configuration snapshot prior to peer bootstrap"
         );
@@ -3177,6 +3309,10 @@ impl Network {
     /// Access voting validator peers explicitly.
     pub fn validators(&self) -> &[NetworkPeer] {
         &self.peers
+    }
+    /// Access configured participant-committee validators excluded from global quorum.
+    pub fn committee_validators(&self) -> &[NetworkPeer] {
+        &self.committee_validators
     }
     /// Access signed, non-voting observer replicas.
     pub fn observers(&self) -> &[NetworkPeer] {
@@ -3206,9 +3342,12 @@ impl Network {
         relays.set_paused(paused);
         true
     }
-    /// Iterate over validators followed by observers in stable builder order.
+    /// Iterate over global validators, committee validators, then observers.
     pub fn all_peers(&self) -> impl Iterator<Item = &NetworkPeer> {
-        self.peers.iter().chain(&self.observers)
+        self.peers
+            .iter()
+            .chain(&self.committee_validators)
+            .chain(&self.observers)
     }
     fn advertised_p2p_address(&self, peer: &NetworkPeer) -> SocketAddr {
         self.observer_advertised_p2p_addresses
@@ -3322,8 +3461,13 @@ impl Network {
         let startup_timeout = self.peer_startup_timeout();
         info!(
             validators = self.peers.len(),
+            committee_validators = self.committee_validators.len(),
             observers = self.observers.len(),
-            total_peers = self.peers.len().saturating_add(self.observers.len()),
+            total_peers = self
+                .peers
+                .len()
+                .saturating_add(self.committee_validators.len())
+                .saturating_add(self.observers.len()),
             genesis_submitters = ?submitters,
             ?startup_timeout,
             "bootstrapping test network",
@@ -3393,11 +3537,55 @@ impl Network {
             }
         });
         let bootstrap = async {
-            futures::future::try_join_all(validator_start_futures).await?;
-            // Observers are started only after the validator set has committed
-            // the one canonical genesis. They receive the same signed block but
-            // a node-local role override, so their BLS identities authenticate
-            // P2P and block sync without enabling proposal or voting paths.
+            // Supplementary committee validators are not genesis submitters or
+            // global voters. Start them concurrently with the global validators
+            // so their trusted P2P endpoints are available for genesis traffic,
+            // while retaining the base Validator role so independently frozen
+            // participant lanes can select their local signing keys.
+            let committee_validator_start_futures = self
+                .committee_validators
+                .iter()
+                .enumerate()
+                .map(|(committee_index, peer)| {
+                    let genesis_block = genesis_block.clone();
+                    async move {
+                        let index = self.peers.len().saturating_add(committee_index);
+                        let mnemonic = peer.mnemonic().to_string();
+                        let delay = Duration::from_millis(200)
+                            .checked_mul(
+                                u32::try_from(committee_index.saturating_add(1))
+                                    .expect("bounded committee-validator index fits u32"),
+                            )
+                            .unwrap_or(Duration::from_secs(u64::MAX));
+                        if delay > Duration::ZERO {
+                            tokio::time::sleep(delay).await;
+                        }
+                        info!(
+                            index,
+                            %mnemonic,
+                            role = "committee_validator",
+                            "starting non-global committee validator"
+                        );
+                        peer.start_checked(
+                            self.config_layers_for_peer(peer),
+                            Some(genesis_block.as_ref()),
+                        )
+                        .await?;
+                        Self::wait_for_block_1_with_watchdog(
+                            peer,
+                            index,
+                            &mnemonic,
+                            "committee_validator",
+                        )
+                        .await?;
+                        Ok::<(), color_eyre::Report>(())
+                    }
+                });
+            // Observers are started only after both validator cohorts have
+            // committed the one canonical genesis. They receive the same signed
+            // block but a node-local role override, so their BLS identities
+            // authenticate P2P and block sync without enabling proposal or
+            // voting paths.
             let observer_start_futures =
                 self.observers
                     .iter()
@@ -3406,7 +3594,11 @@ impl Network {
                         let genesis_block = genesis_block.clone();
                         let observer_role = self.observer_start_layer(peer);
                         async move {
-                            let index = self.peers.len().saturating_add(observer_index);
+                            let index = self
+                                .peers
+                                .len()
+                                .saturating_add(self.committee_validators.len())
+                                .saturating_add(observer_index);
                             let mnemonic = peer.mnemonic().to_string();
                             let delay = Duration::from_millis(200)
                                 .checked_mul(
@@ -3436,8 +3628,12 @@ impl Network {
                             Ok::<(), color_eyre::Report>(())
                         }
                     });
-            futures::future::try_join_all(observer_start_futures).await?;
-            Ok::<(), color_eyre::Report>(())
+            run_peer_bootstrap_stages(
+                futures::future::try_join_all(validator_start_futures),
+                futures::future::try_join_all(committee_validator_start_futures),
+                futures::future::try_join_all(observer_start_futures),
+            )
+            .await
         };
         match timeout(startup_timeout, bootstrap).await {
             Ok(result) => match result {
@@ -3499,7 +3695,7 @@ impl Network {
         mnemonic: &str,
         role: &str,
     ) -> Result<()> {
-        let mut latest_status: Option<iroha::client::Status> = None;
+        let mut latest_status: Option<iroha_torii_shared::status::Status> = None;
         let status_timeout = {
             let configured = client_status_timeout_env();
             if configured == Duration::ZERO {
@@ -3647,7 +3843,11 @@ impl Network {
         let base = self
             .peer_startup_timeout_override
             .unwrap_or_else(peer_start_timeout_env);
-        let peers = self.peers.len().saturating_add(self.observers.len()) as u128;
+        let peers = self
+            .peers
+            .len()
+            .saturating_add(self.committee_validators.len())
+            .saturating_add(self.observers.len()) as u128;
         if peers == 0 {
             return base;
         }
@@ -3697,6 +3897,24 @@ impl Network {
     /// Includes `trusted_peers` parameter, containing all currently present peers.
     pub fn config_layers(&self) -> impl Iterator<Item = Cow<'_, Table>> {
         self.config_layers_with_additional_peers([])
+    }
+    /// Base configuration plus the node-local role for one built peer.
+    ///
+    /// Global and supplementary committee validators receive the ordinary
+    /// shared layers. Signed observers receive the additional fail-closed
+    /// observer role (and any observer relay address override), making this the
+    /// appropriate layer set for restarting an existing peer without changing
+    /// its process capability.
+    pub fn config_layers_for_peer<'a>(
+        &'a self,
+        peer: &'a NetworkPeer,
+    ) -> impl Iterator<Item = Cow<'a, Table>> {
+        let observer_layer = self
+            .observers
+            .iter()
+            .any(|observer| observer.network_peer_id() == peer.network_peer_id())
+            .then(|| Cow::Owned(self.observer_start_layer(peer)));
+        self.config_layers().chain(observer_layer)
     }
     /// Base configuration including the current peers and any additional peers provided.
     ///
@@ -3925,6 +4143,8 @@ impl Network {
                 &consensus_handshake_meta,
                 &self.genesis_key_pair,
                 &self.chain_id(),
+                da_proof_policies.as_ref(),
+                confidential_policy_hash,
             );
             ensure_genesis_results_with_runtime_config(
                 &mut augmented,
@@ -4870,6 +5090,151 @@ impl ObserverP2pBootstrap {
         Ok(participants)
     }
 }
+/// Bounded recipe for configured validator processes excluded from the global genesis roster.
+///
+/// Unlike [`ObserverP2pBootstrap`], these processes retain the default
+/// `NodeRole::Validator` runtime capability so they can sign independently
+/// frozen participant-lane work. They remain absent from [`Network::peers`],
+/// the signed global topology, and global quorum calculations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommitteeValidatorP2pBootstrap {
+    validator_count: NonZero<usize>,
+}
+/// Validation error for [`CommitteeValidatorP2pBootstrap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommitteeValidatorP2pBootstrapError {
+    /// At least one supplementary committee validator must be requested.
+    ZeroValidators,
+    /// The supplementary validator count alone exceeds the connection cap.
+    ValidatorCountExceedsConnectionCapacity {
+        /// Requested supplementary validator processes.
+        requested: usize,
+        /// Maximum processes possible beside one global validator.
+        maximum: usize,
+    },
+    /// Participant counts could not be added without overflow.
+    ParticipantCountOverflow {
+        /// Signed global validator count.
+        global_validators: usize,
+        /// Supplementary committee-validator count.
+        committee_validators: usize,
+        /// Explicit observer count.
+        observers: usize,
+    },
+    /// A full trusted-peer fanout would exceed the connection cap.
+    FanoutExceedsConnectionCapacity {
+        /// Signed global validator count.
+        global_validators: usize,
+        /// Supplementary committee-validator count.
+        committee_validators: usize,
+        /// Explicit observer count.
+        observers: usize,
+        /// Connections required per participant.
+        required: usize,
+        /// Available total-connection capacity per participant.
+        capacity: usize,
+    },
+}
+impl fmt::Display for CommitteeValidatorP2pBootstrapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroValidators => {
+                write!(f, "committee-validator bootstrap count must be non-zero")
+            }
+            Self::ValidatorCountExceedsConnectionCapacity { requested, maximum } => write!(
+                f,
+                "committee-validator bootstrap count {requested} exceeds the core P2P connection capacity {maximum}"
+            ),
+            Self::ParticipantCountOverflow {
+                global_validators,
+                committee_validators,
+                observers,
+            } => write!(
+                f,
+                "{global_validators} global validators plus {committee_validators} committee validators and {observers} observers overflow usize"
+            ),
+            Self::FanoutExceedsConnectionCapacity {
+                global_validators,
+                committee_validators,
+                observers,
+                required,
+                capacity,
+            } => write!(
+                f,
+                "{global_validators} global validators plus {committee_validators} committee validators and {observers} observers require {required} connections per peer, above capacity {capacity}"
+            ),
+        }
+    }
+}
+impl std::error::Error for CommitteeValidatorP2pBootstrapError {}
+impl CommitteeValidatorP2pBootstrap {
+    /// Construct a bounded supplementary committee-validator recipe.
+    ///
+    /// # Errors
+    /// Returns an error for zero or a count that cannot fit beside even one
+    /// global validator under the production core P2P connection cap.
+    pub fn new(
+        validator_count: usize,
+    ) -> std::result::Result<Self, CommitteeValidatorP2pBootstrapError> {
+        let validator_count = NonZero::new(validator_count)
+            .ok_or(CommitteeValidatorP2pBootstrapError::ZeroValidators)?;
+        let maximum = Self::connection_capacity();
+        if validator_count.get() > maximum {
+            return Err(
+                CommitteeValidatorP2pBootstrapError::ValidatorCountExceedsConnectionCapacity {
+                    requested: validator_count.get(),
+                    maximum,
+                },
+            );
+        }
+        Ok(Self { validator_count })
+    }
+    /// Number of supplementary validator processes requested by this recipe.
+    pub const fn validator_count(self) -> usize {
+        self.validator_count.get()
+    }
+    /// Production core-profile total-connection capacity used by the harness.
+    pub const fn connection_capacity() -> usize {
+        ObserverP2pBootstrap::connection_capacity()
+    }
+    fn validate_for_network(
+        self,
+        global_validators: usize,
+        observers: usize,
+        capacity: usize,
+    ) -> std::result::Result<usize, CommitteeValidatorP2pBootstrapError> {
+        let committee_validators = self.validator_count();
+        let participants = global_validators
+            .checked_add(committee_validators)
+            .and_then(|count| count.checked_add(observers))
+            .ok_or(
+                CommitteeValidatorP2pBootstrapError::ParticipantCountOverflow {
+                    global_validators,
+                    committee_validators,
+                    observers,
+                },
+            )?;
+        let required = participants.checked_sub(1).ok_or(
+            CommitteeValidatorP2pBootstrapError::ParticipantCountOverflow {
+                global_validators,
+                committee_validators,
+                observers,
+            },
+        )?;
+        if required > capacity {
+            return Err(
+                CommitteeValidatorP2pBootstrapError::FanoutExceedsConnectionCapacity {
+                    global_validators,
+                    committee_validators,
+                    observers,
+                    required,
+                    capacity,
+                },
+            );
+        }
+        Ok(participants)
+    }
+}
 const OBSERVER_SLOW_READER_MAX_CHUNK_BYTES: usize = 64 * 1024;
 const OBSERVER_SLOW_READER_MAX_DELAY: Duration = Duration::from_secs(1);
 const OBSERVER_RELAY_UPSTREAM_RETRY_DELAY: Duration = Duration::from_millis(25);
@@ -5413,6 +5778,7 @@ enum PermissionedLaneAuthorityBootstrap {
 pub struct NetworkBuilder {
     n_peers: usize,
     max_validator_capacity: Option<usize>,
+    committee_validator_p2p_bootstrap: Option<CommitteeValidatorP2pBootstrap>,
     observer_p2p_bootstrap: Option<ObserverP2pBootstrap>,
     observer_slow_reader_relays: Option<ObserverSlowReaderRelayConfig>,
     config_layers: Vec<Table>,
@@ -5464,10 +5830,10 @@ fn merge_tables(dst: &mut Table, src: &Table) {
 }
 fn generated_sumeragi_capacity_layer(
     validator_count: usize,
+    minimum_authenticated_non_validator_sources: usize,
     caller_layers: &[Table],
 ) -> Result<Table> {
     let commands = iroha_config::parameters::defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get();
-    let bodies = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
     let effective_positive_capacity = |field: &str, fallback: usize| {
         caller_layers
             .iter()
@@ -5485,7 +5851,21 @@ fn generated_sumeragi_capacity_layer(
         "authenticated_non_validator_sources",
         iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
             .get(),
-    );
+    )
+    .max(minimum_authenticated_non_validator_sources);
+    let required_bodies =
+        iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
+            validator_count,
+            authenticated_non_validator_sources,
+        )
+        .ok_or_else(|| {
+            eyre!(
+                "generated test-network Sumeragi body-message capacity overflowed for {validator_count} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
+            )
+        })?;
+    let bodies = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY
+        .get()
+        .max(required_bodies);
     let body_source_bytes = effective_positive_capacity(
         "body_source_bytes",
         iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
@@ -5568,6 +5948,7 @@ fn effective_network_reply_source_capacity(
 fn validate_planned_validator_capacity(
     config: &iroha_config::parameters::actual::Root,
     max_validator_capacity: usize,
+    minimum_authenticated_non_validator_sources: usize,
 ) -> Result<()> {
     let bootstrap_validator_count = config.common.trusted_peers.value().validator_roster_len();
     if max_validator_capacity < bootstrap_validator_count {
@@ -5582,6 +5963,11 @@ fn validate_planned_validator_capacity(
     }
     let queues = &config.sumeragi.queues;
     let authenticated_non_validator_sources = queues.authenticated_non_validator_sources.get();
+    if authenticated_non_validator_sources < minimum_authenticated_non_validator_sources {
+        return Err(eyre!(
+            "final caller layers leave sumeragi.queues.authenticated_non_validator_sources ({authenticated_non_validator_sources}) below the planned non-global participant minimum {minimum_authenticated_non_validator_sources}"
+        ));
+    }
     let required_bodies =
         iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
             max_validator_capacity,
@@ -5669,6 +6055,7 @@ fn trusted_peers_layer_for_parse_with_observers(
 ) -> Table {
     trusted_peers_layer_for_parse_with_observer_addresses(
         validators,
+        &[],
         observers,
         &HashMap::new(),
         auto_populate_trusted_peer_pops,
@@ -5676,12 +6063,14 @@ fn trusted_peers_layer_for_parse_with_observers(
 }
 fn trusted_peers_layer_for_parse_with_observer_addresses(
     validators: &[NetworkPeer],
+    committee_validators: &[NetworkPeer],
     observers: &[NetworkPeer],
     observer_advertised_p2p_addresses: &HashMap<PeerId, SocketAddr>,
     auto_populate_trusted_peer_pops: bool,
 ) -> Table {
     let trusted_peers: Vec<String> = validators
         .iter()
+        .chain(committee_validators)
         .chain(observers)
         .map(|peer| {
             let address = observer_advertised_p2p_addresses
@@ -6234,6 +6623,8 @@ fn normalize_genesis_consensus_handshake(
     consensus_handshake_meta: &Parameter,
     genesis_key_pair: &KeyPair,
     _fallback_chain_id: &ChainId,
+    da_proof_policies: Option<&DaProofPolicyBundle>,
+    confidential_policy_hash: Option<[u8; 32]>,
 ) -> GenesisBlock {
     let mut param_instructions = genesis_isi
         .iter()
@@ -6289,6 +6680,17 @@ fn normalize_genesis_consensus_handshake(
     let mut header = source.0.header();
     header.merkle_root = external_merkle.root();
     header.result_merkle_root = None;
+    let da_proof_policies = da_proof_policies
+        .cloned()
+        .or_else(|| source.0.da_proof_policies().cloned());
+    header.set_da_proof_policies_hash(da_proof_policies.as_ref().map(iroha_crypto::HashOf::new));
+    if let Some(zk_policy_hash) = confidential_policy_hash {
+        let mut confidential_features = header
+            .confidential_features()
+            .unwrap_or(iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST);
+        confidential_features.zk_policy_hash = Some(zk_policy_hash);
+        header.set_confidential_features(Some(confidential_features));
+    }
     let signer_index = source
         .0
         .signatures()
@@ -6303,7 +6705,7 @@ fn normalize_genesis_consensus_handshake(
     let mut proposal =
         iroha_data_model::block::SignedBlock::presigned(proposal_signature, header, transactions);
     proposal.set_da_commitments(source.0.da_commitments().cloned());
-    proposal.set_da_proof_policies(source.0.da_proof_policies().cloned());
+    proposal.set_da_proof_policies(da_proof_policies);
     proposal.set_da_pin_intents(source.0.da_pin_intents().cloned());
     GenesisBlock(proposal)
 }
@@ -6318,7 +6720,8 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         block_cadence_ms: consensus_profile.params.block_cadence_ms,
         wire_protocol_version: consensus_profile.wire_protocol_version,
         consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
-        sumeragi_v2: consensus_profile.params.v2_context,
+        sumeragi_v2: consensus_profile.params.v2_context.clone(),
+        kagemusha_mint_finality: consensus_profile.kagemusha_mint_finality.clone(),
     };
     metadata
         .validate()
@@ -6358,6 +6761,24 @@ fn npos_params_from_genesis(
         .map(Some)
         .ok_or_else(|| "genesis contains invalid `sumeragi_npos_parameters`".to_owned())
 }
+fn authenticated_validator_capacity(
+    declared_capacity: usize,
+    consensus_mode: ConsensusMode,
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+) -> Result<usize, String> {
+    if consensus_mode == ConsensusMode::Permissioned {
+        return Ok(declared_capacity);
+    }
+    let npos =
+        npos_params_from_genesis(genesis_isi, genesis_post_topology_isi)?.unwrap_or_default();
+    npos.validate()
+        .map_err(|error| format!("invalid signed NPoS validator ceiling: {error}"))?;
+    let signed_capacity = usize::try_from(npos.max_validators()).map_err(|_| {
+        "signed NPoS maximum validator roster does not fit this platform".to_owned()
+    })?;
+    Ok(declared_capacity.max(signed_capacity))
+}
 fn resolve_npos_bootstrap_stake(
     genesis_isi: &[Vec<InstructionBox>],
     genesis_post_topology_isi: &[Vec<InstructionBox>],
@@ -6386,6 +6807,7 @@ impl NetworkBuilder {
         let mut builder = Self {
             n_peers: DEFAULT_NETWORK_PEERS,
             max_validator_capacity: None,
+            committee_validator_p2p_bootstrap: None,
             observer_p2p_bootstrap: None,
             observer_slow_reader_relays: None,
             config_layers: vec![],
@@ -6461,18 +6883,63 @@ impl NetworkBuilder {
                 "validator peer count {n_peers} exceeds the reserved maximum validator capacity {max_validator_capacity}"
             );
         }
+        let committee_validator_count = self
+            .committee_validator_p2p_bootstrap
+            .map_or(0, CommitteeValidatorP2pBootstrap::validator_count);
         if let Some(bootstrap) = self.observer_p2p_bootstrap {
             bootstrap
                 .validate_for_validators(
-                    self.max_validator_capacity.unwrap_or(n_peers),
+                    self.max_validator_capacity
+                        .unwrap_or(n_peers)
+                        .checked_add(committee_validator_count)
+                        .expect("validator participant count cannot overflow"),
                     ObserverP2pBootstrap::connection_capacity(),
                 )
                 .unwrap_or_else(|error| {
                     panic!("invalid observer bootstrap after peer change: {error}")
                 });
         }
+        if let Some(bootstrap) = self.committee_validator_p2p_bootstrap {
+            bootstrap
+                .validate_for_network(
+                    self.max_validator_capacity.unwrap_or(n_peers),
+                    self.observer_p2p_bootstrap
+                        .map_or(0, ObserverP2pBootstrap::observer_count),
+                    CommitteeValidatorP2pBootstrap::connection_capacity(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("invalid committee-validator bootstrap after peer change: {error}")
+                });
+        }
         self.n_peers = n_peers;
         self
+    }
+    /// Add configured Validator processes for non-global participant committees.
+    ///
+    /// These peers join the trusted P2P fanout and receive the signed genesis,
+    /// but are excluded from [`Self::with_peers`], the global genesis topology,
+    /// and global quorum calculations. They start alongside the global roster
+    /// with a bounded stagger and retain the base Validator role.
+    ///
+    /// # Errors
+    /// Returns an error when all configured processes cannot fit full localnet
+    /// fanout under the production core P2P connection cap.
+    pub fn with_committee_validator_p2p_bootstrap(
+        mut self,
+        bootstrap: CommitteeValidatorP2pBootstrap,
+    ) -> std::result::Result<Self, CommitteeValidatorP2pBootstrapError> {
+        assert!(
+            self.parliament_test_signers.is_none(),
+            "supplementary committee validators are unsupported by the feature-isolated Parliament signer daemon"
+        );
+        bootstrap.validate_for_network(
+            self.max_validator_capacity.unwrap_or(self.n_peers),
+            self.observer_p2p_bootstrap
+                .map_or(0, ObserverP2pBootstrap::observer_count),
+            CommitteeValidatorP2pBootstrap::connection_capacity(),
+        )?;
+        self.committee_validator_p2p_bootstrap = Some(bootstrap);
+        Ok(self)
     }
     /// Add a bounded set of signed, non-voting observer replicas.
     ///
@@ -6488,8 +6955,17 @@ impl NetworkBuilder {
         mut self,
         bootstrap: ObserverP2pBootstrap,
     ) -> std::result::Result<Self, ObserverP2pBootstrapError> {
+        let committee_validator_count = self
+            .committee_validator_p2p_bootstrap
+            .map_or(0, CommitteeValidatorP2pBootstrap::validator_count);
         bootstrap.validate_for_validators(
-            self.max_validator_capacity.unwrap_or(self.n_peers),
+            self.max_validator_capacity
+                .unwrap_or(self.n_peers)
+                .checked_add(committee_validator_count)
+                .ok_or(ObserverP2pBootstrapError::ParticipantCountOverflow {
+                    validators: self.max_validator_capacity.unwrap_or(self.n_peers),
+                    observers: bootstrap.observer_count(),
+                })?,
             ObserverP2pBootstrap::connection_capacity(),
         )?;
         self.observer_p2p_bootstrap = Some(bootstrap);
@@ -6542,6 +7018,10 @@ impl NetworkBuilder {
             self.n_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
             "the feature-isolated Parliament signer fixture requires exactly four validators",
         );
+        assert!(
+            self.committee_validator_p2p_bootstrap.is_none(),
+            "the feature-isolated Parliament signer daemon does not support supplementary committee validators",
+        );
         self.parliament_test_signers = Some(ParliamentTestSignerSelection::AllValid);
         self
     }
@@ -6565,6 +7045,10 @@ impl NetworkBuilder {
         assert_eq!(
             self.n_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
             "the feature-isolated Parliament signer fixture requires exactly four validators",
+        );
+        assert!(
+            self.committee_validator_p2p_bootstrap.is_none(),
+            "the feature-isolated Parliament signer daemon does not support supplementary committee validators",
         );
         let modes = modes.into_iter().collect::<Vec<_>>();
         assert_eq!(
@@ -6626,14 +7110,32 @@ impl NetworkBuilder {
             );
         }
         if self.n_peers < target_peers {
+            let committee_validator_count = self
+                .committee_validator_p2p_bootstrap
+                .map_or(0, CommitteeValidatorP2pBootstrap::validator_count);
             if let Some(bootstrap) = self.observer_p2p_bootstrap {
                 bootstrap
                     .validate_for_validators(
-                        self.max_validator_capacity.unwrap_or(target_peers),
+                        self.max_validator_capacity
+                            .unwrap_or(target_peers)
+                            .checked_add(committee_validator_count)
+                            .expect("validator participant count cannot overflow"),
                         ObserverP2pBootstrap::connection_capacity(),
                     )
                     .unwrap_or_else(|error| {
                         panic!("invalid observer bootstrap after minimum peer change: {error}")
+                    });
+            }
+            if let Some(bootstrap) = self.committee_validator_p2p_bootstrap {
+                bootstrap
+                    .validate_for_network(
+                        self.max_validator_capacity.unwrap_or(target_peers),
+                        self.observer_p2p_bootstrap
+                            .map_or(0, ObserverP2pBootstrap::observer_count),
+                        CommitteeValidatorP2pBootstrap::connection_capacity(),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("invalid committee-validator bootstrap after minimum peer change: {error}")
                     });
             }
             self.n_peers = target_peers;
@@ -6663,13 +7165,32 @@ impl NetworkBuilder {
             "maximum validator capacity must not exceed protocol ceiling {MAX_VALIDATORS_PER_HEIGHT}, got {max_validator_capacity}"
         );
         if let Some(bootstrap) = self.observer_p2p_bootstrap {
+            let committee_validator_count = self
+                .committee_validator_p2p_bootstrap
+                .map_or(0, CommitteeValidatorP2pBootstrap::validator_count);
             bootstrap
                 .validate_for_validators(
-                    max_validator_capacity,
+                    max_validator_capacity
+                        .checked_add(committee_validator_count)
+                        .expect("validator participant count cannot overflow"),
                     ObserverP2pBootstrap::connection_capacity(),
                 )
                 .unwrap_or_else(|error| {
                     panic!("invalid observer bootstrap after validator reservation: {error}")
+                });
+        }
+        if let Some(bootstrap) = self.committee_validator_p2p_bootstrap {
+            bootstrap
+                .validate_for_network(
+                    max_validator_capacity,
+                    self.observer_p2p_bootstrap
+                        .map_or(0, ObserverP2pBootstrap::observer_count),
+                    CommitteeValidatorP2pBootstrap::connection_capacity(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "invalid committee-validator bootstrap after validator reservation: {error}"
+                    )
                 });
         }
         self.max_validator_capacity = Some(max_validator_capacity);
@@ -6896,7 +7417,106 @@ impl NetworkBuilder {
     where
         F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
     {
-        self.custom_genesis = Some(Arc::new(build));
+        self.custom_genesis = Some(Arc::new(
+            move |topology,
+                  topology_entries,
+                  _committee_validators,
+                  _committee_validator_entries,
+                  _observers,
+                  _observer_entries| { build(topology, topology_entries) },
+        ));
+        self.genesis_isi = vec![Vec::new()];
+        self
+    }
+    /// Override genesis using both the voting topology and observer identities.
+    ///
+    /// The first two closure arguments are the exact signed global voting
+    /// topology and its Proof-of-Possession entries. The third argument lists
+    /// signed, non-voting observer identities in stable builder order. Observer
+    /// identities may be referenced by observer-specific post-topology metadata,
+    /// but cannot sign global or participant-committee work and must not be added
+    /// to the signed global voting roster returned by the closure. Use
+    /// [`Self::with_genesis_block_and_committee_validator_entries`] when a
+    /// participant dataspace needs independently signing validators.
+    ///
+    /// The same normalization, pre-execution, and voting-roster validation as
+    /// [`Self::with_genesis_block`] is applied to the returned block.
+    pub fn with_genesis_block_and_observers<F>(mut self, build: F) -> Self
+    where
+        F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>, Vec<PeerId>) -> GenesisBlock
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.custom_genesis = Some(Arc::new(
+            move |topology,
+                  topology_entries,
+                  _committee_validators,
+                  _committee_validator_entries,
+                  observers,
+                  _observer_entries| { build(topology, topology_entries, observers) },
+        ));
+        self.genesis_isi = vec![Vec::new()];
+        self
+    }
+    /// Override genesis using proof-bearing non-voting observer identities.
+    ///
+    /// The first two closure arguments are the exact signed global voting
+    /// topology and its PoP entries. The third contains the disjoint observer
+    /// identities and their PoPs in stable builder order. These observer entries
+    /// may be used with `RegisterCommitteePeerWithPop`, but must remain outside
+    /// the signed global topology.
+    pub fn with_genesis_block_and_observer_entries<F>(mut self, build: F) -> Self
+    where
+        F: Fn(
+                UniqueVec<PeerId>,
+                Vec<GenesisTopologyEntry>,
+                Vec<GenesisTopologyEntry>,
+            ) -> GenesisBlock
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.custom_genesis = Some(Arc::new(
+            move |topology,
+                  topology_entries,
+                  _committee_validators,
+                  _committee_validator_entries,
+                  _observers,
+                  observer_entries| {
+                build(topology, topology_entries, observer_entries)
+            },
+        ));
+        self.genesis_isi = vec![Vec::new()];
+        self
+    }
+    /// Override genesis using proof-bearing supplementary committee validators.
+    ///
+    /// The first two closure arguments are the exact signed global voting
+    /// topology and its PoP entries. The third contains configured Validator
+    /// processes and PoPs that remain outside that topology but may be
+    /// registered with `RegisterCommitteePeerWithPop` for participant lanes.
+    pub fn with_genesis_block_and_committee_validator_entries<F>(mut self, build: F) -> Self
+    where
+        F: Fn(
+                UniqueVec<PeerId>,
+                Vec<GenesisTopologyEntry>,
+                Vec<GenesisTopologyEntry>,
+            ) -> GenesisBlock
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.custom_genesis = Some(Arc::new(
+            move |topology,
+                  topology_entries,
+                  _committee_validators,
+                  committee_validator_entries,
+                  _observers,
+                  _observer_entries| {
+                build(topology, topology_entries, committee_validator_entries)
+            },
+        ));
         self.genesis_isi = vec![Vec::new()];
         self
     }
@@ -6948,6 +7568,7 @@ impl NetworkBuilder {
         let NetworkBuilder {
             n_peers,
             max_validator_capacity,
+            committee_validator_p2p_bootstrap,
             observer_p2p_bootstrap,
             observer_slow_reader_relays,
             mut config_layers,
@@ -6970,18 +7591,49 @@ impl NetworkBuilder {
             initial_consensus_message_control,
         } = self;
         let max_validator_capacity = max_validator_capacity.unwrap_or(n_peers);
+        let ingress_validator_capacity = authenticated_validator_capacity(
+            max_validator_capacity,
+            consensus_mode,
+            &genesis_isi,
+            &genesis_post_topology_isi,
+        )
+        .unwrap_or_else(|error| {
+            panic!("failed to derive authenticated test-network validator capacity: {error}")
+        });
         let observer_count = observer_p2p_bootstrap.map_or(0, |bootstrap| {
             bootstrap
                 .validate_for_validators(
-                    max_validator_capacity,
+                    max_validator_capacity
+                        .checked_add(
+                            committee_validator_p2p_bootstrap
+                                .map_or(0, CommitteeValidatorP2pBootstrap::validator_count),
+                        )
+                        .expect("validator participant count cannot overflow"),
                     ObserverP2pBootstrap::connection_capacity(),
                 )
                 .unwrap_or_else(|error| panic!("invalid observer P2P bootstrap: {error}"));
             bootstrap.observer_count()
         });
+        let committee_validator_count = committee_validator_p2p_bootstrap.map_or(0, |bootstrap| {
+            bootstrap
+                .validate_for_network(
+                    max_validator_capacity,
+                    observer_count,
+                    CommitteeValidatorP2pBootstrap::connection_capacity(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("invalid committee-validator P2P bootstrap: {error}")
+                });
+            bootstrap.validator_count()
+        });
         let participant_count = n_peers
+            .checked_add(committee_validator_count)
+            .expect("validated committee-validator participant count cannot overflow")
             .checked_add(observer_count)
-            .expect("validated observer participant count cannot overflow");
+            .expect("validated P2P participant count cannot overflow");
+        let authenticated_non_validator_source_reservation = committee_validator_count
+            .checked_add(observer_count)
+            .expect("validated non-global participant count cannot overflow");
         // A builder is a reusable network recipe. Allocate the environment only
         // when the recipe is built so retrying a cloned recipe cannot inherit a
         // previous attempt's peer directories, Kura state, logs, or ports.
@@ -7051,6 +7703,16 @@ impl NetworkBuilder {
                     .build_with_program(&env, validator_program)
             })
             .collect();
+        let mut committee_validators: Vec<_> = (0..committee_validator_count)
+            .map(|i| {
+                let seed = seed
+                    .as_ref()
+                    .map(|x| format!("{x}-committee-validator-{i}"));
+                NetworkPeerBuilder::new()
+                    .with_seed(seed.as_ref().map(|x| x.as_bytes()))
+                    .build_with_program(&env, validator_program)
+            })
+            .collect();
         let mut observers: Vec<_> = (0..observer_count)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-observer-{i}"));
@@ -7081,6 +7743,24 @@ impl NetworkBuilder {
             "every network peer must provide a BLS PoP"
         );
         let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
+        let committee_validator_entries: Vec<GenesisTopologyEntry> = committee_validators
+            .iter()
+            .filter_map(NetworkPeer::genesis_pop)
+            .collect();
+        assert_eq!(
+            committee_validator_entries.len(),
+            committee_validators.len(),
+            "every supplementary committee validator must provide a BLS PoP"
+        );
+        let observer_entries: Vec<GenesisTopologyEntry> = observers
+            .iter()
+            .filter_map(NetworkPeer::genesis_pop)
+            .collect();
+        assert_eq!(
+            observer_entries.len(),
+            observers.len(),
+            "every signed observer must provide a BLS PoP"
+        );
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
         if let Some(initial) = initial_consensus_message_control {
             for (receiver_index, peer) in peers.iter_mut().enumerate() {
@@ -7094,6 +7774,16 @@ impl NetworkBuilder {
                     .stage_initial_rules(&rules, initial.queue_capacity)
                     .expect("stage valid initial consensus message-control rules");
             }
+            for committee_validator in &mut committee_validators {
+                let control = committee_validator
+                    .consensus_message_control
+                    .as_mut()
+                    .and_then(Arc::get_mut)
+                    .expect("new controlled committee validator must uniquely own its controller");
+                control
+                    .stage_initial_rules(&[], initial.queue_capacity)
+                    .expect("stage empty committee-validator message-control rules");
+            }
             for observer in &mut observers {
                 let control = observer
                     .consensus_message_control
@@ -7105,11 +7795,14 @@ impl NetworkBuilder {
                     .expect("stage empty observer message-control rules");
             }
         }
-        let generated_sumeragi_layer =
-            generated_sumeragi_capacity_layer(max_validator_capacity, &config_layers)
-                .unwrap_or_else(|error| {
-                    panic!("failed to derive test-network Sumeragi capacity layer: {error:#}")
-                });
+        let generated_sumeragi_layer = generated_sumeragi_capacity_layer(
+            ingress_validator_capacity,
+            authenticated_non_validator_source_reservation,
+            &config_layers,
+        )
+        .unwrap_or_else(|error| {
+            panic!("failed to derive test-network Sumeragi capacity layer: {error:#}")
+        });
         let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 3);
         config_layers_for_parse.push(
             Table::new()
@@ -7121,6 +7814,7 @@ impl NetworkBuilder {
         );
         config_layers_for_parse.push(trusted_peers_layer_for_parse_with_observer_addresses(
             &peers,
+            &committee_validators,
             &observers,
             &observer_advertised_p2p_addresses,
             auto_populate_trusted_peer_pops,
@@ -7140,9 +7834,21 @@ impl NetworkBuilder {
                 pre_genesis_peer.mnemonic()
             )
         });
-        let custom_genesis_block = custom_genesis
-            .as_ref()
-            .map(|builder_fn| builder_fn(peer_ids.clone(), topology_entries.clone()));
+        let observer_ids = observers.iter().map(NetworkPeer::id).collect::<Vec<_>>();
+        let committee_validator_ids = committee_validators
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let custom_genesis_block = custom_genesis.as_ref().map(|builder_fn| {
+            builder_fn(
+                peer_ids.clone(),
+                topology_entries.clone(),
+                committee_validator_ids.clone(),
+                committee_validator_entries.clone(),
+                observer_ids.clone(),
+                observer_entries.clone(),
+            )
+        });
         if let Some(custom) = custom_genesis_block.as_ref() {
             assert_genesis_voting_roster_matches_network(custom, &peer_topology);
         }
@@ -7518,14 +8224,10 @@ impl NetworkBuilder {
             // Fan-out gossip to all peers so block sync converges quickly in multi-peer
             // integration scenarios (NPoS liveness and certified-body recovery).
             .write(["network", "block_gossip_size"], participant_fanout);
-        base_layer = base_layer
-            // Test networks always provision BLS validator keys; drop the HSM binding requirement
-            // so genesis peer registration succeeds.
-            .write(["sumeragi", "keys", "require_hsm"], false)
-            .write(
-                ["genesis", "public_key"],
-                genesis_key_pair.public_key().to_string(),
-            );
+        base_layer = base_layer.write(
+            ["genesis", "public_key"],
+            genesis_key_pair.public_key().to_string(),
+        );
         base_layer = base_layer
             // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
             .write(["pipeline", "signature_batch_max_bls"], 4i64)
@@ -7538,6 +8240,7 @@ impl NetworkBuilder {
         let mut final_config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
         final_config_layers_for_parse.push(trusted_peers_layer_for_parse_with_observer_addresses(
             &peers,
+            &committee_validators,
             &observers,
             &observer_advertised_p2p_addresses,
             auto_populate_trusted_peer_pops,
@@ -7554,11 +8257,12 @@ impl NetworkBuilder {
             resolved_genesis_config
                 .as_ref()
                 .expect("final test-network config was just resolved"),
-            max_validator_capacity,
+            ingress_validator_capacity,
+            authenticated_non_validator_source_reservation,
         )
         .unwrap_or_else(|error| {
             panic!(
-                "final fully merged test-network config does not reserve the declared maximum validator capacity: {error:#}"
+                "final fully merged test-network config does not reserve the authenticated/planned maximum validator capacity: {error:#}"
             )
         });
         if let Some(bootstrap) = observer_p2p_bootstrap {
@@ -7568,9 +8272,28 @@ impl NetworkBuilder {
                 .unwrap_or_else(ObserverP2pBootstrap::connection_capacity)
                 .min(ObserverP2pBootstrap::connection_capacity());
             bootstrap
-                .validate_for_validators(max_validator_capacity, configured_capacity)
+                .validate_for_validators(
+                    max_validator_capacity
+                        .checked_add(committee_validator_count)
+                        .expect("validator participant count cannot overflow"),
+                    configured_capacity,
+                )
                 .unwrap_or_else(|error| {
                     panic!("observer P2P fanout exceeds effective network capacity: {error}")
+                });
+        }
+        if let Some(bootstrap) = committee_validator_p2p_bootstrap {
+            let configured_capacity = resolved_genesis_config
+                .as_ref()
+                .map(|config| effective_network_reply_source_capacity(&config.network))
+                .unwrap_or_else(CommitteeValidatorP2pBootstrap::connection_capacity)
+                .min(CommitteeValidatorP2pBootstrap::connection_capacity());
+            bootstrap
+                .validate_for_network(max_validator_capacity, observer_count, configured_capacity)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "committee-validator P2P fanout exceeds effective network capacity: {error}"
+                    )
                 });
         }
         // Build consensus parameters from the effective genesis instructions (base + post-topology),
@@ -7644,18 +8367,27 @@ impl NetworkBuilder {
             consensus_mode_tag = NPOS_TAG;
             consensus_bls_domain = NPOS_BLS_DOMAIN;
         }
-        let provisional_v2_context =
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+        let provisional_metadata = parameter_state
+            .custom()
+            .get(&consensus_metadata::handshake_meta_id())
+            .and_then(|parameter| {
+                norito::json::from_str::<ConsensusHandshakeMetadata>(parameter.payload().get()).ok()
+            })
+            .expect(
+                "test-network genesis must carry explicitly provisioned signed Sumeragi v2 context parameters",
             );
+        let provisional_v2_context = provisional_metadata.sumeragi_v2;
+        let provisional_kagemusha_mint_finality = provisional_metadata.kagemusha_mint_finality;
         let provisional_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                provisional_v2_context,
+                provisional_v2_context.clone(),
             )
             .expect("test-network genesis parameters must form a canonical carrier");
         let provisional_profile = ConsensusBootstrapProfile {
             params: provisional_params,
+            kagemusha_mint_finality: provisional_kagemusha_mint_finality.clone(),
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),
@@ -7670,6 +8402,8 @@ impl NetworkBuilder {
                     &consensus_handshake_parameter(&provisional_profile),
                     &genesis_key_pair,
                     &consensus_chain_id,
+                    da_proof_policies.as_ref(),
+                    confidential_policy_hash,
                 );
                 config::staged_genesis_policy_hashes(
                     &provisional,
@@ -7698,6 +8432,7 @@ impl NetworkBuilder {
             .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
+            kagemusha_mint_finality: provisional_kagemusha_mint_finality,
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),
@@ -7746,6 +8481,8 @@ impl NetworkBuilder {
                 &consensus_handshake_meta,
                 &genesis_key_pair,
                 &consensus_chain_id,
+                da_proof_policies.as_ref(),
+                confidential_policy_hash,
             );
             let (signed_block, final_staged_hash) = config::preexecute_genesis_with_runtime_config(
                 &final_custom,
@@ -7777,6 +8514,7 @@ impl NetworkBuilder {
         let mut network = Network {
             env,
             peers,
+            committee_validators,
             observers,
             observer_advertised_p2p_addresses,
             observer_slow_reader_relays,
@@ -7822,6 +8560,9 @@ impl NetworkBuilder {
             .map(Cow::into_owned)
             .collect::<Vec<_>>();
         for peer in network.validators() {
+            let _ = resolve_final_actual_config(peer, &final_config_layers);
+        }
+        for peer in network.committee_validators() {
             let _ = resolve_final_actual_config(peer, &final_config_layers);
         }
         for peer in network.observers() {
@@ -9078,6 +9819,15 @@ impl NetworkPeer {
     pub fn is_running(&self) -> bool {
         self.is_running.load(Ordering::Relaxed)
     }
+    /// Return the operating-system process identifier for the current peer run.
+    ///
+    /// The identifier is present only after the child has been spawned and is
+    /// cleared when the run terminates. Release evidence callers must combine
+    /// this value with a fresh health check instead of treating PID presence as
+    /// proof that the process remains alive.
+    pub async fn process_id(&self) -> Option<u32> {
+        self.run.lock().await.as_ref().and_then(|run| run.pid)
+    }
     /// Create a client to interact with this peer
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
         tracing::debug!(
@@ -10017,6 +10767,16 @@ mod tests {
     ///
     /// Tests needing both guards must acquire `CONFIG_ENV_GUARD` first.
     static NETWORK_PERMIT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
+    fn run_large_stack_test(name: &str, test: fn()) {
+        let worker = std::thread::Builder::new()
+            .name(name.to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn large-stack test worker");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
     fn lock_env_guard(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.blocking_lock()
     }
@@ -10869,6 +11629,30 @@ mod tests {
             .expect("fatal signal should be delivered");
     }
     #[tokio::test]
+    async fn process_id_reports_only_the_current_live_run_slot() {
+        if skip_network_tests("process_id_reports_only_the_current_live_run_slot") {
+            return;
+        }
+        let env = Environment::new();
+        let peer = NetworkPeer::builder().build(&env);
+        assert_eq!(peer.process_id().await, None);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
+        let tasks = tokio::task::JoinSet::new();
+        let (fatal_tx, _fatal_rx) = watch::channel(false);
+        {
+            let mut guard = peer.run.lock().await;
+            *guard = Some(PeerRun {
+                tasks,
+                shutdown: shutdown_tx,
+                fatal_tx,
+                pid: Some(42_424),
+            });
+        }
+        assert_eq!(peer.process_id().await, Some(42_424));
+        peer.run.lock().await.take();
+        assert_eq!(peer.process_id().await, None);
+    }
+    #[tokio::test]
     async fn shutdown_if_started_returns_false_when_peer_is_not_running() {
         if skip_network_tests("shutdown_if_started_returns_false_when_peer_is_not_running") {
             return;
@@ -11670,6 +12454,16 @@ mod tests {
     }
     #[test]
     fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
+        let worker = std::thread::Builder::new()
+            .name("explicit-npos-ingress-capacity-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos_impl)
+            .expect("spawn explicit NPoS ingress-capacity regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+    fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos_impl() {
         init_instruction_registry();
         let mut npos = SumeragiNposParameters::default();
         npos.max_validators = 4;
@@ -11688,6 +12482,28 @@ mod tests {
                     npos.into_custom_parameter(),
                 ))),
         );
+        let config_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let actual = resolve_final_actual_config(&network.peers()[0], &config_layers);
+        let authenticated_non_validator_sources = actual
+            .sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get();
+        let body_source_bytes = actual.sumeragi.queues.body_source_bytes.get();
+        assert_eq!(
+            actual.sumeragi.queues.body_bytes.get(),
+            (4 + authenticated_non_validator_sources) * body_source_bytes,
+            "an explicit signed four-validator ceiling must retain four validator source partitions"
+        );
+        actual
+            .sumeragi
+            .v2_config(Duration::from_millis(666), ConsensusMode::Npos)
+            .expect("explicit four-validator NPoS config is valid")
+            .validate_ingress_roster_capacity(4)
+            .expect("explicit four-validator NPoS ingress geometry is sufficient");
         let genesis = network.genesis();
         let profile = network.consensus_bootstrap_profile();
         let mut parameter_state = consensus_parameters_from_genesis(&genesis);
@@ -12122,10 +12938,61 @@ mod tests {
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "<missing panic message>".to_owned());
         assert!(
-            panic_message.contains("declared maximum validator capacity")
+            panic_message.contains("authenticated/planned maximum validator capacity")
                 && panic_message.contains("planned-roster minimum"),
             "planned capacity failure should be localized, got: {panic_message}"
         );
+    }
+    #[test]
+    fn npos_signed_ceiling_fails_closed_on_bootstrap_only_body_bytes() {
+        let worker = std::thread::Builder::new()
+            .name("npos-signed-ceiling-underbudget-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+                    .get();
+                let body_source_bytes =
+                    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+                let bootstrap_body_bytes = iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
+                    4,
+                    authenticated_non_validator_sources,
+                    body_source_bytes,
+                )
+                .expect("four-validator fixture byte geometry is representable");
+                let panic = std::panic::catch_unwind(|| {
+                    build_with_isolated_permit(
+                        NetworkBuilder::new()
+                            .with_peers(4)
+                            .with_npos_consensus()
+                            .with_base_seed(stringify!(
+                                npos_signed_ceiling_fails_closed_on_bootstrap_only_body_bytes
+                            ))
+                            .with_config_layer(move |layer| {
+                                layer.write(
+                                    ["sumeragi", "queues", "body_bytes"],
+                                    i64::try_from(bootstrap_body_bytes)
+                                        .expect("fixture capacity fits TOML"),
+                                );
+                            }),
+                    );
+                })
+                .expect_err("bootstrap-only bytes must not erase the signed NPoS ceiling");
+                let panic_message = panic
+                    .downcast_ref::<&str>()
+                    .map(std::string::ToString::to_string)
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "<missing panic message>".to_owned());
+                assert!(
+                    panic_message.contains("authenticated/planned maximum validator capacity")
+                        && panic_message.contains("planned-roster minimum")
+                        && panic_message.contains("31 validators"),
+                    "signed NPoS capacity failure should be localized, got: {panic_message}"
+                );
+            })
+            .expect("spawn signed NPoS ceiling underbudget regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
     }
     #[test]
     fn max_validator_capacity_checks_planned_body_message_boundary() {
@@ -12338,6 +13205,12 @@ mod tests {
     }
     #[test]
     fn observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster() {
+        run_large_stack_test(
+            stringify!(observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster),
+            observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster_impl,
+        );
+    }
+    fn observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster_impl() {
         let bootstrap = ObserverP2pBootstrap::new(5).expect("five observers fit the core profile");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
@@ -12424,10 +13297,197 @@ mod tests {
         let resolved_trusted = resolved.common.trusted_peers.value();
         assert_eq!(resolved_trusted.others.len(), 8);
         assert_eq!(resolved_trusted.pops.len(), 4);
+        assert_eq!(
+            resolved
+                .sumeragi
+                .queues
+                .authenticated_non_validator_sources
+                .get(),
+            5,
+            "every signed observer must have a reserved authenticated ingress lane"
+        );
         let role = observer_role_layer();
         assert_eq!(
             get_nested_value(&role, &["sumeragi", "role"]).and_then(Value::as_str),
             Some("observer")
+        );
+    }
+    #[test]
+    fn committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role() {
+        run_large_stack_test(
+            stringify!(committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role),
+            committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role_impl,
+        );
+    }
+    fn committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role_impl() {
+        let bootstrap = CommitteeValidatorP2pBootstrap::new(5)
+            .expect("five committee validators fit the core profile");
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role
+                ))
+                .with_committee_validator_p2p_bootstrap(bootstrap)
+                .expect("four global and five committee validators fit the P2P cap"),
+        );
+        assert_eq!(network.peers().len(), 4);
+        assert_eq!(network.validators().len(), 4);
+        assert_eq!(network.committee_validators().len(), 5);
+        assert!(network.observers().is_empty());
+        assert_eq!(network.all_peers().count(), 9);
+        assert_eq!(network.topology_entries().len(), 4);
+
+        let global_keys = network
+            .validators()
+            .iter()
+            .map(|peer| peer.id().public_key().to_string())
+            .collect::<BTreeSet<_>>();
+        let committee_keys = network
+            .committee_validators()
+            .iter()
+            .map(|peer| peer.id().public_key().to_string())
+            .collect::<BTreeSet<_>>();
+        let topology_keys = network
+            .topology_entries()
+            .iter()
+            .map(|entry| entry.peer.public_key().to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(topology_keys, global_keys);
+        assert!(topology_keys.is_disjoint(&committee_keys));
+
+        let trusted_layer = network
+            .config_layers()
+            .next()
+            .expect("trusted peer layer")
+            .into_owned();
+        assert_eq!(
+            trusted_layer
+                .get("trusted_peers")
+                .and_then(Value::as_array)
+                .expect("trusted peer array")
+                .len(),
+            9
+        );
+        let pop_keys = trusted_layer
+            .get("trusted_peers_pop")
+            .and_then(Value::as_array)
+            .expect("global validator PoP array")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("public_key")
+                    .and_then(Value::as_str)
+                    .expect("PoP public key")
+                    .to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(pop_keys, global_keys);
+        assert!(pop_keys.is_disjoint(&committee_keys));
+
+        let base_layer_count = network.config_layers().count();
+        for peer in network.committee_validators() {
+            let layers = network.config_layers_for_peer(peer).collect::<Vec<_>>();
+            assert_eq!(layers.len(), base_layer_count);
+            assert!(layers.iter().all(|layer| {
+                get_nested_value(layer, &["sumeragi", "role"]).and_then(Value::as_str)
+                    != Some("observer")
+            }));
+        }
+        let resolved_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let resolved = resolve_actual_config(&network.validators()[0], &resolved_layers)
+            .expect("validator config reserves supplementary committee ingress lanes");
+        assert_eq!(
+            resolved
+                .sumeragi
+                .queues
+                .authenticated_non_validator_sources
+                .get(),
+            5,
+            "every supplementary committee validator must have a reserved authenticated ingress lane"
+        );
+    }
+    #[test]
+    fn committee_validator_bootstrap_rejects_an_underbudget_ingress_override() {
+        run_large_stack_test(
+            stringify!(committee_validator_bootstrap_rejects_an_underbudget_ingress_override),
+            committee_validator_bootstrap_rejects_an_underbudget_ingress_override_impl,
+        );
+    }
+    fn committee_validator_bootstrap_rejects_an_underbudget_ingress_override_impl() {
+        let panic = std::panic::catch_unwind(|| {
+            build_with_isolated_permit(
+                NetworkBuilder::new()
+                    .with_peers(4)
+                    .with_base_seed(stringify!(
+                        committee_validator_bootstrap_rejects_an_underbudget_ingress_override
+                    ))
+                    .with_committee_validator_p2p_bootstrap(
+                        CommitteeValidatorP2pBootstrap::new(5)
+                            .expect("valid committee-validator count"),
+                    )
+                    .expect("bounded participant fanout")
+                    .with_config_layer(|layer| {
+                        layer.write(
+                            ["sumeragi", "queues", "authenticated_non_validator_sources"],
+                            4i64,
+                        );
+                    }),
+            );
+        })
+        .expect_err("caller override must not erase committee ingress reservations");
+        let panic_message = panic
+            .downcast_ref::<&str>()
+            .map(std::string::ToString::to_string)
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<missing panic message>".to_owned());
+        assert!(
+            panic_message.contains("authenticated/planned maximum validator capacity")
+                && panic_message.contains("planned non-global participant minimum 5"),
+            "planned authenticated-source failure should be localized, got: {panic_message}"
+        );
+    }
+    #[test]
+    fn mixed_committee_and_observer_bootstrap_reserves_every_non_global_source() {
+        run_large_stack_test(
+            stringify!(mixed_committee_and_observer_bootstrap_reserves_every_non_global_source),
+            mixed_committee_and_observer_bootstrap_reserves_every_non_global_source_impl,
+        );
+    }
+    fn mixed_committee_and_observer_bootstrap_reserves_every_non_global_source_impl() {
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    mixed_committee_and_observer_bootstrap_reserves_every_non_global_source
+                ))
+                .with_committee_validator_p2p_bootstrap(
+                    CommitteeValidatorP2pBootstrap::new(3)
+                        .expect("valid committee-validator count"),
+                )
+                .expect("bounded committee participant fanout")
+                .with_observer_p2p_bootstrap(
+                    ObserverP2pBootstrap::new(2).expect("valid observer count"),
+                )
+                .expect("bounded mixed participant fanout"),
+        );
+        let resolved_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let resolved = resolve_actual_config(&network.validators()[0], &resolved_layers)
+            .expect("mixed participant config resolves");
+        assert_eq!(
+            resolved
+                .sumeragi
+                .queues
+                .authenticated_non_validator_sources
+                .get(),
+            5,
+            "committee validators and observers need distinct authenticated ingress lanes"
         );
     }
     #[test]
@@ -12956,6 +14016,16 @@ mod tests {
     }
     #[test]
     fn generated_network_configs_parse_for_legal_roster_scales() {
+        let worker = std::thread::Builder::new()
+            .name("generated-npos-ingress-capacity-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(generated_network_configs_parse_for_legal_roster_scales_impl)
+            .expect("spawn generated NPoS ingress-capacity regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+    fn generated_network_configs_parse_for_legal_roster_scales_impl() {
         init_instruction_registry();
         let commands = iroha_config::parameters::defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get();
         let bodies = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
@@ -13011,16 +14081,27 @@ mod tests {
                 actual.sumeragi.queues.body_source_bytes.get(),
                 body_source_bytes
             );
+            let authenticated_validator_capacity =
+                usize::try_from(SumeragiNposParameters::default().max_validators())
+                    .expect("default signed NPoS validator ceiling fits this platform");
+            assert_eq!(network.max_validator_capacity, validator_count);
             assert_eq!(
                 actual.sumeragi.queues.body_bytes.get(),
-                (validator_count + authenticated_non_validator_sources) * body_source_bytes
+                (authenticated_validator_capacity + authenticated_non_validator_sources)
+                    * body_source_bytes
             );
+            actual
+                .sumeragi
+                .v2_config(network.block_cadence(), ConsensusMode::Npos)
+                .expect("default NPoS config is valid")
+                .validate_ingress_roster_capacity(authenticated_validator_capacity)
+                .expect("generated ingress geometry admits the signed NPoS ceiling");
             assert_eq!(
                 effective_network_reply_source_capacity(&actual.network),
                 max_total_connections
             );
             iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
-                validator_count,
+                authenticated_validator_capacity,
                 effect_work_capacity,
                 bodies,
                 authenticated_non_validator_sources,
@@ -13253,6 +14334,80 @@ mod tests {
                 )
                 .expect("aggregate body bytes fit TOML")
             )
+        );
+    }
+    #[tokio::test]
+    async fn peer_bootstrap_stages_start_global_and_committee_before_observers() {
+        let (global_started_tx, global_started_rx) = tokio::sync::oneshot::channel();
+        let (global_release_tx, global_release_rx) = tokio::sync::oneshot::channel();
+        let (committee_started_tx, committee_started_rx) = tokio::sync::oneshot::channel();
+        let (committee_release_tx, committee_release_rx) = tokio::sync::oneshot::channel();
+        let observer_started = Arc::new(AtomicBool::new(false));
+        let observer_started_for_task = Arc::clone(&observer_started);
+
+        let global_validators = async move {
+            global_started_tx
+                .send(())
+                .map_err(|()| "global start receiver dropped")?;
+            global_release_rx
+                .await
+                .map_err(|_| "global release sender dropped")?;
+            Ok::<(), &'static str>(())
+        };
+        let committee_validators = async move {
+            committee_started_tx
+                .send(())
+                .map_err(|()| "committee start receiver dropped")?;
+            committee_release_rx
+                .await
+                .map_err(|_| "committee release sender dropped")?;
+            Ok::<(), &'static str>(())
+        };
+        let observers = async move {
+            observer_started_for_task.store(true, Ordering::Release);
+            Ok::<(), &'static str>(())
+        };
+        let bootstrap = tokio::spawn(run_peer_bootstrap_stages(
+            global_validators,
+            committee_validators,
+            observers,
+        ));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            global_started_rx
+                .await
+                .expect("global validator cohort should start");
+            committee_started_rx
+                .await
+                .expect("committee validator cohort should start concurrently");
+        })
+        .await
+        .expect("both validator cohorts should start without either completing");
+        assert!(
+            !observer_started.load(Ordering::Acquire),
+            "observers must remain gated while validator cohorts are starting"
+        );
+
+        global_release_tx
+            .send(())
+            .expect("global validator cohort should still be waiting");
+        tokio::task::yield_now().await;
+        assert!(
+            !observer_started.load(Ordering::Acquire),
+            "observers must remain gated until the committee cohort also completes"
+        );
+
+        committee_release_tx
+            .send(())
+            .expect("committee validator cohort should still be waiting");
+        tokio::time::timeout(Duration::from_secs(1), bootstrap)
+            .await
+            .expect("bootstrap stages should complete after both cohorts are released")
+            .expect("bootstrap task should not panic")
+            .expect("bootstrap stages should succeed");
+        assert!(
+            observer_started.load(Ordering::Acquire),
+            "observers should start after both validator cohorts complete"
         );
     }
     #[tokio::test]
@@ -14917,10 +16072,19 @@ mod tests {
                         .expect("callback topology mutex poisoned") = Some(topology.clone());
                     *callback_pops.lock().expect("callback pop mutex poisoned") =
                         Some(pops.clone());
-                    genesis_factory(Vec::new(), topology, pops)
+                    unexecuted_genesis_factory_with_post_topology(
+                        Vec::new(),
+                        Vec::new(),
+                        topology,
+                        pops,
+                    )
                 },
             ));
         let produced = network.genesis();
+        assert!(
+            produced.0.has_results(),
+            "NetworkBuilder must prepare an unexecuted custom genesis"
+        );
         let recorded = seen_topology
             .lock()
             .expect("topology mutex poisoned")
@@ -14931,7 +16095,16 @@ mod tests {
             .expect("pop mutex poisoned")
             .clone()
             .expect("topology pops should be recorded");
-        let expected = genesis_factory(Vec::new(), recorded, recorded_pops);
+        let expected = unexecuted_genesis_factory_with_post_topology(
+            Vec::new(),
+            Vec::new(),
+            recorded,
+            recorded_pops,
+        );
+        assert!(
+            !expected.0.has_results(),
+            "the custom-genesis helper must defer transaction execution"
+        );
         let produced_instructions = collect_non_handshake_instructions(&produced);
         let expected_instructions = collect_non_handshake_instructions(&expected);
         assert!(
@@ -14940,6 +16113,194 @@ mod tests {
         );
         let expected_handshake = consensus_handshake_parameter(&network.consensus_profile);
         assert_exactly_one_consensus_handshake(&produced, &expected_handshake);
+    }
+    #[test]
+    fn observer_aware_custom_genesis_keeps_observers_out_of_voting_roster() {
+        let worker = std::thread::Builder::new()
+            .name("observer-aware-custom-genesis-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(observer_aware_custom_genesis_keeps_observers_out_of_voting_roster_impl)
+            .expect("spawn observer-aware custom-genesis regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+    fn observer_aware_custom_genesis_keeps_observers_out_of_voting_roster_impl() {
+        init_instruction_registry();
+        let seen_topology: Arc<Mutex<Option<UniqueVec<PeerId>>>> = Arc::new(Mutex::new(None));
+        let seen_observers: Arc<Mutex<Option<Vec<PeerId>>>> = Arc::new(Mutex::new(None));
+        let callback_topology = Arc::clone(&seen_topology);
+        let callback_observers = Arc::clone(&seen_observers);
+        let builder = NetworkBuilder::new()
+            .with_peers(4)
+            .with_observer_p2p_bootstrap(
+                ObserverP2pBootstrap::new(4).expect("valid observer count"),
+            )
+            .expect("four validators and four observers fit the P2P capacity")
+            .with_genesis_block_and_observers(move |topology, pops, observers| {
+                *callback_topology
+                    .lock()
+                    .expect("callback topology mutex poisoned") = Some(topology.clone());
+                *callback_observers
+                    .lock()
+                    .expect("callback observers mutex poisoned") = Some(observers);
+                unexecuted_genesis_factory_with_post_topology(
+                    Vec::new(),
+                    Vec::new(),
+                    topology,
+                    pops,
+                )
+            });
+        let network = build_with_isolated_permit(builder);
+        let recorded_topology = seen_topology
+            .lock()
+            .expect("topology mutex poisoned")
+            .clone()
+            .expect("voting topology should be recorded");
+        let recorded_observers = seen_observers
+            .lock()
+            .expect("observer mutex poisoned")
+            .clone()
+            .expect("observer identities should be recorded");
+        let expected_validators = network
+            .validators()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let expected_observers = network
+            .observers()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recorded_topology.into_iter().collect::<Vec<_>>(),
+            expected_validators
+        );
+        assert_eq!(recorded_observers, expected_observers);
+        assert!(
+            expected_validators
+                .iter()
+                .all(|validator| !expected_observers.contains(validator)),
+            "voting validators and signed observers must be disjoint"
+        );
+        let observer_layers = network
+            .config_layers_for_peer(&network.observers()[0])
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observer_layers
+                .last()
+                .and_then(|layer| get_nested_value(layer, &["sumeragi", "role"]))
+                .and_then(Value::as_str),
+            Some("observer"),
+            "peer-specific restart layers must preserve the non-voting observer role"
+        );
+        assert_eq!(
+            signed_genesis_voting_peers(&network.genesis())
+                .expect("custom genesis voting roster")
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            expected_validators.into_iter().collect::<BTreeSet<_>>(),
+            "observer-aware custom genesis must retain exactly four global voters"
+        );
+    }
+    #[test]
+    fn committee_validator_custom_genesis_keeps_exact_global_voting_roster() {
+        let worker = std::thread::Builder::new()
+            .name("committee-validator-custom-genesis-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(committee_validator_custom_genesis_keeps_exact_global_voting_roster_impl)
+            .expect("spawn committee-validator custom-genesis regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+    fn committee_validator_custom_genesis_keeps_exact_global_voting_roster_impl() {
+        init_instruction_registry();
+        let seen_entries: Arc<Mutex<Option<Vec<GenesisTopologyEntry>>>> =
+            Arc::new(Mutex::new(None));
+        let callback_entries = Arc::clone(&seen_entries);
+        let builder = NetworkBuilder::new()
+            .with_peers(4)
+            .with_committee_validator_p2p_bootstrap(
+                CommitteeValidatorP2pBootstrap::new(4).expect("valid committee-validator count"),
+            )
+            .expect("four global and four committee validators fit the P2P capacity")
+            .with_genesis_block_and_committee_validator_entries(
+                move |topology, pops, committee_entries| {
+                    let registrations = committee_entries
+                        .iter()
+                        .map(|entry| {
+                            let pop = entry
+                                .pop_bytes()
+                                .expect("committee-validator PoP hex must decode")
+                                .expect("committee-validator entry must carry a PoP");
+                            InstructionBox::from(
+                                iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                                    entry.peer.clone(),
+                                    pop,
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    *callback_entries
+                        .lock()
+                        .expect("callback entries mutex poisoned") = Some(committee_entries);
+                    unexecuted_genesis_factory_with_post_topology(
+                        Vec::new(),
+                        vec![registrations],
+                        topology,
+                        pops,
+                    )
+                },
+            );
+        let network = build_with_isolated_permit(builder);
+        let recorded_entries = seen_entries
+            .lock()
+            .expect("committee entries mutex poisoned")
+            .clone()
+            .expect("committee-validator entries should be recorded");
+        let expected_entries = network
+            .committee_validators()
+            .iter()
+            .map(|peer| peer.genesis_pop().expect("committee validator PoP"))
+            .collect::<Vec<_>>();
+        assert_eq!(recorded_entries, expected_entries);
+        let committee_registration_count = network
+            .genesis()
+            .0
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => Some(instructions),
+                _ => None,
+            })
+            .flat_map(|instructions| instructions.iter())
+            .filter(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>()
+                    .is_some()
+            })
+            .count();
+        assert_eq!(
+            committee_registration_count,
+            expected_entries.len(),
+            "custom genesis must retain every proof-bound Committee registration"
+        );
+
+        let expected_global = network
+            .validators()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            signed_genesis_voting_peers(&network.genesis())
+                .expect("custom genesis voting roster")
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            expected_global,
+            "supplementary committee validators must not widen the global voting roster"
+        );
     }
     #[test]
     #[should_panic(
@@ -14966,19 +16327,90 @@ mod tests {
     }
     #[test]
     fn with_genesis_block_respects_npos_consensus_mode() {
-        init_instruction_registry();
+        let worker = std::thread::Builder::new()
+            .name("deferred-custom-genesis-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                init_instruction_registry();
+        let mut npos = SumeragiNposParameters::default();
+        npos.epoch_seed = CryptoHash::new(chain_id().into_inner().as_bytes()).into();
+        npos.max_validators = 4;
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
                 .with_genesis_block(|topology, topology_entries| {
-                    genesis_factory_with_post_topology(
+                    let domain_id = DomainId::try_new("deferred_genesis", "universal")
+                        .expect("deferred-genesis domain id");
+                    let asset_definition_id = AssetDefinitionId::derive_from_components(
+                        domain_id.clone(),
+                        "private_credit".parse().expect("asset name"),
+                    );
+                    let scoped_asset_id = AssetId::with_scope(
+                        asset_definition_id.clone(),
+                        ALICE_ID.clone(),
+                        AssetBalanceScope::Dataspace(DataSpaceId::new(1)),
+                    );
+                    unexecuted_genesis_factory_with_post_topology(
                         Vec::new(),
-                        Vec::new(),
+                        vec![
+                            vec![
+                                Register::domain(Domain::new(domain_id.clone())).into(),
+                                Register::asset_definition(AssetDefinition::numeric(
+                                    asset_definition_id,
+                                    "deferred private credit".to_owned(),
+                                    AssetBalancePolicy::DataspaceRestricted,
+                                    Some(domain_id),
+                                ))
+                                .into(),
+                            ],
+                            vec![Mint::asset_quantity(1_u32, scoped_asset_id).into()],
+                        ],
                         topology,
                         topology_entries,
                     )
+                })
+                .with_genesis_instruction(InstructionBox::from(SetParameter::new(
+                    Parameter::Custom(npos.into_custom_parameter()),
+                )))
+                .with_config_layer(|layer| {
+                    let mut universal = Table::new();
+                    universal.insert("alias".into(), Value::String("universal".to_owned()));
+                    universal.insert("id".into(), Value::Integer(0));
+                    universal.insert("fault_tolerance".into(), Value::Integer(1));
+                    let mut private = Table::new();
+                    private.insert("alias".into(), Value::String("private-1".to_owned()));
+                    private.insert("id".into(), Value::Integer(1));
+                    private.insert(
+                        "manifest_hash".into(),
+                        Value::String(format!("01{}", "00".repeat(31))),
+                    );
+                    private.insert("fault_tolerance".into(), Value::Integer(1));
+                    let mut lane0 = Table::new();
+                    lane0.insert("index".into(), Value::Integer(0));
+                    lane0.insert("alias".into(), Value::String("global".to_owned()));
+                    lane0.insert("dataspace".into(), Value::String("universal".to_owned()));
+                    lane0.insert("visibility".into(), Value::String("public".to_owned()));
+                    lane0.insert("metadata".into(), Value::Table(Table::new()));
+                    let mut lane1 = Table::new();
+                    lane1.insert("index".into(), Value::Integer(1));
+                    lane1.insert("alias".into(), Value::String("private".to_owned()));
+                    lane1.insert("dataspace".into(), Value::String("private-1".to_owned()));
+                    lane1.insert("visibility".into(), Value::String("restricted".to_owned()));
+                    lane1.insert("metadata".into(), Value::Table(Table::new()));
+                    layer
+                        .write(["nexus", "lane_count"], 2_i64)
+                        .write(
+                            ["nexus", "dataspace_catalog"],
+                            Value::Array(vec![Value::Table(universal), Value::Table(private)]),
+                        )
+                        .write(
+                            ["nexus", "lane_catalog"],
+                            Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]),
+                        )
+                        .write(["nexus", "staking", "max_validators"], 4_i64)
+                        .write(["zk", "stark", "enabled"], true);
                 }),
         );
         let profile = network.consensus_bootstrap_profile();
@@ -14987,14 +16419,44 @@ mod tests {
             "custom genesis should preserve requested NPoS consensus mode",
         );
         let produced = network.genesis();
+        assert!(
+            produced.0.results().all(|result| result.as_ref().is_ok()),
+            "deferred dataspace-scoped genesis transactions must pre-execute under the final catalog"
+        );
+        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let peer = network.peers().first().expect("network should have peers");
+        let actual = resolve_actual_config(peer, &config_layers)
+            .expect("deferred-genesis final config should resolve");
+        let expected_policies = iroha_core::da::proof_policy_bundle(&actual.nexus.lane_config);
+        assert_eq!(
+            produced.0.da_proof_policies(),
+            Some(&expected_policies),
+            "custom genesis must bind the builder-resolved multi-lane DA policy"
+        );
+        assert_eq!(
+            produced
+                .0
+                .header()
+                .confidential_features()
+                .and_then(|digest| digest.zk_policy_hash),
+            Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+                &actual.zk
+            )),
+            "custom genesis must bind the builder-resolved confidential policy"
+        );
         assert_exactly_one_consensus_handshake(&produced, &consensus_handshake_parameter(&profile));
         let metadata = consensus_handshake_metadata(&produced)
             .expect("custom genesis should include consensus handshake metadata");
-        assert_eq!(
-            metadata.mode,
-            SumeragiConsensusMode::Npos,
-            "custom genesis handshake metadata should advertise NPoS mode",
-        );
+                assert_eq!(
+                    metadata.mode,
+                    SumeragiConsensusMode::Npos,
+                    "custom genesis handshake metadata should advertise NPoS mode",
+                );
+            })
+            .expect("spawn deferred custom-genesis regression worker");
+        if let Err(payload) = worker.join() {
+            std::panic::resume_unwind(payload);
+        }
     }
     #[test]
     fn custom_genesis_binds_active_validator_projection_instead_of_normal_preview() {

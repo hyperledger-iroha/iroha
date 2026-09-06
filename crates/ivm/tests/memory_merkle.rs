@@ -3,12 +3,12 @@ use sha2::{Digest, Sha256};
 // Paths are ordered leaf → root; verify recomputation matches Memory::root().
 #[test]
 fn test_merkle_path_matches_root() {
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     // Write a value into heap and fetch the merkle path for that address
     let addr = Memory::HEAP_START;
     mem.store_u32(addr, 0xAA55AA55).unwrap();
     mem.commit();
-    let path = mem.merkle_path(addr);
+    let path = mem.merkle_path(addr).unwrap();
     let root = *mem.root().as_ref();
     // Recompute root from leaf and path
     const CHUNK: usize = 32;
@@ -52,7 +52,7 @@ fn test_merkle_path_matches_root() {
 #[test]
 fn final_partial_stack_chunk_is_committed_and_provable() {
     let stack_limit = 64 * 1024 + Memory::STACK_ALIGNMENT;
-    let mut mem = Memory::new_with_stack_limit(0, stack_limit);
+    let mut mem = Memory::new_with_stack_limit(stack_limit).unwrap();
     assert_eq!(mem.stack_top() % 32, Memory::STACK_ALIGNMENT);
 
     let baseline = mem.current_root();
@@ -66,7 +66,7 @@ fn final_partial_stack_chunk_is_committed_and_provable() {
         "the final partial stack chunk must be covered by the memory commitment"
     );
     assert!(
-        !mem.merkle_path(final_chunk).is_empty(),
+        !mem.merkle_path(final_chunk).unwrap().is_empty(),
         "a valid address in the final partial stack chunk must have a Merkle path"
     );
 }

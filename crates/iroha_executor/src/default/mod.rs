@@ -49,11 +49,12 @@ use iroha_smart_contract::data_model::{
         CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
         CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
         DrawSorafsReserveCredit, ExitPublicLaneValidator, ExpireReplicationOrder,
-        FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
-        MaintainSorafsOrderbook, MatchSorafsOrderbook, PublishSorafsPopRevocationList,
-        RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
-        RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
-        RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
+        ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+        FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
+        MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+        RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
+        RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterCommitteePeerWithPop,
+        RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
         RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
         RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
         RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
@@ -74,9 +75,12 @@ use iroha_smart_contract::data_model::{
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{
-            ProposeSccpRouteGovernance, ProposeSorafsProviderGovernance,
-            ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy, RegisterCitizen,
+            ProposeContractEmergencyHold, ProposeContractLifecycleGovernance,
+            ProposeGlobalDataTriggerPermissionGovernance, ProposeSccpRouteGovernance,
+            ProposeSorafsProviderGovernance, ProposeValidationFeePayoutLifecycle,
+            ProposeValidationFeePolicy, RegisterCitizen,
         },
+        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         nexus::{
             ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
             CreateFeeSponsorProgram, EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
@@ -84,19 +88,13 @@ use iroha_smart_contract::data_model::{
             RegisterVerifiedLaneRelay, StageFeeSponsorProgramRevision,
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
-        offline::{
-            ActivateKagemushaRecursiveReleaseV4, AuthorizeKagemushaTairaCanaryV4,
-            CancelKagemushaRecursiveReleaseV4, DeactivateKagemushaRecursiveIssuanceV4,
-            EnableKagemushaRecursiveIssuanceV4, RecordKagemushaTairaCanaryV4,
-            RedeemKagemushaRecursiveV4, RegisterOfflineDeviceAttestation,
-            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV4,
-        },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
-            ActivateContractInstance, CancelSmartContractCodeUpload, CommitContractDeployment,
-            DeactivateContractInstance, FinalizeSmartContractCodeUpload,
-            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            AcceptContractOwnership, ActivateContractInstance, CancelContractOwnershipOffer,
+            CancelSmartContractCodeUpload, CommitContractDeployment, DeactivateContractInstance,
+            FinalizeSmartContractCodeUpload, OfferContractOwnership, RegisterSmartContractBytes,
+            RegisterSmartContractCode, RemoveSmartContractBytes, SetContractParliamentDelegation,
             UploadSmartContractCodeChunk,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
@@ -172,7 +170,7 @@ pub use nft::{
 /// Re-export parameter visitor helpers used by the default executor.
 pub use parameter::visit_set_parameter;
 /// Re-export peer visitor helpers used by the default executor.
-pub use peer::{visit_register_peer, visit_unregister_peer};
+pub use peer::{visit_register_committee_peer, visit_register_peer, visit_unregister_peer};
 /// Re-export permission visitor helpers used by the default executor.
 pub use permission::{visit_grant_account_permission, visit_revoke_account_permission};
 /// Re-export role visitor helpers used by the default executor.
@@ -553,11 +551,13 @@ mod contract_deployment_bootstrap_tests {
             .into(),
             DeactivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 reason: Some("dispatch fixture".to_owned()),
             }
             .into(),
             ActivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 code_hash,
             }
             .into(),
@@ -922,6 +922,10 @@ impl InstructionDispatch for InstructionBox {
             visit_register_peer(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<RegisterCommitteePeerWithPop>() {
+            visit_register_committee_peer(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<MintBox>() {
             executor.visit_mint(isi);
             return;
@@ -985,6 +989,18 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<ActivateContractInstance>() {
             execute!(executor, isi);
         }
+        if let Some(isi) = any.downcast_ref::<SetContractParliamentDelegation>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<OfferContractOwnership>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<AcceptContractOwnership>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CancelContractOwnershipOffer>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<CommitContractDeployment>() {
             execute!(executor, isi);
         }
@@ -1006,37 +1022,12 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<SetContractAlias>() {
             execute!(executor, isi);
         }
-        // Core owns offline note/device validation and the exact governance permissions for
-        // attestation-policy mutations. Forward every native offline instruction so those
-        // consensus-critical checks run.
-        if let Some(isi) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
+        // Core owns recursive-proof validation and reserve accounting. Forward both native
+        // KAGEMUSHA V1 settlement instructions so those consensus-critical checks run.
+        if let Some(isi) = any.downcast_ref::<TopUpKagemushaV1>() {
             execute!(executor, isi);
         }
-        if let Some(isi) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<ActivateKagemushaRecursiveReleaseV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<EnableKagemushaRecursiveIssuanceV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<CancelKagemushaRecursiveReleaseV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<DeactivateKagemushaRecursiveIssuanceV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<AuthorizeKagemushaTairaCanaryV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<RecordKagemushaTairaCanaryV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<RegisterOfflineDeviceAttestation>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<SetOfflineDeviceAttestationPolicy>() {
+        if let Some(isi) = any.downcast_ref::<RedeemKagemushaV1>() {
             execute!(executor, isi);
         }
         // Core owns the signature, chain/client binding, canonical policy,
@@ -1225,6 +1216,15 @@ impl InstructionDispatch for InstructionBox {
             governance::visit_propose_sccp_route_governance(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ProposeContractLifecycleGovernance>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeContractEmergencyHold>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeGlobalDataTriggerPermissionGovernance>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<ProposeSorafsProviderGovernance>() {
             governance::visit_propose_sorafs_provider_governance(executor, isi);
             return;
@@ -1389,6 +1389,10 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_resolve_moderation_challenge(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ExpireSorafsModerationChallenge>() {
+            sorafs::visit_expire_moderation_challenge(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<SubmitSorafsModerationReveal>() {
             sorafs::visit_submit_moderation_reveal(executor, isi);
             return;
@@ -1474,10 +1478,6 @@ mod core_authorization_dispatch_tests {
             settlement::{FxCorridorOracleEvidence, SettleFxCorridor},
         },
         nexus::DataSpaceId,
-        offline::{
-            KagemushaDevicePublicKeyV2, OfflineDeviceAttestationPolicy,
-            OfflineDeviceAttestationRegistration,
-        },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
     };
@@ -1554,47 +1554,6 @@ mod core_authorization_dispatch_tests {
             name.parse().expect("valid FX asset name"),
         )
     }
-    fn offline_attestation_registration(
-        account_id: AccountId,
-    ) -> OfflineDeviceAttestationRegistration {
-        let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&[
-            0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
-            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
-            0x45, 0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e,
-            0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e,
-            0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
-        ])
-        .expect("canonical uncompressed P-256 generator point");
-        let attestation_report = b"executor-offline-attestation-report".to_vec();
-        let evidence = b"executor-offline-attestation-evidence".to_vec();
-        OfflineDeviceAttestationRegistration {
-            version: 1,
-            platform: "android-keymint".to_owned(),
-            key_id: "executor-offline-key".to_owned(),
-            device_id: "executor-offline-device".to_owned(),
-            account_id,
-            asset_definition_id: None,
-            ios_team_id: None,
-            ios_bundle_id: None,
-            ios_environment: None,
-            android_package_name: Some("org.hyperledger.iroha.executor".to_owned()),
-            android_signing_certificate_sha256: Some(vec![0x51; 32]),
-            public_key,
-            assertion_scheme: "android-keymint".to_owned(),
-            assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
-            assertion_public_key: vec![0x52; 65],
-            assertion_usage_count_limit: Some(1),
-            one_use: true,
-            challenge_hash: Hash::new(b"executor-offline-attestation-challenge"),
-            attestation_report_hash: Hash::new(&attestation_report),
-            attestation_report,
-            evidence_hash: Hash::new(&evidence),
-            evidence,
-            recent_block_height: 42,
-            recent_block_hash: Hash::new(b"executor-offline-attestation-block"),
-            expires_at_ms: 2_000_000_000_000,
-        }
-    }
     #[test]
     fn fx_settlement_reaches_core_without_executor_permission() {
         let authority = account(0x41);
@@ -1632,59 +1591,6 @@ mod core_authorization_dispatch_tests {
             executor.verdict().is_ok(),
             "the default executor must defer FX source authorization to Core"
         );
-    }
-    #[test]
-    fn offline_attestation_instructions_reach_core_authorization() {
-        let authority = account(0x43);
-        let instructions = [
-            InstructionBox::from(RegisterOfflineDeviceAttestation::new(
-                offline_attestation_registration(authority.clone()),
-            )),
-            SetOfflineDeviceAttestationPolicy::new(OfflineDeviceAttestationPolicy {
-                version: 1,
-                trusted_roots: Vec::new(),
-                revoked_certificate_tbs_sha256: Vec::new(),
-                ios_apps: Vec::new(),
-                android_apps: Vec::new(),
-                android_status_snapshot: None,
-                require_ios_app_policy: false,
-                require_android_app_policy: false,
-            })
-            .into(),
-        ];
-        for instruction in instructions {
-            let mut executor = TestExecutor::new(authority.clone());
-            visit_instruction(&mut executor, &instruction);
-            assert!(
-                executor.verdict().is_ok(),
-                "offline instructions must reach Core authorization"
-            );
-        }
-    }
-    #[test]
-    fn default_executor_forwards_the_complete_kagemusha_canary_lifecycle() {
-        let source = include_str!("mod.rs");
-        let start = source
-            .find("// Core owns offline note/device validation")
-            .expect("Kagemusha dispatch marker");
-        let tail = &source[start..];
-        let end = tail
-            .find("// Core owns the signature, chain/client binding")
-            .expect("Kagemusha dispatch terminator");
-        let dispatch = &tail[..end];
-        for instruction in [
-            "ActivateKagemushaRecursiveReleaseV4",
-            "EnableKagemushaRecursiveIssuanceV4",
-            "CancelKagemushaRecursiveReleaseV4",
-            "DeactivateKagemushaRecursiveIssuanceV4",
-            "AuthorizeKagemushaTairaCanaryV4",
-            "RecordKagemushaTairaCanaryV4",
-        ] {
-            assert!(
-                dispatch.contains(instruction),
-                "default executor Kagemusha dispatch omitted {instruction}"
-            );
-        }
     }
     #[test]
     fn alias_lifecycle_instructions_reach_core_dispatch() {
@@ -1772,6 +1678,19 @@ pub mod peer {
             execute!(executor, isi);
         }
         deny!(executor, "Can't register peer");
+    }
+    /// Registers a non-global-voting committee peer when genesis or a peer manager submits it.
+    pub fn visit_register_committee_peer<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RegisterCommitteePeerWithPop,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(executor, "Can't register committee peer");
     }
     /// Unregisters a peer if the caller has peer management privileges.
     pub fn visit_unregister_peer<V: Execute + Visit + ?Sized>(
@@ -2497,8 +2416,10 @@ pub mod sorafs {
     declare_execute_visitors! {
         /// Submit a juror commitment; native execution binds it to the authority.
         visit_submit_moderation_commit(SubmitSorafsModerationCommit);
-        /// Raise an authenticated payload-free moderation challenge.
+        /// Raise an authenticated, bonded, payload-free public moderation challenge.
         visit_raise_moderation_challenge(RaiseSorafsModerationChallenge);
+        /// Permissionlessly expire a pending challenge after its resolution grace.
+        visit_expire_moderation_challenge(ExpireSorafsModerationChallenge);
     }
     /// Resolve a moderation challenge when the caller is authorised.
     pub fn visit_resolve_moderation_challenge<V: Execute + Visit + ?Sized>(
@@ -2792,6 +2713,7 @@ pub mod domain {
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -2807,9 +2729,7 @@ pub mod domain {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -2849,9 +2769,33 @@ pub mod account {
     use iroha_executor_data_model::permission::account::{
         CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
-    declare_execute_visitors! {
-        /// Registers a canonical account.
-        visit_register_account(Register<Account>);
+    fn has_native_transfer_control_metadata(metadata: &Metadata) -> bool {
+        metadata
+            .get(iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY)
+            .is_some()
+    }
+    fn reserved_native_registration_metadata(account: &NewAccount) -> Option<&'static str> {
+        [
+            iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+        ]
+        .into_iter()
+        .find(|key| account.metadata.get(*key).is_some())
+    }
+    /// Registers a canonical account without allowing public instructions to seed native state.
+    pub fn visit_register_account<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &Register<Account>,
+    ) {
+        if let Some(key) = reserved_native_registration_metadata(isi.object()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{key}` is reserved for native state"
+                ))
+            );
+        }
+        execute!(executor, isi);
     }
     /// Unregisters an account when the caller owns it or has the unregister permission.
     pub fn visit_unregister_account<V: Execute + Visit + ?Sized>(
@@ -2859,6 +2803,22 @@ pub mod account {
         isi: &Unregister<Account>,
     ) {
         let account_id = isi.object();
+        let account = match executor
+            .host()
+            .query_single(FindAccountById::new(account_id.clone()))
+        {
+            Ok(account) => account,
+            Err(error) => deny!(executor, error),
+        };
+        if has_native_transfer_control_metadata(account.metadata()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(
+                    "account with native asset transfer-control state must clear it through dedicated instructions before removal"
+                        .to_owned()
+                )
+            );
+        }
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
             || {
@@ -2884,6 +2844,15 @@ pub mod account {
         executor: &mut V,
         isi: &SetKeyValue<Account>,
     ) {
+        if isi.key().as_ref() == iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native asset transfer controls",
+                    isi.key()
+                ))
+            );
+        }
         if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
             deny!(
                 executor,
@@ -2918,6 +2887,15 @@ pub mod account {
         executor: &mut V,
         isi: &RemoveKeyValue<Account>,
     ) {
+        if isi.key().as_ref() == iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native asset transfer controls",
+                    isi.key()
+                ))
+            );
+        }
         if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
             deny!(
                 executor,
@@ -2946,6 +2924,135 @@ pub mod account {
             executor,
             "Can't remove value from the metadata of another account"
         );
+    }
+    #[cfg(test)]
+    mod reserved_transfer_control_tests {
+        use super::*;
+        use core::num::NonZeroU64;
+
+        #[derive(Debug)]
+        struct TestExecutor {
+            host: Iroha,
+            context: prelude::Context,
+            verdict: crate::data_model::executor::Result<(), ValidationFail>,
+        }
+
+        impl TestExecutor {
+            fn new(authority: AccountId) -> Self {
+                Self {
+                    host: Iroha,
+                    context: prelude::Context {
+                        authority,
+                        curr_block: BlockHeader::new(
+                            NonZeroU64::new(2).expect("non-genesis block height"),
+                            None,
+                            None,
+                            None,
+                            0,
+                            0,
+                        ),
+                    },
+                    verdict: Ok(()),
+                }
+            }
+        }
+
+        impl Execute for TestExecutor {
+            fn host(&self) -> &Iroha {
+                &self.host
+            }
+
+            fn context(&self) -> &prelude::Context {
+                &self.context
+            }
+
+            fn context_mut(&mut self) -> &mut prelude::Context {
+                &mut self.context
+            }
+
+            fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+                &self.verdict
+            }
+
+            fn deny(&mut self, reason: ValidationFail) {
+                self.verdict = Err(reason);
+            }
+        }
+
+        impl Visit for TestExecutor {}
+
+        fn account_id() -> AccountId {
+            let public_key: PublicKey =
+                "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                    .parse()
+                    .expect("valid fixture public key");
+            AccountId::new(public_key)
+        }
+
+        #[test]
+        fn default_executor_rejects_generic_transfer_control_set_and_remove() {
+            let authority = account_id();
+            let key: Name = iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("asset transfer control metadata key");
+            let set = SetKeyValue::account(
+                authority.clone(),
+                key.clone(),
+                Json::new("generic replacement"),
+            );
+            let mut set_executor = TestExecutor::new(authority.clone());
+            visit_set_account_key_value(&mut set_executor, &set);
+            assert!(
+                matches!(set_executor.verdict(), Err(ValidationFail::NotPermitted(message))
+                    if message.contains("reserved for native asset transfer controls")),
+                "default executor must deny the reserved SetKeyValue path"
+            );
+
+            let remove = RemoveKeyValue::account(authority.clone(), key);
+            let mut remove_executor = TestExecutor::new(authority);
+            visit_remove_account_key_value(&mut remove_executor, &remove);
+            assert!(
+                matches!(remove_executor.verdict(), Err(ValidationFail::NotPermitted(message))
+                    if message.contains("reserved for native asset transfer controls")),
+                "default executor must deny the reserved RemoveKeyValue path"
+            );
+        }
+
+        #[test]
+        fn default_executor_rejects_reserved_native_metadata_during_registration() {
+            for key in [
+                iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+            ] {
+                let authority = account_id();
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    key.parse().expect("reserved native metadata key"),
+                    Json::new(7_u64),
+                );
+                let register =
+                    Register::account(NewAccount::new(authority.clone()).with_metadata(metadata));
+                let mut executor = TestExecutor::new(authority);
+                visit_register_account(&mut executor, &register);
+                assert!(
+                    matches!(executor.verdict(), Err(ValidationFail::NotPermitted(message))
+                        if message.contains("reserved for native state")),
+                    "default executor must deny public native-state seeding"
+                );
+            }
+
+            let authority = account_id();
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "ordinary_metadata".parse().expect("ordinary metadata key"),
+                Json::new("ordinary value"),
+            );
+            let account = NewAccount::new(authority).with_metadata(metadata);
+            assert!(
+                reserved_native_registration_metadata(&account).is_none(),
+                "ordinary account metadata must remain registrable"
+            );
+        }
     }
     /// Replaces the controller for an account when the caller owns it or has the replacement permission.
     pub fn visit_replace_account_controller<V: Execute + Visit + ?Sized>(
@@ -3066,6 +3173,7 @@ pub mod account {
             | AnyPermission::CanManageAssetDefinitionAlias(_)
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanManageRuntimeUpgrades(_)
@@ -3091,9 +3199,7 @@ pub mod account {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -3377,6 +3483,7 @@ pub mod asset_definition {
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -3399,9 +3506,7 @@ pub mod asset_definition {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -3945,6 +4050,19 @@ pub mod asset {
             assert!(
                 executor.verdict().is_ok(),
                 "register peer with pop should succeed during genesis"
+            );
+        }
+        #[test]
+        fn visit_instruction_dispatches_register_committee_peer_with_pop() {
+            let (mut executor, _) = StubExecutor::new(1);
+            let peer_keypair = fixture_key_pair(43);
+            let peer_id = PeerId::from(peer_keypair.public_key().clone());
+            let instruction = RegisterCommitteePeerWithPop::new(peer_id, vec![1, 2, 3]);
+            let instruction_box: InstructionBox = instruction.into();
+            visit_instruction(&mut executor, &instruction_box);
+            assert!(
+                executor.verdict().is_ok(),
+                "register committee peer with pop should succeed during genesis"
             );
         }
         #[test]
@@ -4760,6 +4878,7 @@ pub mod trigger {
             | AnyPermission::DpnInori(_)
             | AnyPermission::DpnSettlement(_)
             | AnyPermission::DpnEprGuard(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
@@ -4798,9 +4917,7 @@ pub mod trigger {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -5262,16 +5379,17 @@ mod sorafs_permission_tests {
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
             ApprovePinManifest, BindManifestAlias, CommitSorafsPopCredentialBatch,
-            CompleteReplicationOrder, ExpireReplicationOrder, FinalizeSorafsModerationSortition,
-            IssueReplicationOrder, PublishSorafsPopRevocationList, RecordCapacityTelemetry,
-            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsCapacityDispute, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
-            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            CompleteReplicationOrder, ExpireReplicationOrder, ExpireSorafsModerationChallenge,
+            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
+            PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+            RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
+            RegisterPinManifest, RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
+            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsPopIssuerPolicy, SetSorafsReputationJournalAuthorityPolicy,
-            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, UnregisterProviderOwner,
-            UpsertProviderCredit,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            SubmitSorafsModerationReveal, UnregisterProviderOwner, UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -5298,7 +5416,8 @@ mod sorafs_permission_tests {
             },
             moderation_ledger::{
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
-                ModerationAppealIntakeV1, ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
+                ModerationAppealIntakeV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
+                ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
             },
             pin_registry::{
                 ManifestAliasBinding, ManifestDigest, ProviderIngestCompletionAuthorityV1,
@@ -5693,11 +5812,26 @@ mod sorafs_permission_tests {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
+            challenge_voting_asset_id:
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    iroha_data_model::domain::DomainId::try_new("sora", "universal")
+                        .expect("governance domain"),
+                    "xor".parse().expect("governance asset name"),
+                ),
+            challenge_bond_amount: Quantity::from(
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+            ),
+            challenge_escrow_account: authority_account_id(),
+            challenge_slash_receiver_account: authority_account_id(),
+            challenge_rejected_slash_bps:
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            challenge_resolution_grace_ms:
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             max_panel_size: 8,
             max_candidate_pool_size: 32,
             max_waitlist_size: 8,
             max_exclusions_per_case: 16,
-            max_total_window_ms: 60_000,
+            max_total_window_ms: 90_000_000,
             max_challenges_per_case: 4,
             missing_commit_penalty_points: 10,
             unrevealed_commit_penalty_points: 20,
@@ -5724,8 +5858,9 @@ mod sorafs_permission_tests {
             registration_deadline_unix_ms: 1_000,
             acceptance_deadline_unix_ms: 2_000,
             commit_deadline_unix_ms: 3_000,
-            challenge_deadline_unix_ms: 4_000,
-            reveal_deadline_unix_ms: 5_000,
+            challenge_submission_deadline_unix_ms: 4_000,
+            challenge_resolution_deadline_unix_ms: 86_404_000,
+            reveal_deadline_unix_ms: 86_405_000,
             policy_digest: [0x15; 32],
         }
     }
@@ -5953,6 +6088,50 @@ mod sorafs_permission_tests {
         );
     }
     #[test]
+    fn moderation_challenge_raise_expiry_and_reveal_are_public_at_executor_layer() {
+        assert_allowed_without_permission(
+            RaiseSorafsModerationChallenge::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+                ModerationChallengeKindV1::Other,
+                None,
+                [0x31; 32],
+                "public challenge".to_owned(),
+            ),
+            sorafs::visit_raise_moderation_challenge,
+        );
+        assert_allowed_without_permission(
+            ExpireSorafsModerationChallenge::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+            ),
+            sorafs::visit_expire_moderation_challenge,
+        );
+        assert_allowed_without_permission(
+            SubmitSorafsModerationReveal::new(vec![0x01]),
+            sorafs::visit_submit_moderation_reveal,
+        );
+    }
+    sorafs_permission_case!(
+        resolve_moderation_challenge_requires_permission,
+        ResolveSorafsModerationChallenge::new(
+            "appeal-case".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeDecisionV1::Accepted,
+        ),
+        CanManageSorafsModeration,
+        sorafs::visit_resolve_moderation_challenge
+    );
+    sorafs_permission_case!(
+        finalize_moderation_case_requires_permission,
+        FinalizeSorafsModerationCase::new("appeal-case".to_owned(), "round-1".to_owned()),
+        CanManageSorafsModeration,
+        sorafs::visit_finalize_moderation_case
+    );
+    #[test]
     fn moderation_transparency_queries_are_public() {
         assert_allowed_without_permission(
             FindSorafsModerationPolicy,
@@ -6157,7 +6336,6 @@ pub mod permission {
         impl_execute!(executor, isi, validate_revoke, Revoke<Permission, Account>);
     }
 }
-include!("governed_offline_permission_tests.rs");
 include!("dpn_permission_tests.rs");
 /// Permission-checked visitor for executor upgrade instructions.
 pub mod executor {

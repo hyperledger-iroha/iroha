@@ -9,6 +9,8 @@ use norito::codec::{Decode, Encode};
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::social::ViralRewardBudget")]
 pub struct ViralRewardBudget {
     /// Day identifier derived from `timestamp_ms / 86_400_000`.
     pub day: u64,
@@ -31,6 +33,8 @@ impl Default for ViralRewardBudget {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::social::ViralDailyCounter")]
 pub struct ViralDailyCounter {
     /// Day identifier derived from `timestamp_ms / 86_400_000`.
     pub day: u64,
@@ -43,6 +47,8 @@ pub struct ViralDailyCounter {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::social::ViralCampaignBudget")]
 pub struct ViralCampaignBudget {
     /// Total amount spent since the campaign began.
     pub spent: Quantity,
@@ -60,6 +66,8 @@ impl Default for ViralCampaignBudget {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::social::ViralEscrowRecord")]
 pub struct ViralEscrowRecord {
     /// Targeted Twitter binding hash (pseudonymous).
     pub binding_hash: KeyedHash,
@@ -74,3 +82,6 @@ pub struct ViralEscrowRecord {
 pub mod prelude {
     pub use super::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget};
 }
+
+#[cfg(test)]
+mod captured_social_schema_tests;

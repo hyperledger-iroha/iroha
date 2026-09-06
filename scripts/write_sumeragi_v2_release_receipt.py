@@ -504,7 +504,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 864
+_PRODUCTION_TEST_COUNT = 866
 _G_UNIT_TEST_COUNT = 522
 _G_UNIT_GROUPS = (
     (
@@ -618,7 +618,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-certified-serve-payload-store",
         "sumeragi::v2_certified_serve_payload_store::tests",
-        11,
+        13,
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
@@ -635,7 +635,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-        42,
+        43,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     (
@@ -650,24 +650,14 @@ _PRODUCTION_MODULES = (
         19,
     ),
     (
-        "production-kagemusha-finality",
-        "zk::kagemusha_finality::tests",
-        1,
-    ),
-    (
         "production-data-model-v2-finality",
         "block::consensus_v2::finality::tests",
         1,
     ),
     (
-        "production-data-model-offline-compact-qc",
-        "offline::kagemusha_v4_topup_provenance_tests",
-        1,
-    ),
-    (
         "production-data-model-v2-context-identity",
         "block::consensus_v2::tests",
-        2,
+        3,
     ),
     (
         "production-v2-integration-runner",
@@ -728,7 +718,6 @@ _PRODUCTION_MODULES = (
 _PRODUCTION_INTEGRATION_MODULE = "sumeragi_v2_runner::prepare_qc_split_tests"
 _DATA_MODEL_PRODUCTION_MODULES = (
     "block::consensus_v2::finality::tests",
-    "offline::kagemusha_v4_topup_provenance_tests",
     "block::consensus_v2::tests",
 )
 _DATA_STATUS_TEST = (
@@ -774,8 +763,8 @@ _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
     ("python", 129),
     ("javascript", 88),
     ("swift", 34),
-    ("kotlin", 44),
-    ("java", 43),
+    ("kotlin", 50),
+    ("java", 48),
 )
 _SDK_SOURCE_CLOSURE_RESOLVER = "ci/resolve_sumeragi_v2_sdk_source_closure.py"
 _SDK_SOURCE_CLOSURE_MANIFEST = "ci/sumeragi_v2_sdk_source_closure.json"

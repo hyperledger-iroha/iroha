@@ -77,7 +77,8 @@ impl Drop for ChainDiscriminantGuard {
     }
 }
 /// Canonical representation of an account address payload.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::address::AccountAddress")]
 pub struct AccountAddress {
     header: AddressHeader,
     controller: ControllerPayload,
@@ -318,7 +319,7 @@ impl FromStr for AccountAddress {
 }
 impl TypeId for AccountAddress {
     fn id() -> Ident {
-        std::any::type_name::<Self>().to_owned()
+        "iroha_data_model::account::address::AccountAddress".to_owned()
     }
 }
 impl IntoSchema for AccountAddress {

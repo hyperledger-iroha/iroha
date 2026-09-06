@@ -10,9 +10,12 @@ pub mod availability;
 pub(crate) mod carrier;
 /// Committee verification and durable Prepare staging.
 pub(crate) mod committee;
-// TODO: Compile the coordinator in production once the global coordinator
-// runtime owns this deterministic projection; today only its model tests use it.
-/// Bundle-level all-Prepare/all-Commit phase barriers.
+/// Test-only reference projection for bundle-level phase ordering.
+///
+/// Production coordination belongs to the neutral sponsor and is implemented
+/// by `iroha::client::private_settlement`; participant nodes independently
+/// validate the complete barrier and the global carrier. Keeping this model
+/// test-only avoids creating a second node-owned coordinator path.
 #[cfg(test)]
 pub(crate) mod coordinator;
 /// Globally replicated roots, replay items, outputs, and receipts.
@@ -33,17 +36,25 @@ pub use audit::{
 };
 pub use auditor::{
     PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
-    PrivateSettlementAuditorApprovalErrorV1, approve_private_settlement_leg_v1,
+    PrivateSettlementAuditorApprovalErrorV1, PrivateSettlementAuditorCredentialErrorV1,
+    PrivateSettlementAuditorCredentialProviderV1, SoftwarePrivateSettlementAuditorCredentialsV1,
+    SoftwarePrivateSettlementAuditorKeyringCredentialsV1, approve_private_settlement_leg_v1,
+    approve_private_settlement_leg_with_provider_v1,
 };
 pub use availability::{
     PrivateSettlementAvailabilityErrorV1, PrivateSettlementAvailabilitySignerV1,
     aggregate_private_settlement_availability_shares_v1,
+    verify_private_settlement_audit_approval_acknowledgement_attestation_v1,
+    verify_private_settlement_auditor_view_attestation_v1,
     verify_private_settlement_availability_share_v1,
 };
 pub use phase::{
     PrivateSettlementPhaseErrorV1, PrivateSettlementPhaseSignerV1,
     aggregate_private_settlement_phase_votes, build_private_settlement_prepare_barrier,
     verify_private_settlement_phase_certificate,
+};
+pub use protocol::{
+    PrivateSettlementCommitteeAuthorityErrorV1, validate_private_settlement_committee_authority_v1,
 };
 pub use sidecar_store::{
     PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGE_RECORDS_V1,
@@ -60,5 +71,10 @@ pub use sidecar_store::{
     PrivateSettlementReconciliationOutcomeV1, PrivateSettlementReconciliationPageV1,
     PrivateSettlementRestrictedSidecarV1, PrivateSettlementSidecarLifecycleV1,
     PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1,
-    PrivateSettlementSidecarStoreOutcomeV1,
+    PrivateSettlementSidecarStoreOutcomeV1, PrivateSettlementSponsorPhaseCertificatesV1,
 };
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+pub use sidecar_store::{
+    PrivateSettlementStagedLockCountsV1, PrivateSettlementStagedLockEvidenceV1,
+};
+pub use state::fetch_private_settlement_auditor_view_v1;

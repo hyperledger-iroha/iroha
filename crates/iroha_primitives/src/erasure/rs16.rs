@@ -166,21 +166,25 @@ type ParityMatrixCache = OnceLock<Mutex<HashMap<(usize, usize), Arc<ParityMatrix
 fn parity_matrix(data_shards: usize, parity_shards: usize) -> Result<Arc<ParityMatrix>, Rs16Error> {
     static CACHE: ParityMatrixCache = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(entry) = cache
+    let cached = cache
         .lock()
-        .expect("mutex poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(&(data_shards, parity_shards))
-    {
-        return Ok(entry.clone());
+        .cloned();
+    if let Some(entry) = cached {
+        return Ok(entry);
     }
-    let total = data_shards + parity_shards;
+    let total = data_shards
+        .checked_add(parity_shards)
+        .filter(|total| data_shards != 0 && parity_shards != 0 && *total <= ORDER_MINUS_ONE)
+        .ok_or(Rs16Error)?;
     let mut vandermonde = vec![vec![0u16; data_shards]; total];
     for (row_idx, row) in vandermonde.iter_mut().enumerate() {
         for (col_idx, value) in row.iter_mut().enumerate() {
             *value = if row_idx == 0 || col_idx == 0 {
                 1
             } else {
-                gf_pow(row_idx * col_idx)
+                gf_pow(row_idx.checked_mul(col_idx).ok_or(Rs16Error)?)
             };
         }
     }
@@ -200,7 +204,7 @@ fn parity_matrix(data_shards: usize, parity_shards: usize) -> Result<Arc<ParityM
     let matrix = Arc::new(ParityMatrix { rows: parity_rows });
     cache
         .lock()
-        .expect("mutex poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert((data_shards, parity_shards), matrix.clone());
     Ok(matrix)
 }
@@ -235,15 +239,15 @@ pub fn encode_parity(
 /// Convert a payload slice into RS16 symbols using the configured chunk size.
 ///
 /// # Errors
-/// Returns `Rs16Error` if `chunk_size` is smaller than 2, `length` exceeds
-/// `chunk_size`, or the requested range is out of bounds.
+/// Returns `Rs16Error` if `chunk_size` is smaller than 2 or odd, `length`
+/// exceeds `chunk_size`, or the requested range is out of bounds.
 pub fn symbols_from_payload(
     chunk_size: usize,
     payload: &[u8],
     offset: usize,
     length: usize,
 ) -> Result<Vec<u16>, Rs16Error> {
-    if chunk_size < 2 || length > chunk_size {
+    if chunk_size < 2 || !chunk_size.is_multiple_of(2) || length > chunk_size {
         return Err(Rs16Error);
     }
     let end = offset.checked_add(length).ok_or(Rs16Error)?;
@@ -371,6 +375,74 @@ pub fn reconstruct_shards(
         });
     }
     Ok(())
+}
+
+/// Reconstruct only the missing data rows of one RS16 stripe.
+///
+/// The returned vector has exactly `data_shards` slots. A slot is populated
+/// only when the corresponding data row was absent from `shards`; present data
+/// rows remain borrowed by the caller and are not cloned. Parity rows are
+/// never regenerated. This is the preferred recovery path for consumers that
+/// need the original payload but do not need to repair the complete codeword.
+///
+/// # Errors
+/// Returns `Rs16Error` if the stripe geometry is invalid, fewer than
+/// `data_shards` rows are present, symbol widths differ, or the selected
+/// recovery matrix is singular.
+pub fn reconstruct_missing_data_shards(
+    shards: &[Option<Vec<u16>>],
+    data_shards: usize,
+    parity_shards: usize,
+) -> Result<Vec<Option<Vec<u16>>>, Rs16Error> {
+    if data_shards == 0 || shards.len() != data_shards.saturating_add(parity_shards) {
+        return Err(Rs16Error);
+    }
+
+    let mut selected = Vec::with_capacity(data_shards);
+    let mut symbol_count = None;
+    for (idx, maybe_row) in shards.iter().enumerate() {
+        let Some(row) = maybe_row.as_deref() else {
+            continue;
+        };
+        match symbol_count {
+            Some(expected) if expected != row.len() => return Err(Rs16Error),
+            Some(_) => {}
+            None => symbol_count = Some(row.len()),
+        }
+        if selected.len() < data_shards {
+            selected.push((idx, row));
+        }
+    }
+    let symbol_count = symbol_count.ok_or(Rs16Error)?;
+    if selected.len() != data_shards {
+        return Err(Rs16Error);
+    }
+
+    let mut recovered = (0..data_shards).map(|_| None).collect::<Vec<_>>();
+    if shards.iter().take(data_shards).all(Option::is_some) {
+        return Ok(recovered);
+    }
+
+    let decode_matrix = selected
+        .iter()
+        .map(|(idx, _)| generator_row(data_shards, parity_shards, *idx))
+        .collect::<Result<Vec<_>, _>>()?;
+    let inverse = invert_matrix(decode_matrix)?;
+    let backend = choose_backend();
+    for data_idx in 0..data_shards {
+        if shards[data_idx].is_some() {
+            continue;
+        }
+        let mut output = vec![0_u16; symbol_count];
+        for (selected_idx, (_, input)) in selected.iter().enumerate() {
+            let coefficient = inverse[data_idx][selected_idx];
+            if coefficient != 0 {
+                mul_add_row(coefficient, input, &mut output, backend);
+            }
+        }
+        recovered[data_idx] = Some(output);
+    }
+    Ok(recovered)
 }
 /// Compute the parity chunk offset for a given stripe/parity index.
 pub fn parity_offset(
@@ -706,8 +778,16 @@ mod tests {
         let payload = [0u8; 4];
         let ok = symbols_from_payload(4, &payload, 0, 4).expect("symbols");
         assert_eq!(ok.len(), 2);
+        assert!(symbols_from_payload(3, &payload, 0, 3).is_err());
         assert!(symbols_from_payload(2, &payload, 0, 4).is_err());
         assert!(symbols_from_payload(4, &payload, 3, 2).is_err());
+    }
+    #[test]
+    fn parity_matrix_rejects_invalid_field_geometry_before_allocation() {
+        assert!(parity_matrix(0, 1).is_err());
+        assert!(parity_matrix(1, 0).is_err());
+        assert!(parity_matrix(ORDER_MINUS_ONE, 1).is_err());
+        assert!(parity_matrix(usize::MAX, 1).is_err());
     }
     #[test]
     fn parity_offset_matches_expected() {
@@ -733,5 +813,57 @@ mod tests {
         reconstruct_shards(&mut shards, 4, 2).expect("reconstruct");
         assert_eq!(shards[1].as_ref().expect("data shard"), &expected_data);
         assert_eq!(shards[4].as_ref().expect("parity shard"), &parity[0]);
+    }
+
+    #[test]
+    fn payload_recovery_allocates_only_missing_data_rows() {
+        let data = sample_symbols(4, 8);
+        let expected_missing = data[1].clone();
+        let parity = encode_parity(&data, 2).expect("parity");
+        let mut shards = data.into_iter().chain(parity).map(Some).collect::<Vec<_>>();
+        shards[1] = None;
+        shards[5] = None;
+
+        let recovered =
+            reconstruct_missing_data_shards(&shards, 4, 2).expect("recover payload data");
+        assert_eq!(recovered.len(), 4);
+        assert_eq!(
+            recovered.iter().filter(|row| row.is_some()).count(),
+            1,
+            "present data and missing parity must not allocate output rows"
+        );
+        assert_eq!(
+            recovered[1].as_ref().expect("missing data row"),
+            &expected_missing
+        );
+    }
+
+    #[test]
+    fn payload_recovery_simd_matches_scalar_for_multiple_missing_rows() {
+        struct RestoreSimd(bool);
+        impl Drop for RestoreSimd {
+            fn drop(&mut self) {
+                set_simd_enabled(self.0);
+            }
+        }
+
+        let _guard = SIMULATED_GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        let data = sample_symbols(4, 257);
+        let parity = encode_parity_with_backend(&data, 2, Backend::Scalar).expect("parity");
+        let mut shards = data.into_iter().chain(parity).map(Some).collect::<Vec<_>>();
+        shards[0] = None;
+        shards[2] = None;
+
+        let _restore = RestoreSimd(simd_enabled());
+        set_simd_enabled(false);
+        let scalar = reconstruct_missing_data_shards(&shards, 4, 2).expect("scalar recovery");
+        set_simd_enabled(true);
+        let accelerated =
+            reconstruct_missing_data_shards(&shards, 4, 2).expect("accelerated recovery");
+
+        assert_eq!(accelerated, scalar);
     }
 }

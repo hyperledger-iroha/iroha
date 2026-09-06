@@ -235,12 +235,10 @@ invokes `scripts/check_android_fixtures.py` to guard parity.
 
 ## CUDA acceleration
 
-CUDA helpers are shipped behind the deterministic `CudaAccelerators` facade
-with a Kotlin-friendly wrapper in `CudaAcceleratorsKotlin`. The native backend
-remains disabled by default; enable it with `-Diroha.cuda.enableNative=true`
-and consult the CUDA operator guide (`gpu_operator_guide.md`) for setup and the
-hardware-qualified JNI smoke command. The ordinary JVM suite excludes the
-GPU-only class; the nightly CUDA lane selects it explicitly and fails closed.
+CUDA computation is owned by the Kotlin/JVM `CudaAccelerators` API. Kotlin and
+Java callers use explicit backend construction and the same bounded batch
+operations. Native setup and the separately required hardware test are recorded
+in [the CUDA bridge contract](gpu_operator_guide.md).
 
 ## Pending Work
 

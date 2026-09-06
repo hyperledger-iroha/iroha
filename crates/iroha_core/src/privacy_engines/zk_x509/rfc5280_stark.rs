@@ -13,6 +13,8 @@
 //! remain false until every terminal below is wired to its numeric consumer.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::der_air::rfc5280_io_witnesses_v1;
+#[cfg(test)]
+use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use super::{
     der_air::{
         ZK_X509_DER_AIR_MAX_DOCUMENTS_V1, ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1,
@@ -52,9 +54,10 @@ use super::{
     io_air::ZkX509IoEndpointV1,
 };
 #[cfg(test)]
-use crate::privacy_engines::transparent_stark::sha256_frame_v1;
+use crate::privacy_engines::transparent_stark::goldilocks_digest384_frame_v1;
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
@@ -726,9 +729,16 @@ impl ZkX509Rfc5280StarkShapeV1 {
         Ok(bytes)
     }
     #[cfg(test)]
-    pub(crate) fn schedule_digest(&self) -> Result<[u8; 32], ZkX509Rfc5280StarkErrorV1> {
-        sha256_frame_v1(
+    pub(crate) fn schedule_digest(
+        &self,
+    ) -> Result<GoldilocksDigest384V1, ZkX509Rfc5280StarkErrorV1> {
+        goldilocks_digest384_frame_v1(
+            ZK_X509_DIGEST_CONTEXT_V1,
             b"iroha:privacy:zk-x509:rfc5280-stark-schedule:v1",
+            b"rfc5280-public-schedule",
+            0,
+            0,
+            0,
             &[&self.transcript_bytes()?],
         )
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)

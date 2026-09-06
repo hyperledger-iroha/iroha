@@ -28,6 +28,32 @@ fn completion_owner_snapshot(
         .collect()
 }
 
+#[test]
+fn completion_runtime_cut_and_worker_retention_share_one_clock_order() {
+    let admission = V2IoAdmission::new(1, 1).expect("bounded I/O admission");
+    let V2IoCompletionRuntimeCutObservationV1::Empty { cut_at } =
+        admission.completion_runtime_cut_observation()
+    else {
+        panic!("a fresh Completion lane must be empty");
+    };
+
+    let retained_at = admission.retain_completion(true, None, None, None, None, None, None);
+    assert!(
+        retained_at >= cut_at,
+        "retention after an empty cut cannot claim an earlier timestamp"
+    );
+    let V2IoCompletionRuntimeCutObservationV1::Pending(owner) =
+        admission.completion_runtime_cut_observation()
+    else {
+        panic!("the retained owner must be visible at the next cut");
+    };
+    assert_eq!(owner.retained_at, retained_at);
+    assert!(owner.requires_runtime_capacity);
+    assert!(!owner.is_dedicated_lifecycle());
+
+    admission.acknowledge_completion_at(0);
+}
+
 /// Exercise the real worker-tracker completion join with an opposite-lineage result.
 pub(in crate::sumeragi) fn lifecycle_decision_apply_result_substitution_is_inert_for_test(
     expected: LifecycleDecisionApplyDispatchKeyV1,
@@ -444,9 +470,8 @@ fn lifecycle_decision_apply_completion_accounting_is_stable_by_exact_key() {
     let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
     let key = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None, None, None, None, None);
+    admission.retain_completion(false, None, None, None, None, None, None);
     admission.retain_completion(
-        Instant::now(),
         true,
         Some(7),
         Some(key),
@@ -455,7 +480,7 @@ fn lifecycle_decision_apply_completion_accounting_is_stable_by_exact_key() {
         None,
         None,
     );
-    admission.retain_completion(Instant::now(), false, Some(8), None, None, None, None, None);
+    admission.retain_completion(false, Some(8), None, None, None, None, None);
     assert!(admission.lifecycle_decision_apply_completion_is_exact(key));
     assert!(
         !admission.lifecycle_decision_apply_completion_is_exact(same_ordinal_foreign),
@@ -481,9 +506,8 @@ fn lifecycle_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
         v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
     let key = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None, None, None, None, None);
+    admission.retain_completion(false, None, None, None, None, None, None);
     admission.retain_completion(
-        Instant::now(),
         true,
         Some(7),
         Some(key),
@@ -493,7 +517,6 @@ fn lifecycle_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
         None,
     );
     admission.retain_completion(
-        Instant::now(),
         true,
         Some(7),
         Some(same_ordinal_foreign),
@@ -545,7 +568,6 @@ fn lifecycle_decision_apply_retry_unavailable_preserves_pending_owner() {
         .expect("fill the sole physical queue position");
     let key = LifecycleDecisionApplyDispatchKeyV1::for_test(11, 3);
     admission.retain_completion(
-        Instant::now(),
         true,
         Some(11),
         Some(key),

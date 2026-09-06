@@ -2338,6 +2338,17 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
         Ok(self.qualification)
     }
 
+    fn attest_partial_release_capability(
+        &self,
+        _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        _expected_participant_index: u16,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    > {
+        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
+    }
+
     fn sign_projected_partial_release(
         &self,
         _projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
@@ -2351,7 +2362,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
 
 #[test]
 fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
-    let handle = "hsm://iroha/consensus-signers/primary";
+    let handle = "provider://iroha/consensus-signers/primary";
     let revision = 7;
     let digest = [0xA7; 32];
     let qualification = ConsensusSignerProviderQualificationV1::new(revision, digest, false);
@@ -2386,7 +2397,7 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
     .expect("exact beacon signer backend qualifies");
     for backend in [
         TestGlobalBeaconBrokerBackendV1 {
-            handle: "hsm://iroha/consensus-signers/substituted",
+            handle: "provider://iroha/consensus-signers/substituted",
             qualification,
         },
         TestGlobalBeaconBrokerBackendV1 {

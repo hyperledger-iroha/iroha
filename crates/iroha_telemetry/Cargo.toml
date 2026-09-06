@@ -13,6 +13,9 @@ license.workspace = true
 workspace = true
 
 [features]
+default = []
+# Report the portable SM implementation as part of the shipping capability set.
+sm = ["iroha_config/sm", "iroha_data_model/sm"]
 # Send structured events to the configured WebSocket collector.
 event-exporter = [
     "dep:chrono",
@@ -54,11 +57,6 @@ telegram = [
     "tokio/sync",
     "tokio/time",
 ]
-otel-exporter = [
-    "dep:opentelemetry",
-    "dep:opentelemetry_sdk",
-    "dep:opentelemetry_otlp",
-]
 
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -67,7 +65,7 @@ iroha_telemetry_derive = { path = "../iroha_telemetry_derive" }
 iroha_config = { workspace = true }
 iroha_logger = { workspace = true, optional = true }
 iroha_futures = { workspace = true, optional = true }
-iroha_schema = { workspace = true }
+iroha_torii_shared = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
 
 async-trait = { workspace = true }
@@ -81,9 +79,6 @@ tokio-tungstenite = { workspace = true, optional = true, features = ["rustls-tls
 url = { workspace = true, optional = true }
 prometheus = { workspace = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls-native-roots"], optional = true }
-opentelemetry = { version = "0.31", default-features = false, features = ["metrics"], optional = true }
-opentelemetry_sdk = { version = "0.31", default-features = false, features = ["metrics", "rt-tokio"], optional = true }
-opentelemetry_otlp = { package = "opentelemetry-otlp", version = "0.31", default-features = false, features = ["metrics", "grpc-tonic"], optional = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }

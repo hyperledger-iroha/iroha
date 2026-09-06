@@ -2,16 +2,16 @@
 // multisig implementation below its source-file budget.
 
 use crate::governance::parliament::{
-    PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1, parliament_attempt_policy_v1,
+    PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1,
+    canonical_governance_attempt_ids_v1, parliament_attempt_policy_v1,
 };
 use iroha_data_model::{
     governance::types::{
         BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId, GovernanceAttemptStatusV1,
         GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
-        GovernanceStageV1, MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
-        MAX_PARLIAMENT_SORTITION_RETRIES_V1, ParliamentBody, ProposalContentId, ProposalKind,
-        RiskTierV1, SortitionRequestId, SortitionRequestV1, ValidationFeePolicyProposal,
-        parliament_candidate_root_v1,
+        GovernanceStageV1, MAX_PARLIAMENT_SORTITION_RETRIES_V1, ParliamentBody, ProposalContentId,
+        ProposalKind, RiskTierV1, SortitionRequestId, SortitionRequestV1,
+        ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
     isi::governance::ParliamentSortitionRequestRegistrationV1,
     validation_fee::{
@@ -49,10 +49,10 @@ fn validation_fee_policy_proposal_for_rekey_test(
     })
 }
 
-fn rejected_validation_fee_attempt_for_rekey_test(
+fn exhausted_validation_fee_attempt_for_rekey_test(
     proposal: &ProposalKind,
-    governance_attempt_sequence: u32,
 ) -> ParliamentAttemptStateV1 {
+    let governance_attempt_sequence = 0;
     let proposal_content_id = ProposalContentId::new(proposal.fingerprint());
     let governance_attempt_id =
         GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
@@ -144,6 +144,7 @@ fn account_rekey_rejects_active_parliament_candidate_without_partial_mutation() 
     let old_account = new_account_id(&checked_keypair());
     let new_account = new_account_id(&checked_keypair());
     let other_candidate = new_account_id(&checked_keypair());
+    let third_candidate = new_account_id(&checked_keypair());
     domain!(
         tx,
         old_account,
@@ -184,7 +185,7 @@ fn account_rekey_rejects_active_parliament_candidate_without_partial_mutation() 
     attempt
         .complete_qualification(governance_attempt_id)
         .expect("complete fixture qualification");
-    let mut candidates = vec![old_account.clone(), other_candidate];
+    let mut candidates = vec![old_account.clone(), other_candidate, third_candidate];
     candidates.sort_unstable();
     let election_attempt_id =
         BodyElectionAttemptId::derive_v1(governance_attempt_id, ParliamentBody::PolicyJury, 0);
@@ -197,8 +198,8 @@ fn account_rekey_rejects_active_parliament_candidate_without_partial_mutation() 
             ParliamentBody::PolicyJury,
             &candidates,
         ),
-        2,
-        2,
+        3,
+        3,
         1,
         2,
         BeaconSessionId::new([0x44; 32]),
@@ -298,7 +299,7 @@ fn account_rekey_rejects_immutable_validation_fee_authorization_without_partial_
     assert!(
         error
             .to_string()
-            .contains("validation-fee Parliament authorization"),
+            .contains("operator-bound Parliament authorization"),
         "unexpected error: {error}"
     );
     assert!(tx.world.account(&old_account).is_ok());
@@ -315,7 +316,163 @@ fn account_rekey_rejects_immutable_validation_fee_authorization_without_partial_
 }
 
 #[test]
-fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
+fn account_rekey_rejects_live_deploy_operator_without_partial_mutation() {
+    tx!(
+        state,
+        block,
+        tx,
+        World::new(),
+        "multisig-rekey-live-deploy-operator"
+    );
+    let domain_id = DomainId::try_new("deployauth", "universal").expect("domain id");
+    let old_account = new_account_id(&checked_keypair());
+    let new_account = new_account_id(&checked_keypair());
+    domain!(
+        tx,
+        old_account,
+        domain_id,
+        "register deploy operator domain"
+    );
+    account!(
+        tx,
+        old_account,
+        domain_id,
+        old_account,
+        "register deploy proposal operator"
+    );
+    let proposal = ProposalKind::DeployContract(
+        iroha_data_model::governance::types::DeployContractProposal {
+            proposal_operator: old_account.clone(),
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("contract address"),
+            code_hash: iroha_data_model::governance::types::ContractCodeHash::new([0x31; 32]),
+            abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([0x41; 32]),
+            abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
+            manifest_provenance: None,
+        },
+    );
+    let proposal_id = proposal.fingerprint();
+    tx.world
+        .put_governance_proposal(
+            proposal_id,
+            crate::state::GovernanceProposalRecord {
+                proposer: old_account.clone(),
+                kind: proposal,
+                created_height: 1,
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            },
+        )
+        .expect("persist live operator-bound deploy proposal");
+
+    let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
+        .expect_err("a live deploy operator identity must remain immutable");
+    assert!(
+        error
+            .to_string()
+            .contains("operator-bound Parliament authorization"),
+        "unexpected error: {error}"
+    );
+    assert!(tx.world.account(&old_account).is_ok());
+    assert!(matches!(
+        tx.world.account(&new_account),
+        Err(FindError::Account(account)) if account == new_account
+    ));
+    assert_eq!(
+        tx.world
+            .governance_proposals
+            .get(&proposal_id)
+            .expect("failed rekey preserves deploy proposal")
+            .proposer,
+        old_account
+    );
+}
+
+#[test]
+fn account_rekey_rejects_live_contract_ownership_recipient_without_partial_mutation() {
+    tx!(
+        state,
+        block,
+        tx,
+        World::new(),
+        "multisig-rekey-live-contract-ownership-recipient"
+    );
+    let domain_id = DomainId::try_new("contractoffer", "universal").expect("domain id");
+    let old_account = new_account_id(&checked_keypair());
+    let new_account = new_account_id(&checked_keypair());
+    let proposal_operator = new_account_id(&checked_keypair());
+    domain!(
+        tx,
+        old_account,
+        domain_id,
+        "register contract-offer recipient domain"
+    );
+    account!(
+        tx,
+        old_account,
+        domain_id,
+        old_account,
+        "register contract-offer recipient"
+    );
+    account!(
+        tx,
+        old_account,
+        domain_id,
+        proposal_operator,
+        "register contract-offer operator"
+    );
+    let proposal = ProposalKind::ContractLifecycleGovernance(
+        iroha_data_model::governance::types::ContractLifecycleGovernanceProposalV1 {
+            proposal_operator: proposal_operator.clone(),
+            contract_address:
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                    .parse()
+                    .expect("contract address"),
+            expected_revision: 1,
+            action: iroha_data_model::governance::types::ContractLifecycleGovernanceActionV1::OfferOwnership(
+                iroha_data_model::governance::types::OfferContractOwnershipGovernanceActionV1 {
+                    new_owner: old_account.clone(),
+                },
+            ),
+        },
+    );
+    let proposal_id = proposal.fingerprint();
+    tx.world
+        .put_governance_proposal(
+            proposal_id,
+            crate::state::GovernanceProposalRecord {
+                proposer: proposal_operator,
+                kind: proposal.clone(),
+                created_height: 1,
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            },
+        )
+        .expect("persist live contract ownership offer");
+
+    let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
+        .expect_err("a live ownership recipient identity must remain immutable");
+    assert!(
+        error
+            .to_string()
+            .contains("operator-bound Parliament authorization"),
+        "unexpected error: {error}"
+    );
+    assert!(tx.world.account(&old_account).is_ok());
+    assert!(matches!(
+        tx.world.account(&new_account),
+        Err(FindError::Account(account)) if account == new_account
+    ));
+    let retained = tx
+        .world
+        .governance_proposals
+        .get(&proposal_id)
+        .expect("failed rekey preserves contract ownership offer");
+    assert_eq!(retained.kind, proposal);
+    assert_eq!(retained.kind.fingerprint(), proposal_id);
+}
+
+#[test]
+fn account_rekey_rejects_terminal_validation_fee_without_proven_exhaustion() {
     tx!(
         state,
         block,
@@ -341,9 +498,6 @@ fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
     );
     let proposal_id = proposal.fingerprint();
     tx.world
-        .put_parliament_attempt(rejected_validation_fee_attempt_for_rekey_test(&proposal, 0))
-        .expect("persist retryable rejected validation-fee attempt");
-    tx.world
         .put_governance_proposal(
             proposal_id,
             crate::state::GovernanceProposalRecord {
@@ -353,14 +507,14 @@ fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
                 status: crate::state::GovernanceProposalStatus::Rejected,
             },
         )
-        .expect("persist retryable rejected validation-fee proposal");
+        .expect("persist terminal validation-fee proposal with missing attempt history");
 
     let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
-        .expect_err("retryable terminal validation-fee history still has executable effect");
+        .expect_err("missing attempt history must not prove redraw exhaustion");
     assert!(
         error
             .to_string()
-            .contains("validation-fee Parliament authorization"),
+            .contains("operator-bound Parliament authorization"),
         "unexpected error: {error}"
     );
     assert!(tx.world.account(&old_account).is_ok());
@@ -372,7 +526,7 @@ fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
         .world
         .governance_proposals
         .get(&proposal_id)
-        .expect("failed rekey preserves retryable fee history");
+        .expect("failed rekey preserves unproven fee history");
     assert_eq!(retained.proposer, old_account);
     assert_eq!(retained.kind, proposal);
     assert_eq!(
@@ -407,13 +561,11 @@ fn account_rekey_preserves_exhausted_terminal_validation_fee_history() {
         tx.network_id.clone(),
     );
     let proposal_id = proposal.fingerprint();
-    for sequence in 0..=MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
-        tx.world
-            .put_parliament_attempt(rejected_validation_fee_attempt_for_rekey_test(
-                &proposal, sequence,
-            ))
-            .expect("persist contiguous exhausted validation-fee attempt history");
-    }
+    let proposal_bytes = norito::encode_canonical(&proposal)
+        .expect("encode exhausted terminal proposal before account rekey");
+    tx.world
+        .put_parliament_attempt(exhausted_validation_fee_attempt_for_rekey_test(&proposal))
+        .expect("persist one attempt that exhausts the proposal-wide redraw budget");
     tx.world
         .put_governance_proposal(
             proposal_id,
@@ -440,19 +592,19 @@ fn account_rekey_preserves_exhausted_terminal_validation_fee_history() {
         .expect("successful rekey retains exhausted fee history");
     assert_eq!(retained.proposer, old_account);
     assert_eq!(retained.kind, proposal);
+    assert_eq!(retained.kind.fingerprint(), proposal_id);
+    assert_eq!(
+        norito::encode_canonical(&retained.kind)
+            .expect("encode exhausted terminal proposal after account rekey"),
+        proposal_bytes
+    );
     assert_eq!(
         retained.status,
         crate::state::GovernanceProposalStatus::Rejected
     );
-    let retained_attempts = tx
-        .world
-        .parliament_attempts
-        .iter()
-        .filter(|(_, attempt)| attempt.proposal_content_id() == ProposalContentId::new(proposal_id))
-        .count();
-    assert_eq!(
-        retained_attempts,
-        usize::try_from(MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1)
-            .expect("bounded retry count fits usize")
-    );
+    let retained_attempts =
+        canonical_governance_attempt_ids_v1(ProposalContentId::new(proposal_id))
+            .filter_map(|attempt_id| tx.world.parliament_attempts.get(&attempt_id))
+            .count();
+    assert_eq!(retained_attempts, 1);
 }

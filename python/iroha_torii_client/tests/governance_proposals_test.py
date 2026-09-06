@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 from client_test_support import CANONICAL_OWNER
 from iroha_torii_client.governance_proposals import (
+    GovernanceContractLifecycleActionKind,
+    GovernanceContractLifecycleEmergencyHoldRetrospective,
+    GovernanceGlobalDataTriggerPermissionAction,
+    GovernanceProposalContractEmergencyHold,
+    GovernanceProposalContractLifecycleGovernance,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
@@ -25,7 +33,6 @@ from iroha_torii_client.governance_proposals import (
     GovernanceSccpRouteAction,
     GovernanceSccpRouteKey,
     GovernanceSccpSetRouteActivation,
-    GovernanceSccpSolanaDestinationDeployment,
     GovernanceSccpSwitchRouteRevision,
 )
 
@@ -37,8 +44,6 @@ PUBLIC_SIGNAL_SCHEMA_HASH = (
 TAIRA_CHAIN_ID_HASH = (
     "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
 )
-TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000
-TEST_EVM_MAX_WRAPPED_SUPPLY = TEST_MAX_OUTSTANDING_LIABILITY * 1_000_000_000
 
 
 def _lane() -> dict[str, object]:
@@ -111,6 +116,9 @@ def _outbound_proof_policy() -> dict[str, object]:
             "source_network": {"network": "sora_taira", "profile": None},
             "protocol_version": 4,
             "chain_id_hash": TAIRA_CHAIN_ID_HASH,
+            "epoch": 7,
+            "epoch_end_height": 150,
+            "roster_commitment": "25" * 32,
             "checkpoint_height": 12,
             "checkpoint_block_hash": "22" * 32,
             "checkpoint_context_id": "23" * 32,
@@ -149,8 +157,12 @@ def _register_action() -> dict[str, object]:
                 "outbound_proof_policy": _outbound_proof_policy(),
                 "route_address": route_address,
                 "route_code_hash": route_code_hash,
+                "replay_verifier_address": "14" * 20,
+                "replay_verifier_code_hash": "1B" * 32,
+                "mint_breaker_address": "15" * 20,
+                "mint_breaker_code_hash": "1C" * 32,
                 "taira_to_token_multiplier": 1_000_000_000,
-                "max_wrapped_supply": TEST_EVM_MAX_WRAPPED_SUPPLY,
+                "max_wrapped_supply": "1000000000000000000000",
             },
         },
         "sora_outbound_execution_policy": {
@@ -167,82 +179,8 @@ def _register_action() -> dict[str, object]:
         },
         "settlement": {
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "custody_owner": CANONICAL_OWNER,
             "payload_amount_scale": 9,
-            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
-        },
-    }
-    return {
-        "action": "Register",
-        "route": {"route": route, "native_trust_anchor": None},
-    }
-
-
-def _solana_register_action() -> dict[str, object]:
-    lane = {
-        "source": {"network": "solana_testnet", "profile": None},
-        "target": {"network": "sora_taira", "profile": None},
-    }
-    route = {
-        "lane_id": lane,
-        "route_id": "taira_sol_xor",
-        "asset_key": "xor",
-        "revision": 1,
-        "activation": _activation("staged"),
-        "inbound_finality_cutoff": None,
-        "source_identity": {
-            "lane": copy.deepcopy(lane),
-            "emitter": {
-                "emitter": "solana",
-                "identity": {
-                    "program_id": "31" * 32,
-                    "program_data_address": "32" * 32,
-                    "program_data_slot": 3,
-                    "state_account": "33" * 32,
-                    "program_code_hash": "34" * 32,
-                    "route_config_hash": "35" * 32,
-                },
-            },
-        },
-        "destination": {
-            "family": "solana",
-            "deployment": {
-                "token_mint_address": "41" * 32,
-                "route_program_id": "42" * 32,
-                "route_program_data_address": "43" * 32,
-                "route_program_data_slot": 4,
-                "route_state_account": "44" * 32,
-                "route_program_code_hash": "45" * 32,
-                "native_verifier_program_id": "46" * 32,
-                "native_verifier_program_data_address": "47" * 32,
-                "native_verifier_program_data_slot": 5,
-                "native_verifier_material_account": "48" * 32,
-                "native_verifier_program_code_hash": "49" * 32,
-                "native_verifier_config_hash": "4A" * 32,
-                "verifying_key": _verifying_key(),
-                "verifier_key_hash": "4B" * 32,
-                "outbound_proof_policy": _outbound_proof_policy(),
-                "taira_to_token_multiplier": 1,
-                "max_wrapped_supply": TEST_MAX_OUTSTANDING_LIABILITY,
-            },
-        },
-        "sora_outbound_execution_policy": {
-            "version": 1,
-            "semantics": "ivm_proved_record_sccp_message_v1",
-            "contract_artifact_sha256": "51" * 32,
-            "vk_ref": {
-                "backend": "halo2/ipa",
-                "name": "sccp_solana_route_v1",
-                "version": 1,
-                "commitment": "52" * 32,
-            },
-            "gas_limit": 1_000_000,
-        },
-        "settlement": {
-            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "custody_owner": CANONICAL_OWNER,
-            "payload_amount_scale": 9,
-            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
+            "max_outstanding_liability": "1000000000000",
         },
     }
     return {
@@ -384,7 +322,99 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
             },
             GovernanceProposalSorafsProviderGovernance,
         ),
+        (
+            "ContractLifecycleGovernance",
+            {
+                "contract_address": CONTRACT_ADDRESS,
+                "expected_revision": 3,
+                "action": {
+                    "action": "CompleteEmergencyHoldRetrospective",
+                    "payload": {
+                        "hold_proposal_content_id": [81] * 32,
+                        "hold_governance_attempt_id": [82] * 32,
+                        "incident_digest": [83] * 32,
+                        "retrospective_finding_root": [84] * 32,
+                    },
+                },
+            },
+            GovernanceProposalContractLifecycleGovernance,
+        ),
+        (
+            "ContractEmergencyHold",
+            {
+                "contract_address": CONTRACT_ADDRESS,
+                "expected_revision": 2,
+                "expected_code_hash": "33" * 32,
+                "incident_digest": [85] * 32,
+                "reason": "contain active exploit",
+                "duration_blocks": 3_600,
+            },
+            GovernanceProposalContractEmergencyHold,
+        ),
+        (
+            "GlobalDataTriggerPermissionGovernance",
+            {
+                "authority": CANONICAL_OWNER,
+                "action": {"action": "grant", "value": None},
+            },
+            GovernanceProposalGlobalDataTriggerPermissionGovernance,
+        ),
     ]
+
+
+def test_shared_fixture_pins_closed_proposal_and_lifecycle_action_inventories() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "governance"
+        / "parliament_api_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    assert fixture["proposal_kinds"] == [kind.value for kind in GovernanceProposalKindTag]
+    assert fixture["contract_lifecycle_actions"] == [
+        action.value for action in GovernanceContractLifecycleActionKind
+    ]
+
+
+def test_contract_lifecycle_action_inventory_admits_exactly_six_wire_tags() -> None:
+    action_payloads: dict[GovernanceContractLifecycleActionKind, object] = {
+        GovernanceContractLifecycleActionKind.ACTIVATE: {
+            "code_hash": "11" * 32,
+            "abi_hash": "22" * 32,
+            "abi_version": 1,
+            "manifest_provenance": None,
+        },
+        GovernanceContractLifecycleActionKind.DEACTIVATE: {
+            "expected_code_hash": "33" * 32,
+        },
+        GovernanceContractLifecycleActionKind.OFFER_OWNERSHIP: {
+            "new_owner": CANONICAL_OWNER,
+        },
+        GovernanceContractLifecycleActionKind.CANCEL_OWNERSHIP_OFFER: None,
+        GovernanceContractLifecycleActionKind.ACCEPT_PARLIAMENT_OWNERSHIP: None,
+        GovernanceContractLifecycleActionKind.COMPLETE_EMERGENCY_HOLD_RETROSPECTIVE: {
+            "hold_proposal_content_id": [0x42] * 32,
+            "hold_governance_attempt_id": [0x43] * 32,
+            "incident_digest": [0x44] * 32,
+            "retrospective_finding_root": [0x45] * 32,
+        },
+    }
+    assert list(action_payloads) == list(GovernanceContractLifecycleActionKind)
+    for action, payload in action_payloads.items():
+        lifecycle = copy.deepcopy(_variants()[7][1])
+        lifecycle["action"] = {"action": action.value, "payload": payload}
+        proposal = GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
+        assert proposal.payload.action.action is action  # type: ignore[union-attr]
+
+    lifecycle = copy.deepcopy(_variants()[7][1])
+    lifecycle["action"] = {"action": "Unknown", "payload": None}
+    with pytest.raises(TypeError, match="not a first-release lifecycle action"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
 
 
 @pytest.mark.parametrize(("tag", "payload", "payload_type"), _variants())
@@ -471,6 +501,64 @@ def test_closed_nested_action_tags_reject_unknown_values() -> None:
         )
 
 
+def test_contract_lifecycle_retrospective_and_unit_actions_are_closed() -> None:
+    lifecycle = copy.deepcopy(_variants()[7][1])
+    proposal = GovernanceProposalKind.from_payload(
+        {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+    )
+    assert proposal.payload.action.action is (  # type: ignore[union-attr]
+        GovernanceContractLifecycleActionKind.COMPLETE_EMERGENCY_HOLD_RETROSPECTIVE
+    )
+    assert isinstance(  # type: ignore[union-attr]
+        proposal.payload.action.payload,
+        GovernanceContractLifecycleEmergencyHoldRetrospective,
+    )
+
+    for action in ("CancelOwnershipOffer", "AcceptParliamentOwnership"):
+        lifecycle["action"] = {"action": action, "payload": None}
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
+        del lifecycle["action"]["payload"]  # type: ignore[index]
+        with pytest.raises(TypeError, match="missing required field `payload`"):
+            GovernanceProposalKind.from_payload(
+                {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+            )
+
+
+def test_contract_hold_bounds_and_retrospective_root_fail_closed() -> None:
+    lifecycle = copy.deepcopy(_variants()[7][1])
+    lifecycle["action"]["payload"]["retrospective_finding_root"] = [0] * 32  # type: ignore[index]
+    with pytest.raises(TypeError, match="must be non-zero"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
+
+    emergency = copy.deepcopy(_variants()[8][1])
+    emergency["duration_blocks"] = 3_601
+    with pytest.raises(TypeError, match=r"1\.\.3600"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractEmergencyHold", "payload": emergency}
+        )
+
+
+def test_global_data_trigger_permission_is_exact_account_and_closed_action() -> None:
+    proposal = GovernanceProposalKind.from_payload(
+        {
+            "kind": "GlobalDataTriggerPermissionGovernance",
+            "payload": _variants()[9][1],
+        }
+    )
+    assert proposal.payload.action is GovernanceGlobalDataTriggerPermissionAction.GRANT  # type: ignore[union-attr]
+
+    malformed = copy.deepcopy(_variants()[9][1])
+    malformed["action"]["value"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError, match="must be null"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "GlobalDataTriggerPermissionGovernance", "payload": malformed}
+        )
+
+
 def test_sccp_register_action_is_recursively_typed() -> None:
     parsed = GovernanceSccpRouteAction.from_payload(_register_action())
 
@@ -481,75 +569,8 @@ def test_sccp_register_action_is_recursively_typed() -> None:
         GovernanceSccpEvmDestinationDeployment,
     )
     assert parsed.route.route.destination.deployment.outbound_proof_policy.version == 1
-    assert (
-        parsed.route.route.destination.deployment.max_wrapped_supply
-        == TEST_EVM_MAX_WRAPPED_SUPPLY
-    )
     assert parsed.route.route.sora_outbound_execution_policy.vk_ref.name == "sccp_route_v1"
-    assert parsed.route.route.settlement.custody_owner == CANONICAL_OWNER
-    assert (
-        parsed.route.route.settlement.max_outstanding_liability
-        == TEST_MAX_OUTSTANDING_LIABILITY
-    )
-
-
-def test_sccp_solana_register_uses_the_exact_typed_deployment() -> None:
-    parsed = GovernanceSccpRouteAction.from_payload(_solana_register_action())
-
-    assert isinstance(parsed.route, GovernanceSccpRegisterRoute)
-    deployment = parsed.route.route.destination.deployment
-    assert isinstance(deployment, GovernanceSccpSolanaDestinationDeployment)
-    assert deployment.native_verifier_material_account == "48" * 32
-    assert deployment.route_program_data_slot == 4
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "native_verifier_material_account",
-        "native_verifier_config_hash",
-        "max_wrapped_supply",
-    ],
-)
-def test_sccp_solana_register_rejects_missing_closed_deployment_roles(field: str) -> None:
-    action = _solana_register_action()
-    action["route"]["route"]["destination"]["deployment"].pop(field)  # type: ignore[index]
-
-    with pytest.raises(TypeError, match="missing required field"):
-        GovernanceSccpRouteAction.from_payload(action)
-
-
-def test_sccp_solana_slots_reject_unsafe_json_integers() -> None:
-    action = _solana_register_action()
-    action["route"]["route"]["destination"]["deployment"][
-        "native_verifier_program_data_slot"
-    ] = 1 << 53  # type: ignore[index]
-
-    with pytest.raises(TypeError, match="integer"):
-        GovernanceSccpRouteAction.from_payload(action)
-
-
-def test_sccp_register_requires_matching_positive_supply_and_liability_caps() -> None:
-    missing_supply = _register_action()
-    missing_supply["route"]["route"]["destination"]["deployment"].pop(  # type: ignore[index]
-        "max_wrapped_supply"
-    )
-    with pytest.raises(TypeError, match="max_wrapped_supply"):
-        GovernanceSccpRouteAction.from_payload(missing_supply)
-
-    missing_liability = _register_action()
-    missing_liability["route"]["route"]["settlement"].pop(  # type: ignore[index]
-        "max_outstanding_liability"
-    )
-    with pytest.raises(TypeError, match="max_outstanding_liability"):
-        GovernanceSccpRouteAction.from_payload(missing_liability)
-
-    mismatched = _register_action()
-    mismatched["route"]["route"]["destination"]["deployment"][  # type: ignore[index]
-        "max_wrapped_supply"
-    ] += 1
-    with pytest.raises(TypeError, match="must equal settlement.max_outstanding_liability"):
-        GovernanceSccpRouteAction.from_payload(mismatched)
+    assert parsed.route.route.settlement.max_outstanding_liability == 1_000_000_000_000
 
 
 @pytest.mark.parametrize(
@@ -622,6 +643,14 @@ def test_every_non_register_sccp_action_has_a_typed_payload(
             "rpc_url", "https://example.invalid"
         ),
         lambda action: action["route"]["route"].pop("sora_outbound_execution_policy"),
+        lambda action: action["route"]["route"]["sora_outbound_execution_policy"][
+            "vk_ref"
+        ].__setitem__(
+            "commitment",
+            action["route"]["route"]["sora_outbound_execution_policy"][
+                "contract_artifact_sha256"
+            ],
+        ),
         lambda action: action["route"]["route"]["destination"]["deployment"][
             "outbound_proof_policy"
         ]["sora_finality_anchor"].__setitem__("checkpoint_height", 1 << 53),

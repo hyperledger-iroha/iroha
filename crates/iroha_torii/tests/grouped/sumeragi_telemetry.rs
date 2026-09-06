@@ -14,6 +14,9 @@ mod sse_proof_envelope_hash;
 mod sse_proof_rejected_fields;
 #[path = "../sse_proof_verified_fields.rs"]
 mod sse_proof_verified_fields;
+#[cfg(feature = "telemetry")]
+#[path = "../common/sumeragi_evidence.rs"]
+mod sumeragi_evidence;
 #[path = "../sumeragi_evidence_count_endpoint.rs"]
 mod sumeragi_evidence_count_endpoint;
 #[path = "../sumeragi_evidence_list_endpoint.rs"]

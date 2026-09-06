@@ -54,8 +54,6 @@ from iroha_python.tx import (
     _normalize_quantity,
     _normalize_rwa_quantity_fields,
     _normalize_u128_quantity,
-    _require_canonical_positive_u128_literal,
-    _require_canonical_public_balance_scope,
 )
 
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
@@ -826,7 +824,7 @@ def test_proof_required_onboarding_never_retries_atomic_post(
         "https://torii.example",
         session=session,
         max_retries=4,
-        backoff_factor=0,
+        backoff_initial=0,
         retry_on_methods=["POST"],
     )
 
@@ -1831,17 +1829,14 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kaigi-usage-v1",
             "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         }
     )
-    assert len(expected) == 12
+    assert len(expected) == 9
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
     for backend in expected:
         expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
@@ -1870,6 +1865,9 @@ def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() 
         "halo2/ipa\0",
         "HALO2/IPA",
         "stark/FRI",
+        "stark/fri",
+        "stark/fri/poseidon2-goldilocks",
+        "stark/fri/sha256_goldilocks.v1",
         "halo2/ipa::ivm-execution-v1",
         "halo2//ipa",
         "halo2/ipa:",
@@ -2186,7 +2184,7 @@ def test_asset_balance_rejects_wrong_network_prefix_without_retry() -> None:
             "params": None,
             "data": None,
             "headers": {"Accept": "application/json"},
-            "allow_redirects": True,
+            "allow_redirects": False,
         }
     ]
 
@@ -2843,8 +2841,8 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
         "stark/fri/replace-before-mainnet",
         "stark/fri/not-production-ready",
         "stark/fri/placeholder",
-        " stark/fri/sha256-goldilocks",
-        "stark/fri/sha256-goldilocks ",
+        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
         "halo2/ipa/orchard",
         "halo2/kzg",
         "halo2/ipa\0",
@@ -3485,8 +3483,8 @@ def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_reques
         "stark/fri/replace-before-mainnet",
         "stark/fri/not-production-ready",
         "stark/fri/placeholder",
-        " stark/fri/sha256-goldilocks",
-        "stark/fri/sha256-goldilocks ",
+        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
         "halo2/ipa/orchard",
         "halo2/kzg",
         "halo2/ipa\0",
@@ -3598,8 +3596,8 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
         "stark/fri/replace-before-mainnet",
         "stark/fri/not-production-ready",
         "stark/fri/placeholder",
-        " stark/fri/sha256-goldilocks",
-        "stark/fri/sha256-goldilocks ",
+        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
         "halo2/ipa/orchard",
         "halo2/kzg",
         "halo2/ipa\0",
@@ -3835,9 +3833,75 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
             "params": None,
             "data": None,
             "headers": {"Accept": "application/json"},
-            "allow_redirects": True,
+            "allow_redirects": False,
         }
     ]
+
+
+def test_dataspace_visible_account_reads_use_configured_canonical_signer() -> None:
+    account = account_address(0x46)
+    session = FakeSession(
+        [
+            response(200, {"id": account}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+        ]
+    )
+    client = authenticated_query_client(session)
+
+    assert client.find_account(account) == {"id": account}
+    assert client.list_account_assets(account) == {"items": [], "total": 0}
+    assert client.list_account_transactions(account) == {"items": [], "total": 0}
+    assert client.list_account_permissions(account) == {"items": [], "total": 0}
+    assert client.find_account_assets(account) == []
+
+    assert len(session.calls) == 5
+    for call in session.calls:
+        assert call["allow_redirects"] is False
+        headers = call["headers"]
+        assert isinstance(headers, dict)
+        for header in (
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+        ):
+            assert header in headers
+
+
+def test_dataspace_visible_account_reads_remain_anonymous_without_signer() -> None:
+    account = account_address(0x47)
+    session = FakeSession(
+        [
+            response(200, {"id": account}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.find_account(account) == {"id": account}
+    assert client.list_account_assets(account) == {"items": [], "total": 0}
+    assert client.list_account_transactions(account) == {"items": [], "total": 0}
+    assert client.list_account_permissions(account) == {"items": [], "total": 0}
+    assert client.find_account_assets(account) == []
+
+    assert len(session.calls) == 5
+    for call in session.calls:
+        assert call["allow_redirects"] is False
+        headers = call["headers"]
+        assert isinstance(headers, dict)
+        for header in (
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+        ):
+            assert header not in headers
 
 
 def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None:
@@ -4240,47 +4304,6 @@ def test_retired_generic_confidential_instruction_and_client_surfaces_are_absent
 
 
 @pytest.mark.parametrize(
-    "hostile",
-    (
-        "",
-        "Global",
-        "GLOBAL",
-        " global",
-        "global ",
-        "universal",
-        "dataspace:",
-        "dataspace:0",
-        "dataspace:00",
-        "dataspace:01",
-        "dataspace:+1",
-        "dataspace:-1",
-        "dataspace: 1",
-        "dataspace:1 ",
-        "dataspace:１",
-        "dataspace:18446744073709551616",
-        "dataspace:999999999999999999999",
-        "dataspace:universal",
-    ),
-)
-def test_public_balance_scope_rejects_aliases_padding_and_numeric_adversaries(
-    hostile: str,
-) -> None:
-    with pytest.raises(ValueError, match="public_balance_scope"):
-        _require_canonical_public_balance_scope(hostile)
-
-
-@pytest.mark.parametrize("hostile", (None, 1, True, b"global"))
-def test_public_balance_scope_rejects_non_strings(hostile: object) -> None:
-    with pytest.raises(TypeError, match="public_balance_scope"):
-        _require_canonical_public_balance_scope(hostile)
-
-
-def test_public_balance_scope_rejects_oversize_decimal_before_integer_conversion() -> None:
-    with pytest.raises(ValueError, match="public_balance_scope"):
-        _require_canonical_public_balance_scope("dataspace:" + "9" * 4096)
-
-
-@pytest.mark.parametrize(
     "entry_surface",
     ("instruction", "transaction_draft", "torii_client"),
 )
@@ -4383,42 +4406,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert captured[0][0].config.metadata == {"purpose": "zk-register"}
     assert captured[0][1]["wait"] is False
     assert captured[1][1]["private_key_hex"] == "bb" * 32
-
-
-def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
-    u128_max = str((1 << 128) - 1)
-    assert _require_canonical_positive_u128_literal("17", "amount") == "17"
-    assert _require_canonical_positive_u128_literal(u128_max, "amount") == u128_max
-
-    for amount in [
-        None,
-        True,
-        False,
-        23,
-        0,
-        -1,
-        1.5,
-        Decimal("1"),
-        "",
-        " ",
-        "0",
-        "00",
-        "01",
-        "00017",
-        "-1",
-        "+1",
-        "1.0",
-        "1e3",
-        1 << 128,
-        str(1 << 128),
-        [],
-        object(),
-    ]:
-        with pytest.raises(
-            (TypeError, ValueError),
-            match="amount must be a canonical positive decimal u128 string",
-        ):
-            _require_canonical_positive_u128_literal(amount, "amount")
 
 
 def test_verify_proof_client_helper_rejects_non_mapping_before_submission() -> None:

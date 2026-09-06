@@ -64,7 +64,7 @@ fn tlv_account_id_structure() {
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
     // Preload into INPUT and read back a slice
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     mem.preload_input(0, &tlv).expect("preload input");
     let region = mem
         .load_region(Memory::INPUT_START, tlv.len() as u64)

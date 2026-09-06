@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.musubi
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -1240,7 +1242,7 @@ class MusubiSdkV1FixtureTest {
     }
 
     private fun canonicalAuth(): ToriiCanonicalRequestAuth =
-        ToriiCanonicalRequestAuth(accountId, keyPair.private)
+        ToriiCanonicalRequestAuth(accountId, RequestSigner.ed25519(keyPair.private))
 
     private fun firstHeader(request: TransportRequest, name: String): String? = request.headers
         .entries

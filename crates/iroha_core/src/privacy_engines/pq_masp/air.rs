@@ -66,7 +66,7 @@ pub(super) const SCRATCH_VM_RESULT_BITS_OFFSET: usize = SCRATCH_VM_RESULT + 1;
 pub(super) const SCRATCH_VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_RESULT_BITS_OFFSET + 8;
 // Distinctness rows share the right-hand byte-bit cells with the reserved VM
 // difference decomposition. The row selectors are disjoint, so the alias
-// preserves the committed V0 layout while naming both consumers explicitly.
+// preserves the committed V1 layout while naming both consumers explicitly.
 pub(super) const SCRATCH_DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 const _: () = assert!(SCRATCH_DISTINCT_RIGHT_BITS_OFFSET == SCRATCH_OFFSET + 81);
 pub(super) const SHA256_INITIAL_STATE_V1: [u32; 8] = [

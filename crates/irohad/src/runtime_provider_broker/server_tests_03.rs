@@ -921,9 +921,10 @@ fn moderation_quarantine_server_binds_key_identity_and_revalidates_operations() 
     ));
     for backend in [
         ServerTestModerationKeyWrapper::exact()
-            .with_handle("kms://moderation/quarantine-wrapper-substitute"),
+            .with_handle("software://sorafs/moderation/quarantine-wrapper-substitute"),
         ServerTestModerationKeyWrapper::exact().with_revision(8),
-        ServerTestModerationKeyWrapper::exact().with_active_key_id("file:/tmp/plaintext-test-key"),
+        ServerTestModerationKeyWrapper::exact()
+            .with_active_key_id("software://sorafs/moderation/test/quarantine-key"),
     ] {
         assert!(matches!(
             prepare_server_state(
@@ -1095,11 +1096,13 @@ fn moderation_quarantine_server_rejects_malformed_inputs_and_unwrap_drift() {
     );
     for key_id in [
         String::new(),
-        " kms:key".to_owned(),
-        "file:/tmp/key".to_owned(),
-        "kms:key\n".to_owned(),
+        " software://sorafs/moderation/quarantine-key".to_owned(),
+        "software://sorafs/moderation/quarantine?token".to_owned(),
+        "software://sorafs/moderation/test/quarantine-key".to_owned(),
+        "software://sorafs/moderation/dummy/quarantine-key".to_owned(),
+        "software://sorafs/moderation/quarantine-key\n".to_owned(),
         format!(
-            "kms:{}",
+            "software:{}",
             "x".repeat(MAX_MODERATION_QUARANTINE_KEY_ID_BYTES_V1)
         ),
     ] {
@@ -1297,7 +1300,7 @@ fn moderation_quarantine_broker_debug_output_redacts_key_material() {
     );
     assert_eq!(
         operation_frame_limit(OPERATION_QUALIFY_V1),
-        MAX_MODERATION_QUARANTINE_FRAME_BYTES_V1,
+        MAX_QUALIFICATION_FRAME_BYTES_V1,
     );
     let wire = ModerationQuarantineWrapDekRequestWireV1 {
         context_digest: [0x31; 32],

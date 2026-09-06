@@ -137,7 +137,7 @@ def test_fixture_document_has_no_host_tool_or_binary_identity() -> None:
     fixture = MODULE._fixture_document(artifact, manifest, provenance)
     encoded = json.dumps(fixture, sort_keys=True)
 
-    assert fixture["fixture_version"] == 2
+    assert fixture["fixture_version"] == 1
     assert fixture["source_provenance"] == provenance
     assert "generation_provenance" not in fixture
     for retired in ("koto_sha256", "rustc_sha256", "ivm_rlib_sha256", "dependency"):

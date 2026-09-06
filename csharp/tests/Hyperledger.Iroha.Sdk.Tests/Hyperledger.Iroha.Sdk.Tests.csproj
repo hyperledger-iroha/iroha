@@ -24,6 +24,8 @@
   <ItemGroup>
     <None Include="../../../fixtures/account/address_vectors.json" Link="Fixtures/address_vectors.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/numeric_v1_golden.json" Link="Fixtures/numeric_v1_golden.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/offline/kagemusha_v1.json" Link="Fixtures/kagemusha_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/offline/kagemusha_device_mint_stage_v1.json" Link="Fixtures/kagemusha_device_mint_stage_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_parity_manifest.json" Link="Fixtures/swift_parity_manifest.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_parity_payloads.json" Link="Fixtures/swift_parity_payloads.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_*.norito" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
@@ -32,6 +34,7 @@
     <None Include="../../../fixtures/norito_rpc/*.norito" Link="Fixtures/norito_rpc/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/kotodama/entrypoint_argument_record_v1.json" Link="Fixtures/kotodama/entrypoint_argument_record_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sccp/native_transfer_event_v1.json" Link="Fixtures/sccp/native_transfer_event_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sccp/replay_forest_v1.json" Link="Fixtures/sccp/replay_forest_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json" Link="Fixtures/alias_setup_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json" Link="Fixtures/prepared_transaction_signature_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/privacy/exact12_v1.tsv" Link="Fixtures/privacy/exact12_v1.tsv" CopyToOutputDirectory="PreserveNewest" />

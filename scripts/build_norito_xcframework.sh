@@ -97,6 +97,8 @@ run_python312_clean() {
 # - Produces a static-library XCFramework with iOS device, universal iOS
 #   simulator, and universal macOS slices so Xcode links it without trying to
 #   embed/sign a framework inside simulator app bundles.
+# - Links every thin archive into a real C consumer with all members loaded;
+#   the host macOS consumer also exercises SHA3/SHAKE and ML-DSA/ML-KEM.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
 # - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, and the exact
@@ -444,31 +446,6 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256="${KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256:-}"
-REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION="${MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION:-0}"
-if [[ "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" != "0" \
-    && "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" != "1" ]]; then
-  echo "[-] MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION must be 0 or 1" >&2
-  exit 1
-fi
-if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
-  if [[ ! "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" =~ ^[0-9a-f]{64}$ \
-      || "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" == "$(printf '0%.0s' {1..64})" ]]; then
-    echo "[-] KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256 must be non-zero lowercase SHA-256" >&2
-    exit 1
-  fi
-  if [[ "$PRIVACY_PRODUCTION_ENABLED" != "1" ]]; then
-    echo "[-] a Kagemusha production authorization may bind only a production-enabled build" >&2
-    exit 1
-  fi
-fi
-if [[ "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" == "1" \
-    && "$PRIVACY_PRODUCTION_ENABLED" == "1" \
-    && -z "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
-  echo "[-] official production build requires a verified Kagemusha authorization digest" >&2
-  exit 1
-fi
-
 CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"
 CI_APPLE_SLICE_ARCHIVE="$OUT_DIR/NoritoBridge.apple-slice.tar"
 if [[ -n "$CI_APPLE_SLICE" ]]; then
@@ -504,11 +481,11 @@ if [[ -n "$CI_APPLE_SLICE" ]]; then
   esac
   if [[ "${CI:-}" != "true" \
       || "${GITHUB_ACTIONS:-}" != "true" \
-      || "${GITHUB_WORKFLOW:-}" != "Kagemusha first-release contract" \
+      || "${GITHUB_WORKFLOW:-}" != "Mobile SDK Artifacts" \
       || "${GITHUB_JOB:-}" != "$expected_slice_job" \
       || "${GITHUB_WORKSPACE:-}" != "$ROOT_DIR" \
       || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
-    echo "[-] --ci-apple-slice is restricted to its authenticated Kagemusha producer" >&2
+    echo "[-] --ci-apple-slice is restricted to its authenticated mobile SDK producer" >&2
     exit 1
   fi
   case "${GITHUB_EVENT_NAME:-}" in
@@ -539,11 +516,11 @@ if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
   fi
   if [[ "${CI:-}" != "true" \
       || "${GITHUB_ACTIONS:-}" != "true" \
-      || "${GITHUB_WORKFLOW:-}" != "Kagemusha first-release contract" \
+      || "${GITHUB_WORKFLOW:-}" != "Mobile SDK Artifacts" \
       || "${GITHUB_JOB:-}" != "swift" \
       || "${GITHUB_WORKSPACE:-}" != "$ROOT_DIR" \
       || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
-    echo "[-] --ci-handoff-only is restricted to the authenticated Kagemusha Swift producer" >&2
+    echo "[-] --ci-handoff-only is restricted to the authenticated Swift SDK producer" >&2
     exit 1
   fi
   case "${GITHUB_EVENT_NAME:-}" in
@@ -871,13 +848,9 @@ fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 CARGO_FEATURES_JSON='[]'
-KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON=null
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
-fi
-if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
-  KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON="\"$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256\""
 fi
 
 assert_bridge_source_seal() {
@@ -1059,6 +1032,7 @@ IPHONEOS_SDK_VERSION="$(xcrun_value --sdk iphoneos --show-sdk-version)"
 IPHONESIMULATOR_SDK_VERSION="$(xcrun_value --sdk iphonesimulator --show-sdk-version)"
 MACOSX_SDK_VERSION="$(xcrun_value --sdk macosx --show-sdk-version)"
 LIPO_BINARY="$(xcrun_value --find lipo)"
+CLANG_BINARY="$(xcrun_value --find clang)"
 for sdk_variable in IPHONEOS_SDKROOT IPHONESIMULATOR_SDKROOT MACOSX_SDKROOT; do
   sdkroot="${!sdk_variable}"
   printf -v "$sdk_variable" '%s' "$(run_python312_clean -c \
@@ -1076,6 +1050,13 @@ LIPO_BINARY="$(run_python312_clean -c \
   "$LIPO_BINARY")"
 [[ -x "$LIPO_BINARY" ]] || {
   echo "[-] Xcode lipo executable is unavailable" >&2
+  exit 1
+}
+CLANG_BINARY="$(run_python312_clean -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$CLANG_BINARY")"
+[[ -x "$CLANG_BINARY" ]] || {
+  echo "[-] Xcode clang executable is unavailable" >&2
   exit 1
 }
 XCODE_VERSION_OUTPUT="$(
@@ -1135,7 +1116,6 @@ if [[ -n "$CI_APPLE_SLICE" || -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
   "bridge_header_sha256": "$HEADER_HASH",
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
   "cargo_features": $CARGO_FEATURES_JSON,
-  "kagemusha_production_authorization_sha256": $KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -1177,6 +1157,109 @@ SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
 MACOS_ARM_TRIPLE="aarch64-apple-darwin"
 MACOS_X64_TRIPLE="x86_64-apple-darwin"
+check_apple_consumer_link() {
+  local target_triple="$1"
+  local library="$2"
+  local sdkroot clang_target host_arch
+  local consumer_dir="$STAGE_DIR/consumer-link/$target_triple"
+  case "$target_triple" in
+    "$DEVICE_TRIPLE")
+      sdkroot="$IPHONEOS_SDKROOT"
+      clang_target="arm64-apple-ios$IPHONEOS_DEPLOYMENT_TARGET"
+      ;;
+    "$SIM_ARM_TRIPLE")
+      sdkroot="$IPHONESIMULATOR_SDKROOT"
+      clang_target="arm64-apple-ios$IPHONESIMULATOR_DEPLOYMENT_TARGET-simulator"
+      ;;
+    "$SIM_X64_TRIPLE")
+      sdkroot="$IPHONESIMULATOR_SDKROOT"
+      clang_target="x86_64-apple-ios$IPHONESIMULATOR_DEPLOYMENT_TARGET-simulator"
+      ;;
+    "$MACOS_ARM_TRIPLE")
+      sdkroot="$MACOSX_SDKROOT"
+      clang_target="arm64-apple-macos$MACOSX_DEPLOYMENT_TARGET"
+      ;;
+    "$MACOS_X64_TRIPLE")
+      sdkroot="$MACOSX_SDKROOT"
+      clang_target="x86_64-apple-macos$MACOSX_DEPLOYMENT_TARGET"
+      ;;
+    *) echo "[-] Unknown Apple consumer target: $target_triple" >&2; return 1 ;;
+  esac
+  mkdir -p "$consumer_dir"
+  cat > "$consumer_dir/main.c" <<'CONSUMER_EOF'
+#include "connect_norito_bridge.h"
+#include <stdint.h>
+#include <string.h>
+
+/* Pinned PQClean implementation symbols are exercised here, not added to the
+ * public bridge ABI. Exact sizes/signatures match pqcrypto-mldsa 0.1.2 and
+ * pqcrypto-mlkem 0.1.1. Loading all archive members also checks the accelerated
+ * backends' helper closure on each packaged architecture. */
+extern void sha3_256(uint8_t *, const uint8_t *, size_t);
+extern void shake256(uint8_t *, size_t, const uint8_t *, size_t);
+extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(uint8_t *, uint8_t *);
+extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(
+    uint8_t *, size_t *, const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *);
+extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(
+    const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *);
+extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *, uint8_t *);
+extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *, uint8_t *, const uint8_t *);
+extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *, const uint8_t *, const uint8_t *);
+
+int main(void) {
+    static const uint8_t message[] = {'a', 'b', 'c'};
+    static const uint8_t changed[] = {'a', 'b', 'd'};
+    static const uint8_t sha3_expected[32] = {
+        58, 152, 93, 167, 79, 226, 37, 178, 4, 92, 23, 45, 107, 211, 144, 189,
+        133, 95, 8, 110, 62, 157, 82, 91, 70, 191, 226, 69, 17, 67, 21, 50};
+    static const uint8_t shake_expected[32] = {
+        72, 51, 102, 96, 19, 96, 168, 119, 28, 104, 99, 8, 12, 196, 17, 77,
+        141, 180, 69, 48, 248, 241, 225, 238, 79, 148, 234, 55, 231, 139, 87, 57};
+    uint8_t sha3[32], shake[32];
+    uint8_t signing_public[1312], signing_secret[2560], signature[2420];
+    uint8_t kem_public[800], kem_secret[1632], ciphertext[768], sent[32], received[32];
+    size_t signature_len = 0;
+    if (connect_norito_bridge_abi_version() != CONNECT_NORITO_BRIDGE_ABI_VERSION) return 1;
+    sha3_256(sha3, message, sizeof(message));
+    shake256(shake, sizeof(shake), message, sizeof(message));
+    if (memcmp(sha3, sha3_expected, sizeof(sha3)) || memcmp(shake, shake_expected, sizeof(shake))) return 2;
+    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(signing_public, signing_secret)) return 3;
+    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(signature, &signature_len,
+            message, sizeof(message), NULL, 0, signing_secret)) return 4;
+    if (signature_len != sizeof(signature)) return 5;
+    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(signature, signature_len,
+            message, sizeof(message), NULL, 0, signing_public)) return 6;
+    if (!PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(signature, signature_len,
+            changed, sizeof(changed), NULL, 0, signing_public)) return 7;
+    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(kem_public, kem_secret)) return 8;
+    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(ciphertext, sent, kem_public)) return 9;
+    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(received, ciphertext, kem_secret)) return 10;
+    if (memcmp(sent, received, sizeof(sent))) return 11;
+    return 0;
+}
+CONSUMER_EOF
+  echo "[+] Linking complete native archive into a C consumer: $target_triple" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${CLANG_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$CLANG_BINARY" -target "$clang_target" -isysroot "$sdkroot" \
+    -I "$ROOT_DIR/crates/connect_norito_bridge/include" "$consumer_dir/main.c" \
+    -Wl,-all_load "$library" \
+    -framework Foundation -framework Security -framework Metal -framework Accelerate \
+    -lc++ -liconv -o "$consumer_dir/consumer" || return $?
+  host_arch="$(/usr/bin/uname -m)"
+  if [[ ( "$target_triple" == "$MACOS_ARM_TRIPLE" && "$host_arch" == "arm64" ) \
+     || ( "$target_triple" == "$MACOS_X64_TRIPLE" && "$host_arch" == "x86_64" ) ]]; then
+    env -i HOME="$USER_HOME_DIR" PATH=/usr/bin:/bin TMPDIR="$MOBILE_TMPDIR" \
+      LANG=C.UTF-8 LC_ALL=C.UTF-8 "$consumer_dir/consumer" || return $?
+    echo "[+] Host C consumer passed ABI, SHA3/SHAKE, ML-DSA and ML-KEM checks" >&2
+  fi
+}
+
 stage_cargo_library() {
   local target_triple="$1"
   local label="$2"
@@ -1188,6 +1271,7 @@ stage_cargo_library() {
   fi
   mkdir -p "$(dirname "$staged_library")"
   cp "$source_library" "$staged_library"
+  check_apple_consumer_link "$target_triple" "$staged_library" || return $?
   printf '%s\n' "$staged_library"
 }
 
@@ -1380,6 +1464,11 @@ if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
   LIB_SIM_X64="$STAGE_DIR/cargo-libraries/$SIM_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
   LIB_MAC_ARM="$STAGE_DIR/cargo-libraries/$MACOS_ARM_TRIPLE/lib${LIB_CRATE_NAME}.a"
   LIB_MAC_X64="$STAGE_DIR/cargo-libraries/$MACOS_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  for restored_target in "$DEVICE_TRIPLE" "$SIM_ARM_TRIPLE" "$SIM_X64_TRIPLE" \
+      "$MACOS_ARM_TRIPLE" "$MACOS_X64_TRIPLE"; do
+    check_apple_consumer_link "$restored_target" \
+      "$STAGE_DIR/cargo-libraries/$restored_target/lib${LIB_CRATE_NAME}.a"
+  done
 fi
 
 if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" \
@@ -1527,9 +1616,13 @@ if protocol_abis != header_abis:
 print(header_abis[0])
 PY
 )" || exit 1
-# The mobile registry binds the Kagemusha ABI-21/V4 artifact family carried by
-# the independently versioned native bridge ABI above.
-KAGEMUSHA_ARTIFACT_ABI_VERSION=21
+
+RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
+  connect_norito_private_settlement_auditor_capsule_response
+  verify
+  v1
+)
+RETIRED_AUDITOR_CAPSULE_VERIFY_SYMBOL="${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[0]}_${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[1]}_${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[2]}"
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
@@ -1537,7 +1630,6 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
   "cargo_features": $CARGO_FEATURES_JSON,
-  "kagemusha_production_authorization_sha256": $KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -1669,6 +1761,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
@@ -1678,206 +1771,45 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+    "connect_norito_private_settlement_committee_proof_response_verify_v1",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
+    "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-    "connect_norito_kagemusha_topup_finality_verify_v4",
-    "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
-    "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
-    "connect_norito_kagemusha_output_membership_frontier_build_v4",
-    "connect_norito_kagemusha_output_membership_paths_derive_v4",
-    "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_init_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_v4",
-    "connect_norito_kagemusha_recursive_spend_append_v4",
-    "connect_norito_kagemusha_recursive_spend_verify_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_v4",
-    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
-    "connect_norito_kagemusha_secret_free_buffer",
-    "connect_norito_kagemusha_receiver_key_reference_v2",
-    "connect_norito_kagemusha_recipient_output_derive_v2",
-    "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
-    "connect_norito_kagemusha_recipient_payment_request_create_v2",
-    "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
-    "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
-    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
+    "connect_norito_kagemusha_v1_payment_request_validate",
+    "connect_norito_kagemusha_v1_payment_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_validate",
+    "connect_norito_kagemusha_v1_mint_credit_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_validate",
+    "connect_norito_kagemusha_v1_payment_request_text_validate",
+    "connect_norito_kagemusha_v1_payment_text_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_text_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
+    "connect_norito_kagemusha_contract_vector_v1",
+    "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_open_v1",
+    "connect_norito_kagemusha_core_coordinator_invoke_v1",
+    "connect_norito_kagemusha_device_capabilities_v1",
+    "connect_norito_kagemusha_device_execute_v1",
+    "connect_norito_kagemusha_device_response_authenticator_v1_verify"
   ],
   "forbidden_symbols": [
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
-    "connect_norito_kagemusha_request_authorization_create_v2",
+    "$RETIRED_AUDITOR_CAPSULE_VERIFY_SYMBOL",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_proof_request_v1",
     "iroha_privacy_build_proof_v1",
-    "iroha_privacy_verify_proof_v1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
-    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
-  ],
-  "kagemusha_mobile_artifact_roles": [
-    {
-      "role": "native_bridge",
-      "purpose": "typed Norito codecs and privacy proof execution",
-      "circuit_id": null,
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "xcframework",
-      "delivery": "bridge_embedded",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "transfer_proving_key",
-      "purpose": "prove exact confidential top-up and offline split transitions",
-      "circuit_id": "confidential-transfer-v2",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "halo2_ipa_proving_key",
-      "delivery": "bridge_embedded",
-      "production_ready": $PRIVACY_PRODUCTION_JSON,
-      "required_by": ["topup", "peer_send"]
-    },
-    {
-      "role": "transfer_verifier_record",
-      "purpose": "verify top-up and offline split evidence at an active height",
-      "circuit_id": "confidential-transfer-v2",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "norito_verifying_key_record",
-      "delivery": "torii_readiness_snapshot",
-      "required_by": ["topup", "peer_send", "peer_receive"]
-    },
-    {
-      "role": "unshield_proving_key",
-      "purpose": "prove full or partial offline-to-online redemption",
-      "circuit_id": "confidential-unshield-v3",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "halo2_ipa_proving_key",
-      "delivery": "bridge_embedded",
-      "production_ready": $PRIVACY_PRODUCTION_JSON,
-      "required_by": ["redemption"]
-    },
-    {
-      "role": "unshield_verifier_record",
-      "purpose": "verify proof-bound public credit and optional offline change",
-      "circuit_id": "confidential-unshield-v3",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "norito_verifying_key_record",
-      "delivery": "torii_readiness_snapshot",
-      "required_by": ["redemption"]
-    },
-    {
-      "role": "step_eq_params_ipa",
-      "purpose": "step_eq_params_ipa",
-      "file_name": "step-eq.params-ipa.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_eq_proving_key",
-      "purpose": "step_eq_proving_key",
-      "file_name": "step-eq.proving-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "redemption"]
-    },
-    {
-      "role": "step_eq_verifying_key",
-      "purpose": "step_eq_verifying_key",
-      "file_name": "step-eq.verifying-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_eq_bootstrap_witness",
-      "purpose": "step_eq_bootstrap_witness",
-      "file_name": "step-eq.bootstrap-witness.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_ep_params_ipa",
-      "purpose": "step_ep_params_ipa",
-      "file_name": "step-ep.params-ipa.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_ep_proving_key",
-      "purpose": "step_ep_proving_key",
-      "file_name": "step-ep.proving-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "redemption"]
-    },
-    {
-      "role": "step_ep_verifying_key",
-      "purpose": "step_ep_verifying_key",
-      "file_name": "step-ep.verifying-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_ep_bootstrap_witness",
-      "purpose": "step_ep_bootstrap_witness",
-      "file_name": "step-ep.bootstrap-witness.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "topup_finality_roster",
-      "purpose": "topup_finality_roster",
-      "circuit_id": "kagemusha-topup-finality-qc-merkle-v2",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup"]
-    }
+    "iroha_privacy_verify_proof_v1"
   ],
   "hashes": {
     "ios-arm64": "$IOS_HASH",
@@ -1892,6 +1824,15 @@ PUBLISH_PROSPECTIVE_LOADER="$PUBLISH_ROOT/.NoritoBridge.prospective.NativeBridge
 SWIFT_PIN_PREIMAGE_SHA256="$(
   sha256_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
 )"
+SWIFT_PIN_OWNER_ARGUMENTS=(
+  --root "$ROOT_DIR"
+  --artifact-dir "$PUBLISH_ROOT"
+  --output "$PUBLISH_PROSPECTIVE_LOADER"
+  --expected-preimage-sha256 "$SWIFT_PIN_PREIMAGE_SHA256"
+)
+if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+  SWIFT_PIN_OWNER_ARGUMENTS+=(--allow-dirty-source)
+fi
 env -i \
   HOME="$USER_HOME_DIR" \
   PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
@@ -1910,10 +1851,7 @@ env -i \
   NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
   "$PYTHON_BINARY" -I -S -B \
   "$ROOT_DIR/scripts/update_norito_bridge_swift_pins.py" \
-  --root "$ROOT_DIR" \
-  --artifact-dir "$PUBLISH_ROOT" \
-  --output "$PUBLISH_PROSPECTIVE_LOADER" \
-  --expected-preimage-sha256 "$SWIFT_PIN_PREIMAGE_SHA256"
+  "${SWIFT_PIN_OWNER_ARGUMENTS[@]}"
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$PUBLISH_MANIFEST" \
@@ -2372,6 +2310,14 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     echo "[-] Deterministic NoritoBridge archive owner is unavailable: $ARCHIVE_OWNER" >&2
     exit 1
   fi
+  ARCHIVE_OWNER_ARGUMENTS=(
+    --xcframework "$FINAL_XCFRAMEWORK"
+    --output "$ARCHIVE_OUTPUT"
+    --scratch-dir "$BUILD_DIR"
+  )
+  if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+    ARCHIVE_OWNER_ARGUMENTS+=(--allow-dirty-source)
+  fi
   env -i \
     HOME="$USER_HOME_DIR" \
     PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
@@ -2391,8 +2337,6 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     NORITO_BRIDGE_SEAL_RUSTUP="$RUSTUP_BINARY" \
     NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
     "$PYTHON_BINARY" -I -S -B "$ARCHIVE_OWNER" \
-      --xcframework "$FINAL_XCFRAMEWORK" \
-      --output "$ARCHIVE_OUTPUT" \
-      --scratch-dir "$BUILD_DIR"
+      "${ARCHIVE_OWNER_ARGUMENTS[@]}"
   echo "[+] Deterministic XCFramework archive: $ARCHIVE_OUTPUT" >&2
 fi

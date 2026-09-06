@@ -71,7 +71,7 @@ impl HedgingBillingRuntimeDependenciesV1 {
             journal_verifier: journal_verifier
                 .ok_or_else(|| eyre::eyre!("missing consensus billing journal verifier"))?,
             statement_signer: statement_signer
-                .ok_or_else(|| eyre::eyre!("missing billing statement HSM/KMS signer"))?,
+                .ok_or_else(|| eyre::eyre!("missing billing statement signer"))?,
             statement_publisher: statement_publisher
                 .ok_or_else(|| eyre::eyre!("missing immutable billing statement publisher"))?,
             acknowledgement_authority: acknowledgement_authority
@@ -541,7 +541,13 @@ pub(crate) fn start(
             tokio::select! {
                 _ = interval.tick() => {
                     let tick = worker.clone();
-                    match tokio::task::spawn_blocking(move || tick.reconcile_once()).await {
+                    match crate::panic_recovery::join_recoverable(
+                        crate::panic_recovery::spawn_blocking_recoverable(move || {
+                            tick.reconcile_once()
+                        }),
+                    )
+                    .await
+                    {
                         Ok(Ok(())) => {
                             record_tick_metric("success");
                         }
@@ -552,7 +558,7 @@ pub(crate) fn start(
                                 "committed SoraFS hedging/billing reconciliation failed"
                             );
                         }
-                        Err(error) => {
+                        Err(_panic) => {
                             worker
                                 .external_dependencies_healthy
                                 .store(false, Ordering::Release);
@@ -563,8 +569,6 @@ pub(crate) fn start(
                                 .fetch_add(1, Ordering::Relaxed);
                             record_tick_metric("panic");
                             iroha_logger::error!(
-                                cancelled = error.is_cancelled(),
-                                panicked = error.is_panic(),
                                 "committed SoraFS hedging/billing worker task failed"
                             );
                         }
@@ -693,7 +697,7 @@ fn qualify_dependencies(
             ),
             statement_signer,
         )
-        .wrap_err("qualify billing statement HSM/KMS signer")?,
+        .wrap_err("qualify billing statement signer")?,
     );
     let statement_publisher: Arc<dyn BillingStatementPublisher> = Arc::new(
         QualifiedHedgingBillingRuntimeProviderV1::try_new(
@@ -1172,7 +1176,7 @@ mod tests {
     const GENESIS_SEED: &[u8] = b"sorafs-reference-production-genesis";
     const QUERY_HANDLE: &str = "ledger.billing.finalized.primary";
     const VERIFIER_HANDLE: &str = "consensus.billing.verifier.primary";
-    const SIGNER_HANDLE: &str = "hsm.billing.statement.primary";
+    const SIGNER_HANDLE: &str = "provider.billing.statement.primary";
     const PUBLISHER_HANDLE: &str = "billing.publisher.primary";
     const ACKNOWLEDGEMENT_HANDLE: &str = "billing.acknowledgement.primary";
     const WITNESS_HANDLE: &str = "sealed.billing.epoch.primary";
@@ -1723,7 +1727,7 @@ mod tests {
             "https://operator:secret@billing.example",
             "https://billing.example/query?token=secret",
             "https://billing.example/query#fragment",
-            "hsm://billing/dummy/signer",
+            "provider://billing/dummy/signer",
         ] {
             let temp = TempDir::new().expect("tempdir");
             let mut config = config(temp.path().join("state"), &policy);
@@ -1923,7 +1927,7 @@ mod tests {
         for (provider, expected_context) in [
             ("finalized-query", "qualify finalized"),
             ("journal-verifier", "qualify consensus"),
-            ("statement-signer", "qualify billing statement HSM/KMS"),
+            ("statement-signer", "qualify billing statement signer"),
             ("statement-publisher", "qualify immutable"),
             (
                 "acknowledgement-authority",

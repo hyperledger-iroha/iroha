@@ -379,6 +379,21 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "crates/iroha_core/src/sumeragi/v2_lane_work/"
         "canonical_executed_block_application_repair.rs",
         "fn",
+        "build_canonical_executed_block_response",
+        "kura.read_block_body(height).map_err(CanonicalRecoveryReadError::storage)?",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/"
+        "canonical_executed_block_application_repair.rs",
+        "fn",
+        "plan_lane_application_evidence_repair",
+        "kura.read_block_body(height)"
+        ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/"
+        "canonical_executed_block_application_repair.rs",
+        "fn",
         "plan_lane_application_evidence_repair",
         "let planned_merge_entries = "
         "planned_merge_entries_by_carrier(&merge_carriers)?;",
@@ -402,7 +417,9 @@ NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
         (
             "let planned_merge_entries = "
             "planned_merge_entries_by_carrier(&merge_carriers)?;",
-            "let Some(block) = kura.get_block_without_merge_sidecar(height) else",
+            "let Some(block) = kura",
+            ".read_block_body(height)",
+            ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?",
             "let planned_merge_entry = planned_merge_entries",
             ".get(&(application_block_height, application_block_hash))",
             "preflight_native_amx_participant_application_evidence_repair(",

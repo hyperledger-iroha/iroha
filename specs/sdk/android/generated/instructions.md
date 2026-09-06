@@ -362,21 +362,6 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `proof_b64` | `String` |
 | `public_inputs_json` | `String` |
 
-## `iroha_data_model::isi::governance::PersistCouncilForEpoch`
-
-> Schema summary: struct fields: epoch: u64, members: Vec<AccountId>, alternates: Vec<AccountId>.
-
-- Rust type: `iroha_data_model::isi::governance::PersistCouncilForEpoch`
-- Schema hash: `e883e2ba76ced91134fc5d7faab8caa2`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `epoch` | `u64` |
-| `members` | `Vec<AccountId>` |
-| `alternates` | `Vec<AccountId>` |
-
 ## `iroha_data_model::isi::governance::ProposeDeployContract`
 
 > Schema summary: struct fields: contract_address: ContractAddress, code_hash: ContractCodeHash, abi_hash: ContractAbiHash, abi_version: AbiVersion, manifest_provenance: Option<ManifestProvenance>.
@@ -658,7 +643,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::register::RegisterPeerWithPop`
 
-> Schema summary: struct fields: peer: PeerId, pop: Vec<u8>, activation_at: Option<u64>, expiry_at: Option<u64>, hsm: Option<HsmBinding>.
+> Schema summary: struct fields: peer: PeerId, pop: Vec<u8>, activation_at: Option<u64>, expiry_at: Option<u64>.
 
 - Rust type: `iroha_data_model::isi::register::RegisterPeerWithPop`
 - Schema hash: `5bce06b486a498769cabef7046aa4b60`
@@ -671,7 +656,6 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `pop` | `Vec<u8>` |
 | `activation_at` | `Option<u64>` |
 | `expiry_at` | `Option<u64>` |
-| `hsm` | `Option<HsmBinding>` |
 
 ## `iroha_data_model::isi::register::Unregister<iroha_data_model::account::model::Account>`
 

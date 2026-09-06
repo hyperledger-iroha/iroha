@@ -63,6 +63,7 @@ pub(crate) struct EnactedParliamentRestoreFixtureV1 {
     pub(crate) attempt: ParliamentAttemptStateV1,
     pub(crate) tle_key_sessions: Vec<TleKeySessionPublicStateV1>,
     pub(crate) tle_key_session_rosters: Vec<(TleKeySessionId, Vec<iroha_data_model::peer::PeerId>)>,
+    pub(crate) tle_key_session_lifecycles: Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
     pub(crate) timed_ovn_evidence: Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 }
 
@@ -73,6 +74,7 @@ fn complete_enacted_fixture_hidden_body_with_evidence(
     network_id: &NetworkId,
     tle_key_sessions: &mut Vec<TleKeySessionPublicStateV1>,
     tle_key_session_rosters: &mut Vec<(TleKeySessionId, Vec<iroha_data_model::peer::PeerId>)>,
+    tle_key_session_lifecycles: &mut Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
     timed_ovn_evidence: &mut Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 ) {
     assert_eq!(
@@ -349,6 +351,22 @@ fn complete_enacted_fixture_hidden_body_with_evidence(
     } else {
         tle_key_session_rosters.push((tle_key_session_id, ordered_roster));
     }
+    if let Some((_, existing)) = tle_key_session_lifecycles
+        .iter_mut()
+        .find(|(key_session_id, _)| *key_session_id == tle_key_session_id)
+    {
+        existing
+            .consume_fresh_ballot(3)
+            .expect("shared restore TLE key remains within its fixture use budget");
+    } else {
+        let mut lifecycle =
+            TleKeySessionLifecycleV1::new(tle_key_session_id, 1, u64::MAX, u32::MAX)
+                .expect("construct restore fixture TLE lifecycle");
+        lifecycle
+            .consume_fresh_ballot(3)
+            .expect("consume restore fixture TLE use");
+        tle_key_session_lifecycles.push((tle_key_session_id, lifecycle));
+    }
     timed_ovn_evidence.push((ballot_attempt_id, lifecycle));
 }
 
@@ -361,8 +379,9 @@ pub(crate) fn enacted_parliament_attempt_restore_fixture_v1(
 ) -> EnactedParliamentRestoreFixtureV1 {
     let mut tle_key_sessions = Vec::new();
     let mut tle_key_session_rosters = Vec::new();
+    let mut tle_key_session_lifecycles = Vec::new();
     let mut timed_ovn_evidence = Vec::new();
-    let attempt = build_enacted_parliament_attempt_for_testing(
+    let mut attempt = build_certified_parliament_attempt_for_testing(
         proposal,
         candidates,
         network_id,
@@ -379,15 +398,21 @@ pub(crate) fn enacted_parliament_attempt_restore_fixture_v1(
                     network_id,
                     &mut tle_key_sessions,
                     &mut tle_key_session_rosters,
+                    &mut tle_key_session_lifecycles,
                     &mut timed_ovn_evidence,
                 );
             }
         },
     );
+    let governance_attempt_id = attempt.attempt().id;
+    attempt
+        .mark_enacted(governance_attempt_id, enact_at_height)
+        .expect("mark restore fixture enacted");
     EnactedParliamentRestoreFixtureV1 {
         attempt,
         tle_key_sessions,
         tle_key_session_rosters,
+        tle_key_session_lifecycles,
         timed_ovn_evidence,
     }
 }
@@ -412,6 +437,9 @@ fn casting_state_at_height(
         BallotAttemptId::new(lifecycle.ballot_attempt_id()),
         lifecycle,
     );
+    world
+        .rebuild_governance_read_indexes_for_testing()
+        .expect("rebuild casting candidates from the authoritative fixture attempt");
     let mut state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -427,7 +455,7 @@ fn casting_state_at_height(
 
 fn governance_for_pending_draws(state: &ParliamentAttemptStateV1) -> Governance {
     let mut governance = Governance {
-        parliament_alternate_size: Some(16),
+        parliament_alternate_size: 16,
         ..Governance::default()
     };
     for election in state
@@ -591,7 +619,7 @@ fn state_with_proposal_tag(
 ) -> ParliamentAttemptStateV1 {
     ParliamentAttemptStateV1::try_new(
         attempt_with_proposal_tag(proposal_tag),
-        7,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         10,
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -654,6 +682,7 @@ fn attempt_state_encoded_size_bound_accepts_small_and_rejects_oversized() {
 
 fn deploy_contract_proposal() -> ProposalKind {
     ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: account(40),
         contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
             .expect("canonical contract address"),
@@ -661,6 +690,19 @@ fn deploy_contract_proposal() -> ProposalKind {
         abi_hash: ContractAbiHash::new(root(42)),
         abi_version: AbiVersion::new(1),
         manifest_provenance: None,
+    })
+}
+
+fn contract_emergency_hold_proposal() -> ProposalKind {
+    ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+        contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+            .parse()
+            .expect("canonical contract address"),
+        expected_revision: 7,
+        expected_code_hash: ContractCodeHash::new(root(41)),
+        incident_digest: root(42),
+        reason: "bounded incident containment".to_owned(),
+        duration_blocks: 3_600,
     })
 }
 
@@ -785,6 +827,27 @@ fn validation_fee_proposals_require_mpc_immediately_before_fma() {
 }
 
 #[test]
+fn contract_emergency_hold_uses_full_lifecycle_pipeline() {
+    let expected = public_requirements(CONTRACT_LIFECYCLE_REQUIRED_BODIES_V1);
+    assert_eq!(
+        CONTRACT_LIFECYCLE_REQUIRED_BODIES_V1,
+        &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ]
+    );
+    let (risk_tier, requirements) =
+        parliament_attempt_policy_v1(&contract_emergency_hold_proposal());
+    assert_eq!(risk_tier, RiskTierV1::Emergency);
+    assert_eq!(requirements, expected);
+    assert!(required_pipeline_is_canonical(&requirements));
+}
+
+#[test]
 fn sccp_pipeline_remains_fma_only() {
     assert_eq!(
         SCCP_ROUTE_GOVERNANCE_REQUIRED_BODIES_V1,
@@ -842,7 +905,7 @@ fn governance_attempt_retry_bound_is_enforced_at_construction_and_restore() {
         GovernanceAttemptId::derive_v1(final_attempt.proposal_content_id, final_attempt.sequence);
     let final_state = ParliamentAttemptStateV1::try_new(
         final_attempt,
-        7,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         10,
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -862,7 +925,7 @@ fn governance_attempt_retry_bound_is_enforced_at_construction_and_restore() {
     assert_eq!(
         ParliamentAttemptStateV1::try_new(
             over_limit,
-            7,
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
             10,
             root(3),
             GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -882,6 +945,152 @@ fn governance_attempt_retry_bound_is_enforced_at_construction_and_restore() {
     assert_eq!(
         corrupted.validate(),
         Err(ParliamentReducerErrorV1::GovernanceAttemptRetryLimitExceeded)
+    );
+}
+
+#[test]
+fn successor_attempt_inherits_exact_proposal_redraw_prefix() {
+    let mut first = policy_only_state();
+    let first_id = first.attempt.id;
+    first
+        .complete_qualification(first_id)
+        .expect("enter first Policy Jury stage");
+    let (initial_request, initial_candidates) = sortition_request(
+        first_id,
+        0,
+        ParliamentBody::PolicyJury,
+        150,
+        3,
+        3,
+        10,
+        20,
+        beacon_session(151),
+        None,
+    );
+    let initial_election_id = initial_request.body_election_attempt_id;
+    first
+        .register_sortition_request(first_id, 0, initial_request, initial_candidates)
+        .expect("register the proposal baseline draw");
+    first
+        .fail_body_election_no_roster(first_id, initial_election_id, false, 21)
+        .expect("record missing baseline pulse");
+    let (retry_request, retry_candidates) = sortition_request(
+        first_id,
+        1,
+        ParliamentBody::PolicyJury,
+        152,
+        3,
+        3,
+        21,
+        31,
+        beacon_session(153),
+        None,
+    );
+    first
+        .register_sortition_request(first_id, 1, retry_request, retry_candidates)
+        .expect("register one fresh roster/pulse generation");
+    assert_eq!(first.randomness_redraws_used_v1(), Ok(1));
+
+    let mut successor_attempt = attempt();
+    successor_attempt.sequence = 1;
+    successor_attempt.id = GovernanceAttemptId::derive_v1(
+        successor_attempt.proposal_content_id,
+        successor_attempt.sequence,
+    );
+    let required = vec![RequiredParliamentBodyV1 {
+        body: ParliamentBody::PolicyJury,
+        decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+    }];
+    let mut successor = ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
+        successor_attempt,
+        first.randomness_redraws_used_v1().expect("bounded prefix"),
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+        10,
+        root(3),
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: root(4),
+        }),
+        required.clone(),
+    )
+    .expect("construct successor with exact prefix");
+    let successor_id = successor.attempt.id;
+    successor
+        .complete_qualification(successor_id)
+        .expect("enter successor Policy Jury stage");
+    let (successor_request, successor_candidates) = sortition_request(
+        successor_id,
+        0,
+        ParliamentBody::PolicyJury,
+        154,
+        3,
+        3,
+        40,
+        50,
+        beacon_session(155),
+        None,
+    );
+    successor
+        .register_sortition_request(successor_id, 0, successor_request, successor_candidates)
+        .expect("successor initial sortition is proposal-wide fresh randomness");
+    assert_eq!(successor.randomness_redraws_used_v1(), Ok(2));
+    validate_parliament_randomness_redraw_lineage_v1([&first, &successor])
+        .expect("exact inherited redraw lineage");
+    validate_parliament_randomness_redraw_lineage_v1([&successor, &first])
+        .expect("lineage validation is independent of hashed storage-key order");
+
+    let reset = ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
+        successor_attempt,
+        0,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+        10,
+        root(3),
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: root(4),
+        }),
+        required,
+    )
+    .expect("an isolated attempt cannot prove its predecessor prefix");
+    assert_eq!(
+        validate_parliament_randomness_redraw_lineage_v1([&first, &reset]),
+        Err(ParliamentReducerErrorV1::RandomnessRedrawLineageMismatch),
+        "a terminal attempt must not reset the proposal-wide grinding budget"
+    );
+}
+
+#[test]
+fn proposal_attempt_lineage_requires_exact_contiguous_sequences() {
+    let first = policy_only_state();
+    assert_eq!(
+        validate_parliament_randomness_redraw_lineage_v1([&first, &first]),
+        Err(ParliamentReducerErrorV1::RetrySequenceMismatch),
+        "a duplicate sequence must not masquerade as another zero-cost generation"
+    );
+
+    let mut skipped_attempt = attempt();
+    skipped_attempt.sequence = 2;
+    skipped_attempt.id = GovernanceAttemptId::derive_v1(
+        skipped_attempt.proposal_content_id,
+        skipped_attempt.sequence,
+    );
+    let skipped = ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
+        skipped_attempt,
+        0,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+        10,
+        root(3),
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: root(4),
+        }),
+        vec![RequiredParliamentBodyV1 {
+            body: ParliamentBody::PolicyJury,
+            decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+        }],
+    )
+    .expect("an isolated reducer cannot prove that its predecessor exists");
+    assert_eq!(
+        validate_parliament_randomness_redraw_lineage_v1([&first, &skipped]),
+        Err(ParliamentReducerErrorV1::RetrySequenceMismatch),
+        "proposal history must not omit sequence one"
     );
 }
 
@@ -1177,6 +1386,12 @@ fn beacon_demand_tracks_sortition_timeout_and_frozen_ballot_release_slot() {
         .fail_body_election_no_roster(governance_attempt_id, election_attempt_id, false, 21)
         .expect("missing sortition pulse becomes an objective retryable failure");
     assert!(!sortition.requires_beacon_pulse_at(session_id, 20));
+    assert_eq!(
+        sortition.unavailable_beacon_pulse_slots_v1(),
+        BTreeSet::from([(session_id, 20)])
+    );
+    assert!(sortition.classifies_beacon_pulse_unavailable_at(session_id, 20));
+    assert!(!sortition.classifies_beacon_pulse_unavailable_at(session_id, 21));
     sortition
         .validate()
         .expect("pulse-missing NoRoster is a canonical persistable terminal shape");
@@ -1363,7 +1578,13 @@ fn finalize_policy(
     nay: u32,
     abstain: u32,
 ) -> ParliamentAggregateOutcomeV1 {
-    finalize_policy_with_confirmation_capacity(fixture, aye, nay, abstain, 2)
+    finalize_policy_with_confirmation_capacity(
+        fixture,
+        aye,
+        nay,
+        abstain,
+        MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+    )
 }
 
 fn finalize_policy_with_confirmation_capacity(

@@ -78,6 +78,42 @@ def test_exact12_transaction_domain_requires_one_marked_network_id() -> None:
             )
 
 
+def test_goldilocks_digest_requires_six_raw_canonical_limbs() -> None:
+    canonical = struct.pack("<6Q", 1, 2, 3, 4, 5, 6)
+    assert exact12_module._decode_goldilocks_digest384_v1(
+        canonical, "digest", allow_zero=False
+    ) == canonical
+    assert exact12_module._decode_goldilocks_digest384_v1(
+        bytes(48), "digest", allow_zero=True
+    ) == bytes(48)
+    hostile = [bytes(32), b"\x30" + canonical, canonical[:-1], bytes(48)]
+    for index in range(6):
+        limbs = [1] * 6
+        limbs[index] = 0xFFFF_FFFF_0000_0001
+        hostile.append(struct.pack("<6Q", *limbs))
+    for payload in hostile:
+        with pytest.raises(PrivacyExact12FixtureErrorV1):
+            exact12_module._decode_goldilocks_digest384_v1(payload, "digest", allow_zero=False)
+
+
+def test_envelope_requires_final_marker_and_exact_catalog_commitment() -> None:
+    bundle = _bundle()
+    row = bundle.rows[0]
+    original = _fields(_frame_payload(row.envelope_norito, 8), 13)
+    assert original[0] == b"IRHZK1\xa5\x5a"
+    assert len(original[1]) == 48
+    for index, offsets, match in ((0, (0, 7), "wire marker"), (1, (0, 8, 16, 24, 32, 40, 47), "catalog commitment")):
+        for offset in offsets:
+            fields = list(original)
+            changed = bytearray(fields[index])
+            changed[offset] ^= 1
+            fields[index] = bytes(changed)
+            envelope = _frame(_encode_fields(fields), ENVELOPE_SCHEMA, 8)
+            _assert_row_rejected(bundle, 0, replace(row, envelope_norito=envelope), match)
+    retired = _frame(_encode_fields(original[2:]), ENVELOPE_SCHEMA, 8)
+    _assert_row_rejected(bundle, 0, replace(row, envelope_norito=retired))
+
+
 def _read_compact(payload: bytes | bytearray, offset: int) -> tuple[int, int]:
     value = 0
     for used in range(10):
@@ -214,10 +250,10 @@ def _projection_with_envelope(
     row: PrivacyExact12TypedFixtureRowV1,
     mutate: Callable[[list[bytes]], None],
 ) -> bytes:
-    transaction_fields = _fields(_frame_payload(row.transaction_intent_projection_norito, 0), 9)
+    transaction_fields = _fields(_frame_payload(row.transaction_intent_projection_norito, 0), 10)
     _, _, instruction = _extract_instruction_archive(transaction_fields[3])
     instruction_fields = _fields(_frame_payload(instruction, 8), 1)
-    envelope_fields = _fields(instruction_fields[0], 11)
+    envelope_fields = _fields(instruction_fields[0], 13)
     mutate(envelope_fields)
     instruction_fields[0] = _encode_fields(envelope_fields)
     rebuilt_instruction = _frame(_encode_fields(instruction_fields), INSTRUCTION_SCHEMA, 8)
@@ -232,7 +268,7 @@ def _replace_projected_statement(
     mutate: Callable[[list[bytes]], None],
 ) -> bytes:
     def mutate_envelope(envelope_fields: list[bytes]) -> None:
-        tagged = envelope_fields[9]
+        tagged = envelope_fields[11]
         statement_tag = tagged[:4]
         statement_variant, _, end = _read_field(tagged, 4)
         assert end == len(tagged)
@@ -242,7 +278,7 @@ def _replace_projected_statement(
         )
         mutate(statement_fields)
         variant = _encode_fields(statement_fields)
-        envelope_fields[9] = statement_tag + _compact(len(variant)) + variant
+        envelope_fields[11] = statement_tag + _compact(len(variant)) + variant
 
     return _projection_with_envelope(row, mutate_envelope)
 
@@ -565,7 +601,7 @@ def test_raw_archive_rejects_reordered_duplicate_and_unknown_protocol_rows() -> 
     assert first_start > 8 and first
 
 
-@pytest.mark.parametrize("field_index", (1, 2))
+@pytest.mark.parametrize("field_index", (3, 4))
 def test_every_protocol_rejects_wrong_proof_system_and_engine_tags(field_index: int) -> None:
     bundle = _bundle()
     for index, row in enumerate(bundle.rows):
@@ -574,7 +610,7 @@ def test_every_protocol_rejects_wrong_proof_system_and_engine_tags(field_index: 
             row.envelope_norito,
             schema=ENVELOPE_SCHEMA,
             padding=8,
-            field_count=11,
+            field_count=13,
             field_index=field_index,
             replacement=struct.pack("<I", wrong_tag),
         )
@@ -591,15 +627,15 @@ def test_every_protocol_rejects_statement_envelope_and_proof_tag_substitution() 
         _assert_row_rejected(bundle, index, replace(row, statement_norito=statement), "protocol")
 
         envelope_payload = _frame_payload(row.envelope_norito, 8)
-        envelope_fields = _fields(envelope_payload, 11)
-        envelope_fields[0] = struct.pack("<I", wrong)
+        envelope_fields = _fields(envelope_payload, 13)
+        envelope_fields[2] = struct.pack("<I", wrong)
         envelope = _frame(_encode_fields(envelope_fields), ENVELOPE_SCHEMA, 8)
         _assert_row_rejected(bundle, index, replace(row, envelope_norito=envelope), "protocol")
 
-        envelope_fields = _fields(envelope_payload, 11)
-        proof = bytearray(envelope_fields[10])
+        envelope_fields = _fields(envelope_payload, 13)
+        proof = bytearray(envelope_fields[12])
         struct.pack_into("<I", proof, 0, wrong)
-        envelope_fields[10] = bytes(proof)
+        envelope_fields[12] = bytes(proof)
         envelope = _frame(_encode_fields(envelope_fields), ENVELOPE_SCHEMA, 8)
         _assert_row_rejected(bundle, index, replace(row, envelope_norito=envelope), "protocol")
 
@@ -607,12 +643,12 @@ def test_every_protocol_rejects_statement_envelope_and_proof_tag_substitution() 
 def test_zk_ams_proof_action_tag_must_match_the_statement_action() -> None:
     bundle = _bundle()
     row = bundle.rows[3]
-    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 11)
-    proof = bytearray(envelope_fields[10])
+    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 13)
+    proof = bytearray(envelope_fields[12])
     outer_value, outer_start, _ = _read_field(proof, 4)
     assert struct.unpack_from("<I", outer_value)[0] == 0
     struct.pack_into("<I", proof, outer_start, 1)
-    envelope_fields[10] = bytes(proof)
+    envelope_fields[12] = bytes(proof)
     envelope = _frame(_encode_fields(envelope_fields), ENVELOPE_SCHEMA, 8)
     _assert_row_rejected(bundle, 3, replace(row, envelope_norito=envelope), "protocol tag")
 
@@ -649,18 +685,18 @@ def test_byte_complete_fields_and_cross_row_substitutions_fail_closed() -> None:
 def test_governed_digest_statement_digest_and_instruction_envelope_bindings() -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 11)
+    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 13)
 
-    changed_digest = bytearray(envelope_fields[3])
+    changed_digest = bytearray(envelope_fields[5])
     changed_digest[-1] ^= 1
-    envelope_fields[3] = bytes(changed_digest)
+    envelope_fields[5] = bytes(changed_digest)
     envelope = _frame(_encode_fields(envelope_fields), ENVELOPE_SCHEMA, 8)
     _assert_row_rejected(bundle, 0, replace(row, envelope_norito=envelope), "digest")
 
-    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 11)
-    changed_digest = bytearray(envelope_fields[8])
+    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 13)
+    changed_digest = bytearray(envelope_fields[10])
     changed_digest[-1] ^= 1
-    envelope_fields[8] = bytes(changed_digest)
+    envelope_fields[10] = bytes(changed_digest)
     envelope = _frame(_encode_fields(envelope_fields), ENVELOPE_SCHEMA, 8)
     _assert_row_rejected(bundle, 0, replace(row, envelope_norito=envelope), "statement digest")
 
@@ -675,9 +711,9 @@ def test_governed_digest_statement_digest_and_instruction_envelope_bindings() ->
     )
 
     for proof_bytes, match in ((b"", "present"), (bytes(3), "non-zero")):
-        envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 11)
+        envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 13)
         proof_value = _encode_fields([struct.pack("<Q", len(proof_bytes)) + proof_bytes])
-        envelope_fields[10] = struct.pack("<I", 0) + _compact(len(proof_value)) + proof_value
+        envelope_fields[12] = struct.pack("<I", 0) + _compact(len(proof_value)) + proof_value
         envelope = _frame(_encode_fields(envelope_fields), ENVELOPE_SCHEMA, 8)
         _assert_row_rejected(bundle, 0, replace(row, envelope_norito=envelope), match)
 
@@ -713,11 +749,11 @@ def test_closed_statement_schema_rejects_an_extra_compact_field() -> None:
     )
 
 
-@pytest.mark.parametrize("field_index", (0, 1, 2, 4, 5, 6, 7, 8))
+@pytest.mark.parametrize("field_index", (0, 1, 2, 4, 5, 6, 7, 8, 9))
 def test_unsigned_transaction_rejects_all_independent_field_mutations(field_index: int) -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    fields = _fields(row.unsigned_transaction_payload_norito, 9)
+    fields = _fields(row.unsigned_transaction_payload_norito, 10)
     replacement = bytearray(fields[field_index])
     replacement[-1] ^= 1
     fields[field_index] = bytes(replacement)
@@ -731,7 +767,7 @@ def test_unsigned_transaction_rejects_all_independent_field_mutations(field_inde
 def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments() -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    fields = _fields(row.unsigned_transaction_payload_norito, 9)
+    fields = _fields(row.unsigned_transaction_payload_norito, 10)
 
     executable = bytearray(fields[3])
     sequence, sequence_start, _ = _read_field(executable, 4)
@@ -761,7 +797,7 @@ def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments(
     for index, replacement, match in (
         (4, b"\x00", "TTL"),
         (5, b"\x00", "nonce"),
-        (8, b"\x01\x00", "attachments"),
+        (9, b"\x01\x00", "attachments"),
     ):
         changed = list(fields)
         changed[index] = replacement
@@ -776,10 +812,10 @@ def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments(
 def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_changes() -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    full_envelope = _fields(_frame_payload(row.envelope_norito, 8), 11)
+    full_envelope = _fields(_frame_payload(row.envelope_norito, 8), 13)
 
     projection = _projection_with_envelope(
-        row, lambda fields: fields.__setitem__(10, full_envelope[10])
+        row, lambda fields: fields.__setitem__(12, full_envelope[12])
     )
     _assert_row_rejected(
         bundle,
@@ -789,7 +825,7 @@ def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_chang
     )
 
     projection = _projection_with_envelope(
-        row, lambda fields: fields.__setitem__(8, full_envelope[8])
+        row, lambda fields: fields.__setitem__(10, full_envelope[10])
     )
     _assert_row_rejected(
         bundle,
@@ -826,7 +862,7 @@ def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_chang
     )
 
     def change_governed_parameter_in_both_places(envelope_fields: list[bytes]) -> None:
-        statement_payload = envelope_fields[9]
+        statement_payload = envelope_fields[11]
         statement_variant, _, end = _read_field(statement_payload, 4)
         assert end == len(statement_payload)
         statement_fields = _fields(statement_variant, 11)
@@ -836,8 +872,8 @@ def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_chang
         context_fields[3] = bytes(changed)
         statement_fields[0] = _encode_fields(context_fields)
         variant = _encode_fields(statement_fields)
-        envelope_fields[9] = statement_payload[:4] + _compact(len(variant)) + variant
-        envelope_fields[3] = bytes(changed)
+        envelope_fields[11] = statement_payload[:4] + _compact(len(variant)) + variant
+        envelope_fields[5] = bytes(changed)
 
     projection = _projection_with_envelope(row, change_governed_parameter_in_both_places)
     _assert_row_rejected(
@@ -970,10 +1006,10 @@ def test_trusted_archive_identity_closes_signature_and_opaque_proof_substitution
     with pytest.raises(PrivacyExact12FixtureErrorV1, match="trusted canonical"):
         require_trusted_privacy_exact12_fixture_bundle_v1(signature_archive, FIXTURE_BYTES)
 
-    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 11)
-    proof = bytearray(envelope_fields[10])
+    envelope_fields = _fields(_frame_payload(row.envelope_norito, 8), 13)
+    proof = bytearray(envelope_fields[12])
     proof[-1] ^= 1
-    envelope_fields[10] = bytes(proof)
+    envelope_fields[12] = bytes(proof)
     envelope_payload = _encode_fields(envelope_fields)
     envelope = _frame(envelope_payload, ENVELOPE_SCHEMA, 8)
     instruction = _frame(_encode_fields([envelope_payload]), INSTRUCTION_SCHEMA, 8)

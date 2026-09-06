@@ -2,7 +2,7 @@
 use criterion::Criterion;
 use ivm::Memory;
 fn dirty_memory() -> Memory {
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     for i in 0..1024u64 {
         mem.store_u8(Memory::HEAP_START + i, (i & 0xff) as u8)
             .unwrap();
@@ -10,7 +10,7 @@ fn dirty_memory() -> Memory {
     mem
 }
 fn dirty_memory_large() -> Memory {
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     // Expand the heap to its maximum size so large writes do not violate
     // memory permissions.
     mem.grow_heap(Memory::HEAP_MAX_SIZE - Memory::HEAP_SIZE)

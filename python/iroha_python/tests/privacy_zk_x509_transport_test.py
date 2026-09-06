@@ -20,7 +20,7 @@ from iroha_python import (
 )
 from iroha_python.client import LocalSigningContext, ToriiClient
 
-X509_PROTOCOL = "iroha-zk-x509-stark-p256-v0"
+X509_PROTOCOL = "iroha-zk-x509-stark-p256-v1"
 SIGNED_X509_WIRE = b"canonical-signed-x509-wire"
 SIGNED_OTHER_WIRE = b"canonical-signed-other-protocol-wire"
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32

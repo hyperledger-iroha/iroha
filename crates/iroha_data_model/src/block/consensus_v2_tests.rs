@@ -8,6 +8,37 @@ mod tests {
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
+    fn mint_finality_roster(
+        network_id: NetworkId,
+        epoch: u64,
+        roster: &[ValidatorPower],
+    ) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        use crate::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KagemushaMintFinalityValidatorKeysV1,
+        };
+
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                        validator: validator.validator.clone(),
+                        eq_proof_public_key: [u8::try_from(index + 1)
+                            .expect("small fixture roster");
+                            32],
+                        ep_proof_public_key: [u8::try_from(index + 17)
+                            .expect("small fixture roster");
+                            32],
+                    },
+                )
+                .collect(),
+        }
+    }
     #[test]
     fn consensus_modes_project_canonical_protocol_identities() {
         assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
@@ -93,7 +124,7 @@ mod tests {
         let executed_block_wire_len =
             u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
         let executed = Hash::new(executed_block_wire);
-        let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
+        let post = ExecutionCommitment::kagemusha_post_state_root_v1(2, ordinary, topup);
         let canonical = ExecutionCommitment::new_without_merge_carrier(
             parent,
             post,
@@ -136,17 +167,21 @@ mod tests {
             ),
             Err(ValidationError::InvalidExecutionCommitment)
         );
-        assert_eq!(
+        let wider_count = 17;
+        let wider_post =
+            ExecutionCommitment::kagemusha_post_state_root_v1(wider_count, ordinary, topup);
+        assert!(
             ExecutionCommitment::new_without_merge_carrier(
                 parent,
-                post,
+                wider_post,
                 ordinary,
                 Some(topup),
-                MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                wider_count,
                 executed_block_wire_len,
                 executed,
-            ),
-            Err(ValidationError::TooManyKagemushaTopupAnchors)
+            )
+            .is_ok(),
+            "top-up count is bounded by physical block bytes, not an arbitrary protocol cap"
         );
     }
     #[test]
@@ -160,8 +195,8 @@ mod tests {
             parent_state_root: Hash,
             post_state_root: Hash,
             ordinary_writes_root: Hash,
-            topup_anchor_root: Option<Hash>,
-            topup_anchor_count: u32,
+            kagemusha_top_up_root: Option<Hash>,
+            kagemusha_top_up_count: u32,
             executed_block_wire_hash: Hash,
         }
         #[derive(Encode)]
@@ -169,8 +204,8 @@ mod tests {
             parent_state_root: Hash,
             post_state_root: Hash,
             ordinary_writes_root: Hash,
-            topup_anchor_root: Option<Hash>,
-            topup_anchor_count: u32,
+            kagemusha_top_up_root: Option<Hash>,
+            kagemusha_top_up_count: u32,
             native_amx_application_manifest_version: u16,
             native_amx_application_manifest_root: Hash,
             native_amx_application_manifest_count: u32,
@@ -186,7 +221,7 @@ mod tests {
             u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
         let executed = Hash::new(executed_block_wire);
         let root = Hash::new(b"native manifest non-empty root");
-        let empty = ExecutionCommitment::without_topups_or_merge_carrier(
+        let empty = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             parent,
             post,
             ordinary,
@@ -203,8 +238,8 @@ mod tests {
             parent_state_root: parent,
             post_state_root: post,
             ordinary_writes_root: ordinary,
-            topup_anchor_root: None,
-            topup_anchor_count: 0,
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
             executed_block_wire_hash: executed,
         }
         .encode();
@@ -217,8 +252,8 @@ mod tests {
             parent_state_root: parent,
             post_state_root: post,
             ordinary_writes_root: ordinary,
-            topup_anchor_root: None,
-            topup_anchor_count: 0,
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
             native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
@@ -359,6 +394,10 @@ mod tests {
         let json = norito::json::to_json(&parameters).expect("serialize v2 genesis context");
         assert!(json.contains("\"nexus_amx_context_hash\""));
         assert!(json.contains("\"execution_policy_hash\""));
+        assert!(
+            !json.contains("kagemusha"),
+            "network-independent authority templates are signed beside this secondary context"
+        );
         assert!(!json.contains("active_nexus_lane_hash"));
         let obsolete = json.replace("nexus_amx_context_hash", "active_nexus_lane_hash");
         assert!(
@@ -380,6 +419,11 @@ mod tests {
             "signed v2 genesis context must reject unknown fields"
         );
     }
+    #[test]
+    fn genesis_context_parameters_remain_snapshot_copyable() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<SumeragiV2GenesisContextParameters>();
+    }
     fn peer(seed: u8) -> PeerId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic Sumeragi v2 fixture keypair");
@@ -398,11 +442,18 @@ mod tests {
     }
     fn context(powers: &[u64]) -> HeightContext {
         let roster = roster(powers);
+        let network_id = network_id(0xA1);
+        let mint_finality_roster = mint_finality_roster(network_id, 2, &roster);
+        let mint_finality_epoch_id = mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid fixture mint-finality roster");
         HeightContext {
-            network_id: network_id(0xA1),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 2,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -1056,8 +1107,8 @@ mod tests {
                 parent_state_root: Hash::new(b"parent state"),
                 post_state_root: Hash::new(b"post state"),
                 ordinary_writes_root: Hash::new(b"ordinary writes"),
-                topup_anchor_root: None,
-                topup_anchor_count: 1,
+                kagemusha_top_up_root: None,
+                kagemusha_top_up_count: 1,
                 native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
                 native_amx_application_manifest_count: 0,
@@ -1137,8 +1188,15 @@ mod tests {
         let mut context = context(&[1, 1, 1, 1]);
         context.epoch_end_height = context.height;
         let next_roster = roster(&[1, 1, 1, 1]);
+        let next_mint_finality_roster =
+            mint_finality_roster(context.network_id, context.epoch + 1, &next_roster);
+        let next_mint_finality_epoch_id = next_mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid next-epoch mint-finality roster");
         context.next_epoch_snapshot = Some(finality::FinalizedNextEpochSnapshot {
             epoch: context.epoch + 1,
+            kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
             epoch_end_height: 41,
             mode: context.mode,
             quorum: DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),
@@ -1539,50 +1597,92 @@ mod tests {
             Err(ValidationError::SignerOutOfRange)
         );
         let variants = vec![
-            ConsensusMessageV2Payload::Proposal(proposal),
-            ConsensusMessageV2Payload::Vote(Vote {
-                round: manifest.round,
-                proposal_round: manifest.round,
-                phase: GlobalPhase::Prepare,
-                subject: manifest.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: 0,
-                signature: vec![1],
-            }),
-            ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
-            ConsensusMessageV2Payload::TimeoutVote(TimeoutVote {
-                round: timeout.round,
-                highest_prepare_qc: Some(prepare.clone()),
-                signer: 0,
-                signature: vec![2],
-            }),
-            ConsensusMessageV2Payload::TimeoutCertificate(timeout),
-            ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
-            ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
-                manifest_hash: HashOf::new(&manifest),
-                index: 0,
-                bytes: b"body".to_vec(),
-                sender: 0,
-                signature: vec![0x66; 48],
-            }),
-            ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-            ConsensusMessageV2Payload::CertifiedBodyResponse(CertifiedBodyResponse {
-                request_hash: HashOf::new(&request),
-                manifest,
-                body: b"body".to_vec(),
-                responder: context.roster[0].validator.clone(),
-                signature: vec![3],
-            }),
-            ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
-            ConsensusMessageV2Payload::CommitCertificateResponse(CommitCertificateResponse {
-                request_hash: HashOf::new(&commit_request),
-                certificate: commit,
-                responder: context.roster[0].validator.clone(),
-                signature: vec![4],
-            }),
-            ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
+            (
+                ConsensusMessageV2Payload::Proposal(proposal),
+                CONSENSUS_MESSAGE_V2_PROPOSAL_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::Vote(Vote {
+                    round: manifest.round,
+                    proposal_round: manifest.round,
+                    phase: GlobalPhase::Prepare,
+                    subject: manifest.subject,
+                    execution_commitment: prepare.execution_commitment,
+                    signer: 0,
+                    signature: vec![1],
+                }),
+                CONSENSUS_MESSAGE_V2_VOTE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
+                CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::TimeoutVote(TimeoutVote {
+                    round: timeout.round,
+                    highest_prepare_qc: Some(prepare.clone()),
+                    signer: 0,
+                    signature: vec![2],
+                }),
+                CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+                CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
+                    manifest_hash: HashOf::new(&manifest),
+                    index: 0,
+                    bytes: b"body".to_vec(),
+                    sender: 0,
+                    signature: vec![0x66; 48],
+                }),
+                CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
+                CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CertifiedBodyResponse(CertifiedBodyResponse {
+                    request_hash: HashOf::new(&request),
+                    manifest,
+                    body: b"body".to_vec(),
+                    responder: context.roster[0].validator.clone(),
+                    signature: vec![3],
+                }),
+                CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
+                CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CommitCertificateResponse(CommitCertificateResponse {
+                    request_hash: HashOf::new(&commit_request),
+                    certificate: commit,
+                    responder: context.roster[0].validator.clone(),
+                    signature: vec![4],
+                }),
+                CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
+                CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG,
+            ),
         ];
-        for payload in variants {
+        assert_eq!(
+            variants.len(),
+            11,
+            "the first-release payload inventory is exact"
+        );
+        for (payload, expected_tag) in variants {
+            assert_eq!(
+                payload.encode().get(..core::mem::size_of::<u32>()),
+                Some(expected_tag.to_le_bytes().as_slice()),
+                "payload discriminant drifted from its public first-release tag"
+            );
             let message = ConsensusMessageV2::new(payload);
             let encoded = message.encode();
             let decoded = ConsensusMessageV2::decode(&mut &encoded[..])
@@ -1620,16 +1720,24 @@ mod tests {
     fn signed_payload_chunk_binds_session_and_manifest_fields() {
         let context = context(&[1, 1, 1, 1]);
         let manifest = manifest(&context);
+        let validated = ValidatedPayloadManifest::new(&context, manifest.clone())
+            .expect("validate chunk manifest once");
         let chunk = PayloadChunk {
-            manifest_hash: HashOf::new(&manifest),
+            manifest_hash: validated.manifest_hash(),
             index: 0,
             bytes: b"body".to_vec(),
             sender: 1,
             signature: vec![0x77; 48],
         };
         let payload = chunk
-            .signature_payload(&context, &manifest)
+            .signature_payload(&validated)
             .expect("valid chunk signature payload");
+        assert_eq!(
+            validated
+                .committed_chunk_signature_payload(chunk.index, chunk.sender)
+                .expect("reuse the locally committed chunk hash"),
+            payload
+        );
         assert_eq!(payload.context_id, context.id());
         assert_eq!(payload.epoch, context.epoch);
         assert_eq!(payload.height, context.height);
@@ -1641,22 +1749,21 @@ mod tests {
         );
         assert_eq!(payload.chunk_hash, Hash::new(b"body"));
         assert!(
-            chunk
-                .signature_preimage(&context, &manifest)
-                .expect("valid signature preimage")
+            payload
+                .signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:payload-chunk")
         );
         let mut unsigned = chunk.clone();
         unsigned.signature.clear();
-        assert!(unsigned.signature_preimage(&context, &manifest).is_ok());
+        assert!(unsigned.signature_payload(&validated).is_ok());
         assert_eq!(
-            unsigned.validate(&context, &manifest),
-            Err(ValidationError::MissingChunkSignature)
+            unsigned.validate_for_authentication(&validated),
+            Err(ValidationError::MissingSignature)
         );
         let mut corrupted = chunk.clone();
         corrupted.bytes.push(0);
         assert_eq!(
-            corrupted.signature_payload(&context, &manifest),
+            corrupted.signature_payload(&validated),
             Err(ValidationError::InvalidChunkLength)
         );
     }
@@ -1664,6 +1771,8 @@ mod tests {
     fn manifest_rejects_mutated_root_size_count_and_chunk_length() {
         let context = context(&[1, 1, 1, 1]);
         let canonical = manifest(&context);
+        let validated = ValidatedPayloadManifest::new(&context, canonical.clone())
+            .expect("validate canonical manifest once");
         assert_eq!(canonical.validate(&context), Ok(()));
         let mut wrong_root = canonical.clone();
         wrong_root.chunk_root = Hash::new(b"not the canonical root");
@@ -1691,7 +1800,7 @@ mod tests {
             signature: vec![0x44; 48],
         };
         assert_eq!(
-            short_chunk.validate(&context, &canonical),
+            short_chunk.validate_for_authentication(&validated),
             Err(ValidationError::InvalidChunkLength)
         );
     }
@@ -2795,6 +2904,44 @@ mod tests {
                 .map(|view| equal.leader(view))
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([0, 1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn kagemusha_consensus_signature_envelope_roundtrips_and_rejects_drift() {
+        let bls = [0xA5; 96];
+        let auxiliary = [0x5A; 384];
+        let encoded = encode_kagemusha_consensus_signature_envelope_v1(
+            KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+            &bls,
+            &auxiliary,
+        )
+        .expect("bounded envelope");
+        let decoded = decode_kagemusha_consensus_signature_envelope_v1(&encoded)
+            .expect("canonical envelope")
+            .expect("reserved envelope");
+        assert_eq!(
+            decoded.kind,
+            KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1
+        );
+        assert_eq!(decoded.bls_signature, bls);
+        assert_eq!(decoded.auxiliary_payload, auxiliary);
+
+        let mut wrong_kind = encoded.clone();
+        wrong_kind[16] = 99;
+        assert_eq!(
+            decode_kagemusha_consensus_signature_envelope_v1(&wrong_kind),
+            Err(ValidationError::InvalidKagemushaSignatureEnvelope)
+        );
+        let mut wrong_length = encoded;
+        wrong_length[19..23].copy_from_slice(&1_u32.to_le_bytes());
+        assert_eq!(
+            decode_kagemusha_consensus_signature_envelope_v1(&wrong_length),
+            Err(ValidationError::InvalidKagemushaSignatureEnvelope)
+        );
+        assert_eq!(
+            decode_kagemusha_consensus_signature_envelope_v1(&bls),
+            Ok(None)
         );
     }
 }

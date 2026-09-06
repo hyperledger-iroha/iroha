@@ -592,6 +592,21 @@ where
     }
     Ok((value, end))
 }
+// Nominal Rust identities compose inside generic containers. The root frame
+// projects to the V1 pointer-ABI identity already used by the fixed codec.
+macro_rules! numeric_schema_identity {
+    ($($ty:ty => ($nominal:literal, $frame:ident)),+ $(,)?) => {$(
+        impl norito::NoritoSchema for $ty {
+            fn nominal_name() -> String { $nominal.to_owned() }
+            fn frame_name() -> String { $frame.to_owned() }
+        }
+    )+};
+}
+numeric_schema_identity! {
+    IntValueV1 => ("iroha_primitives::numeric_abi::IntValueV1", INT_SCHEMA_NAME_V1),
+    DecimalValueV1 => ("iroha_primitives::numeric_abi::DecimalValueV1", DECIMAL_SCHEMA_NAME_V1),
+    QuantityValueV1 => ("iroha_primitives::numeric_abi::QuantityValueV1", QUANTITY_SCHEMA_NAME_V1),
+}
 macro_rules! impl_frame_codec {
     ($ty:ty, $schema:expr, $encode:expr, $decode:expr) => {
         impl NoritoSerialize for $ty {

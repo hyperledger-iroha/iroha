@@ -52,6 +52,7 @@ pub mod aos;
 pub mod columnar;
 pub mod core;
 pub mod schema;
+pub use schema::identity::NoritoSchema;
 pub mod streaming;
 pub use core::{
     Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Encoder, Error,
@@ -159,7 +160,7 @@ pub mod yaml;
 pub mod derive {
     pub use norito_derive::{
         Decode, Encode, FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize, NoritoDeserialize,
-        NoritoSerialize,
+        NoritoSchema, NoritoSerialize,
     };
 }
 pub use derive::*;
@@ -597,6 +598,7 @@ pub mod json {
     use std::cell::Cell;
     use url::Url;
     mod exact_string;
+    mod key_hash;
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };
@@ -1800,55 +1802,9 @@ pub mod json {
     /// `crc-key-hash` feature is enabled we use a software CRC32C update and widen to 64 bits using
     /// a fixed avalanche to minimize collisions. Otherwise we default to 64-bit FNV-1a.
     pub const fn key_hash_const(s: &str) -> u64 {
-        #[cfg(feature = "crc-key-hash")]
-        {
-            // Match TapeWalker::read_key_hash CRC32C path:
-            // seed = 0xFFFF_FFFF; per-byte reflected update; deterministic 64-bit mix.
-            const fn crc32c_sw_byte(crc: u32, b: u8) -> u32 {
-                let mut c = crc ^ 0xFFFF_FFFF;
-                let mut x = b as u32;
-                let mut i = 0u32;
-                while i < 8 {
-                    let mix = (c ^ x) & 1;
-                    c >>= 1;
-                    if mix != 0 {
-                        c ^= 0x82F63B78;
-                    }
-                    x >>= 1;
-                    i += 1;
-                }
-                c ^ 0xFFFF_FFFF
-            }
-            let bytes = s.as_bytes();
-            let mut i = 0usize;
-            let mut crc: u32 = 0xFFFF_FFFF;
-            while i < bytes.len() {
-                crc = crc32c_sw_byte(crc, bytes[i]);
-                i += 1;
-            }
-            // Mix CRC32C to 64 bits deterministically (no HW dependency)
-            let mut x = (crc as u64) ^ 0x9E3779B97F4A7C15;
-            x ^= x >> 33;
-            x = x.wrapping_mul(0xff51afd7ed558ccd);
-            x ^= x >> 33;
-            x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
-            x ^= x >> 33;
-            x
-        }
-        #[cfg(not(feature = "crc-key-hash"))]
-        {
-            // 64-bit FNV-1a
-            let bytes = s.as_bytes();
-            let mut i = 0usize;
-            let mut h: u64 = 0xcbf29ce484222325;
-            while i < bytes.len() {
-                h ^= bytes[i] as u64;
-                h = h.wrapping_mul(0x100000001b3);
-                i += 1;
-            }
-            h
-        }
+        key_hash::hash_const(s)
     }
+
     #[inline]
     fn write_f64_json(x: f64, out: &mut String) {
         if !x.is_finite() {
@@ -4478,11 +4434,11 @@ pub mod json {
                 }
             }
         }
-        /// Read a JSON object key and return its FNV-1a 64-bit hash.
+        /// Read a JSON object key using the same hash as compile-time field dispatch.
         pub fn read_key_hash(&mut self) -> Result<u64, Error> {
             self.skip_ws();
             self.expect(b'"')?;
-            let mut h: u64 = 0xcbf29ce484222325;
+            let mut hash = key_hash::KeyHasher::new();
             loop {
                 let b = self.bump().ok_or_else(|| {
                     let (byte, line, col) = self.pos_meta(self.i);
@@ -4498,36 +4454,28 @@ pub mod json {
                         })?;
                         match esc {
                             b'"' => {
-                                h ^= b'"' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(b'"');
                             }
                             b'\\' => {
-                                h ^= b'\\' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(b'\\');
                             }
                             b'/' => {
-                                h ^= b'/' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(b'/');
                             }
                             b'b' => {
-                                h ^= 0x08u64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(0x08);
                             }
                             b'f' => {
-                                h ^= 0x0Cu64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(0x0C);
                             }
                             b'n' => {
-                                h ^= b'\n' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(b'\n');
                             }
                             b'r' => {
-                                h ^= b'\r' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(b'\r');
                             }
                             b't' => {
-                                h ^= b'\t' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
+                                hash.update(b'\t');
                             }
                             b'u' => {
                                 // Consume 4 hex digits; combine surrogate pairs when present and hash UTF‑8 bytes
@@ -4603,8 +4551,7 @@ pub mod json {
                                     let mut buf = [0u8; 4];
                                     let s = ch.encode_utf8(&mut buf);
                                     for &bb in s.as_bytes() {
-                                        h ^= bb as u64;
-                                        h = h.wrapping_mul(0x100000001b3);
+                                        hash.update(bb);
                                     }
                                 } else {
                                     let (byte, line, col) = self.pos_meta(self.i);
@@ -4628,12 +4575,11 @@ pub mod json {
                         }
                     }
                     _ => {
-                        h ^= b as u64;
-                        h = h.wrapping_mul(0x100000001b3);
+                        hash.update(b);
                     }
                 }
             }
-            Ok(h)
+            Ok(hash.finish())
         }
         /// Parse a JSON object key and return a borrowed `&str` when no escapes are present,
         /// or an owned `String` otherwise. This avoids allocating in the common fast path.
@@ -6999,51 +6945,7 @@ pub mod json {
                 return Err(Error::UnterminatedKey { byte, line, col });
             }
             let bytes = self.input.as_bytes();
-            let mut h_fnv: u64 = 0xcbf29ce484222325;
-            let mut h_crc: u32 = 0xFFFF_FFFF;
-            #[cfg(not(feature = "crc-key-hash"))]
-            let _ = &mut h_crc;
-            #[inline]
-            fn fnv_add(h: &mut u64, b: u8) {
-                *h ^= b as u64;
-                *h = h.wrapping_mul(0x100000001b3);
-            }
-            #[cfg(feature = "crc-key-hash")]
-            #[inline]
-            fn crc32c_sw(crc: u32, b: u8) -> u32 {
-                // Reflected CRC32C update (poly 0x82F63B78)
-                let mut c = crc ^ 0xFFFF_FFFF;
-                let mut x = b as u32;
-                for _ in 0..8 {
-                    let mix = (c ^ x) & 1;
-                    c >>= 1;
-                    if mix != 0 {
-                        c ^= 0x82F63B78;
-                    }
-                    x >>= 1;
-                }
-                c ^ 0xFFFF_FFFF
-            }
-            #[cfg(all(feature = "crc-key-hash", target_arch = "x86_64"))]
-            #[inline]
-            unsafe fn crc32c_u8_sse(crc: u32, b: u8) -> u32 {
-                use core::arch::x86_64::_mm_crc32_u8;
-                unsafe { _mm_crc32_u8(crc, b) }
-            }
-            #[cfg(all(feature = "crc-key-hash", target_arch = "aarch64"))]
-            #[inline]
-            unsafe fn crc32c_u8_arm(crc: u32, b: u8) -> u32 {
-                // Uses aarch64 CRC32C byte update when available
-                #[cfg(target_feature = "crc")]
-                {
-                    use core::arch::aarch64::__crc32cb;
-                    return unsafe { __crc32cb(crc, b) };
-                }
-                #[allow(unreachable_code)]
-                {
-                    crc
-                }
-            }
+            let mut hash = key_hash::KeyHasher::new();
             let mut i = open_off + 1;
             while i < close_off {
                 let b = bytes[i];
@@ -7057,165 +6959,22 @@ pub mod json {
                     i += 1;
                     match esc {
                         b'"' | b'\\' | b'/' => {
-                            fnv_add(&mut h_fnv, esc);
-                            #[cfg(feature = "crc-key-hash")]
-                            {
-                                #[cfg(target_arch = "x86_64")]
-                                {
-                                    h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                        unsafe { crc32c_u8_sse(h_crc, esc) }
-                                    } else {
-                                        crc32c_sw(h_crc, esc)
-                                    };
-                                }
-                                #[cfg(target_arch = "aarch64")]
-                                {
-                                    h_crc = if std::arch::is_aarch64_feature_detected!("crc") {
-                                        unsafe { crc32c_u8_arm(h_crc, esc) }
-                                    } else {
-                                        crc32c_sw(h_crc, esc)
-                                    };
-                                }
-                                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                                {
-                                    h_crc = crc32c_sw(h_crc, esc);
-                                }
-                            }
+                            hash.update(esc);
                         }
                         b'b' => {
-                            fnv_add(&mut h_fnv, 0x08);
-                            #[cfg(feature = "crc-key-hash")]
-                            {
-                                let bb = 0x08u8;
-                                #[cfg(target_arch = "x86_64")]
-                                {
-                                    h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                        unsafe { crc32c_u8_sse(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(target_arch = "aarch64")]
-                                {
-                                    h_crc = if std::arch::is_aarch64_feature_detected!("crc") {
-                                        unsafe { crc32c_u8_arm(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                                {
-                                    h_crc = crc32c_sw(h_crc, bb);
-                                }
-                            }
+                            hash.update(0x08);
                         }
                         b'f' => {
-                            fnv_add(&mut h_fnv, 0x0C);
-                            #[cfg(feature = "crc-key-hash")]
-                            {
-                                let bb = 0x0Cu8;
-                                #[cfg(target_arch = "x86_64")]
-                                {
-                                    h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                        unsafe { crc32c_u8_sse(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(target_arch = "aarch64")]
-                                {
-                                    h_crc = if std::arch::is_aarch64_feature_detected!("crc") {
-                                        unsafe { crc32c_u8_arm(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                                {
-                                    h_crc = crc32c_sw(h_crc, bb);
-                                }
-                            }
+                            hash.update(0x0C);
                         }
                         b'n' => {
-                            fnv_add(&mut h_fnv, b'\n');
-                            #[cfg(feature = "crc-key-hash")]
-                            {
-                                let bb = b'\n';
-                                #[cfg(target_arch = "x86_64")]
-                                {
-                                    h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                        unsafe { crc32c_u8_sse(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(target_arch = "aarch64")]
-                                {
-                                    h_crc = if std::arch::is_aarch64_feature_detected!("crc") {
-                                        unsafe { crc32c_u8_arm(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                                {
-                                    h_crc = crc32c_sw(h_crc, bb);
-                                }
-                            }
+                            hash.update(b'\n');
                         }
                         b'r' => {
-                            fnv_add(&mut h_fnv, b'\r');
-                            #[cfg(feature = "crc-key-hash")]
-                            {
-                                let bb = b'\r';
-                                #[cfg(target_arch = "x86_64")]
-                                {
-                                    h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                        unsafe { crc32c_u8_sse(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(target_arch = "aarch64")]
-                                {
-                                    h_crc = if std::arch::is_aarch64_feature_detected!("crc") {
-                                        unsafe { crc32c_u8_arm(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                                {
-                                    h_crc = crc32c_sw(h_crc, bb);
-                                }
-                            }
+                            hash.update(b'\r');
                         }
                         b't' => {
-                            fnv_add(&mut h_fnv, b'\t');
-                            #[cfg(feature = "crc-key-hash")]
-                            {
-                                let bb = b'\t';
-                                #[cfg(target_arch = "x86_64")]
-                                {
-                                    h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                        unsafe { crc32c_u8_sse(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(target_arch = "aarch64")]
-                                {
-                                    h_crc = if std::arch::is_aarch64_feature_detected!("crc") {
-                                        unsafe { crc32c_u8_arm(h_crc, bb) }
-                                    } else {
-                                        crc32c_sw(h_crc, bb)
-                                    };
-                                }
-                                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                                {
-                                    h_crc = crc32c_sw(h_crc, bb);
-                                }
-                            }
+                            hash.update(b'\t');
                         }
                         b'u' => {
                             // Parse 4 hex digits, handle surrogate pair, hash UTF‑8
@@ -7290,34 +7049,7 @@ pub mod json {
                                 let mut buf = [0u8; 4];
                                 let s = ch.encode_utf8(&mut buf);
                                 for &bb in s.as_bytes() {
-                                    fnv_add(&mut h_fnv, bb);
-                                    #[cfg(feature = "crc-key-hash")]
-                                    {
-                                        #[cfg(target_arch = "x86_64")]
-                                        {
-                                            h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                                unsafe { crc32c_u8_sse(h_crc, bb) }
-                                            } else {
-                                                crc32c_sw(h_crc, bb)
-                                            };
-                                        }
-                                        #[cfg(target_arch = "aarch64")]
-                                        {
-                                            h_crc =
-                                                if std::arch::is_aarch64_feature_detected!("crc") {
-                                                    unsafe { crc32c_u8_arm(h_crc, bb) }
-                                                } else {
-                                                    crc32c_sw(h_crc, bb)
-                                                };
-                                        }
-                                        #[cfg(not(any(
-                                            target_arch = "x86_64",
-                                            target_arch = "aarch64"
-                                        )))]
-                                        {
-                                            h_crc = crc32c_sw(h_crc, bb);
-                                        }
-                                    }
+                                    hash.update(bb);
                                 }
                             } else {
                                 let (byte, line, col) =
@@ -7342,30 +7074,7 @@ pub mod json {
                         }
                     }
                 } else {
-                    fnv_add(&mut h_fnv, b);
-                    #[cfg(feature = "crc-key-hash")]
-                    {
-                        #[cfg(target_arch = "x86_64")]
-                        {
-                            h_crc = if std::is_x86_feature_detected!("sse4.2") {
-                                unsafe { crc32c_u8_sse(h_crc, b) }
-                            } else {
-                                crc32c_sw(h_crc, b)
-                            };
-                        }
-                        #[cfg(target_arch = "aarch64")]
-                        {
-                            h_crc = if std::arch::is_aarch64_feature_detected!("crc") {
-                                unsafe { crc32c_u8_arm(h_crc, b) }
-                            } else {
-                                crc32c_sw(h_crc, b)
-                            };
-                        }
-                        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                        {
-                            h_crc = crc32c_sw(h_crc, b);
-                        }
-                    }
+                    hash.update(b);
                     i += 1;
                 }
             }
@@ -7395,21 +7104,7 @@ pub mod json {
                     return Err(Error::ExpectedColon { byte, line, col });
                 }
             }
-            #[cfg(feature = "crc-key-hash")]
-            {
-                // Mix CRC32C to 64 bits with a fixed avalanche; keep deterministic
-                let mut x = (h_crc as u64) ^ 0x9E3779B97F4A7C15;
-                x ^= x >> 33;
-                x = x.wrapping_mul(0xff51afd7ed558ccd);
-                x ^= x >> 33;
-                x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
-                x ^= x >> 33;
-                Ok(x)
-            }
-            #[cfg(not(feature = "crc-key-hash"))]
-            {
-                Ok(h_fnv)
-            }
+            Ok(hash.finish())
         }
         fn skip_ws_raw(&mut self) {
             let bytes = self.input.as_bytes();
@@ -9000,49 +8695,6 @@ pub mod json {
             }
         }
         Err(Error::Message("json integer out of range".to_owned()))
-    }
-    // ===== CRC32C helpers (portable + HW-accelerated byte update) =====
-    #[inline]
-    #[allow(dead_code)]
-    fn crc32c_update_byte(crc: u32, byte: u8) -> u32 {
-        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
-        {
-            if std::arch::is_aarch64_feature_detected!("crc") {
-                // SAFETY: guarded by runtime feature detection
-                return unsafe { crc32c_hw_update_byte(crc, byte) };
-            }
-        }
-        #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
-        {
-            if std::is_x86_feature_detected!("sse4.2") {
-                // SAFETY: guarded by runtime feature detection
-                return unsafe { crc32c_hw_update_byte(crc, byte) };
-            }
-        }
-        crc32c_update_byte_sw(crc, byte)
-    }
-    #[inline]
-    #[allow(dead_code)]
-    fn crc32c_update_byte_sw(mut crc: u32, byte: u8) -> u32 {
-        // Bitwise CRC32C (Castagnoli) with reflected polynomial 0x82F63B78
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg() & 0x82F6_3B78;
-            crc = (crc >> 1) ^ mask;
-        }
-        crc
-    }
-    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
-    #[target_feature(enable = "crc")]
-    unsafe fn crc32c_hw_update_byte(crc: u32, byte: u8) -> u32 {
-        use core::arch::aarch64::__crc32cb;
-        __crc32cb(crc, byte)
-    }
-    #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
-    #[target_feature(enable = "sse4.2")]
-    unsafe fn crc32c_hw_update_byte(crc: u32, byte: u8) -> u32 {
-        use core::arch::x86_64::_mm_crc32_u8;
-        _mm_crc32_u8(crc, byte)
     }
 }
 /// Serialize an object into the given writer.

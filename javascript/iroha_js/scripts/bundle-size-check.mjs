@@ -18,28 +18,29 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "src", "toriiClient.js"),
     platform: "node",
     target: "node18",
-    // This direct entrypoint intentionally exposes the complete Torii surface. The
-    // protected pre-reset tree measured 945,975 bytes on the same pinned runner.
-    // SCCP, Parliament, and validation-fee proof validation now share one optional
-    // async boundary, leaving a 941,461-byte eager closure (-0.48%). The 930 KiB
-    // ceiling leaves 10,859 bytes while both lazy closures remain independently
-    // inventoried and bounded below.
-    limitKb: 930,
-    reviewedEagerBytes: 941_461,
-    reviewedCombinedBytes: 1_151_436,
+    // The first-release simplification audit measured a 1,082,470-byte eager
+    // closure before moving Norito-heavy validation, Kagemusha, SCCP, and route
+    // governance behind the existing optional boundary. The reviewed eager path
+    // is now 814,534 bytes (-24.8%); the 797 KiB ceiling leaves 1,594 bytes while
+    // every deferred closure remains independently inventoried below. The small
+    // reviewed increase buys private Torii security state, fail-closed receipts,
+    // and immutable native dependency contexts.
+    limitKb: 797,
+    reviewedEagerBytes: 814_534,
+    reviewedCombinedBytes: 1_214_544,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./toriiOptional.js",
         entryPoint: join(ROOT, "src", "toriiOptional.js"),
         edgeCount: 1,
-        reviewedBytes: 137_044,
-        limitKb: 134,
+        reviewedBytes: 327_517,
+        limitKb: 322,
       }),
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "src", "sumeragiTyped.js"),
         edgeCount: 3,
-        reviewedBytes: 72_931,
+        reviewedBytes: 72_493,
         limitKb: 72,
       }),
     ]),
@@ -50,12 +51,12 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
-    // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes. Canonical ProofAttachment handling
-    // and shared validation/finalization corridors bring current V1 to 298,553
-    // bytes (+2.77%).
-    // The 297 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 297,
+    // shipped entrypoint rather than the Node-capable source graph. The reviewed
+    // first-release codec closure is 311,701 bytes after exact ProofAttachment,
+    // instruction archive, response-binding validation, and immutable native
+    // dependency contexts (+0.39% from the 310,503-byte predecessor). The
+    // 306 KiB ceiling leaves 1,643 bytes.
+    limitKb: 306,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -65,10 +66,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree. Canonical ProofAttachment handling and the shared
-    // asset-definition builder bring current V1 to 385,674 bytes (+3.84%). The
-    // 380 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 380,
+    // pre-reset tree. The exact first-release public graph is now 361,258 bytes
+    // (-2.73%). The 355 KiB ceiling leaves 2,262 bytes.
+    limitKb: 355,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -77,9 +77,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 95,840 bytes
-    // (-2.07%). The 100 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 100,
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 93,163 bytes
+    // (-4.81%). The 94 KiB ceiling leaves 3,093 bytes.
+    limitKb: 94,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -111,27 +111,29 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner. Its reviewed eager code-split closure is 477,639 bytes
-    // (+4.27%) after shared validation paths are interned. The unchanged 469 KiB
-    // eager ceiling leaves 2,617 bytes. The typed Sumeragi parser and deployment
-    // submit continuation are audited below as non-overlapping lazy closures.
-    limitKb: 469,
-    reviewedEagerBytes: 477_639,
-    reviewedCombinedBytes: 560_508,
+    // The prior first-release aggregate measured a 517,186-byte eager split closure
+    // on the pinned runner. Removing feature-specific exports, then adding private
+    // browser transport state and exact URL/header/timeout guards, leaves the
+    // reviewed eager surface at 496,687 bytes (-3.96%); the 486 KiB ceiling leaves
+    // 977 bytes. The typed Sumeragi parser and deployment-submit continuation
+    // remain separately inventoried so startup and deferred code cannot trade
+    // against one another.
+    limitKb: 486,
+    reviewedEagerBytes: 496_687,
+    reviewedCombinedBytes: 578_683,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "dist", "sumeragiTyped.js"),
         edgeCount: 2,
-        reviewedBytes: 73_692,
+        reviewedBytes: 72_806,
         limitKb: 72,
       }),
       Object.freeze({
         specifier: "./smartContractDeploymentSubmit.js",
         entryPoint: join(ROOT, "dist", "smartContractDeploymentSubmit.js"),
         edgeCount: 1,
-        reviewedBytes: 9_177,
+        reviewedBytes: 9_190,
         limitKb: 9,
       }),
     ]),

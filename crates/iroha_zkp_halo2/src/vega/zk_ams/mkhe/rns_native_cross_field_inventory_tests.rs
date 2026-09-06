@@ -1443,7 +1443,7 @@ fn pre_direct_candidate_projection_surface_is_sealed_one_pass_and_fail_closed() 
         .split_once("pub(super) fn authenticate_claimed_inventory_v2")
         .expect("claimed inventory join")
         .1
-        .split_once("impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
+        .split_once("impl<'qpcs, 'cross, S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
         .expect("claimed inventory join boundary")
         .0;
     assert!(join.contains("bind_rns_native_cross_field_rlwe_pre_direct_inventory_v1(inventory)"));

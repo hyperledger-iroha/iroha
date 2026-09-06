@@ -4,6 +4,59 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Replaced every mutable process-global native/Norito override with immutable
+  runtime contexts. Production entrypoints share one verified, snapshotted
+  native surface; Torii clients and source-level test facades can carry isolated
+  contexts through crypto, transaction, DA/SoraFS, proof, validation-fee, and
+  Norito composition without cross-client state. Portable fallback now hides
+  only an exactly classified missing native file; checksum, provenance, and
+  load failures remain visible and every loader outcome is cached.
+- Removed the pre-release `encodeInstruction` alias and the contradictory
+  `SUPPORTED_CRYPTO_ALGORITHMS` constant. `noritoEncodeInstruction` is the sole
+  instruction encoder, `CRYPTO_ALGORITHMS` is the known-label catalog, and
+  `supportedCryptoAlgorithms()` reports the algorithms executable by the
+  current runtime. Crypto and transaction private-key algorithm options also
+  reject `null` instead of silently selecting Ed25519, and explicit falsey key
+  seeds can no longer become random key generation.
+- Moved Torii credentials, canonical-auth key material, origins, retry policy,
+  and validation caches into private class state. Constructor inputs are
+  snapshotted, canonical-auth byte containers are copied, and JSON/object
+  inspection no longer exposes tokens or key bytes. Non-empty Norito
+  transaction receipts now fail closed when their native decoder is missing,
+  rejects the payload, or returns invalid JSON; only `204` or an empty body maps
+  to an empty receipt.
+- Hardened both smaller HTTP clients around the same immutable boundary.
+  `NoritoRpcClient` now keeps credentials and transport state in private fields,
+  copies every request body before dispatch, applies real per-call token
+  overrides, validates exact booleans/timeouts, and drops the no-op `close()`
+  compatibility method. `ToriiBrowserClient` now accepts only credential-free
+  HTTP(S) Torii root URLs, snapshots headers and timeout policy, rejects unknown
+  constructor options, and keeps route success statuses SDK-owned. The duplicate
+  nested browser `config` input and browser-only `ToriiClient`/`ToriiHttpError`
+  aliases are removed; the exact browser class names are the sole surface.
+- Made instruction-codec ownership deterministic: supported V1 instructions
+  use the pure-JavaScript codec first, while unsupported variants dispatch once
+  to the native codec and propagate its exact error. Native error-message text
+  is no longer interpreted as a compatibility signal. DA blob IDs use the
+  portable BLAKE3 implementation, client gateway/proof helpers stay on that
+  client's runtime, and `proofSummary: false` performs no hidden proof work.
+- Reduced the registry artifact to one runtime tree. Published packages contain
+  `dist/` plus the two portable recipes, not duplicate `src/` implementations or
+  development scripts; declarations and recipes resolve that same tree. The
+  address subpath now has an explicit browser condition, and package-layout
+  tests reject source or script leakage. Native-only calls from a clean package
+  now direct consumers to `IROHA_JS_NATIVE_DIR` instead of suggesting the
+  source-checkout-only native build command.
+- Removed the mutable curve-length map from address validation and read each
+  length from its frozen V1 registry entry. SoraFS orderbook cancellation now
+  preserves the caller's exact abort reason through its one-shot deadline and
+  ambiguity error chain. Validation-fee fingerprint calls also reuse the
+  runtime's already-bound native functions instead of rebinding per call.
+- Added native and pure-JavaScript Norito parity for the complete account-scoped
+  asset transfer-control family. Node and browser entry points now expose
+  typed blacklist and calendar-cap builders alongside directional
+  availability, with exact wire IDs, canonical window ordering, optional
+  Quantity clearing semantics, and closed input validation.
 - Hard-cut UAID portfolio, binding, and manifest reads to the exact first-release
   Torii JSON contract. Manifest queries now expose all five current filters,
   responses require pagination metadata and canonical nested identities, and
@@ -52,9 +105,19 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   opaque seek cursors. Node and browser clients now send `cursor`/`limit`,
   validate the `{limit,next_cursor,has_more}` continuation contract, and the NFT
   and RWA async iterators advance only through server-issued cursors.
+- Hard-cut Explorer block, transaction, instruction, and latest-history reads to
+  snapshot-bound `cursor`/`limit` pagination. The Node block client and browser
+  Explorer methods reject page/offset knobs and exact totals, validate the
+  snapshot height/hash plus continuation invariants, and expose typed cursor
+  metadata without reconstructing counts from hidden history. Node and browser
+  Explorer, generic event SSE, and contract replay/stream reads now use the
+  configured default canonical signer to include restricted dataspaces, with
+  anonymous public-only behavior when no signer is configured. Browser callback signers cover the
+  exact final path and wire query, reject redirects and precomputed auth, and do
+  not change the public Explorer health request.
 - Removed the generic `Shield`, `ZkTransfer`, and `Unshield` transaction surface
   from ABI V1. JavaScript builders, TypeScript declarations, exports, and Norito
-  discriminants now fail closed; typed Kagemusha top-up/redemption routes and
+  discriminants now fail closed; typed KAGEMUSHA mint/redemption routes and
   their underlying proof helpers remain available.
 - Added a Node-only native authenticated `BlockProofs` verifier. It accepts
   bounded canonical bridge-finality, exact executed-`SignedBlockWire`, and
@@ -66,7 +129,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   the finality and `BlockProofs` archives but not yet the exact executed block
   wire required to assemble this verification input from public routes alone.
 - Replaced asset-selected offline readiness discovery with the universal
-  `getOfflineCapability()`/`OfflineStatus` contract. The first-release hard cut
+  `getKagemushaReadiness()`/`KagemushaReadinessV1` contract. The first-release hard cut
   removes selector-taking readiness methods, normalizers, types, and exports.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
   the canonical proposal operator and exact typed proposal payload. Both native
@@ -322,13 +385,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
-- Added the complete sharp first-release Offline JSON API: universal
-  `getOfflineCapability`, manifest-V4 `submitKagemushaTopUpV4` and
-  `submitKagemushaRedeemV4` commands with signed-operation-derived idempotency, and
-  typed polling through `getKagemushaOperationStatus`. Capability discovery has no
-  selector and returns exactly the four asset-neutral fields. Node and browser clients
-  reject malformed IDs, contradictory tagged states, mismatched `Location`
-  headers, and whole-payload wrappers before exposing results.
+- Added the sharp first-release `Kagemusha` namespace with typed recursive
+  aggregate messages, exact canonical Norito, strict `kgm1:` transport, and the
+  universal four-field readiness projection.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address
@@ -531,11 +590,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [0.0.2] - 2026-01-27
 
-- Added governance instruction support to native Norito helpers so
-  `buildCastZkBallotInstruction`, `buildCastPlainBallotInstruction`, and
-  `buildPersistCouncilForEpochInstruction` round-trip through
-  `noritoEncodeInstruction`. Proposal-backed certification and execution are
-  consensus-owned and have no client-side finalize or enact builders.
+- Added governance instruction support to native Norito helpers so standalone
+  ZK and plain ballot instructions round-trip through `noritoEncodeInstruction`.
+  Proposal-backed certification and execution are consensus-owned and have no
+  client-side roster, finalize, or enact builders.
 - Updated the native build script to try an offline cargo build first and
   automatically retry online when dependencies are missing.
 - Added release documentation automation script covering changelog/status/roadmap updates.

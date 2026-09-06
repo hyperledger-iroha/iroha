@@ -1,15 +1,18 @@
 import { Buffer } from "node:buffer";
 
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 
 const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
 
-function nativeFunction(name, rustName) {
-  const native = globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+function nativeFunction(nativeRuntime, name, rustName) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (typeof native?.[name] !== "function") {
     throw new Error(`native binding '${rustName}' is unavailable`);
   }
-  return native[name].bind(native);
+  return native[name];
 }
 
 function exactLifecycleProposalId(value) {
@@ -65,6 +68,57 @@ function exactFingerprint(value, proposalName) {
   return fingerprint.toString("hex");
 }
 
+/** @internal Create validation-fee fingerprint helpers for one immutable runtime. */
+export function createValidationFeeProposalApi(nativeRuntime) {
+  function computePolicy(
+    proposalOperator,
+    policy,
+    payoutLifecycleProposalId = null,
+  ) {
+    if (arguments.length < 2 || arguments.length > 3) {
+      throw new TypeError(
+        "computeValidationFeePolicyProposalFingerprintV1 accepts exactly two or three arguments",
+      );
+    }
+    const fingerprint = nativeFunction(
+      nativeRuntime,
+      "validationFeePolicyProposalFingerprintV1",
+      "validation_fee_policy_proposal_fingerprint_v1",
+    )(
+      exactProposalOperator(proposalOperator),
+      exactJsonObject(policy, "policy"),
+      exactLifecycleProposalId(payoutLifecycleProposalId),
+    );
+    return exactFingerprint(fingerprint, "validation-fee policy");
+  }
+
+  function computePayoutLifecycle(proposalOperator, payoutBinding) {
+    if (arguments.length !== 2) {
+      throw new TypeError(
+        "computeValidationFeePayoutLifecycleProposalFingerprintV1 accepts exactly two arguments",
+      );
+    }
+    const fingerprint = nativeFunction(
+      nativeRuntime,
+      "validationFeePayoutLifecycleProposalFingerprintV1",
+      "validation_fee_payout_lifecycle_proposal_fingerprint_v1",
+    )(
+      exactProposalOperator(proposalOperator),
+      exactJsonObject(payoutBinding, "payoutBinding"),
+    );
+    return exactFingerprint(fingerprint, "validation-fee payout lifecycle");
+  }
+
+  return Object.freeze({
+    computeValidationFeePayoutLifecycleProposalFingerprintV1:
+      computePayoutLifecycle,
+    computeValidationFeePolicyProposalFingerprintV1: computePolicy,
+  });
+}
+
+const DEFAULT_VALIDATION_FEE_PROPOSAL_API =
+  createValidationFeeProposalApi(defaultNativeRuntime);
+
 /**
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
@@ -81,20 +135,16 @@ export function computeValidationFeePolicyProposalFingerprintV1(
   policy,
   payoutLifecycleProposalId = null,
 ) {
-  if (arguments.length < 2 || arguments.length > 3) {
-    throw new TypeError(
-      "computeValidationFeePolicyProposalFingerprintV1 accepts exactly two or three arguments",
-    );
+  const compute =
+    DEFAULT_VALIDATION_FEE_PROPOSAL_API
+      .computeValidationFeePolicyProposalFingerprintV1;
+  if (arguments.length === 2) {
+    return compute(proposalOperator, policy);
   }
-  const fingerprint = nativeFunction(
-    "validationFeePolicyProposalFingerprintV1",
-    "validation_fee_policy_proposal_fingerprint_v1",
-  )(
-    exactProposalOperator(proposalOperator),
-    exactJsonObject(policy, "policy"),
-    exactLifecycleProposalId(payoutLifecycleProposalId),
-  );
-  return exactFingerprint(fingerprint, "validation-fee policy");
+  if (arguments.length === 3) {
+    return compute(proposalOperator, policy, payoutLifecycleProposalId);
+  }
+  return Reflect.apply(compute, DEFAULT_VALIDATION_FEE_PROPOSAL_API, arguments);
 }
 
 /**
@@ -111,17 +161,11 @@ export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
   proposalOperator,
   payoutBinding,
 ) {
-  if (arguments.length !== 2) {
-    throw new TypeError(
-      "computeValidationFeePayoutLifecycleProposalFingerprintV1 accepts exactly two arguments",
-    );
+  const compute =
+    DEFAULT_VALIDATION_FEE_PROPOSAL_API
+      .computeValidationFeePayoutLifecycleProposalFingerprintV1;
+  if (arguments.length === 2) {
+    return compute(proposalOperator, payoutBinding);
   }
-  const fingerprint = nativeFunction(
-    "validationFeePayoutLifecycleProposalFingerprintV1",
-    "validation_fee_payout_lifecycle_proposal_fingerprint_v1",
-  )(
-    exactProposalOperator(proposalOperator),
-    exactJsonObject(payoutBinding, "payoutBinding"),
-  );
-  return exactFingerprint(fingerprint, "validation-fee payout lifecycle");
+  return Reflect.apply(compute, DEFAULT_VALIDATION_FEE_PROPOSAL_API, arguments);
 }

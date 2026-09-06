@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -41,15 +42,13 @@ def _auth(network_id: str, messages: list[bytes]) -> ToriiCanonicalRequestAuth:
     )
 
 
-class _Response:
+class _Response(requests.Response):
     def __init__(self, status_code: int, payload: Any = None) -> None:
+        super().__init__()
         self.status_code = status_code
-        self._payload = payload
-        self.content = b"" if payload is None else b"{}"
-        self.text = ""
-
-    def json(self) -> Any:
-        return self._payload
+        self._content = b"" if payload is None else json.dumps(payload).encode("utf-8")
+        self._content_consumed = True
+        self.headers = {"Content-Type": "application/json"}
 
 
 class _Session(requests.Session):

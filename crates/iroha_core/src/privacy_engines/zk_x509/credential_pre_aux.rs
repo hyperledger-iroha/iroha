@@ -6,6 +6,7 @@
 //! family only after all six MAIN base roots and the compact-CA base root have been committed, then
 //! supplies an opaque phase token to MAIN and a binding that each local subproof absorbs before its
 //! auxiliary commitments.
+use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use super::{
     der_stark::{ZkX509DerStarkChallengesV1, derive_zk_x509_der_stark_challenges_v1},
     io_air::{ZkX509IoChallengesV1, derive_zk_x509_io_challenges_v1},
@@ -34,8 +35,8 @@ use super::{
     sha256_word_air::{ZkX509WordMemoryChallengesV1, derive_sha256_word_memory_challenges_v1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
-    sha256_frame_v1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    TransparentTranscriptV1, append_u16_v1, goldilocks_digest384_frame_v1,
 };
 use thiserror::Error;
 const CREDENTIAL_PRE_AUX_MAGIC_V1: [u8; 4] = *b"X5B1";
@@ -93,7 +94,7 @@ pub(crate) struct ZkX509CredentialMainPreAuxV1 {
     /// Digest of the canonical first-release MAIN profile.
     main_profile_digest: [u8; 32],
     /// Exact log5, log8, log15, log16, log18, and log19 MAIN base roots.
-    main_base_roots: [[u8; 32]; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+    main_base_roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
 }
 impl ZkX509CredentialMainPreAuxV1 {
     /// Mint MAIN pre-auxiliary state from the completed canonical commitment
@@ -119,7 +120,7 @@ impl ZkX509CredentialMainPreAuxV1 {
     pub(crate) const fn fixture_for_test_v1(
         consensus_context_digest: [u8; 32],
         main_profile_digest: [u8; 32],
-        main_base_roots: [[u8; 32]; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+        main_base_roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
     ) -> Self {
         Self {
             consensus_context_digest,
@@ -146,13 +147,13 @@ impl ZkX509CredentialMainPreAuxV1 {
     /// Return the fixture MAIN roots in their asserted canonical order.
     pub(crate) const fn main_base_roots_for_test_v1(
         self,
-    ) -> [[u8; 32]; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
+    ) -> [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
         self.main_base_roots
     }
     /// Return mutable fixture-only access to the ordered MAIN roots.
     pub(crate) fn main_base_roots_mut_for_test_v1(
         &mut self,
-    ) -> &mut [[u8; 32]; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
+    ) -> &mut [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
         &mut self.main_base_roots
     }
 }
@@ -174,7 +175,7 @@ pub(crate) struct ZkX509CredentialMainPostBaseChallengesV1 {
     p256_cross: P256CrossTraceChallengesV1,
     p256_scalar: P256ScalarBitBusChallengesV1,
     p256_arithmetic_copy: P256ArithmeticCopyChallengesV1,
-    transcript_state: [u8; 32],
+    transcript_state: GoldilocksDigest384V1,
 }
 impl ZkX509CredentialMainPostBaseChallengesV1 {
     /// MAIN projection copy and compaction challenges.
@@ -221,7 +222,7 @@ impl ZkX509CredentialMainPostBaseChallengesV1 {
         self.p256_arithmetic_copy
     }
     /// Post-challenge state bound into both local subproof transcripts.
-    pub(crate) const fn transcript_state(self) -> [u8; 32] {
+    pub(crate) const fn transcript_state(self) -> GoldilocksDigest384V1 {
         self.transcript_state
     }
 }
@@ -263,7 +264,7 @@ impl ZkX509CredentialPreAuxBindingV1 {
         self.main_post_base.rfc5280()
     }
     /// Post-challenge state bound into both local subproof transcripts.
-    pub(crate) const fn transcript_state(self) -> [u8; 32] {
+    pub(crate) const fn transcript_state(self) -> GoldilocksDigest384V1 {
         self.main_post_base.transcript_state()
     }
 }
@@ -287,10 +288,16 @@ impl From<TransparentStarkErrorV1> for ZkX509CredentialPreAuxErrorV1 {
 }
 fn pre_aux_profile_digest_v1(
     main_profile_digest: [u8; 32],
-    ca_profile_digest: [u8; 32],
-) -> Result<[u8; 32], ZkX509CredentialPreAuxErrorV1> {
-    sha256_frame_v1(
+    ca_profile_digest: GoldilocksDigest384V1,
+) -> Result<GoldilocksDigest384V1, ZkX509CredentialPreAuxErrorV1> {
+    let ca_profile_digest = ca_profile_digest.to_le_bytes();
+    goldilocks_digest384_frame_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         CREDENTIAL_PRE_AUX_PROFILE_DOMAIN_V1,
+        b"credential-profile",
+        0,
+        0,
+        0,
         &[
             &CREDENTIAL_PRE_AUX_MAGIC_V1,
             &ZK_X509_PROOF_VERSION_V1.to_be_bytes(),
@@ -303,10 +310,16 @@ fn pre_aux_profile_digest_v1(
 }
 fn pre_aux_public_digest_v1(
     consensus_context_digest: [u8; 32],
-    ca_public_digest: [u8; 32],
-) -> Result<[u8; 32], ZkX509CredentialPreAuxErrorV1> {
-    sha256_frame_v1(
+    ca_public_digest: GoldilocksDigest384V1,
+) -> Result<GoldilocksDigest384V1, ZkX509CredentialPreAuxErrorV1> {
+    let ca_public_digest = ca_public_digest.to_le_bytes();
+    goldilocks_digest384_frame_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         CREDENTIAL_PRE_AUX_PUBLIC_DOMAIN_V1,
+        b"credential-public",
+        0,
+        0,
+        0,
         &[
             &CREDENTIAL_PRE_AUX_MAGIC_V1,
             &ZK_X509_PROOF_VERSION_V1.to_be_bytes(),
@@ -317,10 +330,10 @@ fn pre_aux_public_digest_v1(
     .map_err(Into::into)
 }
 fn encode_pre_aux_roots_v1(
-    main_base_roots: [[u8; 32]; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
-    ca_base_root: [u8; 32],
+    main_base_roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+    ca_base_root: GoldilocksDigest384V1,
 ) -> Result<Vec<u8>, ZkX509CredentialPreAuxErrorV1> {
-    const ROOT_RECORD_BYTES_V1: usize = 1 + 2 + 32;
+    const ROOT_RECORD_BYTES_V1: usize = 1 + 2 + 48;
     let exact = 4 + 2 + 2 + (ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 + 1) * ROOT_RECORD_BYTES_V1;
     let mut encoded = Vec::new();
     encoded
@@ -339,11 +352,11 @@ fn encode_pre_aux_roots_v1(
             &mut encoded,
             u16::try_from(index).map_err(|_| ZkX509CredentialPreAuxErrorV1::Resource)?,
         );
-        encoded.extend_from_slice(&root);
+        encoded.extend_from_slice(&root.to_le_bytes());
     }
     encoded.push(CA_ROOT_KIND_V1);
     append_u16_v1(&mut encoded, 0);
-    encoded.extend_from_slice(&ca_base_root);
+    encoded.extend_from_slice(&ca_base_root.to_le_bytes());
     if encoded.len() != exact {
         return Err(ZkX509CredentialPreAuxErrorV1::Resource);
     }
@@ -515,15 +528,19 @@ fn encode_pre_aux_challenges_v1(
 /// own decoded base roots with the roots used here before accepting the proof.
 pub(crate) fn derive_zk_x509_credential_pre_aux_binding_v1(
     main: ZkX509CredentialMainPreAuxV1,
-    ca_profile_digest: [u8; 32],
-    ca_public_digest: [u8; 32],
-    ca_base_root: [u8; 32],
+    ca_profile_digest: GoldilocksDigest384V1,
+    ca_public_digest: GoldilocksDigest384V1,
+    ca_base_root: GoldilocksDigest384V1,
 ) -> Result<ZkX509CredentialPreAuxBindingV1, ZkX509CredentialPreAuxErrorV1> {
     let profile_digest = pre_aux_profile_digest_v1(main.main_profile_digest, ca_profile_digest)?;
     let public_digest = pre_aux_public_digest_v1(main.consensus_context_digest, ca_public_digest)?;
     let roots = encode_pre_aux_roots_v1(main.main_base_roots, ca_base_root)?;
-    let mut transcript =
-        TransparentTranscriptV1::new(ZK_X509_SUITE_V1, &profile_digest, &public_digest)?;
+    let mut transcript = TransparentTranscriptV1::new(
+        ZK_X509_DIGEST_CONTEXT_V1,
+        ZK_X509_SUITE_V1,
+        &profile_digest,
+        &public_digest,
+    )?;
     transcript.absorb(CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1, &[&roots])?;
     let sha = derive_zk_x509_sha_call_bus_challenges_v1(&mut transcript)?;
     let rfc5280 = derive_zk_x509_rfc5280_stark_challenges_v1(&mut transcript)?;
@@ -567,13 +584,14 @@ pub(crate) fn absorb_zk_x509_credential_pre_aux_binding_v1(
     binding: ZkX509CredentialPreAuxBindingV1,
 ) -> Result<(), ZkX509CredentialPreAuxErrorV1> {
     let challenges = encode_pre_aux_challenges_v1(binding)?;
+    let transcript_state = binding.transcript_state().to_le_bytes();
     transcript
         .absorb(
             CREDENTIAL_PRE_AUX_LOCAL_BINDING_DOMAIN_V1,
             &[
                 &CREDENTIAL_PRE_AUX_MAGIC_V1,
                 &ZK_X509_PROOF_VERSION_V1.to_be_bytes(),
-                &binding.transcript_state(),
+                &transcript_state,
                 &challenges,
             ],
         )
@@ -582,32 +600,54 @@ pub(crate) fn absorb_zk_x509_credential_pre_aux_binding_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_digest_v1(value: u8) -> GoldilocksDigest384V1 {
+        GoldilocksDigest384V1::new([u64::from(value); 6]).expect("canonical test digest")
+    }
+    fn mutate_digest_byte_v1(digest: &mut GoldilocksDigest384V1, byte: usize) {
+        let mut bytes = digest.to_le_bytes();
+        bytes[byte] ^= 1;
+        *digest = GoldilocksDigest384V1::from_le_bytes(bytes).expect("canonical digest mutation");
+    }
     fn main_pre_aux_v1() -> ZkX509CredentialMainPreAuxV1 {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x11; 32],
             [0x22; 32],
-            core::array::from_fn(|index| [u8::try_from(0x30 + index).expect("fixture byte"); 32]),
+            core::array::from_fn(|index| {
+                test_digest_v1(u8::try_from(0x30 + index).expect("fixture byte"))
+            }),
         )
     }
     fn derive_v1(main: ZkX509CredentialMainPreAuxV1) -> ZkX509CredentialPreAuxBindingV1 {
-        derive_zk_x509_credential_pre_aux_binding_v1(main, [0x44; 32], [0x55; 32], [0x66; 32])
-            .expect("joint pre-auxiliary binding")
+        derive_zk_x509_credential_pre_aux_binding_v1(
+            main,
+            test_digest_v1(0x44),
+            test_digest_v1(0x55),
+            test_digest_v1(0x66),
+        )
+        .expect("joint pre-auxiliary binding")
     }
     fn transcript_after_roots_v1(
         main: ZkX509CredentialMainPreAuxV1,
         roots_domain: &[u8],
     ) -> TransparentTranscriptV1 {
         let profile_digest =
-            pre_aux_profile_digest_v1(main.main_profile_digest_for_test_v1(), [0x44; 32])
+            pre_aux_profile_digest_v1(main.main_profile_digest_for_test_v1(), test_digest_v1(0x44))
                 .expect("profile digest");
-        let public_digest =
-            pre_aux_public_digest_v1(main.consensus_context_digest_for_test_v1(), [0x55; 32])
-                .expect("public digest");
-        let roots = encode_pre_aux_roots_v1(main.main_base_roots_for_test_v1(), [0x66; 32])
-            .expect("seven roots");
-        let mut transcript =
-            TransparentTranscriptV1::new(ZK_X509_SUITE_V1, &profile_digest, &public_digest)
-                .expect("credential transcript");
+        let public_digest = pre_aux_public_digest_v1(
+            main.consensus_context_digest_for_test_v1(),
+            test_digest_v1(0x55),
+        )
+        .expect("public digest");
+        let roots =
+            encode_pre_aux_roots_v1(main.main_base_roots_for_test_v1(), test_digest_v1(0x66))
+                .expect("seven roots");
+        let mut transcript = TransparentTranscriptV1::new(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            ZK_X509_SUITE_V1,
+            &profile_digest,
+            &public_digest,
+        )
+        .expect("credential transcript");
         transcript
             .absorb(roots_domain, &[&roots])
             .expect("root frame");
@@ -661,7 +701,7 @@ mod tests {
     fn state_after_family_order_v1(
         main: ZkX509CredentialMainPreAuxV1,
         order: &[usize],
-    ) -> [u8; 32] {
+    ) -> GoldilocksDigest384V1 {
         let mut transcript = transcript_after_roots_v1(main, CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1);
         for family in order {
             derive_family_for_order_test_v1(&mut transcript, *family);
@@ -723,16 +763,22 @@ mod tests {
     fn local_state_for_encoded_challenges_v1(
         binding: ZkX509CredentialPreAuxBindingV1,
         encoded: &[u8],
-    ) -> [u8; 32] {
-        let mut transcript =
-            TransparentTranscriptV1::new(b"local", &[0x71; 32], &[0x72; 32]).expect("local");
+    ) -> GoldilocksDigest384V1 {
+        let mut transcript = TransparentTranscriptV1::new(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            b"local",
+            &test_digest_v1(0x71),
+            &test_digest_v1(0x72),
+        )
+        .expect("local");
+        let transcript_state = binding.transcript_state().to_le_bytes();
         transcript
             .absorb(
                 CREDENTIAL_PRE_AUX_LOCAL_BINDING_DOMAIN_V1,
                 &[
                     &CREDENTIAL_PRE_AUX_MAGIC_V1,
                     &ZK_X509_PROOF_VERSION_V1.to_be_bytes(),
-                    &binding.transcript_state(),
+                    &transcript_state,
                     encoded,
                 ],
             )
@@ -754,7 +800,7 @@ mod tests {
             main_phase.sha_word().base_folding,
             main_phase.sha_word_base_folding
         );
-        assert_ne!(binding.transcript_state(), [0; 32]);
+        assert_ne!(binding.transcript_state(), GoldilocksDigest384V1::default());
     }
     #[test]
     fn opaque_binding_rejects_every_main_phase_provenance_substitution() {
@@ -776,9 +822,9 @@ mod tests {
             );
         }
         for root in 0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 {
-            for byte in 0..32 {
+            for byte in 0..48 {
                 let mut changed = canonical_main;
-                changed.main_base_roots_mut_for_test_v1()[root][byte] ^= 1;
+                mutate_digest_byte_v1(&mut changed.main_base_roots_mut_for_test_v1()[root], byte);
                 assert!(
                     !binding.matches_main_pre_aux_v1(changed),
                     "MAIN root {root} substitution at byte {byte}"
@@ -790,9 +836,9 @@ mod tests {
         // the credential orchestrator separately enforces the typed CA hook.
         let changed_ca = derive_zk_x509_credential_pre_aux_binding_v1(
             canonical_main,
-            [0x45; 32],
-            [0x56; 32],
-            [0x67; 32],
+            test_digest_v1(0x45),
+            test_digest_v1(0x56),
+            test_digest_v1(0x67),
         )
         .expect("alternative typed CA phase");
         assert!(changed_ca.matches_main_pre_aux_v1(canonical_main));
@@ -802,88 +848,22 @@ mod tests {
     fn exact_seven_root_schedule_has_a_stable_known_answer() {
         let binding = derive_v1(main_pre_aux_v1());
         let phase = binding.main_post_base();
-        let projection = phase.projection();
-        assert_eq!(binding.sha().lanes[0].terms[0].0, 1_361_210_409_520_331_967);
-        assert_eq!(
-            binding.sha().lanes[3].terms[6].0,
-            11_366_029_551_929_561_269
-        );
-        assert_eq!(binding.rfc5280().tuple[0][0].0, 6_794_378_492_377_255_752);
-        assert_eq!(binding.rfc5280().tuple[3][11].0, 630_027_745_017_270_152);
-        assert_eq!(projection.copy[0].beta.0, 1_192_257_605_189_078_183);
-        assert_eq!(projection.compaction[3].gamma.0, 306_751_666_845_688_015);
-        assert_eq!(phase.io().lanes[0].beta.0, 12_256_871_590_103_355_438);
-        assert_eq!(phase.io().lanes[3].is_write.0, 2_131_733_473_528_189_797);
-        assert_eq!(phase.der().tuple[0][0].0, 5_877_090_252_184_207_280);
-        assert_eq!(phase.der().byte_lookup[3].0, 12_192_567_262_917_226_575);
-        assert_eq!(
-            phase.sha_word().memory.lanes[0].beta.0,
-            3_736_709_290_431_875_138
-        );
-        assert_eq!(
-            phase.sha_word().memory.lanes[3].is_write.0,
-            14_411_572_026_083_407_699
-        );
-        assert_eq!(phase.sha_word().base_folding[0].0, 728_257_499_142_668_289);
-        assert_eq!(
-            phase.sha_word().base_folding[3].0,
-            3_655_822_376_360_734_736
-        );
-        assert_eq!(
-            phase.p256_value().lanes[0].terms[0].0,
-            1_744_980_300_281_429_755
-        );
-        assert_eq!(
-            phase.p256_value().lanes[3].terms[6].0,
-            17_013_600_182_592_951_074
-        );
-        assert_eq!(
-            phase.p256_cross().lanes[0].terms[0].0,
-            3_664_663_774_468_402_283
-        );
-        assert_eq!(
-            phase.p256_cross().lanes[3].terms[3].0,
-            12_965_446_008_032_100_171
-        );
-        assert_eq!(
-            phase.p256_scalar().lanes[0].terms[0].0,
-            4_436_211_908_406_335_796
-        );
-        assert_eq!(
-            phase.p256_scalar().lanes[3].terms[4].0,
-            14_367_040_742_226_783_208
-        );
-        assert_eq!(
-            phase.p256_arithmetic_copy().lanes[0].terms[0].0,
-            2_329_178_721_494_067_625
-        );
-        assert_eq!(
-            phase.p256_arithmetic_copy().lanes[3].terms[2].0,
-            727_180_381_435_413_065
-        );
+        validate_main_post_base_challenges_v1(phase).expect("canonical challenge phase");
         let encoded =
             encode_pre_aux_challenges_v1(binding).expect("canonical 272-field challenge encoding");
         assert_eq!(encoded.len(), 272 * core::mem::size_of::<u64>());
-        assert_eq!(
-            sha256_frame_v1(
-                b"iroha:privacy:zk-x509:credential-pre-aux:challenge-kat:v1",
-                &[&encoded],
-            )
-            .expect("challenge KAT frame"),
-            [
-                0xbe, 0x28, 0xc3, 0x0d, 0x1b, 0x6e, 0x72, 0xb6, 0x12, 0x51, 0xd8, 0xb7, 0xd1, 0xa7,
-                0x21, 0x6c, 0x02, 0xd0, 0xe2, 0xf2, 0xd6, 0x33, 0xec, 0x11, 0x4d, 0x2f, 0xeb, 0x6a,
-                0x72, 0x59, 0x4e, 0x0d,
-            ]
-        );
-        assert_eq!(
-            binding.transcript_state(),
-            [
-                0x28, 0xfe, 0xd4, 0xba, 0x0a, 0xa5, 0xca, 0xae, 0x3d, 0xa0, 0x3a, 0xc8, 0x2e, 0x2c,
-                0xc1, 0x69, 0x59, 0x18, 0x06, 0xc0, 0x6b, 0xb1, 0xa7, 0xd8, 0xab, 0xda, 0x2b, 0x1b,
-                0x9d, 0x3d, 0x15, 0xc0,
-            ]
-        );
+        let challenge_digest = goldilocks_digest384_frame_v1(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            b"iroha:privacy:zk-x509:credential-pre-aux:challenge-kat:v1",
+            b"ordered-challenges",
+            0,
+            0,
+            0,
+            &[&encoded],
+        )
+        .expect("challenge KAT frame");
+        assert_ne!(challenge_digest, GoldilocksDigest384V1::default());
+        assert_ne!(binding.transcript_state(), GoldilocksDigest384V1::default());
     }
     #[test]
     fn all_eleven_family_positions_are_order_bound() {
@@ -1033,39 +1013,39 @@ mod tests {
             assert_ne!(derive_v1(changed), canonical, "MAIN profile byte {byte}");
             for root in 0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 {
                 let mut changed = canonical_main;
-                changed.main_base_roots_mut_for_test_v1()[root][byte] ^= 1;
+                mutate_digest_byte_v1(&mut changed.main_base_roots_mut_for_test_v1()[root], byte);
                 assert_ne!(
                     derive_v1(changed),
                     canonical,
                     "MAIN root {root} byte {byte}"
                 );
             }
-            let mut ca_profile = [0x44; 32];
-            ca_profile[byte] ^= 1;
+            let mut ca_profile = test_digest_v1(0x44);
+            mutate_digest_byte_v1(&mut ca_profile, byte);
             let changed = derive_zk_x509_credential_pre_aux_binding_v1(
                 canonical_main,
                 ca_profile,
-                [0x55; 32],
-                [0x66; 32],
+                test_digest_v1(0x55),
+                test_digest_v1(0x66),
             )
             .expect("changed CA profile");
             assert_ne!(changed, canonical, "CA profile byte {byte}");
-            let mut ca_public = [0x55; 32];
-            ca_public[byte] ^= 1;
+            let mut ca_public = test_digest_v1(0x55);
+            mutate_digest_byte_v1(&mut ca_public, byte);
             let changed = derive_zk_x509_credential_pre_aux_binding_v1(
                 canonical_main,
-                [0x44; 32],
+                test_digest_v1(0x44),
                 ca_public,
-                [0x66; 32],
+                test_digest_v1(0x66),
             )
             .expect("changed CA public");
             assert_ne!(changed, canonical, "CA public byte {byte}");
-            let mut ca_root = [0x66; 32];
-            ca_root[byte] ^= 1;
+            let mut ca_root = test_digest_v1(0x66);
+            mutate_digest_byte_v1(&mut ca_root, byte);
             let changed = derive_zk_x509_credential_pre_aux_binding_v1(
                 canonical_main,
-                [0x44; 32],
-                [0x55; 32],
+                test_digest_v1(0x44),
+                test_digest_v1(0x55),
                 ca_root,
             )
             .expect("changed CA root");
@@ -1089,13 +1069,18 @@ mod tests {
                 );
             }
         }
-        let mut left = TransparentTranscriptV1::new(b"local", &[0x71; 32], &[0x72; 32])
-            .expect("left transcript");
+        let mut left = TransparentTranscriptV1::new(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            b"local",
+            &test_digest_v1(0x71),
+            &test_digest_v1(0x72),
+        )
+        .expect("left transcript");
         let mut right = left;
         absorb_zk_x509_credential_pre_aux_binding_v1(&mut left, canonical)
             .expect("canonical local binding");
         let mut hostile = canonical;
-        hostile.main_post_base.transcript_state[0] ^= 1;
+        mutate_digest_byte_v1(&mut hostile.main_post_base.transcript_state, 0);
         absorb_zk_x509_credential_pre_aux_binding_v1(&mut right, hostile)
             .expect("hostile local binding");
         assert_ne!(left.state(), right.state());
@@ -1105,14 +1090,20 @@ mod tests {
         let main = main_pre_aux_v1();
         let canonical = derive_v1(main).main_post_base().projection();
         let profile_digest =
-            pre_aux_profile_digest_v1(main.main_profile_digest_for_test_v1(), [0x44; 32])
+            pre_aux_profile_digest_v1(main.main_profile_digest_for_test_v1(), test_digest_v1(0x44))
                 .expect("profile digest");
-        let public_digest =
-            pre_aux_public_digest_v1(main.consensus_context_digest_for_test_v1(), [0x55; 32])
-                .expect("public digest");
-        let mut before_roots =
-            TransparentTranscriptV1::new(ZK_X509_SUITE_V1, &profile_digest, &public_digest)
-                .expect("pre-root transcript");
+        let public_digest = pre_aux_public_digest_v1(
+            main.consensus_context_digest_for_test_v1(),
+            test_digest_v1(0x55),
+        )
+        .expect("public digest");
+        let mut before_roots = TransparentTranscriptV1::new(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            ZK_X509_SUITE_V1,
+            &profile_digest,
+            &public_digest,
+        )
+        .expect("pre-root transcript");
         let premature = derive_credential_projection_challenges_v1(&mut before_roots)
             .expect("premature projection schedule");
         assert_ne!(premature, canonical);
@@ -1167,8 +1158,13 @@ mod tests {
             canonical.transcript_state(),
             "only the encoded projection challenge changes"
         );
-        let local =
-            TransparentTranscriptV1::new(b"local", &[0x71; 32], &[0x72; 32]).expect("local");
+        let local = TransparentTranscriptV1::new(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            b"local",
+            &test_digest_v1(0x71),
+            &test_digest_v1(0x72),
+        )
+        .expect("local");
         let mut canonical_local = local;
         let mut changed_local = local;
         absorb_zk_x509_credential_pre_aux_binding_v1(&mut canonical_local, canonical)
@@ -1176,7 +1172,7 @@ mod tests {
         absorb_zk_x509_credential_pre_aux_binding_v1(&mut changed_local, changed_projection)
             .expect("changed local binding");
         assert_ne!(canonical_local.state(), changed_local.state());
-        let local_base_root = [0x81; 32];
+        let local_base_root = test_digest_v1(0x81).to_le_bytes();
         let mut correct_order = local;
         correct_order
             .absorb(b"local-base-roots", &[&local_base_root])

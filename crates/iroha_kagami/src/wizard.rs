@@ -25,7 +25,7 @@ const WIZARD_PROFILE_LABEL: &str = "Sora Nexus observer";
 const NEXUS_CHAIN_DISCRIMINANT: i64 = 753;
 const NEXUS_CONFIG_TEMPLATE: &str = include_str!("../../../configs/soranexus/nexus/config.toml");
 const NEXUS_GENESIS_TEMPLATE: &[u8] =
-    include_bytes!("../../../configs/soranexus/nexus/genesis.json");
+    include_bytes!("../../../configs/soranexus/nexus/genesis.template.json");
 /// CLI entrypoint for the setup wizard.
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
@@ -179,7 +179,7 @@ impl<T: Write> RunArgs<T> for Args {
         let shell_output_dir = crate::shell::absolute_quote_path(&output_dir)
             .wrap_err("validate wizard output path for shell handoff command")?;
         let config_path = output_dir.join("config.toml");
-        let genesis_path = output_dir.join("genesis.json");
+        let genesis_path = output_dir.join("genesis.template.json");
         crate::secure_fs::write_private_file_atomic(&config_path, config_payload.as_bytes())
             .wrap_err_with(|| format!("failed to write config to {}", config_path.display()))?;
         crate::secure_fs::write_private_file_atomic(&genesis_path, genesis_payload.as_bytes())
@@ -556,7 +556,7 @@ fn write_wizard_readme(
             "2. Obtain its canonical checked NetworkId, derived from the exact signed genesis hash, as `genesis.expected_hash`.\n",
             "3. Verify both artifacts through the network's authenticated distribution channel.\n\n",
             "4. Confirm `trusted_peers` and `trusted_peers_pop` are the full operator-authenticated validator roster encoded by the signed genesis; the generated local peer starts as an observer.\n\n",
-            "`genesis.json` is a reference manifest and must never be used as `genesis.file`.\n\n",
+            "`genesis.template.json` is an incomplete source reference and must never be used as `genesis.file` or `genesis.manifest_json`.\n\n",
             "## Start after provisioning\n\n",
             "```bash\n",
             "{start_command}\n",
@@ -654,9 +654,9 @@ fn apply_overrides(
     );
     crate::secret_toml::remove(&mut streaming, "identity_private_key_file");
     set_table(config, "streaming", streaming);
-    // `iroha3d --sora` otherwise enables embedded storage. Observer onboarding does not
-    // provision the governed gateway-compliance controller required to operate storage safely,
-    // so make the operator-authored false explicit and let CLI profile resolution preserve it.
+    // Observer onboarding does not provision the governed gateway-compliance controller or
+    // runtime providers required for an embedded storage-provider role, so record that posture
+    // explicitly in the generated operator configuration.
     let mut storage = table(config, "sorafs.storage");
     crate::secret_toml::insert(&mut storage, "enabled".into(), TomlValue::Boolean(false));
     set_table(config, "sorafs.storage", storage);
@@ -1479,7 +1479,7 @@ mod tests {
             ProfileDefaults::nexus().chain,
             checked_wizard_bls_keypair().public_key(),
             Path::new("config.toml"),
-            Path::new("genesis.json"),
+            Path::new("genesis.template.json"),
             "iroha3d --sora --config config.toml",
         )
         .expect("write wizard handoff");
@@ -1801,11 +1801,7 @@ mod tests {
             );
             let mut actual = actual::Root::from_toml_source(TomlSource::inline(root.clone()))
                 .unwrap_or_else(|error| panic!("Nexus wizard config admission: {error:?}"));
-            let configured_storage_enabled = actual.torii.sorafs_storage.enabled;
             actual.apply_sora_profile();
-            // Mirror `iroha3d` CLI resolution: an explicit authored value survives profile
-            // defaults. The raw assertion above proves the wizard emitted that explicit value.
-            actual.torii.sorafs_storage.enabled = configured_storage_enabled;
             assert!(!actual.torii.sorafs_storage.enabled);
         }
     }
@@ -1900,7 +1896,7 @@ mod tests {
             Some(EXPECTED_TAIRA_CHAIN_DISCRIMINANT),
             "public Taira config.toml must keep the shipped address discriminant"
         );
-        let genesis_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let genesis_path = repo_root.join("configs/soranexus/taira/genesis.template.json");
         let genesis_text = fs::read_to_string(&genesis_path)
             .unwrap_or_else(|err| panic!("read {}: {err}", genesis_path.display()));
         let genesis: JsonValue = json::from_str(&genesis_text)
@@ -1908,7 +1904,7 @@ mod tests {
         assert_eq!(
             genesis.get("chain").and_then(JsonValue::as_str),
             Some(EXPECTED_TAIRA_CHAIN_ID),
-            "public Taira genesis.json must match the shipped live chain id"
+            "public Taira genesis source template must match the shipped live chain id"
         );
         assert!(
             config_text.contains("testu"),
@@ -1920,11 +1916,11 @@ mod tests {
         );
         assert!(
             genesis_text.contains("testu"),
-            "public Taira genesis.json must render testnet i105 literals"
+            "public Taira genesis source template must render testnet i105 literals"
         );
         assert!(
             !genesis_text.contains("sorau"),
-            "public Taira genesis.json must not leak mainnet i105 literals"
+            "public Taira genesis source template must not leak mainnet i105 literals"
         );
         let first_tx_instructions = genesis
             .get("transactions")
@@ -1932,7 +1928,7 @@ mod tests {
             .and_then(|items| items.first())
             .and_then(|tx| tx.get("instructions"))
             .and_then(JsonValue::as_array)
-            .expect("public Taira genesis.json must include bootstrap instructions");
+            .expect("public Taira genesis source template must include bootstrap instructions");
         let xor_asset_definition_id = first_tx_instructions
             .iter()
             .find(|instruction| {
@@ -1945,7 +1941,7 @@ mod tests {
             .and_then(|instruction| instruction.get("SetAssetDefinitionAlias"))
             .and_then(|binding| binding.get("asset_definition_id"))
             .and_then(JsonValue::as_str)
-            .expect("public Taira genesis.json must bind xor#universal");
+            .expect("public Taira genesis source template must bind xor#universal");
         let xor_universal = first_tx_instructions
             .iter()
             .find(|instruction| {
@@ -1956,7 +1952,7 @@ mod tests {
                     .and_then(JsonValue::as_str)
                     == Some(xor_asset_definition_id)
             })
-            .expect("public Taira genesis.json must register the canonical xor asset");
+            .expect("public Taira genesis source template must register the canonical xor asset");
         let confidential_policy = xor_universal
             .get("Register")
             .and_then(|register| register.get("AssetDefinition"))

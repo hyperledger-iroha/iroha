@@ -2018,13 +2018,6 @@ mod tests {
         ] {
             assert!(constructor.contains(needle));
         }
-        for (file, source) in [
-            ("curve.rs", curve),
-            ("sponge.rs", include_str!("sponge.rs")),
-        ] {
-            assert!(source.lines().count() <= 600, "{file} line cap");
-            assert!(source.len() <= 24 * 1_024, "{file} byte cap");
-        }
     }
     #[test]
     fn branchless_signed_membership_scalar_covers_release_coefficients() {

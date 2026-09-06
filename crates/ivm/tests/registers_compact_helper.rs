@@ -18,7 +18,7 @@ fn registers_compact_helper_matches_syscall() {
     vm.set_register(11, out_ptr);
     vm.set_register(12, 16);
     vm.set_register(13, root_out);
-    let (proof_h, root_h) = vm.registers.merkle_compact(target, Some(16));
+    let (proof_h, root_h) = vm.registers.merkle_compact(target, Some(16)).unwrap();
     vm.run().unwrap();
     // Decode syscall output
     let mut hdr = [0u8; 1 + 4 + 4];
@@ -57,11 +57,11 @@ fn registers_compact_depth_cap_returns_partial_root() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(3, 0xDEADBEEFCAFEBABE);
     vm.set_register(target, 0xBADC0FFEE0DDFACE);
-    let (full_proof, full_root) = vm.registers.merkle_compact(target, None);
+    let (full_proof, full_root) = vm.registers.merkle_compact(target, None).unwrap();
     let leaf = register_leaf_digest(vm.register(target), false);
     let full_commitment = register_commitment(full_root.clone());
     assert!(full_proof.verify_sha256(&leaf, &full_commitment));
-    let (capped_proof, capped_root) = vm.registers.merkle_compact(target, Some(4));
+    let (capped_proof, capped_root) = vm.registers.merkle_compact(target, Some(4)).unwrap();
     assert_eq!(capped_proof.depth(), 4);
     let capped_full = capped_proof
         .clone()

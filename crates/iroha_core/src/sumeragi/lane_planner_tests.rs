@@ -135,8 +135,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let network_id = crate::sumeragi::synthetic_network_id("autonomous-reservation-slot-test");
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 7, &roster,
+            );
         wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("autonomous-reservation-slot-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 7,
@@ -147,6 +152,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("valid frozen quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"autonomous reservation nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -420,6 +427,36 @@ mod tests {
                 lane_id,
                 dataspace_id,
             })
+        );
+    }
+    #[test]
+    fn autonomous_reservation_retries_only_transient_planning_failures() {
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(33);
+        assert!(
+            AutonomousLaneReservationSlotPlanError::BlockedPredecessor {
+                lane_id,
+                dataspace_id,
+            }
+            .is_retryable_after_state_or_kura_progress()
+        );
+        assert!(
+            AutonomousLaneReservationSlotPlanError::PlanningSnapshotChanged
+                .is_retryable_after_state_or_kura_progress()
+        );
+        assert!(
+            !AutonomousLaneReservationSlotPlanError::ConflictingPredecessor {
+                lane_id,
+                dataspace_id,
+            }
+            .is_retryable_after_state_or_kura_progress()
+        );
+        assert!(
+            !AutonomousLaneReservationSlotPlanError::InactiveRoute {
+                lane_id,
+                dataspace_id,
+            }
+            .is_retryable_after_state_or_kura_progress()
         );
     }
     #[test]

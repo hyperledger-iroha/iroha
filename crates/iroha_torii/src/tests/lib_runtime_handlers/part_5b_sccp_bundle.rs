@@ -41,6 +41,7 @@ fn app_with_indexed_sccp_message_for_test(
         context,
         iroha_sccp::canonical_sccp_payload_bytes(&payload)
             .expect("valid SCCP indexed-message fixture payload encodes"),
+        iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
     );
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
@@ -114,11 +115,33 @@ fn app_with_indexed_sccp_message_for_test(
             power,
         })
         .collect::<Vec<_>>();
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
+    };
+    let mint_roster = KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: *app.state.network_id_ref(),
+        epoch: 0,
+        validators: roster
+            .iter()
+            .zip(1..=4_u8)
+            .map(|(validator, index)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [index; 32],
+                ep_proof_public_key: [index + 16; 32],
+            })
+            .collect(),
+    };
     let context = HeightContext {
         network_id: *app.state.network_id_ref(),
         protocol_version: PROTOCOL_VERSION,
         height: HEIGHT,
         epoch: 0,
+        kagemusha_mint_finality_epoch_id: mint_roster
+            .finality_epoch_id()
+            .expect("valid SCCP mint-finality roster"),
+        kagemusha_mint_finality_epoch_roster: mint_roster,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
@@ -128,16 +151,12 @@ fn app_with_indexed_sccp_message_for_test(
         roster,
         nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
-        },
+        da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
         leader_seed: [0x42; 32],
     };
+    context
+        .validate()
+        .expect("valid SCCP finality height context");
     let subject = BlockSubject {
         parent_block_hash: block.header().prev_block_hash(),
         block_hash,
@@ -155,7 +174,7 @@ fn app_with_indexed_sccp_message_for_test(
         proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
-        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"Torii SCCP exact-v2 parent state"),
             Hash::new(b"Torii SCCP exact-v2 post state"),
             Hash::new(b"Torii SCCP exact-v2 ordinary writes"),

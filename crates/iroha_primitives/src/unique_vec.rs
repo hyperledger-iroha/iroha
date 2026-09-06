@@ -31,6 +31,14 @@ macro_rules! unique_vec {
 #[repr(transparent)]
 #[schema(transparent)]
 pub struct UniqueVec<T>(Vec<T>);
+impl<T: norito::NoritoSchema> norito::NoritoSchema for UniqueVec<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_primitives::unique_vec::UniqueVec",
+            &[T::nominal_name()],
+        )
+    }
+}
 impl<T> UniqueVec<T> {
     /// Create new [`UniqueVec`].
     #[must_use]

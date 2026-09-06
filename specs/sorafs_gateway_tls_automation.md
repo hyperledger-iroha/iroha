@@ -31,8 +31,9 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 
 ## Quick Start Checklist
 
-1. Stage ACME credentials only in the runtime adapter's sealed KMS/Vault
-   namespace. Do not mirror account credentials or private keys to the bastion
+1. Stage ACME credentials only in the runtime adapter's sealed credential
+   custody namespace. The deployment-owned provider must satisfy the same
+   qualification contract. Do not mirror account credentials or private keys to the bastion
    host or readiness artifacts.
 2. Fill in `sorafs.gateway.acme` configuration with DNS-01 and
    TLS-ALPN-01 challenge preferences, enable ECH if supported, and set renewal
@@ -55,7 +56,7 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 | Requirement | Why it matters |
 |-------------|----------------|
 | Audited runtime ACME client supplied by the deployment embedding | Required before `acme.enabled = true`; the repository has no built-in production client. |
-| ACME account credentials stored in the runtime client's sealed KMS/Vault namespace | Credentials are owned by the injected client and must not enter config, logs, or repository artifacts. |
+| ACME account credentials stored in the runtime client's qualified sealed custody namespace | Credentials are owned by the injected client and must not enter config, logs, or repository artifacts. |
 | Offline copy of the latest `sorafs.gateway` config bundle | Lets operators patch `ech_enabled`, host lists, or retry timing without waiting on config-management pipelines. |
 | Access to governance manifests (`manifest_signatures.json`, GAR envelopes) | Needed when publishing updated certificate fingerprints or rotating canonical host mappings. |
 | Repository checkout with Cargo/xtask access on the bastion host | Provides the self-cert wrapper, `sorafs-gateway-attest`, and `sorafs-gateway-probe` checks used in verification steps. |
@@ -64,9 +65,9 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 ### Secrets & File Layout
 
 - Keep ACME account material and certificate private keys inside the runtime
-  adapter's approved KMS/Vault boundary. Do not export them to a repository
+  adapter's approved sealed custody boundary. Do not export them to a repository
   checkout, bastion workspace, readiness bundle, or process log.
-- Maintain recovery capability through the KMS/Vault backup and independently
+- Maintain recovery capability through the custody-provider backup and independently
   reviewed adapter procedure; a copied local certificate/key directory is not a
   recovery path.
 - The injected ACME client owns any durable provider state. Include only its
@@ -411,7 +412,7 @@ with Nexus governance:
 2. Repair the deployment's audited runtime adapter or invoke its independently
    controlled emergency issuance path. The adapter must validate the CA chain,
    SAN set, key binding, expiry, and optional ECH material, install the new
-   secret atomically inside its KMS/Vault boundary, and reload the serving edge.
+   secret atomically inside its qualified custody boundary, and reload the serving edge.
    Repository tooling neither issues nor installs production certificates.
 3. Confirm the controller records exactly one successful renewal for the
    replacement and that the adapter reports an atomic install/reload. A
@@ -465,7 +466,8 @@ Apply this playbook when private keys are exposed or the CA reports mis-issuance
 2. Withdraw the gateway immediately and revoke the certificate through the CA
    using the reviewed runtime adapter or its independently controlled emergency
    workflow. Do not archive a compromised private key as a fallback.
-3. Destroy the compromised key under the KMS/HSM erasure procedure, issue and
+3. Destroy the compromised key under the qualified provider's verified erasure
+   procedure, issue and
    atomically install a fresh CA-valid bundle through the reviewed adapter, then
    follow the validation steps from the rotation playbook.
 4. Publish updated GAR envelopes and `manifest_signatures.json` so downstream nodes adopt the new fingerprint.

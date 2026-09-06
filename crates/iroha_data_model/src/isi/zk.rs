@@ -55,9 +55,9 @@ isi! {
     pub struct RegisterZkAsset {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
-        /// Verifying key for Kagemusha redemption proofs.
+        /// Verifying key for confidential redemption proofs.
         pub vk_unshield: Option<crate::proof::VerifyingKeyId>,
-        /// Canonical Kagemusha top-up shield verifying key.
+        /// Canonical confidential shielding verifying key.
         pub vk_shield: Option<crate::proof::VerifyingKeyId>,
     }
 }
@@ -434,7 +434,7 @@ mod tests {
         )
     }
     fn backend() -> iroha_schema::Ident {
-        "halo2/ipa/poly-open".into()
+        "halo2/pasta/ivm-execution-v1".into()
     }
     fn verifying_key(name: &str) -> VerifyingKeyId {
         VerifyingKeyId::new(backend(), name)

@@ -5,7 +5,7 @@ use super::{
 };
 use thiserror::Error;
 /// Exact external privacy protocol label absorbed through the core public context values.
-pub const VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1: &[u8] = b"vega-existing-credential-zk-v0";
+pub const VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1: &[u8] = b"vega-existing-credential-zk-v1";
 /// Sole privacy-action index admitted by the first-release Vega profile.
 pub const VEGA_MDL_ACTION_INDEX_V1: u32 = 0;
 /// Exact transcript persona used by the pinned Microsoft implementation.

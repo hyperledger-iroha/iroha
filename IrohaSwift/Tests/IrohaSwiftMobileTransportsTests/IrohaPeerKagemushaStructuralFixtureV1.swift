@@ -6,23 +6,10 @@ func mobileKagemushaStructuralArchiveV1(
     payload: Data
 ) -> Data {
     precondition(!payload.isEmpty)
-    let schema: String
-    let alignment: Int
-    switch kind {
-    case .receiveRequest:
-        schema = KagemushaRecursiveSpend.recipientReceiveOfferWireName
-        alignment = 16
-    case .payment:
-        schema = KagemushaRecursiveSpend.peerPaymentWireNameV4
-        alignment = 16
-    case .acknowledgement:
-        schema = KagemushaRecursiveSpend.acknowledgementWireName
-        alignment = 8
-    }
     return noritoEncode(
-        typeName: schema,
+        typeName: kind.requiredKagemushaCanonicalSchema,
         payload: payload,
         flags: NoritoHeader.compactLen,
-        payloadAlignment: alignment
+        payloadAlignment: kind.requiredKagemushaPayloadAlignment
     )
 }

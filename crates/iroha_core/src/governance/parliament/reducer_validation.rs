@@ -34,6 +34,8 @@ impl ParliamentAttemptStateV1 {
             GovernanceAttemptStatusV1::Rejected => {
                 let index = body_index()?;
                 let body_role = self.required_bodies[index].body;
+                let proposal_redraw_budget_exhausted =
+                    self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1;
                 if let Some(current_body) = self.sealed_body_for_role(body_role) {
                     return if current_body.instance.status == BodyInstanceStatusV1::NoResult {
                         Ok(index)
@@ -47,7 +49,8 @@ impl ParliamentAttemptStateV1 {
                     .and_then(|id| self.elections.get(id))
                     .is_some_and(|election| {
                         election.attempt.status == BodyElectionAttemptStatusV1::NoRoster
-                            && election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                            && (election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                                || proposal_redraw_budget_exhausted)
                             && election.failure_kind.is_some()
                             && election.failure_height.is_some()
                     });
@@ -57,7 +60,8 @@ impl ParliamentAttemptStateV1 {
                     .and_then(|id| self.sortition_capacity_failures.get(id))
                     .is_some_and(|failure| {
                         failure.status == BodyElectionAttemptStatusV1::NoRoster
-                            && failure.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                            && (failure.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                                || proposal_redraw_budget_exhausted)
                     });
                 (exhausted_sortition_election || exhausted_sortition_capacity)
                     .then_some(index)
@@ -93,16 +97,20 @@ impl ParliamentAttemptStateV1 {
                 .as_bytes()
                 .iter()
                 .all(|byte| *byte == 0)
-            || self.policy_version == 0
             || root_is_zero(&self.effect_preimage_hash)
             || !expected_head_is_valid(self.expected_head)
             || !self.attempt.has_canonical_id()
         {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
         }
+        if self.policy_version != PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 {
+            return Err(ParliamentReducerErrorV1::UnsupportedPolicyVersion);
+        }
         if self.attempt.sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
             return Err(ParliamentReducerErrorV1::GovernanceAttemptRetryLimitExceeded);
         }
+        let proposal_redraw_budget_exhausted =
+            self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1;
         if self.sortition_pulse_delay_blocks == 0 {
             return Err(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule);
         }
@@ -135,7 +143,8 @@ impl ParliamentAttemptStateV1 {
         let active_exhausted_election = self.active_elections.values().any(|id| {
             self.elections.get(id).is_some_and(|election| {
                 election.attempt.status == BodyElectionAttemptStatusV1::NoRoster
-                    && election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                    && (election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                        || proposal_redraw_budget_exhausted)
             })
         });
         let active_exhausted_capacity =
@@ -144,7 +153,8 @@ impl ParliamentAttemptStateV1 {
                     .get(id)
                     .is_some_and(|failure| {
                         failure.status == BodyElectionAttemptStatusV1::NoRoster
-                            && failure.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                            && (failure.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                                || proposal_redraw_budget_exhausted)
                     })
             });
         if self.attempt.status == GovernanceAttemptStatusV1::Active
@@ -152,18 +162,13 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::SortitionRetryLimitExceeded);
         }
+        let mut unique_candidate_snapshots = BTreeSet::new();
         if self.candidate_snapshots.iter().any(|snapshot| {
-            snapshot.is_empty() || !snapshot.windows(2).all(|pair| pair[0] < pair[1])
-        }) || self
-            .candidate_snapshots
-            .iter()
-            .enumerate()
-            .any(|(index, snapshot)| {
-                self.candidate_snapshots[index + 1..]
-                    .iter()
-                    .any(|other| other == snapshot)
-            })
-        {
+            snapshot.is_empty()
+                || !candidate_snapshot_fits_resource_bounds_v1(snapshot)
+                || !snapshot.windows(2).all(|pair| pair[0] < pair[1])
+                || !unique_candidate_snapshots.insert(snapshot)
+        }) {
             return Err(ParliamentReducerErrorV1::InvalidCandidateSnapshot);
         }
 
@@ -195,7 +200,10 @@ impl ParliamentAttemptStateV1 {
                         failure.sequence,
                     )
                 || failure.sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1
-                || failure.candidate_snapshot.len() >= 2
+                || hidden_ballot_population_meets_anonymity_floor_v1(
+                    failure.candidate_snapshot.len(),
+                )
+                || !candidate_snapshot_fits_resource_bounds_v1(&failure.candidate_snapshot)
                 || !failure
                     .candidate_snapshot
                     .windows(2)
@@ -211,7 +219,7 @@ impl ParliamentAttemptStateV1 {
                 || failure.target_seats == 0
                 || failure.target_seats > MAX_PARLIAMENT_BODY_TARGET_SEATS_V1
                 || (requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
-                    && failure.target_seats < 2)
+                    && failure.target_seats < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
                 || failure
                     .request_height
                     .checked_add(self.sortition_pulse_delay_blocks)
@@ -314,10 +322,10 @@ impl ParliamentAttemptStateV1 {
             }
             let requirement = self.requirement_for_body(request.body)?;
             if requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot {
-                if request.target_seats < 2 {
+                if request.target_seats < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1 {
                     return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
                 }
-                if candidate_snapshot.len() < 2 {
+                if !hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len()) {
                     return Err(ParliamentReducerErrorV1::InvalidCandidateSnapshot);
                 }
             }
@@ -435,7 +443,7 @@ impl ParliamentAttemptStateV1 {
                         if roster.is_empty()
                             || (requirement.decision_mode
                                 == ParliamentDecisionModeV1::HiddenBindingBallot
-                                && roster.len() < 2)
+                                && !hidden_ballot_population_meets_anonymity_floor_v1(roster.len()))
                         {
                             return Err(ParliamentReducerErrorV1::InvalidRoster);
                         }
@@ -455,7 +463,8 @@ impl ParliamentAttemptStateV1 {
                         && invitation_window_is_valid
                         && requirement.decision_mode
                             == ParliamentDecisionModeV1::HiddenBindingBallot
-                        && accepted_roster_len == 1;
+                        && accepted_roster_len > 0
+                        && !hidden_ballot_population_meets_anonymity_floor_v1(accepted_roster_len);
                     let failure_is_valid = match (election.failure_kind, election.failure_height) {
                         (Some(ParliamentElectionFailureKindV1::PulseUnavailable), Some(height)) => {
                             pulse_missing_terminal && height > request.pulse_height
@@ -767,6 +776,16 @@ impl ParliamentAttemptStateV1 {
             }
         }
 
+        if self
+            .elections
+            .values()
+            .filter(|election| election.attempt.status == BodyElectionAttemptStatusV1::Sealed)
+            .count()
+            != self.bodies.len()
+        {
+            return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+        }
+
         let mut all_members_by_body = BTreeMap::<ParliamentBody, BTreeSet<AccountId>>::new();
         for (id, body) in &self.bodies {
             if *id != body.instance.id
@@ -819,6 +838,34 @@ impl ParliamentAttemptStateV1 {
                 .find(|required| required.body == body.instance.body)
                 .map(|required| required.decision_mode)
                 .ok_or(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline)?;
+            if matches!(
+                body.instance.status,
+                BodyInstanceStatusV1::AwaitingSortition
+                    | BodyInstanceStatusV1::AcceptingInvitations
+                    | BodyInstanceStatusV1::Superseded
+            ) {
+                return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                    ParliamentReducerEntityV1::BodyInstance,
+                ));
+            }
+            if decision_mode == ParliamentDecisionModeV1::PublicFinding
+                && matches!(
+                    body.instance.status,
+                    BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Vote)
+                        | BodyInstanceStatusV1::Balloting
+                )
+            {
+                return Err(ParliamentReducerErrorV1::DecisionModeMismatch);
+            }
+            let result_requires_binding = matches!(
+                body.instance.status,
+                BodyInstanceStatusV1::Approved
+                    | BodyInstanceStatusV1::Rejected
+                    | BodyInstanceStatusV1::NoQuorum
+            );
+            if self.body_bindings.contains_key(&body.instance.body) != result_requires_binding {
+                return Err(ParliamentReducerErrorV1::IncompleteCertificate);
+            }
             if body
                 .public_finding_endorsements
                 .iter()
@@ -1193,14 +1240,15 @@ impl ParliamentAttemptStateV1 {
                 }
             }
             if let Some(survivors) = ballot.survivors
-                && (survivors == 0
+                && (survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
                     || survivors > ballot.registered_voters.unwrap_or(0)
                     || survivors > ballot.max_corpus_entries)
             {
                 return Err(ParliamentReducerErrorV1::InvalidBallotCount);
             }
             if let Some(accepted) = ballot.accepted_ballots {
-                if accepted > ballot.registered_voters.unwrap_or(0)
+                if accepted < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+                    || accepted > ballot.registered_voters.unwrap_or(0)
                     || accepted > ballot.max_corpus_entries
                     || ballot.survivors != Some(accepted)
                 {
@@ -1212,10 +1260,20 @@ impl ParliamentAttemptStateV1 {
                 BallotAttemptStatusV1::NoResult | BallotAttemptStatusV1::Superseded
             );
             if terminal_failure {
+                if matches!(
+                    ballot.failure_kind,
+                    Some(
+                        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable
+                            | ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted
+                    )
+                ) && (ballot.attempt.status != BallotAttemptStatusV1::NoResult
+                    || self.attempt.status != GovernanceAttemptStatusV1::Rejected)
+                {
+                    return Err(ParliamentReducerErrorV1::BallotFailureKindMismatch);
+                }
                 if ballot.failure_kind
-                    == Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable)
-                    && (ballot.attempt.status != BallotAttemptStatusV1::NoResult
-                        || self.attempt.status != GovernanceAttemptStatusV1::Rejected)
+                    == Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)
+                    && !proposal_redraw_budget_exhausted
                 {
                     return Err(ParliamentReducerErrorV1::BallotFailureKindMismatch);
                 }
@@ -1276,12 +1334,17 @@ impl ParliamentAttemptStateV1 {
             {
                 return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
             }
-            let confirmation_capacity_failure = ballot.attempt.status
+            let terminal_confirmation_failure = ballot.attempt.status
                 == BallotAttemptStatusV1::NoResult
-                && ballot.failure_kind
-                    == Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable);
+                && matches!(
+                    ballot.failure_kind,
+                    Some(
+                        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable
+                            | ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted
+                    )
+                );
             if ballot.attempt.status != BallotAttemptStatusV1::Finalized
-                && !confirmation_capacity_failure
+                && !terminal_confirmation_failure
                 && (ballot.tally.is_some() || ballot.outcome.is_some())
             {
                 return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
@@ -1342,7 +1405,9 @@ impl ParliamentAttemptStateV1 {
                         || ballot.dropout_root.is_none()
                         || ballot.survivor_root.is_none()
                         || ballot.survivors.is_none()
-                        || ballot.survivors == Some(0)
+                        || ballot.survivors.is_none_or(|survivors| {
+                            survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+                        })
                         || ballot.no_recovery_root.is_none()
                         || ballot.corpus_root.is_some()
                         || ballot.accepted_ballots.is_some()
@@ -1422,10 +1487,17 @@ impl ParliamentAttemptStateV1 {
                     let result_height = body
                         .result_height
                         .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
-                    if tally
+                    let mut expected_outcome = tally
                         .decision()
-                        .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?
-                        != outcome
+                        .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
+                    if self.attempt.risk_tier == RiskTierV1::Emergency
+                        && body.instance.body == ParliamentBody::PolicyJury
+                        && expected_outcome == ParliamentAggregateOutcomeV1::Approved
+                        && tally.aye < parliament_quorum_seats_v1(tally.original_seats)
+                    {
+                        expected_outcome = ParliamentAggregateOutcomeV1::Rejected;
+                    }
+                    if expected_outcome != outcome
                         || body.result_root
                             != Some(parliament_ballot_result_root_v1(
                                 self.attempt.id,
@@ -1495,9 +1567,16 @@ impl ParliamentAttemptStateV1 {
                 .ok_or(ParliamentReducerErrorV1::RetrySequenceMismatch)?;
             if latest.attempt.status == BallotAttemptStatusV1::NoResult {
                 let retry_budget_exhausted = latest.attempt.sequence == latest.max_ballot_retries;
-                let objectively_terminal = latest.failure_kind
-                    == Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable);
-                if (retry_budget_exhausted || objectively_terminal)
+                let objectively_terminal = matches!(
+                    latest.failure_kind,
+                    Some(
+                        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable
+                            | ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted
+                    )
+                );
+                if (retry_budget_exhausted
+                    || objectively_terminal
+                    || proposal_redraw_budget_exhausted)
                     != (self.attempt.status == GovernanceAttemptStatusV1::Rejected)
                 {
                     return Err(ParliamentReducerErrorV1::RetrySequenceMismatch);
@@ -1515,6 +1594,86 @@ impl ParliamentAttemptStateV1 {
                 || ballot.attempt.status == BallotAttemptStatusV1::Superseded
             {
                 return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+            }
+        }
+        for (body_id, body) in &self.bodies {
+            let decision_mode = self.requirement_for_body(body.instance.body)?.decision_mode;
+            let active_ballot = self
+                .active_ballots
+                .get(body_id)
+                .and_then(|ballot_id| self.ballots.get(ballot_id));
+            match decision_mode {
+                ParliamentDecisionModeV1::PublicFinding => {
+                    if active_ballot.is_some() {
+                        return Err(ParliamentReducerErrorV1::DecisionModeMismatch);
+                    }
+                }
+                ParliamentDecisionModeV1::HiddenBindingBallot => match body.instance.status {
+                    BodyInstanceStatusV1::RosterSealed | BodyInstanceStatusV1::Deliberating(_) => {
+                        if active_ballot.is_some() || body.ballot_binding.is_some() {
+                            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                                ParliamentReducerEntityV1::BodyInstance,
+                            ));
+                        }
+                    }
+                    BodyInstanceStatusV1::Balloting => {
+                        if active_ballot.is_none_or(|ballot| {
+                            !matches!(
+                                ballot.attempt.status,
+                                BallotAttemptStatusV1::Registration
+                                    | BallotAttemptStatusV1::SurvivorFreeze
+                                    | BallotAttemptStatusV1::TimedCommitment
+                                    | BallotAttemptStatusV1::AwaitingRelease
+                                    | BallotAttemptStatusV1::Opening
+                            )
+                        }) || body.ballot_binding.is_some()
+                        {
+                            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                                ParliamentReducerEntityV1::BodyInstance,
+                            ));
+                        }
+                    }
+                    BodyInstanceStatusV1::Approved
+                    | BodyInstanceStatusV1::Rejected
+                    | BodyInstanceStatusV1::NoQuorum => {
+                        let expected_outcome = match body.instance.status {
+                            BodyInstanceStatusV1::Approved => {
+                                ParliamentAggregateOutcomeV1::Approved
+                            }
+                            BodyInstanceStatusV1::Rejected => {
+                                ParliamentAggregateOutcomeV1::Rejected
+                            }
+                            BodyInstanceStatusV1::NoQuorum => {
+                                ParliamentAggregateOutcomeV1::NoQuorum
+                            }
+                            _ => unreachable!("matched completed hidden-body status"),
+                        };
+                        if active_ballot.is_none_or(|ballot| {
+                            ballot.attempt.status != BallotAttemptStatusV1::Finalized
+                                || ballot.outcome != Some(expected_outcome)
+                        }) || body.ballot_binding.is_none()
+                        {
+                            return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
+                        }
+                    }
+                    BodyInstanceStatusV1::NoResult => {
+                        if active_ballot.is_none_or(|ballot| {
+                            ballot.attempt.status != BallotAttemptStatusV1::NoResult
+                        }) || body.ballot_binding.is_some()
+                        {
+                            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                                ParliamentReducerEntityV1::BodyInstance,
+                            ));
+                        }
+                    }
+                    BodyInstanceStatusV1::AwaitingSortition
+                    | BodyInstanceStatusV1::AcceptingInvitations
+                    | BodyInstanceStatusV1::Superseded => {
+                        return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                            ParliamentReducerEntityV1::BodyInstance,
+                        ));
+                    }
+                },
             }
         }
         for (tle_session_id, ballot_id) in &self.used_tle_sessions {
@@ -1702,9 +1861,12 @@ impl ParliamentAttemptStateV1 {
                 }
                 GovernanceAttemptStatusV1::Superseded => {
                     if self.terminal_height != Some(certificate.enact_at_height)
-                        || self
-                            .superseding_head
-                            .is_none_or(|head| head == certificate.expected_head)
+                        || self.superseding_head.is_none_or(|head| {
+                            head == certificate.expected_head
+                                || !expected_head_is_valid(head)
+                                || expected_head_subject(head)
+                                    != expected_head_subject(certificate.expected_head)
+                        })
                         || self.execution_failure_root.is_some()
                     {
                         return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);

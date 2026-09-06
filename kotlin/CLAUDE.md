@@ -29,30 +29,46 @@ mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 
 ## Architecture
 
-Two-module Kotlin SDK (`iroha_kotlin_sdk`) for the Hyperledger Iroha SDK.
+Three published SDK modules and a separate JVM `tools` application (`iroha_kotlin_sdk`) serve Kotlin and Java consumers.
 
 ### Module: `core-jvm` (JAR, pure Kotlin/JVM)
-All protocol logic — no Android dependencies:
+All protocol logic — no Android dependencies. HTTP/SSE uses the Kotlin-owned
+OkHttp adapter, with scoped client lifetimes and borrowed injected backends.
+WebSockets use the injected Kotlin-owned Netty engine with explicit NIO/JDK TLS
+resources, bounded complete messages and one upgrade attempt. No engine is
+selected through platform discovery or a process-global client:
 - **`sdk.norito`** — Norito binary codec (TypeAdapter, NoritoCodec, NoritoEncoder/Decoder, compression)
 - **`sdk.core.model`** — transaction models, 84 instruction types, InstructionBox, Executable (sealed class)
 - **`sdk.crypto`** — Blake2b/2s/3, Ed25519, IrohaHash, and Argon2id key export (JCA + direct BouncyCastle dependency)
+- **`sdk.gpu`** — one bounded batch CUDA API for both JVM languages, with explicit backend injection/native loading; device qualification runs through `cudaHardwareTest`, separately from host tests
+- **`sdk.crypto.keystore.attestation`**, **`KeyAttestation`** — Android-free evidence records, certificate verification and governed revocation policy shared with Android clients and offline JVM tooling
 - **`sdk.address`** — account/asset address encoding (IH58, Bech32M)
 - **`sdk.tx`** — transaction building, signing, offline envelopes, norito adapters
 - **`sdk.client`** — Torii HTTP/WS/SSE client, JSON, transport, queue
-- **`sdk.offline`** — ABI-21/V4 typed Kagemusha lifecycle, exact scaled
-  amounts, peer transports, exact eight-role artifact streaming with inline
-  circuit parameters, and fail-closed exact-release readiness projection
-  (independent backend/lineage facts, with `ready` true only for an empty
-  blocker set)
+- **`sdk.offline`** — aggregate-balance KAGEMUSHA V1 models, canonical
+  `kgm1:` peer transports, and hardware lifecycle binding contracts
 - **`sdk.connect`** — connect protocol (BouncyCastle)
 - **`sdk.telemetry`** — telemetry sink, options, providers
 - **`sdk.multisig`**, **`sdk.subscriptions`**, **`sdk.sorafs`**, **`sdk.nexus`** — feature packages
 
 ### Module: `client-android` (AAR, depends on `core-jvm`)
 Android-specific additions:
-- **`sdk.crypto.keystore`** — Android Keystore, attestation (AttestationVerifier, AttestationResult)
+- **`sdk.crypto.keystore`** — Android Keystore provisioning, provider dispatch and platform integration; pure evidence verification belongs to `core-jvm`
 - **`sdk.telemetry`** — AndroidDeviceProfileProvider, AndroidNetworkContextProvider
 - **`sdk.IrohaKeyManager`** — key provider orchestrator
+
+### Module: `kagemusha-wallet-android` (AAR)
+KAGEMUSHA wallet orchestration and Android/JNI device lifecycle integration live here.
+Keep pure wire and cryptographic contracts in `core-jvm` and general Android client integration
+in `client-android`. Device qualification remains separate from JVM/native unit tests.
+
+### Module: `tools` (JVM application)
+
+`iroha-attestation` verifies collected evidence through the `core-jvm` verifier.
+It owns command parsing, bounded certificate/ZIP input and atomic JSON output.
+It has no Android dependency or Maven SDK publication. Trust roots, expected
+challenge/SPKI, governed snapshot commitment and evaluation time are supplied
+independently of the evidence bundle. Run `:tools:test :tools:installDist`.
 
 ## JDK Compatibility
 
@@ -63,7 +79,7 @@ All modules enforce **JDK 8 API compatibility at compile time** via `-Xjdk-relea
 ## API Design Rules
 
 ### No data classes in public API
-**Never use `data class` for public library API types.** Data classes expose `copy()`, `componentN()`, and `toString()` as part of the binary contract. Adding, removing, or reordering properties breaks backward compatibility. Use regular classes with explicit `equals`/`hashCode` instead. See: https://kotlinlang.org/docs/api-guidelines-backward-compatibility.html
+**Never use `data class` for public library API types.** Use regular immutable classes with explicit construction invariants, defensive copying and intentional `equals`/`hashCode` semantics. Avoid automatic copying or rendering of sensitive protocol state. This is the first release: remove superseded interfaces and migrate callers without compatibility aliases or wrappers.
 
 ### No Reflection
 **Never use `java.lang.reflect.*` in this SDK.** This library is consumed by Android apps that use R8/D8 shrinking. Reflection forces consumers to add keep rules for every reflected class/method, complicating ProGuard/R8 configuration. Use unchecked casts, explicit type checks, or Kotlin type system features instead.
@@ -75,6 +91,7 @@ All mutable collections and byte arrays are copied on construction and access. U
 - `@JvmStatic` on companion object factory methods
 - `@JvmField` on public properties where Java callers need field-style access
 - No `Optional` in Kotlin API — use nullable types (`T?`)
+- Authenticated Torii operations use `RequestSigner`; private keys stay with the application or its explicit software signer.
 
 ## Key Patterns
 - **Two instruction representations**: typed (structured fields) vs wire (opaque `ByteArray` + wire name); `InstructionBox` unifies both
@@ -105,4 +122,4 @@ JUnit 5 with `@ParameterizedTest` / `@MethodSource` for data-driven tests. Test 
 
 ## Version Catalog
 
-Dependencies managed in `gradle/libs.versions.toml`: Kotlin 2.3.10, AGP 9.0.1, JUnit 5.11.4, BouncyCastle 1.78.1, zstd-jni 1.5.7-7.
+Dependencies managed in `gradle/libs.versions.toml`: Kotlin 2.3.10, AGP 9.0.1, JUnit 5.11.4, BouncyCastle 1.78.1, zstd-jni 1.5.7-7, OkHttp 4.12.0, Netty 4.2.17.Final.

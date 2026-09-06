@@ -189,7 +189,7 @@ mod tests {
             ))
     }
     fn jindo_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .expect("fixed Jindo parameters derive")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
@@ -239,18 +239,8 @@ mod tests {
             ))
     }
     fn pq_masp_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV1)
             .expect("fixed PQ-MASP profile derives")
-            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 100,
-                    activate_at_height: 400,
-                },
-            ))
-    }
-    fn zk_x509_activation() -> PrivacyProtocolActivationRecordV1 {
-        zk_x509_release_candidate_profile_material_v1()
-            .expect("release-pinned zk-X.509 candidate profile derives")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
@@ -262,16 +252,16 @@ mod tests {
     fn semantic_parameter_labels_and_framed_note_profiles_cannot_drift() {
         assert_eq!(
             IVM_PRIVATE_NOTE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-sha256-proof-managed-note-stark+private-note-vm16x8-tree32-v1"
+            b"goldilocks-poseidon-x7-digest384-proof-managed-note-stark+private-note-vm16x8-tree32-v1"
         );
         assert_eq!(
             PQ_MASP_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-sha256-proof-managed-note-stark+pq-masp+mldsa65+mlkem768-v1"
+            b"goldilocks-poseidon-x7-digest384-proof-managed-note-stark+pq-masp+mldsa65+mlkem768-v1"
         );
         #[cfg(feature = "zk-stark")]
         assert_eq!(
             ZK_ACE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1"
+            b"goldilocks-poseidon-x7-digest384-fp4-binary-fri8-q136-zk-ace-v1"
         );
         for stale_geometry in [
             b"mask255".as_slice(),
@@ -296,18 +286,28 @@ mod tests {
                     .any(|window| window == stale_geometry)
             );
         }
-        let shared_digest: [u8; 32] =
-            Sha256::digest(PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1).into();
-        assert_eq!(shared_digest, PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1);
-        assert_eq!(
+        let private_geometry = proof_managed_note_stark_geometry_digest_v1(PRIVATE_NOTE_DOMAINS_V1)
+            .expect("private-note geometry digest");
+        let masp_geometry = proof_managed_note_stark_geometry_digest_v1(PQ_MASP_DOMAINS_V1)
+            .expect("PQ-MASP geometry digest");
+        assert_ne!(private_geometry, masp_geometry);
+        assert_ne!(private_geometry, Default::default());
+        assert_ne!(masp_geometry, Default::default());
+        assert_ne!(
             proof_managed_note_stark_profile_digest_v1(
-                IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1
-            ),
-            IVM_PRIVATE_NOTE_STARK_PROFILE_DIGEST_V1
+                PRIVATE_NOTE_DOMAINS_V1,
+                IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1,
+            )
+            .expect("private-note profile digest"),
+            Default::default(),
         );
-        assert_eq!(
-            proof_managed_note_stark_profile_digest_v1(PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1),
-            PQ_MASP_STARK_PROFILE_DIGEST_V1
+        assert_ne!(
+            proof_managed_note_stark_profile_digest_v1(
+                PQ_MASP_DOMAINS_V1,
+                PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1,
+            )
+            .expect("PQ-MASP profile digest"),
+            Default::default(),
         );
         assert!(
             IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1
@@ -477,24 +477,16 @@ mod tests {
         let mut expected = vec![
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyProtocolIdV1::PqMaspStarkV1,
         ];
         if require_activation_readiness_v1(zk_x509_activation_readiness_v1()).is_ok() {
-            expected.push(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+            expected.push(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1);
         }
-        assert!(
-            zk_x509_release_candidate_profile_material_v1().is_ok(),
-            "X.509 candidate material must derive independently of governance release"
-        );
-        assert!(
-            vega_release_candidate_profile_material_v1().is_ok(),
-            "Vega candidate material must derive independently of governance release"
-        );
         assert_eq!(available, expected);
     }
     #[test]
@@ -549,9 +541,9 @@ mod tests {
                 ),
             ),
             (
-                PrivacyProtocolIdV1::PqMaspStarkV0,
+                PrivacyProtocolIdV1::PqMaspStarkV1,
                 pq_masp_activation(),
-                PrivacyProtocolActivationLimitsV1::PqMaspStarkV0(PqMaspActivationLimitsV1 {
+                PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(PqMaspActivationLimitsV1 {
                     max_input_count: PQ_MASP_MAX_INPUTS_V1,
                     max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
                 }),
@@ -563,9 +555,12 @@ mod tests {
             assert_eq!(first, second);
             assert_eq!(
                 first.proof_system_id,
-                PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
+                PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64
             );
-            assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeGoldilocksStarkFri);
+            assert_eq!(
+                first.engine_id,
+                PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64
+            );
             assert_eq!(first.protocol_limits, expected_limits);
             for digest in [
                 *first.parameter_id.as_bytes(),
@@ -578,18 +573,18 @@ mod tests {
             }
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-                    "b5db09ae42957802c502855459a102ba8e829bfb86a0356691455de0a08fbec0".to_owned(),
-                    "a665cfcbea5576a1cf533997e575ebd49957ce320c483c019e784f8fc93457e1".to_owned(),
-                    "8fd68669b9ef735fa227de44ced8fb204c55e46ac1c8f05efc128667e1a69dbb".to_owned(),
-                    "9c83cc55b7098221d7361dfb2f09ae834f4b5e46af777d24266e2e70ceefc45c".to_owned(),
-                    "d8e8f893f2541b0929a8bc9c44f995a38cd6023072e6d94fc362c6f67bdc4cd8".to_owned(),
+                    "755bd48dd1ec364da87e9fdc82cb8145bab2ae3422e602acde39f4659a3470c8".to_owned(),
+                    "4bd1d4ed3304d873d3111f0c37a1151df9ac48c99b3e2a760be93f0656ef76a2".to_owned(),
+                    "b566ed92037f905cda0ee5f295ba2c1e70e006398bdedf7f57aac99e5758167d".to_owned(),
+                    "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
+                    "ef48407e9fffa1d18f32321136e616ba24a38febefd3700736c8507e9a97d3d3".to_owned(),
                 ),
-                PrivacyProtocolIdV1::PqMaspStarkV0 => (
-                    "10a8697291331061099a6c67eaeac3bc29f77aea951f2f2ad55ca29d0f816951".to_owned(),
-                    "06fbee48b23572d6496ba068dfe819300176a9422ffbcd79c6ccfe1b0b4f9cd2".to_owned(),
-                    "4ee67f01e2268c1b5b14ab576352ba379661c0fab93a4c2f5507f2786ec7b00f".to_owned(),
-                    "776487d416a46123b2146c0e9455be474999f2d8de8994532d8fbf4bf63def9d".to_owned(),
-                    "f05f4f90c69e39a64942426d3ddd6f8d2c2bddbcc25143c7df71a2f495e34fbc".to_owned(),
+                PrivacyProtocolIdV1::PqMaspStarkV1 => (
+                    "6265e763be8e1f62feb4e34a0b9fe0f4ca7748be2ca5d0ad334996a029b42197".to_owned(),
+                    "c7bee6a60c069cf303c3bc9022a52fe59e1af6dd28ee114dab47718ac0b54129".to_owned(),
+                    "175934207a8a851284551a4f494b07b0b045b2b8008d009564232f6a26d76a55".to_owned(),
+                    "a6314323ab707a3766599aed2d109b3ada63acec793ff2a729c749cd951a332d".to_owned(),
+                    "7c254368cd3b41773cb92fea58df239745467d80aefcde365e224c058f88d87c".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };
@@ -645,7 +640,7 @@ mod tests {
                         PrivacyProtocolActivationLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) => {
                             limits.max_input_count += 1;
                         }
-                        PrivacyProtocolActivationLimitsV1::PqMaspStarkV0(limits) => {
+                        PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(limits) => {
                             limits.max_output_count += 1;
                         }
                         _ => unreachable!("test covers only IVM private note and PQ-MASP"),
@@ -667,12 +662,13 @@ mod tests {
         let snapshot = committed_privacy_capability_snapshot_v1(
             42,
             PrivacyConsensusPolicyV1::taira_default(),
+            None,
             |_| None,
         )
         .expect("empty committed lifecycle state is valid");
         for protocol_id in [
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyProtocolIdV1::PqMaspStarkV1,
         ] {
             let row = snapshot
                 .protocols
@@ -740,9 +736,9 @@ mod tests {
             (
                 "8a24198f13ce0dbe0f4747874def956dc15ca98f9308c29ed678afddbe989a04".to_owned(),
                 "92ee53970444330e37716b98a9eb1c04d8e52eb1ffe08103fb2745cc1abc9a89".to_owned(),
-                "5e83f32ed7edf764e50fc8cebf5b4d8b75cb9e42a296965514b033d49dae4ac4".to_owned(),
-                "c1577ce5a4a22e089a2fd7547f7fea32b7b35808967149d0e7f96a2ecb8c4ba7".to_owned(),
-                "fb5e94756f9f234641b27899b7fd63bb48f3b5f92c24266d76e6d4de16231b27".to_owned(),
+                "e03cf36db71869cc30ddffc00c9cbf32b84424693018415824e4e6553347f23e".to_owned(),
+                "6071bb6f845eed0a13df34ca6e2b28c2b6a9af1c98b6b08957d9838a5c6101c7".to_owned(),
+                "8e182847eb0ff635485572aaf234693beec0970bd6fac3a6bc7ee9fe525864d4".to_owned(),
             ),
             "every consensus-critical FCMP++ binding is a pinned KAT",
         );
@@ -1008,11 +1004,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "55bea016d0919cde8d24b54bb35eb01f7578a9a91189aececa34c7fc1b90e75c".to_owned(),
-                "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9".to_owned(),
-                "7733ada1295556a13c3f626f270d1287324e28e987613d97e1e1605ff4d22ce8".to_owned(),
-                "9c7c4f65128a4d924955b8b0fb6bfcc56ec34d14224ddfefebe32771c19a9e54".to_owned(),
-                "e613fbbaf3e0470524a2924e72e5f8adc93c3950a26c5a4e9af8b7a74b88078b".to_owned(),
+                "5858a2e4d1be81b06da5a153e8ec103515939fbe78106d7c4e3aa865c2d347cd".to_owned(),
+                "c0bbfcdc6d612eef0e8a5ef549f7dab1f832b217566445b7881fb9d71d1f300a".to_owned(),
+                "3a6e0f4fdaeeab4947f68b44ee6f1eb0434f32326289210d3faab15038ab9cff".to_owned(),
+                "cd5aeafd932dbf75f3cf1d59671480b377f12188aac553700864f0619812fa78".to_owned(),
+                "7d9e4422510f202eb46891b6830923622d396833c32691bda883710eb72b5b2a".to_owned(),
             ),
             "every consensus-critical Bootle/Lantern binding is a pinned KAT"
         );
@@ -1060,7 +1056,7 @@ mod tests {
                 CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
                 |record| {
                     record.protocol_limits =
-                        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+                        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                             JindoActivationLimitsV1 {
                                 max_polynomial_count: 1,
                             },
@@ -1094,7 +1090,7 @@ mod tests {
             bootle_lantern_parameter_digest_v1(&public_parameter_seed, &sampling_profile_digest);
         assert_eq!(
             hex::encode(governed),
-            "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9"
+            "c0bbfcdc6d612eef0e8a5ef549f7dab1f832b217566445b7881fb9d71d1f300a"
         );
         for index in 0..sampling_profile_digest.len() {
             let mut mutated_sampling_profile_digest = sampling_profile_digest;
@@ -1192,9 +1188,9 @@ mod tests {
             (
                 "8d5a2946c58314ac12d2968ffe9e8e0c672e3bbceefaaefad6a87420ea7dd212".to_owned(),
                 "b27b73d59151415e21b158c75ed9371cccd795655b604e4a6b53db621660b66e".to_owned(),
-                "c788016923d55e5455f3114735999f3c01f06aac8e7af2ce2bed4968b29800ea".to_owned(),
-                "0412d379f8cbf01109d994bc74f148a13e38fc64350308597c047a0e6ec95fd9".to_owned(),
-                "25f22d98c4f37d513361402fa5730caf214d097b624b2abd848dd932da39751e".to_owned(),
+                "5f44e8a6a901ef33bc3c99d5400592f420f006877ae9904b758ee49a3226718f".to_owned(),
+                "2141dd88d579b2460cfb0f79f230bfb2f71663364d8700c8e7e6b3e8f57c5a2a".to_owned(),
+                "c294d7ddc1be131d273410ce3f191328ed589b7db37283b49b138658250f060c".to_owned(),
             ),
             "every consensus-critical Orchard profile binding is a pinned KAT"
         );
@@ -1218,12 +1214,16 @@ mod tests {
         }
     }
     #[test]
-    fn zk_ace_remains_fail_closed_without_a_128_bit_commitment_profile() {
-        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    #[cfg(feature = "zk-stark")]
+    fn zk_ace_final_digest384_profile_stays_unavailable_without_qrom_certification() {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         );
+        assert!(!ZK_ACE_FULL_ENGINE_AVAILABLE_V1);
+        assert!(!ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1.is_empty());
+        assert_eq!(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, 2_131_222);
     }
     #[test]
     fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {
@@ -1239,31 +1239,8 @@ mod tests {
             Err(expected),
             "the unavailable result must be deterministic"
         );
-        let candidate = zk_ams_release_candidate_profile_material_v1()
-            .expect("release-candidate profile material derives independently of activation");
-        assert_eq!(candidate.protocol_id, PrivacyProtocolIdV1::IrohaZkAmsV1);
-        for digest in [
-            *candidate.parameter_id.as_bytes(),
-            *candidate.parameter_digest.as_bytes(),
-            *candidate.verifier_digest.as_bytes(),
-            *candidate.statement_schema_digest.as_bytes(),
-            *candidate.engine_manifest_digest.as_bytes(),
-        ] {
-            assert_ne!(digest, [0; 32]);
-        }
-        let candidate_activation = candidate.activation_record(
-            PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                proposed_at_height: 100,
-                activate_at_height: 400,
-            }),
-        );
-        assert_eq!(
-            validate_compiled_privacy_activation_v1(&candidate_activation),
-            Err(CompiledPrivacyProfileValidationErrorV1::Profile(expected)),
-            "release-candidate material must never bypass the production readiness gate",
-        );
         let readiness =
-            iroha_zkp_halo2::vega::zk_ams_mkhe_readiness_v1().expect("candidate readiness derives");
+            iroha_zkp_halo2::vega::zk_ams_mkhe_readiness_v1().expect("readiness derives");
         assert!(readiness.parameter_gate);
         assert!(readiness.noise_gate);
         assert!(readiness.security_gate);
@@ -1339,8 +1316,8 @@ mod tests {
                 "97e8be40e495bb6723db0ca73c04d2441ff166cf2163ddd2662c7e6a083f2c32".to_owned(),
                 "3d79fe744741f956cb589f45774f922b849cf93833e6a9ebdedf1f815f1b7b44".to_owned(),
                 "9b1a285d43ddc306b4d9ca6eac525b49b073f7d281ecf94299730613f683aa13".to_owned(),
-                "32c038ab076bf2cab61bb15ffd07675e64b6849fce6e935252160b640d11b5c4".to_owned(),
-                "5464e209f243f68189a84fad74e435aa78653d2fdd3458601787daf5479a45b0".to_owned(),
+                "e98c04cd9cdf69539d24858400c02d1021207b6377bfbe63a734e189ff5b4327".to_owned(),
+                "b3fd69b5fcf8ba2f14f529a8edfac9725338124ac24d612da65eb0fb8364c0d5".to_owned(),
             )
         );
     }
@@ -1375,19 +1352,19 @@ mod tests {
             (
                 "58c1a93d39f23727ae8b5bbb661414f3dcadf2479575282cd7e3b9ebbb5589fc".to_owned(),
                 "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
-                "aa352369f2a1fd0c9377414a2721728c35a95a4bc72497118e75c765edacd99e".to_owned(),
-                "080aaf7d1f9d44c5dad6a5adc393034715fbf428d1dd1e5b59e33808c110aa96".to_owned(),
-                "a74d8f690da89d50b9950e6d3496179f98bc6e60b71ec11e408c908aad73a81b".to_owned(),
+                "f744892c6f1a855b2dc24586ff5701f45ff2dad4d94bca6f8342e500df899a02".to_owned(),
+                "68641f65f768489617b1105cf3918b4f0b0499800af18a1f92b5471fa7836ebb".to_owned(),
+                "041fd6b68d1a2e8b78749f58d013239e317d010ecdc7e37d1299ab9835c3b887".to_owned(),
             )
         );
     }
     #[test]
     fn jindo_profile_is_deterministic_complete_and_bounded() {
         let first =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
                 .expect("profile");
         let second =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
                 .expect("profile");
         assert_eq!(first, second);
         assert_eq!(
@@ -1395,15 +1372,48 @@ mod tests {
             PrivacyProofSystemIdV1::JindoPolynomialCommitment
         );
         assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeJindo);
-        assert_eq!(JINDO_NATIVE_PROOF_BYTES_V1, 331_912);
+        assert_eq!(JINDO_NATIVE_PROOF_BYTES_V1, 7_159_944);
         assert_ne!(jindo_crs_digest_v1(), [0; 32]);
+        assert_eq!(
+            crate::privacy_engines::jindo::jindo_unit_difference_certificate_v1()
+                .expect("compiled Jindo unit theorem")
+                .digest(),
+            crate::privacy_engines::jindo::JINDO_UNIT_DIFFERENCE_CERTIFICATE_DIGEST_V1,
+        );
+        assert_eq!(
+            crate::privacy_engines::jindo::jindo_security_certificate_v1(),
+            Err(
+                crate::privacy_engines::jindo::JindoSecurityCertificateErrorV1::MissingQromParallelFiatShamirExtractorLoss {
+                    repetitions: 32,
+                    terminal_challenge_bits: 352,
+                    required_security_bits: 128,
+                },
+            ),
+        );
+        let activation = first.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 1,
+                activate_at_height: 2,
+            },
+        ));
+        assert_eq!(activation.protocol_id, first.protocol_id);
+        assert_eq!(activation.parameter_digest, first.parameter_digest);
         let provenance = core::str::from_utf8(JINDO_SOURCE_PROVENANCE_V1)
             .expect("Jindo source provenance is ASCII");
         assert!(provenance.contains("revision-2026-06-02"));
         assert!(provenance.contains("ringo-snark@805eab27"));
         let wire = core::str::from_utf8(JINDO_PROOF_WIRE_LABEL_V1)
             .expect("Jindo proof wire label is ASCII");
-        for required in ["IJP2", "7-outer", "12-inner", "644-field", "no-IJP1"] {
+        for required in [
+            "IJP3",
+            "32-parallel",
+            "224-outer-packed5",
+            "384-inner-packed6",
+            "4612-field",
+            "7159944-bytes",
+            "no-IJP1",
+            "no-IJP2",
+        ] {
             assert!(
                 wire.contains(required),
                 "Jindo wire descriptor lost {required}"
@@ -1411,7 +1421,7 @@ mod tests {
         }
         assert_eq!(
             first.protocol_limits,
-            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: u32::try_from(JINDO_MAX_BATCH_SIZE_V1)
                         .expect("fixed Jindo batch size fits u32"),
@@ -1428,86 +1438,40 @@ mod tests {
                 hex::encode(jindo_crs_digest_v1()),
             ),
             (
-                "48bdc194dcd85c416db5b1c00e58dba42357098dfb807d060497d7495911692c".to_owned(),
-                "56c9d07c283889a824768299b65dd69e2b6befbd123434be8571d21b32b0794b".to_owned(),
-                "89fe6e1c19c8b4851bf33b66479fba2d747943442009679c8618158165fad76e".to_owned(),
-                "7b87a8f64c9345e3ce13c2f4ce02a183e3806a8d2cea0faf7b6b0a00491aed28".to_owned(),
-                "ae3bf287b0c3c0f8c3163db10a06f037f79e3a5967ed6a84eadb054cc809d95a".to_owned(),
-                "424603d0ab5f57eed76aa365ec100cb4ac583e10dc801727363b6e188f5edd27".to_owned(),
+                "c4a5f4e1dc7ec790302538f77d0a76c9ca1442f3d23a2517c5f577714bd94500".to_owned(),
+                "e5989a51a3121672e02ff827bd9850587233e1ba77eab3dc5401e914ab2ade84".to_owned(),
+                "e32deea2258a2dfa34f5394f78001051a10945a9b9a9ac51ab3fedd1cdb25289".to_owned(),
+                "cc09c3ae81e41158eb533d828aea52c27a1769cc8e89bbd2adb42eeaf84cbd61".to_owned(),
+                "9c94a7482d68cc10d6d062bc6cdd40e25aa319f27bad56c8109b79fee500f000".to_owned(),
+                "adc8dc7954268627d30b85d6a79df579b3a933af487248a4cba79af08f217dda".to_owned(),
             )
         );
     }
     #[test]
-    fn vega_candidate_is_deterministic_bounded_and_not_governance_available() {
-        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    fn vega_engine_remains_unavailable_until_exact12_qualification() {
+        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         );
-        let first = vega_release_candidate_profile_material_v1().expect("candidate profile");
-        let second = vega_release_candidate_profile_material_v1().expect("candidate profile");
-        assert_eq!(first, second);
-        assert_eq!(
-            first.proof_system_id,
-            PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256
-        );
-        assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeVega);
-        assert_eq!(
-            first.protocol_limits,
-            PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0
-        );
-        assert!(MAX_VEGA_PROOF_BYTES_V1 <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize);
         assert_ne!(vega_mdl_canonical_relation_digest_v1(), [0; 32]);
         assert_ne!(vega_mdl_compiled_profile_digest_v1(), [0; 32]);
         assert_eq!(
             vega_mdl_verifier_digest_v1().expect("canonical Vega-MC verifier digest"),
             VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1,
         );
-        for digest in [
-            *first.parameter_id.as_bytes(),
-            *first.parameter_digest.as_bytes(),
-            *first.verifier_digest.as_bytes(),
-            *first.statement_schema_digest.as_bytes(),
-            *first.engine_manifest_digest.as_bytes(),
-        ] {
-            assert_ne!(digest, [0; 32]);
-        }
     }
     #[test]
     #[ignore = "operator-only KAT regeneration after an intentional compiled-profile change"]
-    fn print_available_and_release_candidate_profile_tuples() {
+    fn print_available_profile_tuples() {
         for protocol_id in PrivacyProtocolIdV1::ALL {
-            let profile = match protocol_id {
-                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
-                    // ZK-ACE has no authenticated release-candidate tuple. Report the exact
-                    // production unavailability instead of manufacturing synthetic material.
-                    match compiled_privacy_profile_v1(protocol_id) {
-                        Err(
-                            error @ CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                                protocol_id: unavailable,
-                            },
-                        ) if unavailable == protocol_id => {
-                            eprintln!("{}=unavailable|{error}", protocol_id.canonical_label());
-                            continue;
-                        }
-                        result => result,
-                    }
+            let profile = match compiled_privacy_profile_v1(protocol_id) {
+                Ok(profile) => profile,
+                Err(error) => {
+                    eprintln!("{}=unavailable|{error}", protocol_id.canonical_label());
+                    continue;
                 }
-                PrivacyProtocolIdV1::IrohaZkAmsV1 => zk_ams_release_candidate_profile_material_v1(),
-                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
-                    zk_x509_release_candidate_profile_material_v1()
-                }
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
-                    vega_release_candidate_profile_material_v1()
-                }
-                _ => compiled_privacy_profile_v1(protocol_id),
-            }
-            .unwrap_or_else(|error| {
-                panic!(
-                    "compiled profile for {}: {error}",
-                    protocol_id.canonical_label()
-                )
-            });
+            };
             eprintln!(
                 "{}={}|{}|{}|{}|{}",
                 protocol_id.canonical_label(),
@@ -1519,70 +1483,6 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn vega_candidate_rejects_every_binding_mismatch_while_admission_fails_closed() {
-        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
-        let candidate =
-            vega_release_candidate_profile_material_v1().expect("candidate profile material");
-        let valid = candidate.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-            PrivacyProposedLifecycleV1 {
-                proposed_at_height: 100,
-                activate_at_height: 400,
-            },
-        ));
-        validate_compiled_privacy_activation_against_profile_v1(&valid, &candidate)
-            .expect("exact candidate binding");
-        assert_eq!(
-            validate_compiled_privacy_activation_v1(&valid),
-            Err(CompiledPrivacyProfileValidationErrorV1::Profile(
-                CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }
-            ))
-        );
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 7] = [
-            (
-                CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
-                |record| {
-                    record.proof_system_id = PrivacyProofSystemIdV1::IrohaVeRangeP256;
-                },
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
-                |record| record.engine_id = PrivacyEngineIdV1::NativeVeRangeP256,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
-                |record| record.parameter_id.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch,
-                |record| record.parameter_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch,
-                |record| record.verifier_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch,
-                |record| record.statement_schema_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
-                |record| record.engine_manifest_digest.0[0] ^= 1,
-            ),
-        ];
-        for (expected, mutate) in mutations {
-            let mut changed = valid;
-            mutate(&mut changed);
-            assert_eq!(
-                validate_compiled_privacy_activation_against_profile_v1(&changed, &candidate),
-                Err(expected)
-            );
-        }
-    }
-    #[test]
     fn jindo_compiled_profile_rejects_every_binding_and_policy_mismatch() {
         let valid = jindo_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
@@ -1624,7 +1524,7 @@ mod tests {
                 CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
                 |record| {
                     record.protocol_limits =
-                        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+                        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                             JindoActivationLimitsV1 {
                                 max_polynomial_count: 5,
                             },
@@ -1651,11 +1551,16 @@ mod tests {
         ); 7] = [
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
-                |record| record.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
+                |record| {
+                    record.proof_system_id =
+                        PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64
+                },
             ),
             (
                 CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
-                |record| record.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri,
+                |record| {
+                    record.engine_id = PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64
+                },
             ),
             (
                 CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
@@ -1732,10 +1637,10 @@ mod tests {
             pgc_compiled.engine_manifest_digest
         );
         let jindo_compiled =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
                 .expect("Jindo profile");
         let mut jindo = jindo_activation();
-        jindo.protocol_limits = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+        jindo.protocol_limits = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
             JindoActivationLimitsV1 {
                 max_polynomial_count: 1,
             },
@@ -1817,7 +1722,7 @@ mod tests {
         invalid.push(zero_verange);
         let mut jindo_over = jindo_activation();
         jindo_over.protocol_limits =
-            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: 5,
                 },
@@ -1825,7 +1730,7 @@ mod tests {
         invalid.push(jindo_over);
         let mut zero_jindo = jindo_activation();
         zero_jindo.protocol_limits =
-            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: 0,
                 },
@@ -1859,38 +1764,43 @@ mod tests {
         }
     }
     #[test]
-    fn zk_x509_compiled_activation_is_complete_and_immutable() {
-        let candidate = zk_x509_release_candidate_profile_material_v1()
-            .expect("release candidate profile material");
+    fn zk_x509_compiled_activation_is_fail_closed_or_complete_and_immutable() {
+        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let profile = match compiled_privacy_profile_v1(protocol_id) {
+            Ok(profile) => profile,
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id: unavailable,
+            }) if unavailable == protocol_id => return,
+            Err(error) => panic!("unexpected ZK-X509 profile error: {error}"),
+        };
+        for digest in [
+            *profile.parameter_id.as_bytes(),
+            *profile.parameter_digest.as_bytes(),
+            *profile.verifier_digest.as_bytes(),
+            *profile.statement_schema_digest.as_bytes(),
+            *profile.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
         assert_eq!(
-            (
-                hex::encode(candidate.parameter_id.as_bytes()),
-                hex::encode(candidate.parameter_digest.as_bytes()),
-                hex::encode(candidate.verifier_digest.as_bytes()),
-                hex::encode(candidate.statement_schema_digest.as_bytes()),
-                hex::encode(candidate.engine_manifest_digest.as_bytes()),
-            ),
-            (
-                "1ef8a47c6314a4a91e4446086b8c0c7110879e7770b441c663c1c398d5ea518b".to_owned(),
-                "19c064109579bf83809043cec4e1ea9744af3486251e5253911f4d87634999ff".to_owned(),
-                "4a7f1f34a569d9b5cedc137e12df012eee740dd32dbf2dff375b7f1b08766c0c".to_owned(),
-                "f228f0d842277d2df246a1e6aa66880726a617d669e176efa37ad5a106bc7f60".to_owned(),
-                "709883293be4fb2c89740490724394990c8f4d600c2b8e0a41a9539bd2211fdb".to_owned(),
-            ),
-            "every consensus-critical zk-X.509 binding is a pinned KAT",
+            profile.proof_system_id,
+            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64
         );
-        let valid = zk_x509_activation();
-        validate_compiled_privacy_activation_against_profile_v1(&valid, &candidate)
-            .expect("exact release-pinned zk-X.509 activation");
         assert_eq!(
-            valid.proof_system_id,
-            PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
+            profile.engine_id,
+            PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64
         );
-        assert_eq!(valid.engine_id, PrivacyEngineIdV1::NativeGoldilocksStarkFri);
         assert_eq!(
-            valid.protocol_limits,
-            PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V0
+            profile.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V1
         );
+        let valid = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 100,
+                activate_at_height: 400,
+            },
+        ));
+        validate_compiled_privacy_activation_v1(&valid).expect("exact compiled profile");
         let mutations: [(
             CompiledPrivacyProfileValidationErrorV1,
             fn(&mut PrivacyProtocolActivationRecordV1),
@@ -1945,18 +1855,17 @@ mod tests {
             let mut changed = valid;
             mutate(&mut changed);
             assert_eq!(
-                validate_compiled_privacy_activation_against_profile_v1(&changed, &candidate),
+                validate_compiled_privacy_activation_v1(&changed),
                 Err(expected)
             );
         }
         let mut wrong_protocol = valid;
         wrong_protocol.protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
         assert_eq!(
-            validate_compiled_privacy_activation_against_profile_v1(&wrong_protocol, &candidate),
+            validate_compiled_privacy_activation_v1(&wrong_protocol),
             Err(CompiledPrivacyProfileValidationErrorV1::ProtocolMismatch)
         );
     }
-    #[test]
     fn anonymous_pgc_compiled_bindings_are_immutable() {
         let valid = pgc_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");

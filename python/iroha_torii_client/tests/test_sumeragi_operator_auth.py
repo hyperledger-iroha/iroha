@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -38,16 +39,9 @@ def _operator_context(captured: Optional[List[bytes]] = None) -> ToriiOperatorSi
     )
 
 
-def _sumeragi_evidence_common(*, admitted: Optional[int] = None) -> Dict[str, Any]:
-    return {
-        "recorded_height": 40,
-        "recorded_view": 2,
-        "recorded_ms": 1_700_000_000_000,
-        "consensus_admitted_height": admitted,
-    }
-
-
-def _sumeragi_v2_equivocation_record() -> Dict[str, Any]:
+def _sumeragi_v2_equivocation_record(
+    *, penalty_status: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     return {
         "kind": "SumeragiV2Equivocation",
         "class": "phase_vote",
@@ -58,19 +52,13 @@ def _sumeragi_v2_equivocation_record() -> Dict[str, Any]:
         "context_id": "11" * 32,
         "artifact_hash_1": "22" * 32,
         "artifact_hash_2": "33" * 32,
-        **_sumeragi_evidence_common(admitted=41),
-    }
-
-
-def _sumeragi_censorship_record() -> Dict[str, Any]:
-    return {
-        "kind": "Censorship",
-        "tx_hash": "44" * 32,
-        "receipt_count": 2,
-        "signers": ["alice@test", "bob@test"],
-        "submitted_at_height_min": 20,
-        "submitted_at_height_max": 22,
-        **_sumeragi_evidence_common(),
+        "recorded_height": 40,
+        "recorded_view": 2,
+        "recorded_ms": 1_700_000_000_000,
+        "consensus_admitted_height": 41,
+        "penalty_status": penalty_status
+        if penalty_status is not None
+        else {"status": "pending", "details": None},
     }
 
 
@@ -113,35 +101,19 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
             payload={
                 "total": 4,
                 "items": [
-                    {
-                        "kind": "DoublePrepare",
-                        "recorded_height": 1,
-                        "recorded_view": 2,
-                        "recorded_ms": 3,
-                        "consensus_admitted_height": None,
-                        "phase": "Prepare",
-                        "height": 4,
-                        "view": 5,
-                        "epoch": 6,
-                        "signer": 1,
-                        "block_hash_1": "aa" * 32,
-                        "block_hash_2": "bb" * 32,
-                    },
-                    {
-                        "kind": "InvalidProposal",
-                        "recorded_height": 7,
-                        "recorded_view": 8,
-                        "recorded_ms": 9,
-                        "consensus_admitted_height": None,
-                        "height": 10,
-                        "view": 11,
-                        "epoch": 12,
-                        "subject_block_hash": "cc" * 32,
-                        "payload_hash": "dd" * 32,
-                        "reason": "payload mismatch",
-                    },
-                    _sumeragi_censorship_record(),
                     _sumeragi_v2_equivocation_record(),
+                    _sumeragi_v2_equivocation_record(
+                        penalty_status={
+                            "status": "applied",
+                            "details": {"height": 42},
+                        }
+                    ),
+                    _sumeragi_v2_equivocation_record(
+                        penalty_status={
+                            "status": "cancelled",
+                            "details": {"height": 43},
+                        }
+                    ),
                 ],
             }
         )
@@ -153,37 +125,30 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
         operator_signing_context=_operator_context(captured),
     )
 
-    page = client.list_sumeragi_evidence(
-        limit=5, offset=1, kind="SumeragiV2Equivocation"
-    )
+    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="SumeragiV2Equivocation")
 
     assert page.total == 4
-    assert len(page.items) == 4
-    prevote = page.items[0]
-    assert isinstance(prevote, client_module.SumeragiDoubleVoteEvidenceRecord)
-    assert prevote.kind == "DoublePrepare"
-    assert prevote.phase == "Prepare"
-    assert prevote.signer == 1
-    assert prevote.block_hash_1 == "aa" * 32
-    assert prevote.block_hash_2 == "bb" * 32
-    invalid_proposal = page.items[1]
-    assert isinstance(
-        invalid_proposal, client_module.SumeragiInvalidProposalEvidenceRecord
-    )
-    assert invalid_proposal.payload_hash == "dd" * 32
-    assert invalid_proposal.reason == "payload mismatch"
-    censorship = page.items[2]
-    assert isinstance(censorship, client_module.SumeragiCensorshipEvidenceRecord)
-    assert censorship.submitted_at_height_min == 20
-    assert censorship.submitted_at_height_max == 22
-    equivocation = page.items[3]
-    assert isinstance(
-        equivocation, client_module.SumeragiV2EquivocationEvidenceRecord
-    )
+    assert len(page.items) == 3
+    equivocation = page.items[0]
+    assert isinstance(equivocation, client_module.SumeragiV2EquivocationEvidenceRecord)
     assert equivocation.class_ == "phase_vote"
     assert equivocation.signer == 3
     assert equivocation.context_id == "11" * 32
     assert equivocation.consensus_admitted_height == 41
+    assert isinstance(
+        equivocation.penalty_status,
+        client_module.SumeragiEvidencePendingPenaltyStatus,
+    )
+    assert isinstance(
+        page.items[1].penalty_status,
+        client_module.SumeragiEvidenceAppliedPenaltyStatus,
+    )
+    assert page.items[1].penalty_status.details.height == 42
+    assert isinstance(
+        page.items[2].penalty_status,
+        client_module.SumeragiEvidenceCancelledPenaltyStatus,
+    )
+    assert page.items[2].penalty_status.details.height == 43
     call = session.calls[0]
     assert call["url"].endswith(
         "/v1/sumeragi/evidence?kind=SumeragiV2Equivocation&limit=5&offset=1"
@@ -191,6 +156,7 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
     assert call["params"] == {}
     assert call["allow_redirects"] is False
     assert call["data"] is None
+    assert call["stream"] is True
     assert len(captured) == 1
     timestamp_ms = int(call["headers"]["X-Iroha-Operator-Timestamp-Ms"])
     nonce = call["headers"]["X-Iroha-Operator-Nonce"]
@@ -202,3 +168,60 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
         timestamp_ms=timestamp_ms,
         nonce=nonce,
     )
+
+
+@pytest.mark.parametrize("route", ["list", "count"])
+@pytest.mark.parametrize(
+    ("failure", "error_type", "message"),
+    [
+        ("content_type", TypeError, "application/json content type"),
+        ("content_length", ValueError, ""),
+        ("actual_body", ValueError, ""),
+        ("duplicate", ValueError, "duplicate field"),
+    ],
+)
+def test_sumeragi_evidence_reads_enforce_strict_bounded_json(
+    route: str,
+    failure: str,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    maximum_body_bytes = 1024 * 1024 if route == "list" else 1024
+    if route == "list":
+        canonical_body = json.dumps({"total": 0, "items": []}).encode()
+        duplicate_body = b'{"total":0,"total":1,"items":[]}'
+    else:
+        canonical_body = json.dumps({"count": 0}).encode()
+        duplicate_body = b'{"count":0,"count":1}'
+
+    headers = {"Content-Type": "application/json"}
+    body = canonical_body
+    if failure == "content_type":
+        headers["Content-Type"] = "text/plain"
+    elif failure == "content_length":
+        headers["Content-Length"] = str(maximum_body_bytes + 1)
+        message = f"{maximum_body_bytes}-byte size bound"
+    elif failure == "actual_body":
+        body = b" " * (maximum_body_bytes + 1)
+        message = f"{maximum_body_bytes}-byte size bound"
+    else:
+        body = duplicate_body
+
+    response = StubResponse(raw=body, headers=headers)
+    session = RecordingSession()
+    session.queue(response)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(error_type, match=message):
+        if route == "list":
+            client.list_sumeragi_evidence()
+        else:
+            client.get_sumeragi_evidence_count()
+
+    assert response.was_closed is True
+    assert session.calls[0]["stream"] is True
+    assert session.calls[0]["headers"]["Accept"] == "application/json"

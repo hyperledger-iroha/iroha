@@ -1,11 +1,11 @@
 use crate::{
-    AssignedValue, Context,
-    QuantumCell::Constant,
-    ScalarField,
     gates::{GateInstructions, RangeInstructions},
     poseidon::hasher::{spec::OptimizedPoseidonSpec, state::PoseidonState},
     safe_types::{SafeBool, SafeTypeChip},
     utils::BigPrimeField,
+    AssignedValue, Context,
+    QuantumCell::Constant,
+    ScalarField,
 };
 
 use getset::{CopyGetters, Getters};

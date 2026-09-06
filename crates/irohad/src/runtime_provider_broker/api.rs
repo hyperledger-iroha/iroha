@@ -106,20 +106,14 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
     /// Attest live custody for one exact validated public session and seat.
-    ///
-    /// The default refusal keeps existing backend implementations source
-    /// compatible while preventing a signing-only provider from satisfying
-    /// startup readiness without an explicit live custody lookup.
     fn attest_partial_release_capability(
         &self,
-        _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
-        _expected_participant_index: u16,
+        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
     ) -> Result<
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
-    > {
-        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
-    }
+    >;
     /// Sign one exact broker-validated public release projection.
     fn sign_projected_partial_release(
         &self,
@@ -349,7 +343,7 @@ mod stock_registry_tests {
             ),
             (
                 IrohaRuntimeProviderSlotV1::MusubiProviderAttestationApprovalSigner,
-                "hsm://musubi/provider-attestation/approval",
+                "provider://musubi/provider-attestation/approval",
             ),
             (
                 IrohaRuntimeProviderSlotV1::MusubiProviderAttestationAuthenticatedInventory,
@@ -766,7 +760,7 @@ define_runtime_provider_backends_v1! {
     pub struct RuntimeProviderBrokerBackendsV1 {
         /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
         optional bootle_lantern_issuance: Arc<dyn BootleLanternIssuanceBrokerBackendV1> => pub fn with_bootle_lantern_issuance(backend);
-        /// Attach the deployment-owned PKCS#11/KMS quarantine-DEK wrapper.
+        /// Attach the deployment-owned authenticated quarantine-DEK wrapper.
         optional moderation_quarantine_key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper> => pub fn with_moderation_quarantine_key_wrapper(key_wrapper);
         /// Attach the deployment-owned threshold-PRF provider used for privacy cycles.
         optional privacy_cycle_prf_provider: Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1> => pub fn with_privacy_cycle_prf_provider(provider);

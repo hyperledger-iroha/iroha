@@ -2207,7 +2207,7 @@ fn routing_vote(service: &ProductionV2Services, view: u64, phase: wire::GlobalPh
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"routing vote block")),
             payload_hash: Hash::new(b"routing vote payload"),
         },
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"routing vote parent state"),
             Hash::new(b"routing vote post state"),
             Hash::new(b"routing vote ordinary writes"),
@@ -2444,6 +2444,8 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
                     == wire::ConsensusMessageV2Payload::Proposal(proposal.clone())
         ));
         let manifest = payload.manifest();
+        let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+            .expect("validate retained chunk manifest once");
         let signer = &service.context.roster[proposer].validator;
         let mut observed_chunk_indices = BTreeSet::new();
         for encoded in &chunks.messages {
@@ -2456,18 +2458,13 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
             let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
                 panic!("the recovered Proposal chunk fanout mixed message classes")
             };
-            chunk
-                .validate(&service.context, manifest)
+            let signature_payload = chunk
+                .validate_for_authentication(&validated)
                 .expect("the retained chunk matches its canonical manifest");
             let signature = Signature::try_from_bytes(&chunk.signature)
                 .expect("the retained chunk signature is canonical");
             signature
-                .verify(
-                    signer.public_key(),
-                    &chunk
-                        .signature_preimage(&service.context, manifest)
-                        .expect("the retained chunk has a canonical signature preimage"),
-                )
+                .verify(signer.public_key(), &signature_payload.signature_preimage())
                 .expect("the retained chunk is signed by the recovered proposer");
             assert!(observed_chunk_indices.insert(chunk.index));
         }
@@ -2640,6 +2637,66 @@ fn same_round_proposal_retransmission_expands_chunks_to_set_b_and_all_voters() {
         expected_all
     );
 }
+
+#[test]
+fn proposal_retransmission_reuses_retained_preencoded_chunk_arcs() {
+    let (mut service, keys) = fixture_with_block_payload();
+    let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    set_local_validator(&mut service, &keys, proposal.proposer);
+    let manifest_hash = HashOf::new(payload.manifest());
+    service
+        .register_outbound_payload(service.active_tag, payload)
+        .expect("retain preencoded proposal chunks");
+    let retained = service
+        .outbound_chunks
+        .get(&manifest_hash)
+        .expect("registered payload owns its exact manifest")
+        .messages
+        .iter()
+        .map(|message| {
+            let NetworkMessage::SumeragiBlock(envelope) = message else {
+                panic!("retained payload chunk changed network lane")
+            };
+            assert!(envelope.as_ref().encoded_len().is_some());
+            Arc::clone(envelope)
+        })
+        .collect::<Vec<_>>();
+    let observed = Arc::new(Mutex::new(Vec::<Arc<BlockMessageWire>>::new()));
+    let observed_for_hook = Arc::clone(&observed);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        assert!(ticket.is_none());
+        let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("proposal fanout changed network lane")
+        };
+        if matches!(
+            envelope.as_message(),
+            BlockMessage::V2(message)
+                if matches!(&message.payload, wire::ConsensusMessageV2Payload::PayloadChunk(_))
+        ) {
+            observed_for_hook
+                .lock()
+                .expect("record routed chunk envelope")
+                .push(Arc::clone(envelope));
+        }
+        Ok(())
+    });
+    let message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal));
+    service
+        .broadcast_consensus(message.clone())
+        .expect("broadcast first proposal occurrence");
+    service
+        .broadcast_consensus(message)
+        .expect("broadcast proposal fallback occurrence");
+
+    let observed = observed.lock().expect("inspect routed chunk envelopes");
+    assert!(observed.len() > retained.len());
+    assert!(observed.iter().all(|routed| {
+        routed.as_ref().encoded_len().is_some()
+            && retained.iter().any(|cached| Arc::ptr_eq(cached, routed))
+    }));
+}
+
 #[test]
 fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2875,11 +2932,6 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         BTreeSet::from([proposal.round])
     );
 }
-fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
-    let directory = TempDir::new().expect("temporary chunk root");
-    service.chunk_root = directory.path().to_path_buf();
-    directory
-}
 fn certified_fetch_task(
     service: &ProductionV2Services,
     id: u64,
@@ -2893,7 +2945,7 @@ fn certified_fetch_task(
         proposal_round: round,
         phase: wire::GlobalPhase::Prepare,
         subject,
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"fetch fixture parent state"),
             Hash::new(b"fetch fixture post state"),
             Hash::new(b"fetch fixture writes"),
@@ -3354,6 +3406,205 @@ fn recovered_decision_fetch_store_retirement_cancels_ranked_request_output() {
             .all(|fixture| fixture.waiter_count() == 0)
     );
     assert!(!output_guard.restart_required());
+}
+#[test]
+fn recovered_decision_fetch_refanout_reaches_live_peer_after_topology_ticket_cancellation() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (canonical_wire, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (authenticated_request, _) = production_authenticated_serve_request(
+        &service.context,
+        &keys,
+        &keys[0],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Commit,
+        &[0, 1, 2],
+    );
+    let exact_request = authenticated_request.request().clone();
+    let frozen_source = service.context.roster[1].validator.clone();
+    let rotated_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::BlsNormal)
+        .expect("deterministic rotated archive key");
+    let rotated_peer = PeerId::new(rotated_key.public_key().clone());
+    assert!(
+        !service
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == rotated_peer)
+    );
+    let key =
+        RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(&service.context, 67, 0xD7);
+    let frozen_sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect();
+    let owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
+        key,
+        EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        ),
+        frozen_sources,
+        authenticated_request,
+    );
+    let request_hash = owner.request_hash();
+    assert_eq!(request_hash, HashOf::new(&exact_request));
+
+    let (network, configured_peers) =
+        crate::IrohaNetwork::closed_for_tests_with_configured_peer_snapshot();
+    service.network = network;
+    configured_peers.replace(vec![frozen_source.clone()]);
+    let first_fanout = service
+        .recovered_decision_fetch_fanout(&owner)
+        .expect("construct the initial recovered Fetch fanout")
+        .expect("the frozen archive is initially configured");
+    assert_eq!(first_fanout.peers, vec![frozen_source.clone()]);
+    {
+        let mut pending = service
+            .lock_pending_exact_output()
+            .expect("lock the recovered Fetch exact-output corridor");
+        assert_eq!(
+            pending.enqueue(first_fanout),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+    }
+
+    let topology_removed = Arc::new(AtomicBool::new(false));
+    let topology_removed_for_hook = Arc::clone(&topology_removed);
+    let old_ticket_fixture = Arc::new(Mutex::new(None));
+    let old_ticket_fixture_for_hook = Arc::clone(&old_ticket_fixture);
+    let observed_requests = Arc::new(Mutex::new(Vec::new()));
+    let observed_requests_for_hook = Arc::clone(&observed_requests);
+    let frozen_source_for_hook = frozen_source.clone();
+    let rotated_peer_for_hook = rotated_peer.clone();
+    let exact_request_for_hook = exact_request.clone();
+    let admitted_rotated_peer = Arc::new(AtomicBool::new(false));
+    let admitted_rotated_peer_for_hook = Arc::clone(&admitted_rotated_peer);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("recovered Fetch fanout must retain one Sumeragi block message")
+        };
+        let BlockMessage::V2(message) = envelope.as_message() else {
+            panic!("recovered Fetch fanout must retain one v2 message")
+        };
+        let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
+        else {
+            panic!("recovered Fetch fanout must retain its certified request")
+        };
+        assert_eq!(request, &exact_request_for_hook);
+        observed_requests_for_hook
+            .lock()
+            .expect("record exact recovered Fetch request")
+            .push(request.clone());
+
+        if post.peer_id == frozen_source_for_hook {
+            if topology_removed_for_hook.load(Ordering::Acquire) {
+                let ticket = ticket.expect("the removed target retains its old-generation ticket");
+                assert_eq!(
+                    ticket.rank(),
+                    None,
+                    "topology reconciliation cancels the old membership rank"
+                );
+                drop(ticket);
+                return Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 1,
+                });
+            }
+            assert!(ticket.is_none());
+            let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+            *old_ticket_fixture_for_hook
+                .lock()
+                .expect("retain old recovered Fetch ticket fixture") = Some(fixture);
+            return Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket: Some(ticket),
+                rank: 1,
+            });
+        }
+
+        assert_eq!(post.peer_id, rotated_peer_for_hook);
+        assert!(ticket.is_none());
+        admitted_rotated_peer_for_hook.store(true, Ordering::Release);
+        Ok(())
+    });
+    assert!(
+        service
+            .retry_pending_exact_output()
+            .expect("retain the initially backpressured recovered Fetch")
+    );
+    {
+        let fixture = old_ticket_fixture
+            .lock()
+            .expect("inspect old recovered Fetch ticket fixture")
+            .clone()
+            .expect("the frozen source owns one actor ticket");
+        assert_eq!(fixture.waiter_count(), 1);
+        configured_peers.replace(vec![rotated_peer.clone()]);
+        assert_eq!(
+            fixture.cancel_topology_membership(),
+            1,
+            "removing the old topology tenure cancels its exact actor waiter"
+        );
+        assert_eq!(fixture.waiter_count(), 0);
+    }
+    topology_removed.store(true, Ordering::Release);
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("ticketless topology rejection releases the reconstructible occurrence")
+    );
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("the removed target no longer occupies exact-output capacity")
+    );
+
+    let retry_fanout = service
+        .recovered_decision_fetch_fanout(&owner)
+        .expect("recreate the exact recovered Fetch after topology rotation")
+        .expect("the live rotated archive is configured");
+    assert_eq!(retry_fanout.peers, vec![rotated_peer.clone()]);
+    {
+        let mut pending = service
+            .lock_pending_exact_output()
+            .expect("lock the recovered Fetch exact-output corridor");
+        assert_eq!(
+            pending.enqueue(retry_fanout),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+    }
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("the live rotated archive admits the recovered Fetch")
+    );
+    assert!(admitted_rotated_peer.load(Ordering::Acquire));
+    let observed = observed_requests
+        .lock()
+        .expect("inspect recovered Fetch request identity");
+    assert_eq!(observed.len(), 3);
+    assert!(observed.iter().all(|request| request == &exact_request));
+    drop(observed);
+
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash,
+        manifest: proposal.manifest,
+        body: canonical_wire,
+        responder: rotated_peer.clone(),
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(rotated_key.private_key(), &response.signature_preimage())
+        .payload()
+        .to_vec();
+    let _ = owner
+        .authenticate_response(&service.context, response, &rotated_peer)
+        .expect("the unchanged request authority accepts the live rotated archive response");
 }
 #[test]
 fn certified_fetch_success_commit_retires_backpressured_request() {
@@ -4419,6 +4670,98 @@ fn replayed_proposal_signature_restores_exact_durable_payload() {
     assert_eq!(work_id, expected_work_id);
     assert!(!signature.is_empty());
     assert_eq!(restored, payload);
+}
+
+#[test]
+fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
+    let (service, keys) = fixture();
+    let mut context = service.context.clone();
+    context.epoch_end_height = context.height;
+    let next_mint_roster = fixture_kagemusha_mint_finality_roster(
+        context.network_id,
+        context.epoch + 1,
+        &context.roster,
+        0xC0,
+    );
+    let next_mint_id = next_mint_roster
+        .finality_epoch_id()
+        .expect("derive next mint-finality roster ID");
+    context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        epoch: context.epoch + 1,
+        kagemusha_mint_finality_epoch_id: next_mint_id,
+        kagemusha_mint_finality_epoch_roster: next_mint_roster,
+        epoch_end_height: context.height + 8,
+        mode: context.mode,
+        roster: context.roster.clone(),
+        validator_set_pops: keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("derive fixture BLS proof of possession")
+            })
+            .collect(),
+        quorum: context.quorum,
+        leader_seed: [0xC7; 32],
+    });
+    context.validate().expect("valid boundary context");
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"boundary block")),
+        payload_hash: Hash::new(b"boundary payload"),
+    };
+    let ordinary_writes_root = Hash::new(b"boundary ordinary writes");
+    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+        Hash::new(b"boundary parent state"),
+        ordinary_writes_root,
+        ordinary_writes_root,
+        1,
+        Hash::new(b"boundary executed block"),
+    );
+    let vote = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let authority =
+        crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+            std::sync::Arc::new(context.kagemusha_mint_finality_epoch_roster.clone()),
+            zeroize::Zeroizing::new([0xA0; 32]),
+            0,
+        )
+        .expect("bind fixture Pasta signing authority");
+    let signature = sign_consensus_request_with_kagemusha_authority(
+        &context,
+        &keys[0],
+        &super::super::v2::SignRequest::Vote(vote.clone()),
+        &vote.signature_preimage(),
+        Some(&authority),
+    )
+    .expect("sign boundary Commit vote");
+    let parts = wire::decode_kagemusha_consensus_signature_envelope_v1(&signature)
+        .expect("decode signature framing")
+        .expect("boundary vote carries an Kagemusha envelope");
+    let share = crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_share_v1(
+        parts.auxiliary_payload,
+    )
+    .expect("decode boundary seal share");
+    assert_eq!(share.message.kagemusha_top_up_count, 0);
+    assert_eq!(share.message.next_finality_epoch_id, Some(next_mint_id));
+    crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
+        &context.kagemusha_mint_finality_epoch_roster,
+        &context,
+        &vote,
+        &share,
+    )
+    .expect("old epoch authorizes the next Pasta roster");
 }
 include!("v2_worker_nonzero_view_restart.rs");
 #[test]

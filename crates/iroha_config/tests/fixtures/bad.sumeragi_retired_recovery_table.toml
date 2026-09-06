@@ -1,0 +1,4 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+[sumeragi.recovery]
+missing_qc_reacquire_window_ms = 1200

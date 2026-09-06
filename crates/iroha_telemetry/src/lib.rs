@@ -12,8 +12,4 @@ mod retry_period;
 pub mod telegram;
 #[cfg(feature = "event-exporter")]
 pub mod ws;
-/// Re-export Norito JSON derive macros for telemetry crate usage.
-pub mod json_macros {
-    pub use norito::derive::{JsonDeserialize, JsonSerialize};
-}
 pub use iroha_telemetry_derive::metrics;

@@ -15,7 +15,7 @@ depends = []
 [contracts.TairaXorSccpBridge]
 display-name = "TairaXorSccpBridge"
 src = "contracts/TairaXorSccpBridge.tolk"
-depends = ["TairaXorJettonWallet"]
+depends = ["TairaXorJettonWallet", "TairaXorJettonMaster"]
 
 [contracts.TairaXorJettonMaster]
 display-name = "TairaXorJettonMaster"

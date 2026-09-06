@@ -1,7 +1,7 @@
 {
   "fastpq_batches": [
     {
-      "parameter": "fastpq-lane-balanced",
+      "parameter": "fastpq-state-transition-stark-v1",
       "entry_hash": "0xbaselinefeed",
       "metadata": {
         "dsid": "0x01"

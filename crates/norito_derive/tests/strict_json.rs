@@ -147,6 +147,15 @@ fn empty_named_struct_accepts_only_an_empty_object() {
     assert_unknown_field(error, "retired");
 }
 #[test]
+fn tagged_unit_enum_requires_explicit_content_member() {
+    let canonical = json::from_slice::<StrictEvent>(br#"{"kind":"Unit","payload":null}"#)
+        .expect("explicit unit payload");
+    assert_eq!(canonical, StrictEvent::Unit);
+    let error = json::from_slice::<StrictEvent>(br#"{"kind":"Unit"}"#)
+        .expect_err("unit enum content must not be inferred");
+    assert_structured_missing_field(error, "payload");
+}
+#[test]
 fn strictness_applies_to_nested_objects_and_array_elements() {
     for input in [
         br#"{"child":{"value":1,"future":2},"children":[]}"#.as_slice(),

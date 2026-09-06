@@ -10,18 +10,18 @@ namespace Hyperledger.Iroha.Privacy;
 /// <summary>Closed first-release privacy protocol identity in canonical Norito order.</summary>
 public enum PrivacyProtocolIdV1 : uint
 {
-    ZkAcePqAuthorizationV0 = 0,
+    ZkAcePqAuthorizationV1 = 0,
     AnonymousPgcKOutOfNV1 = 1,
     VeRangeTransparentRangeV1 = 2,
     IrohaZkAmsV1 = 3,
-    VegaExistingCredentialZkV0 = 4,
-    IrohaZkX509StarkP256V0 = 5,
-    IrohaJindoPolynomialCommitmentV0 = 6,
+    VegaExistingCredentialZkV1 = 4,
+    IrohaZkX509StarkP256V1 = 5,
+    IrohaJindoPolynomialCommitmentV1 = 6,
     IrohaBootleLanternAnoncredV1 = 7,
     OrchardHalo2ActionsV1 = 8,
     MoneroFcmpPlusPlusV1 = 9,
     IrohaIvmPrivateNoteStarkV1 = 10,
-    PqMaspStarkV0 = 11,
+    PqMaspStarkV1 = 11,
 }
 
 /// <summary>Stable ABI-23 result of validating one typed local compiled-profile catalog.</summary>
@@ -64,21 +64,21 @@ public static class PrivacyProtocolsV1
     public static string CanonicalLabel(this PrivacyProtocolIdV1 protocol) =>
         protocol switch
         {
-            PrivacyProtocolIdV1.ZkAcePqAuthorizationV0 => "zk-ace-pq-authorization-v0",
+            PrivacyProtocolIdV1.ZkAcePqAuthorizationV1 => "zk-ace-pq-authorization-v1",
             PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1 => "anonymous-pgc-k-out-of-n-v1",
             PrivacyProtocolIdV1.VeRangeTransparentRangeV1 => "verange-transparent-range-v1",
             PrivacyProtocolIdV1.IrohaZkAmsV1 => "iroha-zk-ams-v1",
-            PrivacyProtocolIdV1.VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
-            PrivacyProtocolIdV1.IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
-            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0 =>
-                "iroha-jindo-polynomial-commitment-v0",
+            PrivacyProtocolIdV1.VegaExistingCredentialZkV1 => "vega-existing-credential-zk-v1",
+            PrivacyProtocolIdV1.IrohaZkX509StarkP256V1 => "iroha-zk-x509-stark-p256-v1",
+            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1 =>
+                "iroha-jindo-polynomial-commitment-v1",
             PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1 =>
                 "iroha-bootle-lantern-anoncred-v1",
             PrivacyProtocolIdV1.OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
             PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
             PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1 =>
                 "iroha-ivm-private-note-stark-v1",
-            PrivacyProtocolIdV1.PqMaspStarkV0 => "pq-masp-stark-v0",
+            PrivacyProtocolIdV1.PqMaspStarkV1 => "pq-masp-stark-v1",
             _ => throw new ArgumentOutOfRangeException(nameof(protocol)),
         };
 
@@ -91,20 +91,20 @@ public static class PrivacyProtocolsV1
         ArgumentNullException.ThrowIfNull(label);
         return label switch
         {
-            "zk-ace-pq-authorization-v0" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV0,
+            "zk-ace-pq-authorization-v1" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV1,
             "anonymous-pgc-k-out-of-n-v1" => PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1,
             "verange-transparent-range-v1" => PrivacyProtocolIdV1.VeRangeTransparentRangeV1,
             "iroha-zk-ams-v1" => PrivacyProtocolIdV1.IrohaZkAmsV1,
-            "vega-existing-credential-zk-v0" => PrivacyProtocolIdV1.VegaExistingCredentialZkV0,
-            "iroha-zk-x509-stark-p256-v0" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V0,
-            "iroha-jindo-polynomial-commitment-v0" =>
-                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0,
+            "vega-existing-credential-zk-v1" => PrivacyProtocolIdV1.VegaExistingCredentialZkV1,
+            "iroha-zk-x509-stark-p256-v1" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V1,
+            "iroha-jindo-polynomial-commitment-v1" =>
+                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1,
             "iroha-bootle-lantern-anoncred-v1" =>
                 PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1,
             "orchard-halo2-actions-v1" => PrivacyProtocolIdV1.OrchardHalo2ActionsV1,
             "monero-fcmp-plus-plus-v1" => PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1,
             "iroha-ivm-private-note-stark-v1" => PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1,
-            "pq-masp-stark-v0" => PrivacyProtocolIdV1.PqMaspStarkV0,
+            "pq-masp-stark-v1" => PrivacyProtocolIdV1.PqMaspStarkV1,
             _ => throw new ArgumentException(
                 "Unknown canonical privacy protocol id.",
                 nameof(label)),
@@ -117,21 +117,21 @@ public static class PrivacyProtocolsV1
     public static string CanonicalTypedVariantLabel(this PrivacyProtocolIdV1 protocol) =>
         protocol switch
         {
-            PrivacyProtocolIdV1.ZkAcePqAuthorizationV0 => "ZkAcePqAuthorizationV0",
+            PrivacyProtocolIdV1.ZkAcePqAuthorizationV1 => "ZkAcePqAuthorizationV1",
             PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1 => "AnonymousPgcKOutOfNV1",
             PrivacyProtocolIdV1.VeRangeTransparentRangeV1 => "VeRangeTransparentRangeV1",
             PrivacyProtocolIdV1.IrohaZkAmsV1 => "IrohaZkAmsV1",
-            PrivacyProtocolIdV1.VegaExistingCredentialZkV0 => "VegaExistingCredentialZkV0",
-            PrivacyProtocolIdV1.IrohaZkX509StarkP256V0 => "IrohaZkX509StarkP256V0",
-            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0 =>
-                "IrohaJindoPolynomialCommitmentV0",
+            PrivacyProtocolIdV1.VegaExistingCredentialZkV1 => "VegaExistingCredentialZkV1",
+            PrivacyProtocolIdV1.IrohaZkX509StarkP256V1 => "IrohaZkX509StarkP256V1",
+            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1 =>
+                "IrohaJindoPolynomialCommitmentV1",
             PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1 =>
                 "IrohaBootleLanternAnoncredV1",
             PrivacyProtocolIdV1.OrchardHalo2ActionsV1 => "OrchardHalo2ActionsV1",
             PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1 => "MoneroFcmpPlusPlusV1",
             PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1 =>
                 "IrohaIvmPrivateNoteStarkV1",
-            PrivacyProtocolIdV1.PqMaspStarkV0 => "PqMaspStarkV0",
+            PrivacyProtocolIdV1.PqMaspStarkV1 => "PqMaspStarkV1",
             _ => throw new ArgumentOutOfRangeException(nameof(protocol)),
         };
 
@@ -144,20 +144,20 @@ public static class PrivacyProtocolsV1
         ArgumentNullException.ThrowIfNull(label);
         return label switch
         {
-            "ZkAcePqAuthorizationV0" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV0,
+            "ZkAcePqAuthorizationV1" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV1,
             "AnonymousPgcKOutOfNV1" => PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1,
             "VeRangeTransparentRangeV1" => PrivacyProtocolIdV1.VeRangeTransparentRangeV1,
             "IrohaZkAmsV1" => PrivacyProtocolIdV1.IrohaZkAmsV1,
-            "VegaExistingCredentialZkV0" => PrivacyProtocolIdV1.VegaExistingCredentialZkV0,
-            "IrohaZkX509StarkP256V0" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V0,
-            "IrohaJindoPolynomialCommitmentV0" =>
-                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0,
+            "VegaExistingCredentialZkV1" => PrivacyProtocolIdV1.VegaExistingCredentialZkV1,
+            "IrohaZkX509StarkP256V1" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V1,
+            "IrohaJindoPolynomialCommitmentV1" =>
+                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1,
             "IrohaBootleLanternAnoncredV1" =>
                 PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1,
             "OrchardHalo2ActionsV1" => PrivacyProtocolIdV1.OrchardHalo2ActionsV1,
             "MoneroFcmpPlusPlusV1" => PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1,
             "IrohaIvmPrivateNoteStarkV1" => PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1,
-            "PqMaspStarkV0" => PrivacyProtocolIdV1.PqMaspStarkV0,
+            "PqMaspStarkV1" => PrivacyProtocolIdV1.PqMaspStarkV1,
             _ => throw new ArgumentException(
                 "Unknown canonical privacy statement/proof variant.",
                 nameof(label)),
@@ -248,6 +248,10 @@ public static class PrivacyNative
                 && NativeLibrary.TryGetExport(
                     handle,
                     "iroha_privacy_validate_compiled_profile_catalog_v1",
+                    out _)
+                && NativeLibrary.TryGetExport(
+                    handle,
+                    "iroha_privacy_validate_exact12_capability_manifest_v1",
                     out _)
                 && NativeLibrary.TryGetExport(
                     handle,
@@ -476,11 +480,11 @@ public static class PrivacyNative
     }
 
     /// <summary>
-    /// Strictly validate canonical committed Exact12 manifest bytes and compare every complete
-    /// compiled-profile result with this ABI-23 binary's native-validated local catalog.
+    /// Require Rust's canonical validation of all release, audit and deployment evidence, then
+    /// compare every complete compiled-profile result with this binary's local catalog.
     /// </summary>
     /// <remarks>
-    /// A valid result is a structural and local-tuple prerequisite only. This method cannot mint
+    /// A valid result establishes canonical evidence and local-tuple consistency. It cannot mint
     /// network authority; only the authenticated Torii fetch can issue a manifest model usable by
     /// <see cref="PrivacyExact12CapabilityAdmissionV1.RequireExact12CapabilityTupleV1"/>.
     /// </remarks>
@@ -503,8 +507,10 @@ public static class PrivacyNative
 
         try
         {
+            var snapshot = (byte[])archive.Clone();
+            RequireValidCapabilityArchive(snapshot);
             var catalog = CompiledProfileCatalogV1().NoritoBytes;
-            PrivacyExact12CapabilityManifestCodecV1.Validate(archive, catalog);
+            PrivacyExact12CapabilityManifestCodecV1.Validate(snapshot, catalog);
             return PrivacyExact12CapabilityManifestValidationStatusV1.Valid;
         }
         catch (PrivacyExact12CapabilityManifestCodecV1.LocalTupleMismatchException)
@@ -514,6 +520,31 @@ public static class PrivacyNative
         catch (PrivacyExact12CapabilityManifestException)
         {
             return PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest;
+        }
+    }
+
+    /// <summary>Require Rust's complete release, audit and deployment evidence verification.</summary>
+    internal static void RequireValidCapabilityArchive(byte[] archive)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        if (archive.Length == 0 || archive.Length > PrivacyExact12CapabilityManifestV1.MaxArchiveBytes)
+        {
+            throw new PrivacyExact12CapabilityManifestException(
+                "Exact12 capability archive is empty or exceeds its byte ceiling.");
+        }
+        if (!IsAvailable())
+        {
+            throw new PrivacyExact12CapabilityManifestException(
+                "The mandatory native Exact12 capability validator is unavailable.");
+        }
+        var snapshot = (byte[])archive.Clone();
+        var status = RunWithNativeStack(() => NativeValidateExact12CapabilityManifest(
+            snapshot,
+            new UIntPtr(checked((uint)snapshot.Length))));
+        if (status != 0)
+        {
+            throw new PrivacyExact12CapabilityManifestException(
+                $"Native Exact12 evidence validation rejected status {status}.");
         }
     }
 
@@ -564,6 +595,14 @@ public static class PrivacyNative
         EntryPoint = "iroha_privacy_validate_compiled_profile_catalog_v1",
         CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeValidateCompiledProfileCatalog(
+        [In] byte[] archive,
+        UIntPtr archiveLength);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "iroha_privacy_validate_exact12_capability_manifest_v1",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeValidateExact12CapabilityManifest(
         [In] byte[] archive,
         UIntPtr archiveLength);
 

@@ -16,6 +16,11 @@ name = "norito_codegen_exporter"
 path = "src/main.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "norito-schema-inventory"
+path = "src/bin/norito_schema_inventory.rs"
+required-features = ["dev-tools"]
+
 [dependencies]
 anyhow = "1.0.100"
 base64 = { workspace = true, features = ["alloc"] }
@@ -32,3 +37,5 @@ norito = { path = "../../crates/norito", features = ["node-codec"], default-feat
 tempfile = { workspace = true }
 time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+syn = { workspace = true, features = ["default", "full", "visit"] }
+proc-macro2 = { workspace = true, features = ["span-locations"] }

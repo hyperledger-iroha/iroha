@@ -2,13 +2,13 @@
 //!
 //! This module deliberately has no constructor from a local compiled-profile
 //! catalog.  The only accepted input is the exact canonical Norito archive
-//! returned by Torii (or a separately authenticated candidate receipt).  The
-//! archive self-digest detects drift; the caller remains responsible for
-//! authenticating the transport or receipt that supplied the bytes.
+//! returned by Torii.  The archive self-digest detects drift; the caller
+//! remains responsible for authenticating the transport that supplied the
+//! bytes.
 use iroha_core::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::privacy::{
-    PrivacyCapabilityActivationStateV1, PrivacyCapabilityLimitationV1,
-    PrivacyCapabilityReadinessV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+    PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
+    PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyEngineIdV1,
     PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyProofSystemIdV1,
     PrivacyProtocolIdV1, validate_privacy_capability_archive_v1,
@@ -142,6 +142,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
             committed_height: 3,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+            qualification: None,
             protocols,
         }
         .exact12_capability_manifest_v1()
@@ -202,12 +203,13 @@ fn parse_protocol_id(label: &str) -> PyResult<PrivacyProtocolIdV1> {
 }
 fn readiness_label(value: PrivacyCapabilityReadinessV1) -> &'static str {
     match value {
-        PrivacyCapabilityReadinessV1::Available => "available",
-        PrivacyCapabilityReadinessV1::AvailableExperimental => "available-experimental",
+        PrivacyCapabilityReadinessV1::ProductionQualified => "production-qualified",
         PrivacyCapabilityReadinessV1::Unavailable(_) => "unavailable",
     }
 }
-fn unavailable_reason_label(value: PrivacyCompiledProfileUnavailableReasonV1) -> &'static str {
+fn compiled_profile_unavailable_reason_label(
+    value: PrivacyCompiledProfileUnavailableReasonV1,
+) -> &'static str {
     match value {
         PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable => "engine-unavailable",
         PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed => {
@@ -218,25 +220,28 @@ fn unavailable_reason_label(value: PrivacyCompiledProfileUnavailableReasonV1) ->
         }
     }
 }
-fn activation_state_label(value: PrivacyCapabilityActivationStateV1) -> &'static str {
+fn unavailable_reason_label(value: PrivacyCapabilityUnavailableReasonV1) -> &'static str {
     match value {
-        PrivacyCapabilityActivationStateV1::NotRegistered => "not-registered",
-        PrivacyCapabilityActivationStateV1::Proposed => "proposed",
-        PrivacyCapabilityActivationStateV1::Active => "active",
-        PrivacyCapabilityActivationStateV1::Suspended => "suspended",
-        PrivacyCapabilityActivationStateV1::Retired => "retired",
-    }
-}
-fn limitation_label(value: PrivacyCapabilityLimitationV1) -> &'static str {
-    match value {
-        PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence => {
-            "missing-distribution-wide-knowledge-soundness-evidence"
+        PrivacyCapabilityUnavailableReasonV1::CompiledProfile(reason) => {
+            compiled_profile_unavailable_reason_label(reason)
+        }
+        PrivacyCapabilityUnavailableReasonV1::NotRegistered => "not-registered",
+        PrivacyCapabilityUnavailableReasonV1::Proposed => "proposed",
+        PrivacyCapabilityUnavailableReasonV1::Suspended => "suspended",
+        PrivacyCapabilityUnavailableReasonV1::Retired => "retired",
+        PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification => {
+            "missing-production-qualification"
+        }
+        PrivacyCapabilityUnavailableReasonV1::InvalidProductionQualification => {
+            "invalid-production-qualification"
         }
     }
 }
 fn proof_system_label(value: PrivacyProofSystemIdV1) -> &'static str {
     match value {
-        PrivacyProofSystemIdV1::StarkFriSha256Goldilocks => "stark-fri-sha256-goldilocks",
+        PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64 => {
+            "stark-fri-poseidon-x7-goldilocks-6x64-v1"
+        }
         PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512 => {
             "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"
         }
@@ -255,7 +260,9 @@ fn proof_system_label(value: PrivacyProofSystemIdV1) -> &'static str {
 }
 fn engine_label(value: PrivacyEngineIdV1) -> &'static str {
     match value {
-        PrivacyEngineIdV1::NativeGoldilocksStarkFri => "native-goldilocks-stark-fri",
+        PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64 => {
+            "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"
+        }
         PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255 => {
             "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"
         }
@@ -286,16 +293,10 @@ fn capability_tuple_dict(
     output.set_item("readiness", readiness_label(row.readiness))?;
     let unavailable_reason = match row.readiness {
         PrivacyCapabilityReadinessV1::Unavailable(reason) => Some(unavailable_reason_label(reason)),
-        PrivacyCapabilityReadinessV1::Available
-        | PrivacyCapabilityReadinessV1::AvailableExperimental => None,
+        PrivacyCapabilityReadinessV1::ProductionQualified => None,
     };
     output.set_item("unavailable_reason", unavailable_reason)?;
-    output.set_item(
-        "activation_state",
-        activation_state_label(row.activation_state),
-    )?;
     output.set_item("network_available", row.is_network_available())?;
-    output.set_item("limitation", row.limitation.map(limitation_label))?;
     match row.compiled_profile {
         PrivacyCompiledProfileResultV1::Available(profile) => {
             output.set_item("compiled_profile_status", "available")?;
@@ -327,7 +328,10 @@ fn capability_tuple_dict(
         }
         PrivacyCompiledProfileResultV1::Unavailable(reason) => {
             output.set_item("compiled_profile_status", "unavailable")?;
-            output.set_item("unavailable_reason", unavailable_reason_label(reason))?;
+            output.set_item(
+                "unavailable_reason",
+                compiled_profile_unavailable_reason_label(reason),
+            )?;
             for key in [
                 "proof_system_id",
                 "engine_id",
@@ -384,7 +388,7 @@ mod tests {
         }
     }
     #[test]
-    fn validated_binding_preserves_bytes_and_does_not_authorize_another_row() {
+    fn validated_binding_preserves_bytes_and_fails_closed_without_registered_evidence() {
         let binding = PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
         );
@@ -398,11 +402,11 @@ mod tests {
         assert!(
             binding
                 .require_network_profile(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-                .is_ok()
+                .is_err()
         );
         assert!(
             binding
-                .require_network_profile(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+                .require_network_profile(PrivacyProtocolIdV1::VegaExistingCredentialZkV1)
                 .is_err()
         );
     }

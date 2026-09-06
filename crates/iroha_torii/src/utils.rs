@@ -1478,6 +1478,49 @@ pub mod extractors {
         json::{self, JsonDeserializeOwned, Number, Value},
     };
     use urlencoding::decode;
+
+    /// Maximum raw query text accepted by the generic V1 query extractors.
+    ///
+    /// This matches the authenticated request and routed-read ceilings. The
+    /// bound is checked before percent decoding or allocating decoded fields.
+    const TORII_QUERY_MAX_RAW_BYTES_V1: usize = 64 * 1024;
+    /// Maximum number of fields accepted by the generic V1 query extractors.
+    const TORII_QUERY_MAX_PAIRS_V1: usize = 64;
+
+    #[derive(Debug)]
+    enum QueryDecodeError {
+        Capacity {
+            resource: &'static str,
+            attempted: usize,
+            limit: usize,
+        },
+        Invalid(&'static str),
+        Schema,
+    }
+
+    fn query_rejection(error: QueryDecodeError) -> Response {
+        match error {
+            QueryDecodeError::Capacity {
+                resource,
+                attempted,
+                limit,
+            } => typed_request_rejection(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "query_capacity_exceeded",
+                format!(
+                    "Query parameters exceed the V1 {resource} bound (attempted {attempted}, limit {limit})."
+                ),
+            ),
+            QueryDecodeError::Invalid(message) => {
+                typed_request_rejection(StatusCode::BAD_REQUEST, "request_query_invalid", message)
+            }
+            QueryDecodeError::Schema => typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_query_invalid",
+                "Query parameters do not match the endpoint schema.",
+            ),
+        }
+    }
     fn typed_request_rejection(
         status: StatusCode,
         code: &'static str,
@@ -2042,139 +2085,109 @@ pub mod extractors {
             decode_body_as_norito_or_json::<T>(&body, format).map(NoritoJson)
         }
     }
+    /// Schema-specific body and decode limits for public KAGEMUSHA API requests.
     #[cfg(feature = "app_api")]
-    const OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
-    #[cfg(feature = "app_api")]
-    const OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES: usize = 64 * 1024;
-    /// Schema-specific body and decode limits for public Offline API requests.
-    #[cfg(feature = "app_api")]
-    pub(crate) trait OfflineCanonicalNoritoSchema:
+    trait KagemushaCanonicalNoritoSchemaV1:
         NoritoSerialize + for<'de> NoritoDeserialize<'de> + Sized
     {
         /// Exact protocol body ceiling, in canonical framed bytes.
         const MAX_BODY_BYTES: usize;
-        /// Maximum nested value-decode depth needed by this request schema.
-        const MAX_NESTING_DEPTH: usize;
-        /// Extra frame-derived copies needed before semantic field caps run.
-        const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize = 0;
-        /// Fixed allowance for schema-bounded nested proof reconstruction.
-        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize = 0;
-        /// Inspect schema-specific bounded fields before owned reconstruction.
-        fn preflight_canonical_norito(_body: &[u8]) -> Result<(), norito::Error> {
-            Ok(())
-        }
-        /// Build payload-derived limits for one already body-capped archive.
-        fn decode_limits(encoded_len: usize) -> norito::core::DecodeLimits {
-            // Every variable-length member is represented in the exact
-            // uncompressed canonical frame. Per-sequence and cumulative
-            // element limits therefore derive from the supplied frame, while
-            // the fourfold base accounts for decoded structs and nested
-            // collection storage. Schemas carrying bounded proof material add
-            // only the fixed allowance required by their statically known
-            // canonical field depth. This avoids inheriting Norito's generic
-            // 32-fold allowance. The schema-specific body ceiling is checked
-            // before these limits are installed.
-            norito::core::DecodeLimits::new(
-                encoded_len,
-                encoded_len,
-                encoded_len.saturating_mul(2),
-                encoded_len
-                    .saturating_mul(
-                        OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
-                            .saturating_add(Self::EXTRA_ENCODED_ALLOCATION_MULTIPLIER),
-                    )
-                    .saturating_add(Self::FIXED_ALLOCATION_ALLOWANCE_BYTES),
-                Self::MAX_NESTING_DEPTH,
-            )
-        }
+        /// Decode the canonical body and enforce every schema invariant.
+        fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError>;
     }
     #[cfg(feature = "app_api")]
-    impl OfflineCanonicalNoritoSchema
-        for iroha_torii_shared::offline_api::OfflineRecipientLineageRequest
+    impl KagemushaCanonicalNoritoSchemaV1
+        for iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1
     {
         const MAX_BODY_BYTES: usize =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2;
-        const MAX_NESTING_DEPTH: usize = 32;
-        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
-            OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1;
+
+        fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError> {
+            iroha_torii_shared::kagemusha_api::decode_kagemusha_top_up_request_v1(body)
+                .map_err(KagemushaCanonicalNoritoDecodeError::from_kagemusha_api)
+        }
     }
     #[cfg(feature = "app_api")]
-    impl OfflineCanonicalNoritoSchema for iroha_torii_shared::offline_api::OfflineTopUpRequest {
+    impl KagemushaCanonicalNoritoSchemaV1
+        for iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1
+    {
         const MAX_BODY_BYTES: usize =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4;
-        const MAX_NESTING_DEPTH: usize = 32;
-        // The proof bytes cross up to ten charged reconstruction boundaries;
-        // the fourfold frame-derived base already covers four of them.
-        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
-            iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
-    }
-    #[cfg(feature = "app_api")]
-    impl OfflineCanonicalNoritoSchema for iroha_torii_shared::offline_api::OfflineRedeemRequest {
-        const MAX_BODY_BYTES: usize =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4;
-        const MAX_NESTING_DEPTH: usize = 64;
-        // The main and optional-change recursive proofs have fixed protocol
-        // caps. Wire preflight reads the nested unshield Vec length and rejects
-        // it above 192 KiB before reconstruction; the fixed allowance therefore
-        // carries its three remaining charged copies.
-        const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
-            iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
-        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
-            iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
-        fn preflight_canonical_norito(body: &[u8]) -> Result<(), norito::Error> {
-            iroha_data_model::offline::preflight_kagemusha_redeem_request_archive_v4(body)
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1;
+
+        fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError> {
+            iroha_torii_shared::kagemusha_api::decode_kagemusha_redemption_request_v1(body)
+                .map_err(KagemushaCanonicalNoritoDecodeError::from_kagemusha_api)
         }
     }
     #[cfg(feature = "app_api")]
     #[derive(Debug)]
-    enum OfflineCanonicalNoritoDecodeError {
+    enum KagemushaCanonicalNoritoDecodeError {
         Empty,
         TooLarge { actual: usize, maximum: usize },
         Norito(norito::Error),
+        Invalid(iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1),
     }
     #[cfg(feature = "app_api")]
-    fn validate_offline_canonical_norito_body_len(
+    impl KagemushaCanonicalNoritoDecodeError {
+        fn from_kagemusha_api(
+            error: iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1,
+        ) -> Self {
+            match error {
+                iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1::Codec(error) => {
+                    Self::Norito(error)
+                }
+                iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1::EncodedSizeExceeded {
+                    actual,
+                    max,
+                } => Self::TooLarge {
+                    actual,
+                    maximum: max,
+                },
+                error => Self::Invalid(error),
+            }
+        }
+    }
+    #[cfg(feature = "app_api")]
+    fn validate_kagemusha_canonical_norito_body_len(
         actual: usize,
         maximum: usize,
-    ) -> Result<(), OfflineCanonicalNoritoDecodeError> {
+    ) -> Result<(), KagemushaCanonicalNoritoDecodeError> {
         if actual == 0 {
-            return Err(OfflineCanonicalNoritoDecodeError::Empty);
+            return Err(KagemushaCanonicalNoritoDecodeError::Empty);
         }
         if actual > maximum {
-            return Err(OfflineCanonicalNoritoDecodeError::TooLarge { actual, maximum });
+            return Err(KagemushaCanonicalNoritoDecodeError::TooLarge { actual, maximum });
         }
         Ok(())
     }
     #[cfg(feature = "app_api")]
-    fn decode_offline_canonical_norito<T: OfflineCanonicalNoritoSchema>(
+    fn decode_kagemusha_canonical_norito<T: KagemushaCanonicalNoritoSchemaV1>(
         body: &[u8],
-    ) -> Result<T, OfflineCanonicalNoritoDecodeError> {
-        validate_offline_canonical_norito_body_len(body.len(), T::MAX_BODY_BYTES)?;
-        T::preflight_canonical_norito(body).map_err(OfflineCanonicalNoritoDecodeError::Norito)?;
-        norito::decode_canonical_with_limits(body, T::decode_limits(body.len()))
-            .map_err(OfflineCanonicalNoritoDecodeError::Norito)
+    ) -> Result<T, KagemushaCanonicalNoritoDecodeError> {
+        validate_kagemusha_canonical_norito_body_len(body.len(), T::MAX_BODY_BYTES)?;
+        T::decode_validated(body)
     }
     #[cfg(feature = "app_api")]
     #[allow(clippy::result_large_err)]
-    fn offline_canonical_norito_rejection<T: 'static>(
-        error: OfflineCanonicalNoritoDecodeError,
+    fn kagemusha_canonical_norito_rejection<T: 'static>(
+        error: KagemushaCanonicalNoritoDecodeError,
     ) -> Response {
         match error {
-            OfflineCanonicalNoritoDecodeError::Empty => typed_request_rejection(
+            KagemushaCanonicalNoritoDecodeError::Empty => typed_request_rejection(
                 StatusCode::BAD_REQUEST,
                 "request_norito_invalid",
-                "Offline Norito request body must not be empty.",
+                "KAGEMUSHA Norito request body must not be empty.",
             ),
-            OfflineCanonicalNoritoDecodeError::TooLarge { actual, maximum } => {
+            KagemushaCanonicalNoritoDecodeError::TooLarge { actual, maximum } => {
                 typed_request_rejection(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "request_payload_too_large",
                     format!(
-                        "Offline Norito request body is {actual} bytes; maximum is {maximum} bytes."
+                        "KAGEMUSHA Norito request body is {actual} bytes; maximum is {maximum} bytes."
                     ),
                 )
             }
-            OfflineCanonicalNoritoDecodeError::Norito(error) => {
+            KagemushaCanonicalNoritoDecodeError::Norito(error) => {
                 record_payload_decode_failure::<T>(&error);
                 typed_request_rejection(
                     StatusCode::BAD_REQUEST,
@@ -2182,21 +2195,26 @@ pub mod extractors {
                     format!("Invalid canonical offline Norito body: {error}"),
                 )
             }
+            KagemushaCanonicalNoritoDecodeError::Invalid(error) => typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_norito_invalid",
+                format!("Invalid KAGEMUSHA V1 request: {error}"),
+            ),
         }
     }
-    /// Extractor for one canonical, schema-bounded Offline API Norito request.
+    /// Extractor for one canonical, schema-bounded KAGEMUSHA API Norito request.
     #[cfg(feature = "app_api")]
     #[derive(Clone, Copy, Debug)]
-    pub(crate) struct OfflineNorito<T>(
+    pub(crate) struct KagemushaNorito<T>(
         /// Decoded canonical request.
         pub(crate) T,
     );
     #[cfg(feature = "app_api")]
-    impl<S, T> FromRequest<S> for OfflineNorito<T>
+    impl<S, T> FromRequest<S> for KagemushaNorito<T>
     where
         Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
-        T: OfflineCanonicalNoritoSchema + Send + 'static,
+        T: KagemushaCanonicalNoritoSchemaV1 + Send + 'static,
     {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
@@ -2204,9 +2222,9 @@ pub mod extractors {
             let body = Bytes::from_request(req, state)
                 .await
                 .map_err(typed_body_rejection)?;
-            decode_offline_canonical_norito::<T>(&body)
-                .map(OfflineNorito)
-                .map_err(offline_canonical_norito_rejection::<T>)
+            decode_kagemusha_canonical_norito::<T>(&body)
+                .map(KagemushaNorito)
+                .map_err(kagemusha_canonical_norito_rejection::<T>)
         }
     }
     /// Extractor for one canonical native-Norito request body.
@@ -2269,7 +2287,15 @@ pub mod extractors {
             decode_as_json::<T>(&body).map(JsonOnly)
         }
     }
-    /// Extractor for URL query strings decoded into `JsonDeserialize` types.
+    /// Extractor for canonical form-encoded URL queries decoded into
+    /// `JsonDeserialize` types.
+    ///
+    /// An absent query decodes as an empty object. A present query must contain
+    /// one to 64 unique, non-empty `key=value` pairs and at most 64 KiB of raw
+    /// text. Components must use the one canonical
+    /// `application/x-www-form-urlencoded` spelling: spaces are `+`, literal
+    /// plus signs and all other escaped bytes use uppercase percent escapes,
+    /// and bytes that can be written literally are not escaped.
     #[derive(Clone, Debug)]
     pub struct NoritoQuery<T>(pub T);
     impl<S, T> FromRequestParts<S> for NoritoQuery<T>
@@ -2282,23 +2308,26 @@ pub mod extractors {
             parts: &mut axum::http::request::Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            let query = parts.uri.query().unwrap_or("");
+            let query = parts.uri.query();
+            if query == Some("") {
+                return Err(query_rejection(QueryDecodeError::Invalid(
+                    "A present query string must contain at least one key=value pair.",
+                )));
+            }
             #[cfg(feature = "app_api")]
-            if let Some(decoded) = crate::decode_current_app_routed_read_query::<T>(query, true) {
+            if let Some(decoded) =
+                crate::decode_current_app_routed_read_query::<T>(query.unwrap_or_default(), true)
+            {
                 return decoded.map(NoritoQuery);
             }
             match decode_query::<T>(query) {
                 Ok(value) => Ok(NoritoQuery(value)),
-                Err(e) => Err(typed_request_rejection(
-                    StatusCode::BAD_REQUEST,
-                    "request_query_invalid",
-                    format!("invalid query params: {e}"),
-                )),
+                Err(error) => Err(query_rejection(error)),
             }
         }
     }
-    /// Extractor for URL query strings decoded into `JsonDeserialize` types
-    /// without scalar type coercion.
+    /// Extractor for canonical form-encoded URL queries decoded into
+    /// `JsonDeserialize` types without scalar type coercion.
     #[derive(Clone, Debug)]
     pub struct NoritoStringQuery<T>(pub T);
     impl<S, T> FromRequestParts<S> for NoritoStringQuery<T>
@@ -2311,118 +2340,204 @@ pub mod extractors {
             parts: &mut axum::http::request::Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            let query = parts.uri.query().unwrap_or("");
+            let query = parts.uri.query();
+            if query == Some("") {
+                return Err(query_rejection(QueryDecodeError::Invalid(
+                    "A present query string must contain at least one key=value pair.",
+                )));
+            }
             #[cfg(feature = "app_api")]
-            if let Some(decoded) = crate::decode_current_app_routed_read_query::<T>(query, false) {
+            if let Some(decoded) =
+                crate::decode_current_app_routed_read_query::<T>(query.unwrap_or_default(), false)
+            {
                 return decoded.map(NoritoStringQuery);
             }
             match decode_string_query::<T>(query) {
                 Ok(value) => Ok(NoritoStringQuery(value)),
-                Err(e) => Err(typed_request_rejection(
-                    StatusCode::BAD_REQUEST,
-                    "request_query_invalid",
-                    format!("invalid query params: {e}"),
-                )),
+                Err(error) => Err(query_rejection(error)),
             }
         }
     }
-    fn decode_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+    fn decode_query<T: JsonDeserializeOwned>(query: Option<&str>) -> Result<T, QueryDecodeError> {
         let pairs = query_pairs(query)?;
         reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
         for (key, value) in pairs {
             object.insert(key, scalar_to_value(&value));
         }
-        json::from_value(Value::Object(object))
+        json::from_value(Value::Object(object)).map_err(|_| QueryDecodeError::Schema)
     }
-    fn decode_string_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+    fn decode_string_query<T: JsonDeserializeOwned>(
+        query: Option<&str>,
+    ) -> Result<T, QueryDecodeError> {
         let pairs = query_pairs(query)?;
         reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
         for (key, value) in pairs {
             object.insert(key, Value::String(value));
         }
-        json::from_value(Value::Object(object))
+        json::from_value(Value::Object(object)).map_err(|_| QueryDecodeError::Schema)
     }
-    fn reject_duplicate_query_keys(pairs: &[(String, String)]) -> Result<(), json::Error> {
+    fn reject_duplicate_query_keys(pairs: &[(String, String)]) -> Result<(), QueryDecodeError> {
         // Structured query DTOs have exactly one value per field. Keep this
         // check local to the DTO decoders so protocol-specific parsers can
         // still define ordered or repeated-key semantics explicitly.
         let mut seen = std::collections::BTreeSet::new();
         for (key, _) in pairs {
             if !seen.insert(key.as_str()) {
-                return Err(json::Error::duplicate_field(key));
+                return Err(QueryDecodeError::Invalid(
+                    "Query parameters contain a duplicate decoded key.",
+                ));
             }
         }
         Ok(())
     }
-    fn query_pairs(query: &str) -> Result<Vec<(String, String)>, json::Error> {
-        query
-            .split('&')
-            .filter(|segment| !segment.is_empty())
-            .map(|segment| {
-                let mut parts = segment.splitn(2, '=');
-                let raw_key = parts.next().unwrap_or("");
-                let raw_value = parts.next().unwrap_or("");
-                Ok((decode_component(raw_key)?, decode_component(raw_value)?))
-            })
-            .collect()
+    fn query_pairs(query: Option<&str>) -> Result<Vec<(String, String)>, QueryDecodeError> {
+        let Some(query) = query else {
+            return Ok(Vec::new());
+        };
+        if query.is_empty() {
+            return Err(QueryDecodeError::Invalid(
+                "A present query string must contain at least one key=value pair.",
+            ));
+        }
+        if query.len() > TORII_QUERY_MAX_RAW_BYTES_V1 {
+            return Err(QueryDecodeError::Capacity {
+                resource: "raw-byte",
+                attempted: query.len(),
+                limit: TORII_QUERY_MAX_RAW_BYTES_V1,
+            });
+        }
+
+        let mut pairs = Vec::new();
+        for segment in query.split('&') {
+            if pairs.len() == TORII_QUERY_MAX_PAIRS_V1 {
+                return Err(QueryDecodeError::Capacity {
+                    resource: "pair-count",
+                    attempted: TORII_QUERY_MAX_PAIRS_V1 + 1,
+                    limit: TORII_QUERY_MAX_PAIRS_V1,
+                });
+            }
+            if segment.is_empty() {
+                return Err(QueryDecodeError::Invalid(
+                    "Query parameters must not contain empty segments.",
+                ));
+            }
+            let Some((raw_key, raw_value)) = segment.split_once('=') else {
+                return Err(QueryDecodeError::Invalid(
+                    "Every query parameter must use key=value framing.",
+                ));
+            };
+            if raw_value.contains('=') {
+                return Err(QueryDecodeError::Invalid(
+                    "Literal equals signs in query components must be percent-encoded.",
+                ));
+            }
+            if raw_key.is_empty() || raw_value.is_empty() {
+                return Err(QueryDecodeError::Invalid(
+                    "Query parameter names and values must be non-empty.",
+                ));
+            }
+            pairs.push((decode_component(raw_key)?, decode_component(raw_value)?));
+        }
+        Ok(pairs)
     }
-    fn decode_component(input: &str) -> Result<String, json::Error> {
-        // HTML form query semantics decode `+` as a space before percent
-        // decoding. A literal plus must therefore be encoded as `%2B`.
+    fn decode_component(input: &str) -> Result<String, QueryDecodeError> {
+        // V1 uses one exact HTML-form spelling. Keeping the spelling unique is
+        // important for signed requests, caches, and duplicate-key checks: an
+        // accepted component cannot acquire an alternate percent-encoded alias.
         let bytes = input.as_bytes();
         let mut position = 0;
         while position < bytes.len() {
-            if bytes[position] != b'%' {
-                position += 1;
-                continue;
+            match bytes[position] {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' | b'+' => {
+                    position += 1;
+                }
+                b'%' => {
+                    let Some(high) = bytes.get(position + 1).copied() else {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query parameters contain invalid percent-encoding.",
+                        ));
+                    };
+                    let Some(low) = bytes.get(position + 2).copied() else {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query parameters contain invalid percent-encoding.",
+                        ));
+                    };
+                    if !matches!(high, b'0'..=b'9' | b'A'..=b'F')
+                        || !matches!(low, b'0'..=b'9' | b'A'..=b'F')
+                    {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query percent-encoding must use two uppercase hexadecimal digits.",
+                        ));
+                    }
+                    let decoded = (query_hex_nibble(high) << 4) | query_hex_nibble(low);
+                    if is_query_form_literal(decoded) || decoded == b' ' {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query parameters contain a non-canonical percent escape.",
+                        ));
+                    }
+                    position += 3;
+                }
+                _ => {
+                    return Err(QueryDecodeError::Invalid(
+                        "Query components must percent-encode bytes outside the canonical form literal set.",
+                    ));
+                }
             }
-            let Some(high) = bytes.get(position + 1).copied() else {
-                return Err(json::Error::Message(
-                    "invalid percent-encoding in query component".to_owned(),
-                ));
-            };
-            let Some(low) = bytes.get(position + 2).copied() else {
-                return Err(json::Error::Message(
-                    "invalid percent-encoding in query component".to_owned(),
-                ));
-            };
-            if !high.is_ascii_hexdigit() || !low.is_ascii_hexdigit() {
-                return Err(json::Error::Message(
-                    "invalid percent-encoding in query component".to_owned(),
-                ));
-            }
-            position += 3;
         }
         let replaced = input.replace('+', " ");
-        decode(&replaced)
+        let decoded = decode(&replaced)
             .map(std::borrow::Cow::into_owned)
-            .map_err(|error| {
-                json::Error::Message(format!(
-                    "invalid percent-encoding in query component: {error}"
-                ))
-            })
+            .map_err(|_| QueryDecodeError::Invalid("Query components must decode as UTF-8."))?;
+        if decoded.chars().any(char::is_control) {
+            return Err(QueryDecodeError::Invalid(
+                "Query components must not contain control characters.",
+            ));
+        }
+        Ok(decoded)
+    }
+    const fn query_hex_nibble(byte: u8) -> u8 {
+        match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => 0,
+        }
+    }
+    const fn is_query_form_literal(byte: u8) -> bool {
+        matches!(
+            byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_'
+        )
     }
     fn scalar_to_value(raw: &str) -> Value {
-        let trimmed = raw.trim();
-        if trimmed.eq_ignore_ascii_case("null") {
+        if raw == "null" {
             Value::Null
-        } else if trimmed.eq_ignore_ascii_case("true") {
+        } else if raw == "true" {
             Value::Bool(true)
-        } else if trimmed.eq_ignore_ascii_case("false") {
+        } else if raw == "false" {
             Value::Bool(false)
-        } else if let Ok(u) = trimmed.parse::<u64>() {
+        } else if canonical_unsigned_decimal(raw)
+            && let Ok(u) = raw.parse::<u64>()
+        {
             Value::Number(Number::from(u))
-        } else if let Ok(i) = trimmed.parse::<i64>() {
+        } else if canonical_negative_decimal(raw)
+            && let Ok(i) = raw.parse::<i64>()
+        {
             Value::Number(Number::from(i))
-        } else if let Ok(f) = trimmed.parse::<f64>() {
-            Number::from_f64(f)
-                .map(Value::Number)
-                .unwrap_or_else(|| Value::String(trimmed.to_string()))
         } else {
-            Value::String(trimmed.to_string())
+            Value::String(raw.to_owned())
         }
+    }
+    fn canonical_unsigned_decimal(raw: &str) -> bool {
+        raw == "0"
+            || raw.as_bytes().split_first().is_some_and(|(first, rest)| {
+                matches!(*first, b'1'..=b'9') && rest.iter().all(u8::is_ascii_digit)
+            })
+    }
+    fn canonical_negative_decimal(raw: &str) -> bool {
+        raw.strip_prefix('-')
+            .is_some_and(|magnitude| magnitude != "0" && canonical_unsigned_decimal(magnitude))
     }
     #[cfg(test)]
     mod tests {
@@ -2477,7 +2592,7 @@ pub mod extractors {
                     .any(|window| window == marker.as_bytes())
             );
             let envelope: iroha_torii_shared::ErrorEnvelope =
-                norito::json::from_slice(&body).expect("decode fixed rejection envelope");
+                norito::decode_from_bytes(&body).expect("decode fixed Norito rejection envelope");
             assert_eq!(envelope.code(), "invalid_query_payload");
         }
         #[test]
@@ -2524,269 +2639,361 @@ pub mod extractors {
             assert_eq!(oversized_error.status(), StatusCode::PAYLOAD_TOO_LARGE);
         }
         #[cfg(feature = "app_api")]
-        impl OfflineCanonicalNoritoSchema for Vec<u64> {
+        impl KagemushaCanonicalNoritoSchemaV1 for Vec<u64> {
             const MAX_BODY_BYTES: usize = 4 * 1024;
-            const MAX_NESTING_DEPTH: usize = 8;
+
+            fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError> {
+                norito::decode_canonical_with_limits(
+                    body,
+                    norito::canonical_decode_limits(body.len()),
+                )
+                .map_err(KagemushaCanonicalNoritoDecodeError::Norito)
+            }
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_top_up_fixture() -> iroha_torii_shared::offline_api::OfflineTopUpRequest
-        {
-            use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-            use iroha_data_model::{
-                NetworkId,
-                account::AccountId,
-                asset::{AssetDefinitionId, AssetId},
-                domain::DomainId,
-                offline::{
-                    KagemushaAndroidKeyMintHardwareAssertionV1, KagemushaDeviceSignatureV2,
-                    KagemushaOnlineHardwareAssertionV1, KagemushaRecursiveSpendArtifactBindingV4,
-                    KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
-                    KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
-                },
-                proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-            };
-            let key_pair = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
-                .expect("derive offline-ingress fixture key");
-            let authority = AccountId::new(key_pair.public_key().clone());
-            let definition = AssetDefinitionId::derive_from_components(
-                DomainId::try_new("offline", "universal").expect("fixture domain"),
-                "ingress".parse().expect("fixture asset name"),
-            );
-            let network_id = NetworkId::from_genesis_hash(HashOf::<
+        fn kagemusha_ingress_account(seed: u8) -> iroha_data_model::account::AccountId {
+            use iroha_crypto::{Algorithm, KeyPair};
+
+            iroha_data_model::account::AccountId::new(
+                KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            )
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_network() -> iroha_data_model::NetworkId {
+            use iroha_crypto::{Hash, HashOf};
+
+            iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
                 iroha_data_model::block::BlockHeader,
             >::from_untyped_unchecked(
-                Hash::new(b"offline-ingress-test-network"),
-            ));
-            let amount = KagemushaScaledAmountV2 {
-                atomic_units: 500,
-                scale: 0,
+                Hash::new(b"kagemusha-v1-ingress-test-network"),
+            ))
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_asset() -> iroha_data_model::asset::AssetDefinitionId {
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                iroha_data_model::domain::DomainId::try_new("offline", "universal")
+                    .expect("fixture domain"),
+                "ingress".parse().expect("fixture asset name"),
+            )
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_asset_incarnation() -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
+            use iroha_crypto::Hash;
+
+            iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+                *Hash::new(b"kagemusha-v1-ingress-asset-incarnation").as_ref(),
+            )
+            .expect("canonical asset incarnation")
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_device_public_key(
+            key: &p256::ecdsa::SigningKey,
+        ) -> iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 {
+            use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+
+            iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1::from_sec1_bytes(
+                key.verifying_key().to_encoded_point(false).as_bytes(),
+            )
+            .expect("canonical P-256 device key")
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_sign(
+            key: &p256::ecdsa::SigningKey,
+            bytes: &[u8],
+        ) -> iroha_data_model::kagemusha::KagemushaDeviceSignatureV1 {
+            use p256::ecdsa::{Signature, signature::Signer as _};
+
+            let signature: Signature = key.sign(bytes);
+            let signature = signature.normalize_s().unwrap_or(signature);
+            iroha_data_model::kagemusha::KagemushaDeviceSignatureV1::from_raw_bytes(
+                signature.to_bytes().as_ref(),
+            )
+            .expect("canonical low-S P-256 signature")
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_encrypted_credit(recipient_key: [u8; 32], tag: u8) -> Vec<u8> {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
+                KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaEncryptedCreditEnvelopeV1,
+                kagemusha_credit_opening_canonical_len_v1,
             };
-            let operation_id = [0x42; 32];
-            let backend = "halo2/ipa";
-            let mut proof = ProofAttachment::new_ref(
-                backend.into(),
-                ProofBox::new(backend.to_owned(), vec![0x43]),
-                VerifyingKeyId::new(backend, "offline-ingress-topup"),
+
+            let mut ephemeral_x25519_public_key = [0; 32];
+            ephemeral_x25519_public_key[0] = tag.wrapping_add(1);
+            KagemushaEncryptedCreditEnvelopeV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                ephemeral_x25519_public_key,
+                nonce: [tag; KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1],
+                ciphertext_and_tag: vec![
+                    tag;
+                    kagemusha_credit_opening_canonical_len_v1()
+                        .expect("credit opening length")
+                        + KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1
+                ],
+            }
+            .canonical_bytes_against_recipient_key(recipient_key)
+            .expect("canonical encrypted credit")
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_paired_proof(
+            semantic_digest: [u8; 32],
+            proof_len: usize,
+            tag: u8,
+        ) -> iroha_data_model::kagemusha::KagemushaPairedProofV1 {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+                KagemushaPairedProofV1,
+            };
+
+            KagemushaPairedProofV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                eq_protocol_digest: [tag; 32],
+                ep_protocol_digest: [tag.wrapping_add(1); 32],
+                semantic_digest,
+                guard_eq_credential_audit: [tag.wrapping_add(2); 32],
+                guard_ep_credential_audit: [tag.wrapping_add(3); 32],
+                eq_deferred_audit: [tag.wrapping_add(4); 32],
+                ep_deferred_audit: [tag.wrapping_add(5); 32],
+                eq_proof: vec![tag.wrapping_add(6); proof_len],
+                ep_proof: vec![tag.wrapping_add(7); proof_len],
+                eq_history: vec![tag.wrapping_add(8); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                ep_history: vec![tag.wrapping_add(9); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+            }
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_top_up_fixture()
+        -> iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_WIRE_VERSION_V1, KagemushaHardwareCredentialV1,
+                KagemushaMintAuthorizationV1, kagemusha_device_key_reference_v1,
+                kagemusha_liability_pool_id_v1,
+            };
+            let recipient_key =
+                p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).expect("fixture P-256 key");
+            let governance_key =
+                p256::ecdsa::SigningKey::from_slice(&[0x31; 32]).expect("governance P-256 key");
+            let recipient_public_key = kagemusha_ingress_device_public_key(&recipient_key);
+            let network_id = kagemusha_ingress_network();
+            let asset = kagemusha_ingress_asset();
+            let asset_incarnation = kagemusha_ingress_asset_incarnation();
+            let suite_id = [0x4B; 32];
+            let recipient_lane_id = [0x46; 32];
+            let mut hardware_credential = KagemushaHardwareCredentialV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                credential_id: [0; 32],
+                network_id,
+                hardware_profile_id: [0x47; 32],
+                suite_id,
+                firmware_policy_digest: [0x48; 32],
+                policy_epoch: 1,
+                lane_commitment: recipient_lane_id,
+                hardware_epoch_id: [0x49; 32],
+                hardware_epoch_generation: 1,
+                device_public_key: recipient_public_key,
+                device_key_reference: kagemusha_device_key_reference_v1(&recipient_public_key),
+                issued_at_ms: 1,
+                expires_at_ms: 90_000,
+                governance_signature: kagemusha_ingress_sign(
+                    &governance_key,
+                    b"KAGEMUSHA V1 credential placeholder",
+                ),
+            }
+            .seal_credential_id()
+            .expect("seal hardware credential identity");
+            hardware_credential.governance_signature = kagemusha_ingress_sign(
+                &governance_key,
+                &hardware_credential
+                    .canonical_signing_bytes()
+                    .expect("credential signing bytes"),
             );
-            proof.vk_commitment = Some([0x44; 32]);
-            iroha_torii_shared::offline_api::OfflineTopUpRequest {
-                version: 4,
-                asset: AssetId::new(definition.clone(), authority.clone()),
-                amount,
-                current_note: KagemushaSpendableNoteDescriptorV2 {
-                    network_id,
-                    asset: definition.clone(),
-                    note_commitment: [0x45; 32],
-                    spend_nullifier: [0x46; 32],
-                    amount,
-                },
-                shield_evidence: KagemushaTopUpShieldEvidenceV2 {
-                    initial_root: [0x47; 32],
-                    finalized_root: [0x48; 32],
-                    leaf_index: 0,
-                    proof,
-                },
-                artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
-                    version: 4,
-                    generation: "offline-ingress-fixture".to_owned(),
-                    manifest_sha256: [0x49; 32],
-                },
-                operation_id,
-                authorization: KagemushaRequestAuthorizationV2 {
-                    authority,
-                    device_id: "offline-ingress-device".to_owned(),
-                    asset_definition_id: definition,
-                    operation_id,
-                    issued_at_ms: 1,
-                    expires_at_ms: 2,
-                    nonce: [0x4A; 32],
-                    payload_digest: [0x4B; 32],
-                    registration_hash: [0x4C; 32],
-                    hardware_assertion: KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
-                        KagemushaAndroidKeyMintHardwareAssertionV1 {
-                            signature: KagemushaDeviceSignatureV2::from_raw_bytes(&[1; 64])
-                                .expect("canonical low-S fixture signature"),
-                        },
+            let mut recipient_one_time_key = [0; 32];
+            recipient_one_time_key[0] = 9;
+            let request = iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
+                version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
+                operation_id: [0x42; 32],
+                issuance_commitment: [0; 32],
+                credit_id: [0; 32],
+                release_id: [0x43; 32],
+                suite_id,
+                vk_digest: [0x44; 32],
+                network_id,
+                liability_pool_id: kagemusha_liability_pool_id_v1(
+                    &network_id,
+                    &asset,
+                    asset_incarnation,
+                )
+                .expect("canonical liability pool"),
+                asset,
+                asset_incarnation,
+                scale: 4,
+                amount: 50_000,
+                payer: kagemusha_ingress_account(0x44),
+                recipient: kagemusha_ingress_account(0x45),
+                hardware_credential,
+                recipient_credential_commitment: [0x4A; 32],
+                credit_commitment: [0x4C; 32],
+                recipient_one_time_key,
+                encrypted_credit: kagemusha_ingress_encrypted_credit(recipient_one_time_key, 0x4D),
+                artifact_manifest_digest: [0x4A; 32],
+                mint_authorization: None,
+            }
+            .seal_identifiers()
+            .expect("seal KAGEMUSHA V1 top-up identifiers");
+            let statement = request
+                .mint_authorization_statement()
+                .expect("mint authorization statement");
+            request
+                .attach_mint_authorization(KagemushaMintAuthorizationV1 {
+                    version: KAGEMUSHA_WIRE_VERSION_V1,
+                    proof: kagemusha_ingress_paired_proof(
+                        statement
+                            .canonical_digest()
+                            .expect("mint authorization semantic digest"),
+                        128,
+                        0x71,
                     ),
-                },
-            }
+                    statement,
+                })
+                .expect("attach mint authorization")
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_redeem_fixture(
-            top_up: &iroha_torii_shared::offline_api::OfflineTopUpRequest,
-        ) -> iroha_torii_shared::offline_api::OfflineRedeemRequest {
-            use iroha_data_model::{
-                offline::{
-                    KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
-                    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KagemushaPastaCycleParityV1,
-                    KagemushaPastaCycleProofEnvelopeV4, KagemushaRecursiveSpendBranchClaimV2,
-                    KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendOperationVectorV4,
-                    KagemushaRecursiveSpendProofV4, KagemushaRecursiveSpendPublicStatementV4,
-                    KagemushaRecursiveSpendRedemptionIntentV4,
-                    KagemushaRecursiveSpendStateBoundaryV5,
-                    KagemushaRecursiveSpendTopUpAnchorRefV2,
-                    KagemushaUnshieldPublicInputsBindingV2,
-                    kagemusha_recursive_spend_verifier_key_id_v4,
-                },
-                proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+        fn kagemusha_ingress_redemption_fixture()
+        -> iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
+                KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+                KAGEMUSHA_WIRE_VERSION_V1, KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
+                KagemushaHardwareTerminalBodyV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
+                KagemushaOutboxReservationV1, KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
+                KagemushaRedemptionVoucherV1, KagemushaTrustedCommitTimeV1, kagemusha_liability_pool_id_v1,
             };
-            let operation_id = [0x51; 32];
-            let amount = top_up.amount;
-            let note = top_up.current_note.clone();
-            let binding = top_up.artifact_binding.clone();
-            let anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
-                topup_operation_id: top_up.operation_id,
-                anchor_digest: [0x52; 32],
-            };
-            let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref.anchor_digest)
-                .expect("canonical root branch claim");
-            let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
-                KagemushaPastaCycleParityV1::StepEq,
-                binding.manifest_sha256,
+
+            assert_eq!(
+                KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1 * 2,
+                KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1
             );
-            let statement = KagemushaRecursiveSpendPublicStatementV4 {
-                network_id: note.network_id,
-                asset: note.asset.clone(),
-                asset_scale: amount.scale,
-                final_root: [0x53; 32],
-                next_zero_leaf_index: 1,
-                topup_anchor_refs: vec![anchor_ref],
-                proof_step_count: 1,
-                peer_hop_count: 0,
-                current_note: note.clone(),
-                branch_claims: vec![branch_claim.clone()],
-                transition: None,
-                artifact_binding: binding.clone(),
-                verifier_key_id: verifier_key_id.clone(),
+            assert!(KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 > 0);
+            let network_id = kagemusha_ingress_network();
+            let asset = kagemusha_ingress_asset();
+            let asset_incarnation = kagemusha_ingress_asset_incarnation();
+            let commit_evidence = KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
+                time_evidence_commitment: [0x5A; 32],
+            });
+            let statement = KagemushaRedemptionStatementV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                lifecycle: KagemushaLifecycleBindingV1 {
+                    version: KAGEMUSHA_WIRE_VERSION_V1,
+                    network_id,
+                    protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
+                    suite_id: [0x50; 32],
+                    vk_digest: [0x51; 32],
+                    release_id: [0x52; 32],
+                    asset: asset.clone(),
+                    asset_incarnation,
+                    scale: 4,
+                    liability_pool_id: kagemusha_liability_pool_id_v1(
+                        &network_id,
+                        &asset,
+                        asset_incarnation,
+                    )
+                    .expect("canonical liability pool"),
+                    hardware_profile_id: [0x53; 32],
+                    policy_epoch: 1,
+                    operation_kind: KagemushaOperationKindV1::RedeemSplit,
+                    request_id: [0; 32],
+                    receiver_lane_commitment: [0; 32],
+                    credit_id: [0; 32],
+                    ciphertext_digest: [0; 32],
+                },
+                amount: 12_000,
+                beneficiary: kagemusha_ingress_account(0x53),
+                terminal_nullifier: [0x54; 32],
+                redemption_commitment: [0x59; 32],
+                redemption_id: [0; 32],
+                commit_evidence,
+            }
+            .seal_redemption_id()
+            .expect("seal redemption identity");
+            let reservation = KagemushaOutboxReservationV1 {
+                reservation_id: [0x16; 32],
+                operation_kind: KagemushaOperationKindV1::RedeemSplit,
+                reserved_outbox_bytes: KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+                issued_at_ms: 8_000,
+                expires_at_ms: 10_000,
             };
-            let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
-            state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-            let bundle = KagemushaRecursiveSpendBundleV4 {
+            let terminal_body = KagemushaHardwareTerminalBodyV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                candidate_envelope_digest: [0x17; 32],
+                lifecycle_binding_digest: statement
+                    .lifecycle
+                    .canonical_digest()
+                    .expect("redemption lifecycle digest"),
+                transition_nullifier: statement.terminal_nullifier,
+                outbox_reservation_commitment: reservation
+                    .canonical_commitment()
+                    .expect("redemption outbox reservation"),
+                commit_evidence,
+                hardware_profile_id: statement.lifecycle.hardware_profile_id,
+                policy_epoch: statement.lifecycle.policy_epoch,
+                private_successor_commitment: [0x18; 32],
+                private_journal_commitment: [0x19; 32],
+                private_recovery_commitment: [0x1A; 32],
+            };
+            let commit_certificate = KagemushaCommitCertificateV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                certificate_id: [0; 32],
+                candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+                lifecycle_binding_digest: terminal_body.lifecycle_binding_digest,
+                transition_nullifier: terminal_body.transition_nullifier,
+                outbox_reservation_commitment: terminal_body.outbox_reservation_commitment,
+                commit_evidence,
+                hardware_profile_id: terminal_body.hardware_profile_id,
+                policy_epoch: terminal_body.policy_epoch,
+                hardware_terminal_commitment: [0; 32],
+            }
+            .seal_with_terminal_body(&terminal_body)
+            .expect("redemption terminal certificate");
+            let voucher = KagemushaRedemptionVoucherV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                proof: KagemushaRedemptionProofV1 {
+                    version: KAGEMUSHA_WIRE_VERSION_V1,
+                    eq_protocol_digest: [0x1B; 32],
+                    ep_protocol_digest: [0x1C; 32],
+                    semantic_digest: statement
+                        .canonical_digest()
+                        .expect("redemption statement digest"),
+                    candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+                    commit_certificate_digest: commit_certificate
+                        .canonical_digest_against(
+                            &statement.lifecycle,
+                            statement.commit_evidence,
+                            statement.terminal_nullifier,
+                        )
+                        .expect("redemption certificate digest"),
+                    eq_deferred_audit: [0x1D; 32],
+                    ep_deferred_audit: [0x1E; 32],
+                    // Ingress tests validate public shape and maximum payload admission;
+                    // these bytes do not claim cryptographic proof qualification.
+                    eq_proof: vec![0xA1; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
+                    ep_proof: vec![0xB2; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
+                    eq_history: vec![0xC3; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                    ep_history: vec![0xD4; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                },
                 statement,
-                operation: KagemushaRecursiveSpendOperationVectorV4 {
-                    limbs: [0; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4],
-                },
-                recursive_proof: KagemushaRecursiveSpendProofV4 {
-                    verifier_key_id: verifier_key_id.clone(),
-                    public_statement_digest: [0x54; 32],
-                    proof_envelope: KagemushaPastaCycleProofEnvelopeV4 {
-                        version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-                        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
-                        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
-                            .to_owned(),
-                        step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
-                            .to_owned(),
-                        step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
-                            .to_owned(),
-                        artifact_generation: binding.generation.clone(),
-                        manifest_sha256: binding.manifest_sha256,
-                        step_eq_parameter_generation: "offline-ingress-eq".to_owned(),
-                        step_ep_parameter_generation: "offline-ingress-ep".to_owned(),
-                        step_eq_circuit_params_sha256: [0x55; 32],
-                        step_ep_circuit_params_sha256: [0x56; 32],
-                        step_eq_verifier_key_sha256: [0x57; 32],
-                        step_ep_verifier_key_sha256: [0x58; 32],
-                        state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
-                            .expect("fixture state boundary"),
-                        proof: ProofBox::new(
-                            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
-                            vec![0x59],
-                        ),
-                    },
-                },
+                commit_certificate,
+                artifact_manifest_digest: [0x63; 32],
             };
-            let public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
-                input_commitment_0: note.note_commitment,
-                input_commitment_1: [0; 32],
-                nullifier_0: note.spend_nullifier,
-                nullifier_1: [0; 32],
-                change_output_commitment: [0; 32],
-                root: [0x53; 32],
-                public_amount: [0x5A; 32],
-                asset_tag: [0x5B; 32],
-                network_tag: [0x5C; 32],
+            let request = iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
+                version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
+                operation_id: [0x62; 32],
+                voucher,
             };
-            let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
-                network_id: note.network_id,
-                asset: note.asset.clone(),
-                input_note: note,
-                parent_branch_claims: vec![branch_claim],
-                parent_topup_anchor_refs: vec![anchor_ref],
-                parent_proof_step_count: 1,
-                parent_peer_hop_count: 0,
-                parent_bundle_digest: [0x5D; 32],
-                input_root: [0x53; 32],
-                recipient: top_up.authorization.authority.clone(),
-                public_amount: amount,
-                change_output: None,
-                change_artifact_binding: None,
-                unshield_public_inputs: public_inputs,
-                unshield_public_inputs_digest: [0x5E; 32],
-                operation_id,
-            };
-            let backend = "halo2/ipa";
-            let mut redeem_proof = ProofAttachment::new_ref(
-                backend.into(),
-                ProofBox::new(backend.to_owned(), vec![0x5F]),
-                VerifyingKeyId::new(backend, "offline-ingress-unshield"),
-            );
-            redeem_proof.vk_commitment = Some([0x60; 32]);
-            let mut authorization = top_up.authorization.clone();
-            authorization.operation_id = operation_id;
-            authorization.payload_digest = [0x61; 32];
-            iroha_torii_shared::offline_api::OfflineRedeemRequest {
-                version: 4,
-                bundle,
-                recipient: authorization.authority.clone(),
-                amount,
-                redeem_proof,
-                redemption,
-                offline_change: None,
-                block_height: 1,
-                operation_id,
-                authorization,
-            }
-        }
-        #[cfg(feature = "app_api")]
-        fn offline_ingress_max_shaped_redeem_fixture(
-            top_up: &iroha_torii_shared::offline_api::OfflineTopUpRequest,
-        ) -> iroha_torii_shared::offline_api::OfflineRedeemRequest {
-            let mut redeem = offline_ingress_redeem_fixture(top_up);
-            redeem.bundle.recursive_proof.proof_envelope.proof.bytes = vec![
-                0x72;
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
-                    as usize
-            ];
-            redeem.redeem_proof.proof.bytes =
-                vec![0x73; iroha_data_model::offline::KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
-            let mut change_output = redeem.bundle.statement.current_note.clone();
-            change_output.note_commitment = [0x74; 32];
-            change_output.spend_nullifier = [0x75; 32];
-            let mut change_bundle = redeem.bundle.clone();
-            change_bundle.statement.current_note = change_output.clone();
-            change_bundle.recursive_proof.proof_envelope.proof.bytes = vec![
-                0x76;
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
-                    as usize
-            ];
-            let change_branch_claims = change_bundle.statement.branch_claims.clone();
-            redeem.redemption.change_output = Some(change_output.clone());
-            redeem.redemption.change_artifact_binding =
-                Some(change_bundle.statement.artifact_binding.clone());
-            redeem.offline_change = Some(
-                iroha_data_model::offline::KagemushaRecursiveSpendRedeemChangeBranchV4 {
-                    output: change_output,
-                    branch_claims: change_branch_claims,
-                    bundle: change_bundle,
-                },
-            );
-            redeem
+            request
+                .validate_shape()
+                .expect("valid KAGEMUSHA V1 redemption");
+            request
         }
         #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
         struct StringQueryForTest {
@@ -2829,12 +3036,24 @@ pub mod extractors {
             assert_eq!(envelope.code(), "request_query_invalid");
         }
         #[tokio::test]
-        async fn duplicate_query_fields_are_rejected_before_deserialization() {
-            for query in [
-                "asset_definition_id=first&asset_definition_id=second",
-                "asset_definition_id=first&asset%5fdefinition%5fid=second",
-                "asset_definition_id=first&%61sset_definition_id=second",
-                "asset_definition_id=first&asset%5Fdefinition%5Fid=second",
+        async fn duplicate_and_encoded_alias_query_fields_are_rejected() {
+            for (query, expected_message) in [
+                (
+                    "asset_definition_id=first&asset_definition_id=second",
+                    "duplicate decoded key",
+                ),
+                (
+                    "asset_definition_id=first&asset%5fdefinition%5fid=second",
+                    "uppercase hexadecimal",
+                ),
+                (
+                    "asset_definition_id=first&%61sset_definition_id=second",
+                    "non-canonical percent escape",
+                ),
+                (
+                    "asset_definition_id=first&asset%5Fdefinition%5Fid=second",
+                    "non-canonical percent escape",
+                ),
             ] {
                 let request = Request::builder()
                     .uri(format!("/?{query}"))
@@ -2858,7 +3077,7 @@ pub mod extractors {
                     norito::json::from_slice(&bytes).expect("decode duplicate-query error");
                 assert_eq!(envelope.code(), "request_query_invalid", "query={query}");
                 assert!(
-                    envelope.message().contains("duplicate field"),
+                    envelope.message().contains(expected_message),
                     "query={query}, envelope={envelope:?}"
                 );
             }
@@ -2901,11 +3120,109 @@ pub mod extractors {
         #[test]
         fn query_plus_and_percent_encoded_plus_have_distinct_form_semantics() {
             let space: StringQueryForTest =
-                super::decode_string_query("label=tron+nile").expect("form-space query");
+                super::decode_string_query(Some("label=tron+nile")).expect("form-space query");
             assert_eq!(space.label.as_deref(), Some("tron nile"));
             let plus: StringQueryForTest =
-                super::decode_string_query("label=tron%2Bnile").expect("literal-plus query");
+                super::decode_string_query(Some("label=tron%2Bnile")).expect("literal-plus query");
             assert_eq!(plus.label.as_deref(), Some("tron+nile"));
+        }
+        #[test]
+        fn generic_query_rejects_noncanonical_component_aliases() {
+            for query in [
+                "label=tron%20nile",
+                "label=%74ron",
+                "label=tron%2bnile",
+                "label=tron/nile",
+                "label=tron:nile",
+                "label=tron~nile",
+                "label=tron%C2%A0nile%0A",
+                "label=tron nile",
+                "label=tron💖nile",
+            ] {
+                assert!(
+                    super::decode_string_query::<StringQueryForTest>(Some(query)).is_err(),
+                    "query {query:?} must not acquire an alternate wire spelling"
+                );
+            }
+            let decoded: StringQueryForTest =
+                super::decode_string_query(Some("label=tron%F0%9F%92%96nile"))
+                    .expect("uppercase UTF-8 escapes are canonical");
+            assert_eq!(decoded.label.as_deref(), Some("tron💖nile"));
+            let decoded: StringQueryForTest = super::decode_string_query(Some("label=tron*nile"))
+                .expect("the form asterisk is a canonical literal");
+            assert_eq!(decoded.label.as_deref(), Some("tron*nile"));
+            let decoded: StringQueryForTest = super::decode_string_query(Some("label=tron%7Enile"))
+                .expect("tilde is canonically escaped by form encoding");
+            assert_eq!(decoded.label.as_deref(), Some("tron~nile"));
+        }
+        #[test]
+        fn generic_query_rejects_empty_and_ambiguous_framing() {
+            for query in ["", "&", "label", "=value", "label=", "label=x=", "label=x&"] {
+                assert!(
+                    super::query_pairs(Some(query)).is_err(),
+                    "query {query:?} must be rejected"
+                );
+            }
+            assert!(super::query_pairs(None).expect("absent query").is_empty());
+        }
+        #[test]
+        fn generic_query_capacity_boundaries_are_exact() {
+            let exact_pairs = (0..super::TORII_QUERY_MAX_PAIRS_V1)
+                .map(|index| format!("k{index}=v"))
+                .collect::<Vec<_>>()
+                .join("&");
+            assert_eq!(
+                super::query_pairs(Some(&exact_pairs))
+                    .expect("exact pair-count boundary")
+                    .len(),
+                super::TORII_QUERY_MAX_PAIRS_V1
+            );
+            let excessive_pairs = format!("{exact_pairs}&overflow=v");
+            assert!(matches!(
+                super::query_pairs(Some(&excessive_pairs)),
+                Err(super::QueryDecodeError::Capacity {
+                    resource: "pair-count",
+                    ..
+                })
+            ));
+
+            let exact_bytes = format!("k={}", "a".repeat(super::TORII_QUERY_MAX_RAW_BYTES_V1 - 2));
+            assert!(super::query_pairs(Some(&exact_bytes)).is_ok());
+            let excessive_bytes = format!("{exact_bytes}a");
+            assert!(matches!(
+                super::query_pairs(Some(&excessive_bytes)),
+                Err(super::QueryDecodeError::Capacity {
+                    resource: "raw-byte",
+                    ..
+                })
+            ));
+        }
+        #[test]
+        fn generic_query_scalar_coercion_accepts_only_canonical_spellings() {
+            assert_eq!(super::scalar_to_value("null"), Value::Null);
+            assert_eq!(super::scalar_to_value("true"), Value::Bool(true));
+            assert_eq!(super::scalar_to_value("false"), Value::Bool(false));
+            assert_eq!(
+                super::scalar_to_value("0"),
+                Value::Number(Number::from(0_u64))
+            );
+            assert_eq!(
+                super::scalar_to_value("42"),
+                Value::Number(Number::from(42_u64))
+            );
+            assert_eq!(
+                super::scalar_to_value("-42"),
+                Value::Number(Number::from(-42_i64))
+            );
+            for alias in [
+                "NULL", "TRUE", "False", "00", "01", "-0", "+1", "1.0", "1e0",
+            ] {
+                assert_eq!(
+                    super::scalar_to_value(alias),
+                    Value::String(alias.to_owned()),
+                    "scalar alias {alias:?} must remain text"
+                );
+            }
         }
         #[tokio::test]
         async fn duplicate_string_query_fields_are_rejected_before_deserialization() {
@@ -2930,7 +3247,7 @@ pub mod extractors {
             let envelope: iroha_torii_shared::ErrorEnvelope =
                 norito::json::from_slice(&bytes).expect("decode duplicate string-query error");
             assert_eq!(envelope.code(), "request_query_invalid");
-            assert!(envelope.message().contains("duplicate field"));
+            assert!(envelope.message().contains("duplicate decoded key"));
         }
         impl Version for Dummy {
             fn version(&self) -> u8 {
@@ -3805,7 +4122,7 @@ pub mod extractors {
             }
         }
         #[test]
-        fn kagemusha_command_content_type_is_canonical_norito_only() {
+        fn kagemusha_v1_command_content_type_is_canonical_norito_only() {
             let mut headers = axum::http::HeaderMap::new();
             headers.insert(
                 CONTENT_TYPE,
@@ -3825,7 +4142,7 @@ pub mod extractors {
                 );
                 assert_eq!(
                     super::super::norito_request_content_type(&headers)
-                        .expect_err("Kagemusha commands have one wire representation")
+                        .expect_err("KAGEMUSHA commands have one wire representation")
                         .status(),
                     StatusCode::UNSUPPORTED_MEDIA_TYPE,
                     "content_type={raw}"
@@ -3834,11 +4151,11 @@ pub mod extractors {
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_decoder_accepts_only_the_canonical_layout() {
+        fn kagemusha_norito_decoder_accepts_only_the_canonical_layout() {
             let value = vec![3_u64, 5, 8, 13, 21];
             let canonical = norito::encode_canonical(&value).expect("encode canonical fixture");
             assert_eq!(
-                decode_offline_canonical_norito::<Vec<u64>>(&canonical)
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&canonical)
                     .expect("decode canonical fixture"),
                 value
             );
@@ -3850,8 +4167,8 @@ pub mod extractors {
             };
             assert_ne!(alternate, canonical);
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&alternate),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&alternate),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::NonCanonicalEncoding
                 ))
             ));
@@ -3859,21 +4176,21 @@ pub mod extractors {
                 norito::to_compressed_bytes(&value, Some(norito::CompressionConfig::default()))
                     .expect("encode compressed fixture");
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&compressed),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&compressed),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::NonCanonicalEncoding
                 ))
             ));
             let mut trailing = canonical;
             trailing.push(0);
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&trailing),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(_))
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&trailing),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(_))
             ));
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_decoder_rejects_forged_counts_before_allocation() {
+        fn kagemusha_norito_decoder_rejects_forged_counts_before_allocation() {
             const FORGED_LENGTH: u64 = 1 << 40;
             let frame = norito::core::frame_bare_with_header_flags::<Vec<u64>>(
                 &FORGED_LENGTH.to_le_bytes(),
@@ -3881,8 +4198,8 @@ pub mod extractors {
             )
             .expect("frame forged count with a valid checksum");
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&frame),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&frame),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::SequenceLengthExceeded { .. }
                         | norito::Error::TotalElementsExceeded { .. }
                         | norito::Error::TotalAllocationExceeded { .. }
@@ -3901,132 +4218,146 @@ pub mod extractors {
             )
             .expect("frame forged allocation with a valid checksum");
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&allocation_frame),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&allocation_frame),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::TotalAllocationExceeded { .. }
                 ))
             ));
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_body_caps_are_exact_and_fail_one_byte_over() {
+        fn kagemusha_norito_body_caps_are_exact_and_fail_one_byte_over() {
             assert_eq!(
-                <iroha_torii_shared::offline_api::OfflineRecipientLineageRequest as OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES,
-                32 * 1024,
-                "the lineage extractor and route share the exact 32 KiB protocol cap"
+                <iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 as KagemushaCanonicalNoritoSchemaV1>::MAX_BODY_BYTES,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
+                "the top-up extractor and shared decoder use one protocol cap"
+            );
+            assert_eq!(
+                <iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 as KagemushaCanonicalNoritoSchemaV1>::MAX_BODY_BYTES,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
+                "the redemption extractor and shared decoder use one protocol cap"
             );
             for maximum in [
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
             ] {
                 assert!(
-                    validate_offline_canonical_norito_body_len(maximum, maximum).is_ok(),
+                    validate_kagemusha_canonical_norito_body_len(maximum, maximum).is_ok(),
                     "the exact protocol body cap must be accepted"
                 );
                 assert!(matches!(
-                    validate_offline_canonical_norito_body_len(maximum + 1, maximum),
-                    Err(OfflineCanonicalNoritoDecodeError::TooLarge {
+                    validate_kagemusha_canonical_norito_body_len(maximum + 1, maximum),
+                    Err(KagemushaCanonicalNoritoDecodeError::TooLarge {
                         actual,
                         maximum: rejected_maximum
                     }) if actual == maximum + 1 && rejected_maximum == maximum
                 ));
             }
             assert!(matches!(
-                validate_offline_canonical_norito_body_len(0, 1),
-                Err(OfflineCanonicalNoritoDecodeError::Empty)
+                validate_kagemusha_canonical_norito_body_len(0, 1),
+                Err(KagemushaCanonicalNoritoDecodeError::Empty)
             ));
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_max_shaped_schema_archives_fit_the_schema_allocation_budget() {
-            use iroha_torii_shared::offline_api::{
-                OfflineRecipientLineageRequest, OfflineRecipientLineageSelectorV2,
-            };
+        fn kagemusha_norito_boundary_shaped_v1_requests_use_shared_validation() {
             fn assert_bounded_roundtrip<T>(value: &T)
             where
-                T: OfflineCanonicalNoritoSchema + core::fmt::Debug + PartialEq,
+                T: KagemushaCanonicalNoritoSchemaV1 + core::fmt::Debug + PartialEq,
             {
                 let canonical =
-                    norito::encode_canonical(value).expect("encode canonical Offline DTO");
+                    norito::encode_canonical(value).expect("encode canonical KAGEMUSHA DTO");
                 assert!(
                     canonical.len() <= T::MAX_BODY_BYTES,
-                    "representative Offline DTO exceeds its exact route cap"
+                    "representative KAGEMUSHA DTO exceeds its exact route cap"
                 );
-                let limits = T::decode_limits(canonical.len());
-                assert_eq!(
-                    limits.max_total_allocated_bytes(),
-                    canonical
-                        .len()
-                        .saturating_mul(
-                            OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
-                                .saturating_add(T::EXTRA_ENCODED_ALLOCATION_MULTIPLIER),
-                        )
-                        .saturating_add(T::FIXED_ALLOCATION_ALLOWANCE_BYTES)
-                );
-                let decoded = decode_offline_canonical_norito::<T>(&canonical)
-                    .expect("real Offline DTO must fit its decode budget");
+                let decoded = decode_kagemusha_canonical_norito::<T>(&canonical)
+                    .expect("valid KAGEMUSHA V1 DTO must pass the shared validator");
                 assert_eq!(&decoded, value);
             }
-            let mut top_up = offline_ingress_top_up_fixture();
-            top_up.authorization.device_id = "d".repeat(128);
-            top_up.artifact_binding.generation = "g".repeat(128);
-            top_up.shield_evidence.proof.proof.bytes =
-                vec![0x71; iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2];
+            let top_up = kagemusha_ingress_top_up_fixture();
             assert_bounded_roundtrip(&top_up);
-            let redeem = offline_ingress_max_shaped_redeem_fixture(&top_up);
-            assert_bounded_roundtrip(&redeem);
-            let lineage = OfflineRecipientLineageRequest {
-                version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
-                selector: OfflineRecipientLineageSelectorV2 {
-                    network_id: top_up.current_note.network_id,
-                    recipient: top_up.authorization.authority.clone(),
-                    receiver_device_id: "d".repeat(128),
-                    asset: top_up.current_note.asset.clone(),
-                },
-                trusted_checkpoint_height: 1,
-            };
-            assert_bounded_roundtrip(&lineage);
+            let redemption = kagemusha_ingress_redemption_fixture();
+            assert_bounded_roundtrip(&redemption);
+
+            let mut invalid_top_up = top_up;
+            invalid_top_up.amount = 0;
+            let invalid = norito::encode_canonical(&invalid_top_up)
+                .expect("encode structurally decodable invalid top-up");
+            assert!(matches!(
+                decode_kagemusha_canonical_norito::<
+                    iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1,
+                >(&invalid),
+                Err(KagemushaCanonicalNoritoDecodeError::Invalid(_))
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        #[test]
+        fn kagemusha_norito_redemption_rejects_substituted_terminal_bindings() {
+            use iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1;
+
+            let valid = kagemusha_ingress_redemption_fixture();
+            let mut changed_certificate = valid.clone();
+            changed_certificate.voucher.commit_certificate.candidate_envelope_digest[0] ^= 1;
+            let mut changed_proof = valid.clone();
+            changed_proof.voucher.proof.commit_certificate_digest[0] ^= 1;
+            let mut missing_manifest = valid;
+            missing_manifest.voucher.artifact_manifest_digest = [0; 32];
+            for (label, request) in [
+                ("substituted terminal certificate", changed_certificate),
+                ("substituted proof certificate binding", changed_proof),
+                ("missing released artifact manifest", missing_manifest),
+            ] {
+                let bytes = norito::encode_canonical(&request).expect("encode invalid fixture");
+                assert!(
+                    matches!(
+                        decode_kagemusha_canonical_norito::<KagemushaRedemptionRequestV1>(&bytes),
+                        Err(KagemushaCanonicalNoritoDecodeError::Invalid(_))
+                    ),
+                    "{label} must fail shared ingress validation"
+                );
+            }
         }
         #[cfg(feature = "app_api")]
         #[tokio::test]
-        async fn offline_norito_http_extractor_accepts_max_shaped_redeem_and_rejects_compression() {
-            use iroha_torii_shared::offline_api::OfflineRedeemRequest;
-            let top_up = offline_ingress_top_up_fixture();
-            let redeem = offline_ingress_max_shaped_redeem_fixture(&top_up);
+        async fn kagemusha_norito_http_extractor_accepts_boundary_redemption_and_rejects_invalid_forms()
+         {
+            use iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1;
+
+            let redeem = kagemusha_ingress_redemption_fixture();
             let canonical =
                 norito::encode_canonical(&redeem).expect("encode maximum-shaped redeem request");
             assert!(
                 canonical.len()
-                    <= <OfflineRedeemRequest as OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES
+                    <= <KagemushaRedemptionRequestV1 as KagemushaCanonicalNoritoSchemaV1>::MAX_BODY_BYTES
             );
             let canonical_request = Request::builder()
                 .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
                 .body(Body::from(canonical))
                 .expect("canonical HTTP request");
-            let extracted =
-                OfflineNorito::<OfflineRedeemRequest>::from_request(canonical_request, &())
-                    .await
-                    .expect("maximum-shaped canonical redeem must pass the HTTP extractor");
+            let extracted = KagemushaNorito::<KagemushaRedemptionRequestV1>::from_request(
+                canonical_request,
+                &(),
+            )
+            .await
+            .expect("maximum-shaped canonical redeem must pass the HTTP extractor");
             assert_eq!(extracted.0, redeem);
-            let mut oversized_unshield = redeem.clone();
-            oversized_unshield.redeem_proof.proof.bytes.push(0x77);
+            let mut oversized_proof = redeem.clone();
+            oversized_proof.voucher.proof.eq_proof.push(0x77);
             let oversized_request = Request::builder()
                 .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
                 .body(Body::from(
-                    norito::encode_canonical(&oversized_unshield)
-                        .expect("encode oversized unshield request"),
+                    norito::encode_canonical(&oversized_proof)
+                        .expect("encode oversized paired-proof request"),
                 ))
-                .expect("oversized unshield HTTP request");
-            let rejection =
-                OfflineNorito::<OfflineRedeemRequest>::from_request(oversized_request, &())
-                    .await
-                    .expect_err("wire preflight must reject an oversized unshield proof");
+                .expect("oversized paired-proof HTTP request");
+            let rejection = KagemushaNorito::<KagemushaRedemptionRequestV1>::from_request(
+                oversized_request,
+                &(),
+            )
+            .await
+            .expect_err("the shared validator must reject an oversized parity proof");
             assert_eq!(rejection.status(), StatusCode::BAD_REQUEST);
-            // A behavior assertion is deterministic under parallel tests,
-            // unlike a process-wide RSS threshold. The canonical decoder's
-            // fixed-header preflight guarantees this rejection precedes
-            // decompression or its advertised allocation.
             let compressed =
                 norito::to_compressed_bytes(&redeem, Some(norito::CompressionConfig::default()))
                     .expect("encode compressed redeem fixture");
@@ -4034,10 +4365,12 @@ pub mod extractors {
                 .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
                 .body(Body::from(compressed))
                 .expect("compressed HTTP request");
-            let rejection =
-                OfflineNorito::<OfflineRedeemRequest>::from_request(compressed_request, &())
-                    .await
-                    .expect_err("compressed redeem must fail at the HTTP extractor");
+            let rejection = KagemushaNorito::<KagemushaRedemptionRequestV1>::from_request(
+                compressed_request,
+                &(),
+            )
+            .await
+            .expect_err("compressed redeem must fail at the HTTP extractor");
             assert_eq!(rejection.status(), StatusCode::BAD_REQUEST);
         }
         #[tokio::test]

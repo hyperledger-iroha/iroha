@@ -10,6 +10,11 @@ public sealed partial class SccpExactTests
     {
         using var document = JsonDocument.Parse(File.ReadAllBytes(
             Path.Combine(AppContext.BaseDirectory, "Fixtures", "sccp", "native_transfer_event_v1.json")));
+        Assert.Equal(
+            ["ethereum-mainnet", "bsc-mainnet", "tron-mainnet", "ton-mainnet"],
+            document.RootElement.GetProperty("vectors").EnumerateArray()
+                .Select(static vector => vector.GetProperty("source_profile").GetString()!)
+                .ToArray());
         foreach (var vector in document.RootElement.GetProperty("vectors").EnumerateArray())
         {
             var lane = new SccpLaneIdV1(

@@ -22,7 +22,7 @@ use crate::{
 ///
 /// The registry deliberately has no `Clone`, `Debug`, serialization, key-list,
 /// or participant-list surface. A deployment-owned authenticated runtime broker
-/// may import a validated software share, or inject an independent HSM-backed
+/// may import a validated software share, or inject an independent
 /// [`TleProjectedPartialReleaseSignerV1`] instead of using this type. An
 /// in-process provider may inject [`TlePartialReleaseSignerV1`] directly. Import
 /// and retirement are never exposed as ledger instructions or public Torii
@@ -136,11 +136,10 @@ impl RuntimeTleReleaseShareCustodyV1 {
     ///
     /// The deployment's authenticated rotation coordinator must first make the
     /// session ineligible for new ballots through the consensus key-session
-    /// lifecycle. This method then validates every Parliament attempt in the
-    /// supplied committed view and computes the maximum opening deadline across
-    /// all ballots and retries that reference `key_session_id`. Retirement is
-    /// allowed only when the committed height is strictly greater than that
-    /// maximum. A `u64::MAX` deadline is deliberately unretirable.
+    /// lifecycle. This method then reads the exact derived maximum opening
+    /// deadline across all ballots and retries that reference `key_session_id`.
+    /// Retirement is allowed only when the committed height is strictly greater
+    /// than that maximum. A `u64::MAX` deadline is deliberately unretirable.
     ///
     /// Removing the map entry synchronously drops the non-cloneable signer and
     /// zeroizes its scalar buffers before this method returns.
@@ -161,25 +160,16 @@ impl RuntimeTleReleaseShareCustodyV1 {
             .get(&key_session_id)
             .cloned()
             .ok_or(TleReleaseShareCustodyErrorV1::SessionNotCommitted)?;
-        if world.tle_key_session_eligible_for_new_ballots(key_session_id) {
+        let committed_height = u64::try_from(state.height())
+            .map_err(|_| TleReleaseShareCustodyErrorV1::InvalidCommittedState)?;
+        let next_height = committed_height.checked_add(1).unwrap_or(committed_height);
+        if world.tle_key_session_eligible_for_new_ballots(key_session_id, next_height) {
             return Err(TleReleaseShareCustodyErrorV1::SessionStillRequired);
         }
         committed_public_state
             .validate()
             .map_err(|_| TleReleaseShareCustodyErrorV1::InvalidCommittedState)?;
-
-        let committed_height = u64::try_from(state.height())
-            .map_err(|_| TleReleaseShareCustodyErrorV1::InvalidCommittedState)?;
-        let mut retain_through = None;
-        for (_, attempt) in world.parliament_attempts().iter() {
-            attempt
-                .validate()
-                .map_err(|_| TleReleaseShareCustodyErrorV1::InvalidCommittedState)?;
-            if let Some(deadline) = attempt.tle_key_session_retention_deadline(key_session_id) {
-                retain_through =
-                    Some(retain_through.map_or(deadline, |current: u64| current.max(deadline)));
-            }
-        }
+        let retain_through = world.tle_key_session_retention_deadline_v1(key_session_id);
         if retain_through
             .is_some_and(|deadline| deadline == u64::MAX || committed_height <= deadline)
         {

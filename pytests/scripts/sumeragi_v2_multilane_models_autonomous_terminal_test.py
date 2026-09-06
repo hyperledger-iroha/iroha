@@ -302,9 +302,18 @@ def test_autonomous_terminal_recovery_rejects_aggregate_finalized_journal_cap(
     )
     replace_once_after(
         path,
-        "fn observe_startup_replay_receipt_with_finalized_absence(",
-        "if phases.len() > self.limits.max_live_records",
-        "if phases.len() + finalized_keys.len() > self.limits.max_live_records",
+        "fn observe_startup_replay_receipt_with_terminal_cuts(",
+        (
+            "phases\n"
+            "            .len()\n"
+            "            .checked_add(replica_keys.len())"
+        ),
+        (
+            "phases\n"
+            "            .len()\n"
+            "            .checked_add(finalized_keys.len())\n"
+            "            .and_then(|count| count.checked_add(replica_keys.len()))"
+        ),
     )
     errors = validate_autonomous_terminal_recovery_fixture(
         tmp_path, module, models
@@ -312,7 +321,7 @@ def test_autonomous_terminal_recovery_rejects_aggregate_finalized_journal_cap(
     assert any(
         "absent carrier siblings must not share" in error
         or (
-            "observe_startup_replay_receipt_with_finalized_absence" in error
+            "observe_startup_replay_receipt_with_terminal_cuts" in error
             and "phases.len()" in error
         )
         for error in errors
@@ -548,7 +557,7 @@ def test_autonomous_terminal_recovery_rejects_unvalidated_pending_padding(
     )
     replace_once_after(
         path,
-        "fn validate_body(",
+        "fn validate_body_parts(",
         "!reserved_terminal.is_terminal_outcome_pending_reservation()",
         "false",
     )
@@ -556,7 +565,7 @@ def test_autonomous_terminal_recovery_rejects_unvalidated_pending_padding(
         tmp_path, module, models
     )
     assert any(
-        "AutonomousLifecycleTerminalOutcomeV1::validate_body" in error
+        "AutonomousLifecycleTerminalOutcomeV1::validate_body_parts" in error
         and "is_terminal_outcome_pending_reservation" in error
         for error in errors
     ), errors
@@ -608,5 +617,182 @@ def test_autonomous_terminal_recovery_rejects_complete_without_queue_evidence(
     assert any(
         "complete_autonomous_lifecycle_canonical_terminal_outcome" in error
         and "evidence.consume_for_kura()" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_completion_basis_substitution(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+    )
+    replace_once_after(
+        path,
+        "fn complete(",
+        "basis: self.body.basis",
+        "basis: AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "AutonomousLifecycleTerminalOutcomeV1::complete" in error
+        and "basis: self.body.basis" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_unbound_hash_domain(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+    )
+    replace_once_after(
+        path,
+        "fn from_body(",
+        "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
+        "b\"unbound-terminal-outcome\"",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "AutonomousLifecycleTerminalOutcomeV1::from_body" in error
+        and "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_wrong_v1_body_version(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+    )
+    replace_once_after(
+        path,
+        "fn from_body(",
+        "body.version != Self::VERSION",
+        "false",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "AutonomousLifecycleTerminalOutcomeV1::from_body" in error
+        and "body.version != Self::VERSION" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_alternate_layout_decode(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+    )
+    replace_once_after(
+        path,
+        "fn decode_framed_unvalidated(",
+        "norito::decode_canonical(bytes)",
+        "decode_legacy_terminal_outcome(bytes)",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated" in error
+        and "norito::decode_canonical(bytes)" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_unvalidated_public_decode(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+    )
+    replace_once_after(
+        path,
+        "pub(crate) fn decode_framed(",
+        ".validate_structure()",
+        ".binding()",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "AutonomousLifecycleTerminalOutcomeV1::decode_framed" in error
+        and ".validate_structure()" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_bypassed_capacity_delta_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs"
+    )
+    replace_once_after(
+        path,
+        "fn validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked(",
+        "self.validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(",
+        "self.validate_autonomous_replica_claim_startup_disk_peak_locked(",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked"
+        in error
+        and "with_reservation_deltas_locked" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_unbound_capacity_deltas(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs"
+    )
+    replace_once_after(
+        path,
+        "fn validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(",
+        "additional_unreserved_stable_bytes: u64",
+        "ignored_unreserved_stable_bytes: u64",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked"
+        in error
+        and "additional_unreserved_stable_bytes: u64" in error
         for error in errors
     ), errors

@@ -45,7 +45,10 @@ use super::{
     },
     v2_beacon::V2GlobalBeaconLifecycle,
     v2_block_sync::{
-        CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
+        CommitCertificateAdmissionError, HistoricalBodyServeAdmission,
+        HistoricalBodyServeCompletion, HistoricalBodyServeLimits, HistoricalBodyServeTask,
+        PreparedHistoricalBodyPostOutcome, V2BlockSyncDiscovery, V2BlockSyncError,
+        V2BlockSyncServer,
     },
     v2_body_store::{BlockSignaturePolicy, V2BodyStore, V2BodyStoreCapacity},
     v2_candidate::{
@@ -76,7 +79,8 @@ use super::{
     },
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
-        RecoveredSuccessorActivationAuthority, SnapshotSuccessorActivationAuthority,
+        RecoveredSuccessorActivationAuthority, RecoveredV2Startup,
+        SnapshotSuccessorActivationAuthority, authenticate_terminal_complete_tip,
         build_verified_successor, recover_active_height_with_plan,
         successor_block_refinement_projection, successor_context_refinement_projection,
     },
@@ -84,7 +88,8 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
-        QueuePlanBatchSources, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        QueuePlanBatchSources, V2CleanupSupervisor, V2CompletionRuntimeCutDecisionV1,
+        durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -125,7 +130,8 @@ mod preactivation_ingress;
 pub(in crate::sumeragi) use lifecycle_height_driver::{
     LifecycleApplyTerminalReadyBroadcastPermitV1, LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
     LifecycleDecidedLaneRecoveryPermitV1, LifecycleProducerClaimDispositionV1,
-    LifecycleReadyProposalSignPreemptionPermitV1, drain_lifecycle_v2_ingress,
+    LifecycleReadyProposalSignPreemptionPermitV1, LifecycleValidateSidecarPacemakerEscapePermitV1,
+    drain_lifecycle_v2_ingress,
 };
 #[cfg(test)]
 use lifecycle_pending_kura::{PendingTipRecoveryDeadline, pending_tip_recovery_deadline_error};
@@ -892,6 +898,38 @@ impl Drop for V2IngressClearGuard {
         self.block_ingress.close();
     }
 }
+
+/// Explicit process-height result; chain termination is not operator shutdown.
+enum HeightRunOutcome<T> {
+    /// One authenticated immediate successor is ready to activate.
+    Successor(T),
+    /// The finalized `u64::MAX` height has no successor.
+    Terminal,
+    /// The operator requested shutdown before another height activated.
+    Shutdown,
+}
+
+fn wait_for_terminal_shutdown(
+    height: wire::Height,
+    context_id: wire::HeightContextId,
+    ingress_ready: &Arc<AtomicBool>,
+    block_rx: &Arc<FairV2Ingress>,
+    wake_rx: &std::sync::mpsc::Receiver<()>,
+    shutdown_signal: &iroha_futures::supervisor::ShutdownSignal,
+) {
+    debug_assert_eq!(height, u64::MAX);
+    ingress_ready.store(false, Ordering::Release);
+    block_rx.close();
+    super::status::clear_v2_status();
+    iroha_logger::info!(
+        height,
+        context_id = ?context_id,
+        "Sumeragi v2 reached its terminal height and remains consensus-inert"
+    );
+    while !shutdown_signal.is_sent() {
+        let _ = wake_rx.recv_timeout(IDLE_POLL);
+    }
+}
 include!("v2_runner/lifecycle_terminal_recovery.rs");
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
@@ -905,6 +943,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
         global_beacon_partial_signer,
+        kagemusha_mint_finality_authority,
         startup_replay_plan,
         mut startup_replay_inventory_guard,
         network,
@@ -961,6 +1000,33 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     )?;
     startup_replay_inventory_guard.finish();
     recovery.complete();
+    let recovered = match recovered {
+        RecoveredV2Startup::Active(recovered) => recovered,
+        RecoveredV2Startup::Terminal(terminal) => {
+            let terminal_context = terminal.verified_context().context();
+            if !terminal.matches_kura(kura.as_ref())
+                || terminal.predecessor().height() != u64::MAX
+                || terminal_context.height != u64::MAX
+            {
+                return Err(
+                    super::v2_recovery::V2RecoveryError::TerminalCompleteTipAuthentication(
+                        "recovered terminal authority changed before inert runner activation"
+                            .to_owned(),
+                    )
+                    .into(),
+                );
+            }
+            wait_for_terminal_shutdown(
+                terminal_context.height,
+                terminal_context.id(),
+                &ingress_ready,
+                &block_rx,
+                &wake_rx,
+                &shutdown_signal,
+            );
+            return Ok(());
+        }
+    };
     let pending_kura_apply = recovered.pending_kura_apply();
     let (
         verified_context,
@@ -1025,7 +1091,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             .transpose()?;
         let pending_successor_activation = recovered_successor_activation
             .map(|authority| {
-                PendingSuccessorActivation::recovered(authority, &common_config.key_pair)
+                PendingSuccessorActivation::recovered(
+                    authority,
+                    kura.as_ref(),
+                    &common_config.key_pair,
+                )
             })
             .transpose()?;
         if let Some(activation) = pending_successor_activation.as_ref() {
@@ -1047,12 +1117,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
             .map_err(V2RunnerError::Service)?,
     );
-    if pending_kura_apply.is_none() {
-        state
-            .require_committed_kagemusha_runtime_effective_config()
-            .map_err(V2RunnerError::Service)?;
-    }
-
     match pending_kura_apply {
         None => lifecycle_run_inner::run_non_pending_lifecycle_loop(
             config,
@@ -1064,6 +1128,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            kagemusha_mint_finality_authority,
             network,
             block_rx,
             lane_relay_rx,
@@ -1106,6 +1171,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            kagemusha_mint_finality_authority,
             network,
             block_rx,
             lane_relay_rx,
@@ -1786,6 +1852,7 @@ fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
             | V2BlockSyncError::Transport(_)
             | V2BlockSyncError::ConflictingServerRequest { .. }
             | V2BlockSyncError::ConflictingHistoricalBodyRequest { .. }
+            | V2BlockSyncError::HistoricalRequestSubjectMismatch { .. }
     )
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1848,6 +1915,55 @@ fn finalize_bound_block_sync_serve(
         }
         Err(error) => Err(error.into()),
     }
+}
+fn settle_historical_body_serve_completion(
+    receiver: &FairV2Ingress,
+    block_sync_server: &mut V2BlockSyncServer,
+    services: &ProductionV2Services,
+    output_guard: &ConsensusOutputGuard,
+) -> Result<bool, V2RunnerError> {
+    let Some(completion) = block_sync_server.try_recv_historical_body_completion()? else {
+        return Ok(false);
+    };
+    match completion {
+        HistoricalBodyServeCompletion::Prepared(prepared) => {
+            let operation = output_guard
+                .begin_fail_stop_operation()
+                .ok_or(V2RunnerError::RestartRequired)?;
+            let posted = services
+                .post_prepared_historical_body_response_on_reply_routes_with_permit(
+                    prepared,
+                    operation.permit(),
+                );
+            match posted {
+                Ok(PreparedHistoricalBodyPostOutcome::Posted) => {}
+                Ok(PreparedHistoricalBodyPostOutcome::SourceRetained(prepared)) => {
+                    if let Err(error) =
+                        block_sync_server.defer_prepared_historical_body_output(prepared)
+                    {
+                        drop(operation);
+                        return Err(error.into());
+                    }
+                }
+                Err(error) => {
+                    drop(operation);
+                    return Err(V2BlockSyncError::ResponsePost(error).into());
+                }
+            }
+            operation.complete();
+        }
+        HistoricalBodyServeCompletion::NoResponse(task) => {
+            mark_leader_wire_volatile(receiver, task.ingress_ownership())?;
+        }
+        HistoricalBodyServeCompletion::Failed(task, error)
+            if is_remote_block_sync_rejection(&error) =>
+        {
+            mark_leader_wire_volatile(receiver, task.ingress_ownership())?;
+            iroha_logger::debug!(%error, "rejected historical certified body request");
+        }
+        HistoricalBodyServeCompletion::Failed(_task, error) => return Err(error.into()),
+    }
+    Ok(true)
 }
 fn enqueue_control(
     executor: &mut V2EffectExecutor,
@@ -1945,6 +2061,9 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCheckpointV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
+    CompletionPendingAtRuntimeCut,
+    CompletionCapacityReliefStepped,
+    LiveApplyRuntimePredecessorStepped,
     RecoveredLifecycleOutputCompleted,
     RecoveredLifecycleOutputSourceRetained,
     SettledLiveWalSign,
@@ -1952,6 +2071,7 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     SettledReleasedValidateApply,
     PendingReleasedValidateApply,
     SettledLifecycleOutput,
+    DelayedLifecycleOutputAdmitted,
     PendingLifecycleOutput,
     SettledDurableValidate,
     PendingDurableValidate,
@@ -1971,6 +2091,17 @@ impl AdvanceExecutorYieldV1 {
     ) -> Self {
         Self { checkpoint, cause }
     }
+
+    /// Whether the next outer turn must re-enter Completion before Runtime.
+    pub(in crate::sumeragi) const fn requires_completion_retry(self) -> bool {
+        matches!(
+            self.cause,
+            AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
+                | AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped
+                | AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
+                | AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+        )
+    }
 }
 
 /// Exhaustive result of one bounded serialized executor slice.
@@ -1985,11 +2116,12 @@ pub(in crate::sumeragi) enum AdvanceExecutorSliceOutcomeV1 {
     Yielded(AdvanceExecutorYieldV1),
 }
 
-fn advance_executor(
+pub(in crate::sumeragi) fn advance_executor(
     receiver: &FairV2Ingress,
     lifecycle_owner: &mut super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
+    protected_live_apply_ordinal: Option<u128>,
     limit: usize,
 ) -> Result<AdvanceExecutorSliceOutcomeV1, V2RunnerError> {
     for _ in 0..limit.max(1) {
@@ -2048,11 +2180,52 @@ fn advance_executor(
                 ),
             ));
         }
-        if executor.has_pending_lifecycle_output_admissions() {
+        let (live_apply_runtime_predecessor, delayed_apply_successor) = if executor
+            .has_pending_lifecycle_output_admissions()
+            && let Some(ordinal) = protected_live_apply_ordinal
+        {
+            let attestation = lifecycle_owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .map_err(|error| {
+                    V2RunnerError::Service(format!(
+                        "failed to authenticate the Ready live Apply runtime predecessor: {error:?}"
+                    ))
+                })?;
+            match attestation {
+                Some(attestation)
+                    if matches!(
+                        attestation.mode(),
+                        super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+                    ) =>
+                {
+                    (None, true)
+                }
+                Some(attestation)
+                    if executor.lifecycle_decision_apply_runtime_predecessor_drain_available(
+                        &attestation,
+                    )? =>
+                {
+                    (Some(attestation), false)
+                }
+                Some(_) | None => (None, false),
+            }
+        } else {
+            (None, false)
+        };
+        if executor.has_pending_lifecycle_output_admissions()
+            && live_apply_runtime_predecessor.is_none()
+        {
             return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::BeforeStep,
-                    AdvanceExecutorYieldCauseV1::PendingLifecycleOutput,
+                    if delayed_apply_successor {
+                        AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+                    } else {
+                        AdvanceExecutorYieldCauseV1::PendingLifecycleOutput
+                    },
                 ),
             ));
         }
@@ -2073,7 +2246,56 @@ fn advance_executor(
             ));
         }
         executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-        match executor.step(Instant::now(), services)? {
+        let completion_cut = services
+            .prepare_completion_runtime_cut(executor.remaining_completion_capacity() != 0)
+            .map_err(V2RunnerError::Service)?;
+        let (step, retry_completion_after_step) = match completion_cut {
+            V2CompletionRuntimeCutDecisionV1::RetryCompletion => {
+                return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                    AdvanceExecutorYieldV1::new(
+                        AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
+                    ),
+                ));
+            }
+            V2CompletionRuntimeCutDecisionV1::Runtime(completion_cut) => {
+                let step = match live_apply_runtime_predecessor.as_ref() {
+                    Some(attestation) => executor
+                        .step_lifecycle_decision_apply_runtime_predecessor_after_cut(
+                            completion_cut,
+                            attestation,
+                            services,
+                        )?,
+                    None => executor.step_after_completion_runtime_cut(completion_cut, services)?,
+                };
+                (step, false)
+            }
+            V2CompletionRuntimeCutDecisionV1::CapacityRelief(completion_cut) => {
+                let step = match live_apply_runtime_predecessor.as_ref() {
+                    Some(attestation) => executor
+                        .step_lifecycle_decision_apply_completion_capacity_relief_after_cut(
+                            completion_cut,
+                            attestation,
+                            services,
+                        )?,
+                    None => executor
+                        .step_completion_capacity_relief_after_cut(completion_cut, services)?,
+                };
+                (step, true)
+            }
+        };
+        let live_apply_predecessor_advanced = live_apply_runtime_predecessor.is_some()
+            && matches!(step, EffectExecutorStep::Advanced { .. });
+        match step {
+            EffectExecutorStep::Idle if live_apply_runtime_predecessor.is_some() => {}
+            EffectExecutorStep::Idle if retry_completion_after_step => {
+                return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                    AdvanceExecutorYieldV1::new(
+                        AdvanceExecutorYieldCheckpointV1::AfterStep,
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
+                    ),
+                ));
+            }
             EffectExecutorStep::Idle => return Ok(AdvanceExecutorSliceOutcomeV1::Idle),
             EffectExecutorStep::Advanced { .. } => {
                 // A PrepareQC can replace the protected lock without changing
@@ -2082,6 +2304,51 @@ fn advance_executor(
                 // reclaim service ownership for the superseded subject.
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
+        }
+        if let (Some(ordinal), Some(_)) = (
+            protected_live_apply_ordinal,
+            live_apply_runtime_predecessor.as_ref(),
+        ) {
+            let post_step = lifecycle_owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .map_err(|error| {
+                    V2RunnerError::Service(format!(
+                        "failed to reauthenticate the Ready live Apply runtime predecessor: {error:?}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    V2RunnerError::Service(
+                        "Ready live Apply runtime predecessor changed after its sealed step"
+                            .to_owned(),
+                    )
+                })?;
+            if !executor.lifecycle_decision_apply_runtime_predecessor_remains_exact(&post_step)? {
+                return Err(V2RunnerError::Service(
+                    "Ready live Apply runtime predecessor lost its exact post-step owner"
+                        .to_owned(),
+                ));
+            }
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    if live_apply_predecessor_advanced {
+                        AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
+                    } else {
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
+                    },
+                ),
+            ));
+        }
+        if retry_completion_after_step {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
+                ),
+            ));
         }
         let recovered = super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
             lifecycle_owner,
@@ -2475,7 +2742,7 @@ fn candidate_attachments(
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(context.height)
+        .derive_npos_consensus_effects(round_header)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {
         Default::default()
@@ -2971,6 +3238,11 @@ fn dispatch_lane_work_effect_from_snapshot(
     Ok(LaneWorkEffectDispatch::Complete)
 }
 include!("v2_runner/merge_sidecar_recovery.rs");
+// Open heights interleave authenticated lane relays with reducer completions,
+// producer work, and pacemaker progress. One relay occurrence per serialized
+// turn prevents an expensive authenticated backlog from starving those owners.
+const OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST: usize = 1;
+
 fn drain_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
@@ -2994,12 +3266,19 @@ fn drain_lane_relay_prefix(
 fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
     active_view: wire::View,
-    limit: usize,
 ) -> std::result::Result<bool, V2LaneWorkError> {
-    let drained_any = drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit);
+    let drained_any = drain_lane_relay_prefix(
+        lane_relay_rx,
+        lane_work,
+        active_view,
+        OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST,
+    );
     if drained_any {
-        let _ = lane_work.service_next_historical_recovery()?;
+        let current_archive_targets = services.current_archive_targets();
+        let _ = lane_work
+            .service_next_historical_recovery_with_archive_targets(&current_archive_targets)?;
     }
     Ok(drained_any)
 }
@@ -3120,9 +3399,9 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
-    /// Retired NPoS VRF tombstone or committed epoch-parameter boundary failed closed.
+    /// The committed NPoS epoch-parameter boundary failed closed.
     #[error(transparent)]
-    NposVrf(#[from] super::v2_npos::V2NposError),
+    Npos(#[from] super::v2_npos::V2NposError),
     /// Durable lane reservation ownership could not be reconciled exactly.
     #[error(transparent)]
     Reservation(#[from] V2ReservationLifecycleError),

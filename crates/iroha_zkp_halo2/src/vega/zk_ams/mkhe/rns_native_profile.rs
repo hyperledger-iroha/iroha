@@ -683,7 +683,8 @@ pub fn zk_ams_mkhe_rns_native_profile_manifest_v1()
 /// # Errors
 ///
 /// Returns an error when the replacement profile manifest is not canonical.
-pub fn zk_ams_mkhe_rns_native_release_candidate_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+pub(super) fn zk_ams_mkhe_rns_native_release_candidate_digest_v1()
+-> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()?;
     manifest.validate()?;
     let mut hash = Keccak256::new();

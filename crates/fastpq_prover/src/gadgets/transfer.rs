@@ -918,7 +918,7 @@ fn take_matching_row(
 fn index_transfers(transitions: &[StateTransition]) -> HashMap<Vec<u8>, VecDeque<usize>> {
     let mut map = HashMap::new();
     for (idx, transition) in transitions.iter().enumerate() {
-        if matches!(transition.operation, OperationKind::Transfer) {
+        if matches!(&transition.operation, OperationKind::Transfer) {
             map.entry(transition.key.clone())
                 .or_insert_with(VecDeque::new)
                 .push_back(idx);

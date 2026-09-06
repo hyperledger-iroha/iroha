@@ -22,11 +22,10 @@ use iroha_data_model::{
         },
     },
     privacy::{
-        BootleLanternIssuerPolicyLifecycleV1, PRIVACY_RETIRED_PROTOCOL_LABELS_V1,
-        PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
+        BootleLanternIssuerPolicyLifecycleV1, PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
     },
 };
-use iroha_genesis::{RawGenesisTransaction, validate_genesis_manifest_json};
+use iroha_genesis::validate_genesis_manifest_json;
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use std::{
     collections::BTreeSet,
@@ -53,17 +52,18 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "19654e999793036517f56eb61d8b0d4906c7c686504264ecb83bbb6e65b0f92f";
+    "3ee465268b21d40f50223d250d6653f441ab90d494a70e596b19a9a67a65e6fd";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
+const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/config.toml");
 const CANONICAL_GENESIS_TEMPLATE_V1: &[u8] =
-    include_bytes!("../../../../configs/soranexus/taira/genesis.json");
+    include_bytes!("../../../../configs/soranexus/taira/genesis.template.json");
 const GOLDEN_NEVO_UNSIGNED_V2: &[u8] =
-    include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.json");
+    include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json");
 #[cfg(test)]
 const GOLDEN_NEVO_REVIEW_V2: &[u8] =
     include_bytes!("../../tests/fixtures/taira_nevo_v2/review.json");
@@ -71,13 +71,13 @@ const GOLDEN_NEVO_ONBOARDING_V2: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7
 const GOLDEN_NEVO_API_SIGNER_V2: &str = "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
 const GOLDEN_NEVO_INORI_V2: &str = "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9";
 const GOLDEN_NEVO_EPR_GUARD_V2: &str = "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT";
-/// Inputs for native validation of one reviewed Taira NEVO unsigned genesis.
+/// Inputs for native validation of one reviewed Taira NEVO genesis source template.
 #[derive(Debug, ClapArgs)]
 pub(super) struct ValidateTairaNevoReviewV1Args {
-    /// Exact unsigned NEVO genesis bound by the review manifest.
+    /// Exact non-signable NEVO genesis source template bound by the review manifest.
     #[arg(long)]
     unsigned_genesis: PathBuf,
-    /// Deterministic public NEVO review manifest binding the unsigned genesis.
+    /// Deterministic public NEVO review manifest binding the genesis source template.
     #[arg(long)]
     review: PathBuf,
 }
@@ -99,7 +99,7 @@ pub(super) struct RenderTairaReleaseV1Args {
     /// Canonical disabled peer-1 Taira config template.
     #[arg(long)]
     config_template: PathBuf,
-    /// Canonical Taira genesis without privacy bootstrap instructions.
+    /// Canonical non-signable Taira genesis source template without privacy bootstrap instructions.
     #[arg(long)]
     genesis_template: PathBuf,
     /// Deterministic public NEVO review manifest binding the genesis template.
@@ -111,7 +111,7 @@ pub(super) struct RenderTairaReleaseV1Args {
     /// Fresh output path for the complete peer-1 release config.
     #[arg(long)]
     config_output: PathBuf,
-    /// Fresh output path for the complete release genesis.
+    /// Fresh `.template.json` output path for the overlaid release genesis source template.
     #[arg(long)]
     genesis_output: PathBuf,
     /// Fresh output path for the verified canonical public broker export.
@@ -167,6 +167,18 @@ pub(super) fn render_taira_release_v1<T: Write>(
     args: &RenderTairaReleaseV1Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> color_eyre::Result<()> {
+    for (label, path) in [
+        ("Taira genesis source input", &args.genesis_template),
+        ("Taira genesis source output", &args.genesis_output),
+    ] {
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".template.json"))
+        {
+            bail!("{label} must use the `.template.json` suffix");
+        }
+    }
     let activation_instructions = read_bounded(
         &args.activation_instructions,
         MAX_INSTRUCTIONS_JSON_BYTES_V1,
@@ -225,7 +237,7 @@ pub(super) fn render_taira_release_v1<T: Write>(
         (
             &args.genesis_output,
             artifacts.genesis.as_slice(),
-            "Taira privacy release genesis",
+            "Taira privacy release genesis source template",
         ),
         (
             &args.broker_public_output,
@@ -239,8 +251,8 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "plan_sha256": (hex::encode(sha256(&artifacts.plan))),
         "config_path": (args.config_output.display().to_string()),
         "config_sha256": (hex::encode(sha256(&artifacts.config))),
-        "genesis_path": (args.genesis_output.display().to_string()),
-        "genesis_sha256": (hex::encode(sha256(&artifacts.genesis))),
+        "genesis_source_template_path": (args.genesis_output.display().to_string()),
+        "genesis_source_template_sha256": (hex::encode(sha256(&artifacts.genesis))),
         "native_recomposition_passed": (artifacts.native_recomposition_passed),
         "broker_public_path": (args.broker_public_output.display().to_string()),
         "broker_public_sha256": (hex::encode(sha256(&artifacts.broker_public))),
@@ -1024,6 +1036,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
             "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}"
         );
     }
+    validate_rollout_plan_v1(CANONICAL_ROLLOUT_PLAN_V1)?;
     if rollout
         .get("controller_observation_required")
         .and_then(JsonValue::as_bool)
@@ -1181,6 +1194,184 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     }
     Ok(())
 }
+
+fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
+    let value: JsonValue = norito::json::from_slice(bytes)
+        .wrap_err("failed to decode the canonical Taira privacy rollout plan")?;
+    let root = object_v1(&value, "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        root,
+        &[
+            "activation_contract",
+            "canary_contract",
+            "capability_gate",
+            "cargo_lock_sha256",
+            "chain_id",
+            "endpoints",
+            "halt_conditions",
+            "intervals",
+            "post_cutover_contract",
+            "protocol_matrix_sha256",
+            "protocols",
+            "publication_contract",
+            "resource_ceilings",
+            "restart_contract",
+            "rollback_contract",
+            "schema",
+            "schema_version",
+            "waves",
+            "wire_contract",
+        ],
+        "privacy rollout plan",
+    )?;
+    expect_string_v1(
+        root,
+        "schema",
+        "iroha.taira.privacy_rollout_plan.v1",
+        "privacy rollout plan",
+    )?;
+    expect_u64_v1(root, "schema_version", 1, "privacy rollout plan")?;
+    expect_string_v1(root, "chain_id", CHAIN_ID_V1, "privacy rollout plan")?;
+    expect_string_v1(
+        root,
+        "cargo_lock_sha256",
+        &hex::encode(sha256(CANONICAL_CARGO_LOCK_V1)),
+        "privacy rollout plan",
+    )?;
+    let matrix = privacy_exact12_matrix_bytes_v1()
+        .map_err(|source| eyre!("failed to derive the native exact-12 matrix: {source}"))?;
+    expect_string_v1(
+        root,
+        "protocol_matrix_sha256",
+        &hex::encode(sha256(&matrix)),
+        "privacy rollout plan",
+    )?;
+
+    let wire = object_field_v1(root, "wire_contract", "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        wire,
+        &[
+            "catalog_commitment_le_hex",
+            "catalog_size",
+            "proof_envelope_magic_hex",
+        ],
+        "privacy rollout wire contract",
+    )?;
+    expect_u64_v1(
+        wire,
+        "catalog_size",
+        PrivacyProtocolIdV1::COUNT as u64,
+        "privacy rollout wire contract",
+    )?;
+    expect_string_v1(
+        wire,
+        "catalog_commitment_le_hex",
+        "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+        "privacy rollout wire contract",
+    )?;
+    expect_string_v1(
+        wire,
+        "proof_envelope_magic_hex",
+        "4952485a4b31a55a",
+        "privacy rollout wire contract",
+    )?;
+
+    let gate = object_field_v1(root, "capability_gate", "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        gate,
+        &[
+            "all_exact12_rows_required",
+            "authenticated_committed_state_required",
+            "authoritative_route",
+            "caller_asserted_readiness_forbidden",
+            "required_readiness",
+        ],
+        "privacy rollout capability gate",
+    )?;
+    expect_string_v1(
+        gate,
+        "authoritative_route",
+        "/v1/privacy/capabilities",
+        "privacy rollout capability gate",
+    )?;
+    expect_string_v1(
+        gate,
+        "required_readiness",
+        "production-qualified",
+        "privacy rollout capability gate",
+    )?;
+    for flag in [
+        "all_exact12_rows_required",
+        "authenticated_committed_state_required",
+        "caller_asserted_readiness_forbidden",
+    ] {
+        if gate.get(flag).and_then(JsonValue::as_bool) != Some(true) {
+            bail!("privacy rollout capability gate `{flag}` must be true");
+        }
+    }
+
+    let protocols = root
+        .get("protocols")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("privacy rollout plan `protocols` must be an array"))?;
+    if protocols.len() != PrivacyProtocolIdV1::COUNT {
+        bail!("privacy rollout plan must contain exactly twelve protocol rows");
+    }
+    for (index, (value, protocol)) in protocols.iter().zip(PrivacyProtocolIdV1::ALL).enumerate() {
+        let row = object_v1(value, "privacy rollout protocol row")?;
+        expect_exact_keys_v1(
+            row,
+            &["index", "label", "security_model"],
+            "privacy rollout protocol row",
+        )?;
+        expect_u64_v1(row, "index", index as u64, "privacy rollout protocol row")?;
+        expect_string_v1(
+            row,
+            "label",
+            protocol.canonical_label(),
+            "privacy rollout protocol row",
+        )?;
+        expect_string_v1(
+            row,
+            "security_model",
+            protocol.security_model().canonical_label(),
+            "privacy rollout protocol row",
+        )?;
+    }
+
+    let waves = root
+        .get("waves")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("privacy rollout plan `waves` must be an array"))?;
+    if waves.len() != 4 {
+        bail!("privacy rollout plan must contain exactly four waves");
+    }
+    let mut scheduled = BTreeSet::new();
+    for (index, value) in waves.iter().enumerate() {
+        let wave = object_v1(value, "privacy rollout wave")?;
+        expect_exact_keys_v1(
+            wave,
+            &["index", "label", "protocols"],
+            "privacy rollout wave",
+        )?;
+        expect_u64_v1(wave, "index", (index + 1) as u64, "privacy rollout wave")?;
+        for label in string_array_field_v1(wave, "protocols", "privacy rollout wave")? {
+            if !PrivacyProtocolIdV1::ALL
+                .iter()
+                .any(|protocol| protocol.canonical_label() == label)
+            {
+                bail!("privacy rollout wave contains an unknown protocol label");
+            }
+            if !scheduled.insert(label) {
+                bail!("privacy rollout wave schedules a protocol more than once");
+            }
+        }
+    }
+    if scheduled.len() != PrivacyProtocolIdV1::COUNT {
+        bail!("privacy rollout waves must schedule every Exact12 protocol exactly once");
+    }
+    Ok(())
+}
 fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
     expect_exact_keys_v1(
         catalog,
@@ -1189,7 +1380,6 @@ fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
             "matrix_version",
             "protocols",
             "registry_sha256",
-            "retired_labels",
         ],
         "privacy catalog",
     )?;
@@ -1240,14 +1430,6 @@ fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
             protocol.canonical_typed_variant_label(),
             "privacy catalog row",
         )?;
-    }
-    let retired = string_array_field_v1(catalog, "retired_labels", "privacy catalog")?;
-    let expected = PRIVACY_RETIRED_PROTOCOL_LABELS_V1
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if retired != expected {
-        bail!("privacy catalog retirement inventory differs from exact first release");
     }
     Ok(())
 }
@@ -1372,10 +1554,10 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
     )?;
     let torii = toml_table_field_v1(root, "torii", "Taira config")?;
     expect_toml_string_v1(
-        toml_table_field_v1(torii, "kagemusha_commands", "Taira torii config")?,
-        "private_key_file",
-        "/run/secrets/iroha/taira-kagemusha-commands-private-key",
-        "Taira Kagemusha command private-key handle",
+        toml_table_field_v1(torii, "kagemusha_v1_commands", "Taira torii config")?,
+        "redemption_private_key_file",
+        "/run/secrets/iroha/taira-kagemusha-v1-redemption-private-key",
+        "Taira KAGEMUSHA V1 redemption private-key handle",
     )?;
     let onboarding = toml_table_field_v1(torii, "account_onboarding", "Taira torii config")?;
     let onboarding_keys = onboarding
@@ -1524,33 +1706,6 @@ fn render_release_genesis_v1(
     iroha_genesis::init_instruction_registry();
     validate_genesis_manifest_json(bytes)
         .wrap_err("Taira genesis template exceeds fixed resource bounds")?;
-    let decoded_template: RawGenesisTransaction = norito::json::from_slice(bytes)
-        .wrap_err("Taira genesis template cannot be decoded natively")?;
-    if decoded_template.chain_id().as_str() != CHAIN_ID_V1
-        || u64::from(decoded_template.chain_discriminant()) != CHAIN_DISCRIMINANT_V1
-    {
-        bail!("Taira genesis template targets the wrong chain");
-    }
-    for instruction in decoded_template
-        .transactions()
-        .iter()
-        .flat_map(iroha_genesis::RawGenesisTx::instructions)
-    {
-        if instruction
-            .as_any()
-            .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
-            .is_some()
-            || instruction
-                .as_any()
-                .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
-                .is_some()
-        {
-            bail!(
-                "Taira genesis staging template already contains a privacy bootstrap instruction"
-            );
-        }
-    }
-    drop(decoded_template);
     let genesis: JsonValue =
         norito::json::from_slice(bytes).wrap_err("Taira genesis template is not strict JSON")?;
     let root = object_v1(&genesis, "Taira genesis")?;
@@ -1567,6 +1722,28 @@ fn render_release_genesis_v1(
         .ok_or_else(|| eyre!("Taira genesis has no transaction array"))?;
     if transactions.is_empty() {
         bail!("Taira genesis has no transactions");
+    }
+    for transaction in transactions {
+        let instruction_values = transaction
+            .get("instructions")
+            .ok_or_else(|| eyre!("Taira genesis transaction has no instruction array"))?;
+        let decoded = iroha_genesis::genesis_instructions_json::from_value(instruction_values)
+            .wrap_err("Taira genesis source template contains an invalid instruction")?;
+        for instruction in decoded {
+            if instruction
+                .as_any()
+                .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
+                    .is_some()
+            {
+                bail!(
+                    "Taira genesis staging template already contains a privacy bootstrap instruction"
+                );
+            }
+        }
     }
     let mut authority_registration_count = 0_usize;
     let mut governance_grant_count = 0_usize;
@@ -1870,7 +2047,7 @@ mod tests {
     const CONFIG_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/config.toml");
     const GENESIS_TEMPLATE_V1: &[u8] =
-        include_bytes!("../../../../configs/soranexus/taira/genesis.json");
+        include_bytes!("../../../../configs/soranexus/taira/genesis.template.json");
     const NEVO_ONBOARDING_ACCOUNT_V1: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP";
     const NEVO_API_SIGNER_ACCOUNT_V1: &str =
         "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
@@ -2121,11 +2298,13 @@ mod tests {
         assert!(!String::from_utf8_lossy(&first.genesis).contains("principal_seed"));
     }
     #[test]
-    fn rollout_plan_hash_and_fail_closed_rows_are_source_bound() {
+    fn rollout_plan_binds_the_hard_cut_catalog_and_evidence_derived_gate() {
         let bootstrap: JsonValue =
             norito::json::from_slice(PLAN_TEMPLATE_V1).expect("parse staging plan");
         validate_staging_plan_v1(&bootstrap)
             .expect("bootstrap anchor, compiled pin, and rollout bytes must agree");
+        validate_rollout_plan_v1(CANONICAL_ROLLOUT_PLAN_V1)
+            .expect("canonical rollout plan must satisfy the native hard-cut contract");
 
         let rollout: JsonValue = norito::json::from_slice(CANONICAL_ROLLOUT_PLAN_V1)
             .expect("parse canonical rollout plan");
@@ -2134,52 +2313,36 @@ mod tests {
             .and_then(JsonValue::as_array)
             .expect("rollout protocol rows");
         assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
-        let unavailable = [
-            (
-                "zk-ace-pq-authorization-v0",
-                "ZkAceNativeErrorV1::EngineUnavailable",
-            ),
-            ("iroha-zk-ams-v1", "ZkAmsMkheErrorV1::ReleaseUnavailable"),
-            (
-                "vega-existing-credential-zk-v0",
-                "MissingGovernedFigure9ProverArtifacts",
-            ),
-            (
-                "iroha-zk-x509-stark-p256-v0",
-                "ZkX509ProfileErrorV1::EngineIncomplete",
-            ),
-        ];
-        let waves = rollout
-            .get("waves")
-            .and_then(JsonValue::as_array)
-            .expect("rollout waves");
-        assert_eq!(waves.len(), 4);
-        for (label, blocker) in unavailable {
-            let row = protocols
-                .iter()
-                .find(|row| row.get("label").and_then(JsonValue::as_str) == Some(label))
-                .unwrap_or_else(|| panic!("missing rollout row `{label}`"));
+        for (row, protocol) in protocols.iter().zip(PrivacyProtocolIdV1::ALL) {
             assert_eq!(
-                row.get("assurance").and_then(JsonValue::as_str),
-                Some("unavailable")
+                row.get("label").and_then(JsonValue::as_str),
+                Some(protocol.canonical_label())
             );
             assert_eq!(
-                row.get("release_status").and_then(JsonValue::as_str),
-                Some("retained-required")
+                row.get("security_model").and_then(JsonValue::as_str),
+                Some(protocol.security_model().canonical_label())
             );
-            let missing_evidence = row
-                .get("missing_evidence")
-                .and_then(JsonValue::as_array)
-                .expect("missing-evidence array");
-            assert_eq!(missing_evidence.len(), 1);
-            assert_eq!(missing_evidence[0].as_str(), Some(blocker));
-            let scheduled = waves
-                .iter()
-                .filter_map(|wave| wave.get("protocols").and_then(JsonValue::as_array))
-                .flatten()
-                .filter(|protocol| protocol.as_str() == Some(label))
-                .count();
-            assert_eq!(scheduled, 1, "`{label}` must remain in exactly one wave");
+        }
+        assert_eq!(
+            rollout
+                .pointer("/capability_gate/required_readiness")
+                .and_then(JsonValue::as_str),
+            Some("production-qualified")
+        );
+        let rollout_text = std::str::from_utf8(CANONICAL_ROLLOUT_PLAN_V1)
+            .expect("canonical rollout plan must be UTF-8");
+        for removed in [
+            "available-experimental",
+            "assurance",
+            "legacy_policy",
+            "missing_evidence",
+            "release_status",
+            "retired_labels",
+        ] {
+            assert!(
+                !rollout_text.contains(removed),
+                "removed rollout field or value `{removed}` must not survive"
+            );
         }
     }
     #[test]
@@ -2306,7 +2469,7 @@ mod tests {
     #[test]
     fn validate_only_nevo_review_rejects_digest_unbound_identity_mutation() {
         let directory = tempfile::tempdir().expect("create NEVO validation directory");
-        let unsigned_genesis_path = directory.path().join("unsigned-genesis.json");
+        let unsigned_genesis_path = directory.path().join("unsigned-genesis.template.json");
         let review_path = directory.path().join("review.json");
         let (genesis, review) = nevo_fixture_v1();
         fs::write(&unsigned_genesis_path, &genesis).expect("write NEVO unsigned genesis");
@@ -2451,10 +2614,16 @@ mod tests {
     #[test]
     fn reviewed_nevo_genesis_carries_exact_ephemeral_alias_authority() {
         let (genesis, _) = nevo_fixture_v1();
-        let raw: RawGenesisTransaction =
-            norito::json::from_slice(&genesis).expect("decode reviewed NEVO genesis");
-        let overlay = raw.transactions().last().expect("NEVO overlay transaction");
-        let instructions = overlay.instructions();
+        let genesis_json: JsonValue =
+            norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");
+        let instruction_values = genesis_json
+            .get("transactions")
+            .and_then(JsonValue::as_array)
+            .and_then(|transactions| transactions.last())
+            .and_then(|transaction| transaction.get("instructions"))
+            .expect("reviewed overlay instructions");
+        let instructions = iroha_genesis::genesis_instructions_json::from_value(instruction_values)
+            .expect("decode reviewed NEVO instructions");
         assert_eq!(instructions.len(), 29);
 
         let RegisterBox::Role(register) = instructions[8]
@@ -2515,8 +2684,6 @@ mod tests {
             unregister.object().to_string(),
             GENESIS_ALIAS_BOOTSTRAP_ROLE_ID_V1
         );
-        let genesis_json: JsonValue =
-            norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");
         assert!(
             genesis_json
                 .get("transactions")
@@ -2796,7 +2963,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary release directory");
         let plan = directory.path().join("plan.json");
         let config = directory.path().join("config.toml");
-        let genesis = directory.path().join("genesis.json");
+        let genesis = directory.path().join("genesis.template.json");
         fs::write(&config, b"occupied").expect("occupy second path");
         assert!(
             write_new_artifact_set_v1([

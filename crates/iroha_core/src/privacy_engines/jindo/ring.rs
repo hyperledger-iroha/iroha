@@ -19,6 +19,9 @@ impl JindoPrimeModulusV1 {
     pub(crate) const fn modulus(self) -> u64 {
         self.modulus
     }
+    pub(crate) const fn psi(self) -> u64 {
+        self.psi
+    }
 }
 /// Inner-commitment modulus `q` from the current N=256, batch=4 reference profile.
 pub(crate) const JINDO_INNER_MODULI_V1: [JindoPrimeModulusV1; 2] = [
@@ -150,6 +153,7 @@ impl JindoRnsPolynomialV1 {
     /// Each pinned prime splits `X^1024 + 1` completely. The twisted NTT is
     /// evaluation at its 1024 distinct roots, so an element is invertible if
     /// and only if every evaluation is non-zero in every CRT component.
+    #[cfg(test)]
     pub(crate) fn is_unit(&self, moduli: [JindoPrimeModulusV1; 2]) -> bool {
         self.residues
             .iter()
@@ -309,43 +313,44 @@ fn crt_reconstruct(residue_zero: u64, residue_one: u64, moduli: [JindoPrimeModul
     let correction = mul_mod(difference, q0_inverse_mod_q1, q1);
     u128::from(residue_zero) + u128::from(q0) * u128::from(correction)
 }
+/// Deterministically decide primality for a compiled 64-bit RNS modulus.
+pub(crate) fn is_prime_modulus_v1(value: u64) -> bool {
+    if value < 2 {
+        return false;
+    }
+    for small in [2_u64, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
+        if value % small == 0 {
+            return value == small;
+        }
+    }
+    let mut odd = value - 1;
+    let powers = odd.trailing_zeros();
+    odd >>= powers;
+    for witness in [2_u64, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022] {
+        if witness % value == 0 {
+            continue;
+        }
+        let mut candidate = pow_mod(witness % value, odd, value);
+        if candidate == 1 || candidate == value - 1 {
+            continue;
+        }
+        let mut accepted = false;
+        for _ in 1..powers {
+            candidate = mul_mod(candidate, candidate, value);
+            if candidate == value - 1 {
+                accepted = true;
+                break;
+            }
+        }
+        if !accepted {
+            return false;
+        }
+    }
+    true
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn is_prime_64(value: u64) -> bool {
-        if value < 2 {
-            return false;
-        }
-        for small in [2_u64, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
-            if value % small == 0 {
-                return value == small;
-            }
-        }
-        let mut odd = value - 1;
-        let powers = odd.trailing_zeros();
-        odd >>= powers;
-        for witness in [2_u64, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022] {
-            if witness % value == 0 {
-                continue;
-            }
-            let mut candidate = pow_mod(witness % value, odd, value);
-            if candidate == 1 || candidate == value - 1 {
-                continue;
-            }
-            let mut accepted = false;
-            for _ in 1..powers {
-                candidate = mul_mod(candidate, candidate, value);
-                if candidate == value - 1 {
-                    accepted = true;
-                    break;
-                }
-            }
-            if !accepted {
-                return false;
-            }
-        }
-        true
-    }
     fn naive_negacyclic(
         left: [u64; JINDO_RING_DEGREE_V1],
         right: [u64; JINDO_RING_DEGREE_V1],
@@ -375,7 +380,7 @@ mod tests {
             JINDO_OUTER_MODULI_V1[1],
         ];
         for (index, prime) in all.into_iter().enumerate() {
-            assert!(is_prime_64(prime.modulus), "modulus {index}");
+            assert!(is_prime_modulus_v1(prime.modulus), "modulus {index}");
             assert_eq!((prime.modulus - 1) % 2048, 0);
             assert_eq!(pow_mod(prime.psi, 2048, prime.modulus), 1);
             assert_eq!(pow_mod(prime.psi, 1024, prime.modulus), prime.modulus - 1);
@@ -384,6 +389,15 @@ mod tests {
             for right in (left + 1)..all.len() {
                 assert_ne!(all[left].modulus, all[right].modulus);
             }
+        }
+    }
+    #[test]
+    fn deterministic_primality_check_rejects_composites_and_pseudoprimes() {
+        for composite in [0, 1, 4, 341, 3_215_031_751] {
+            assert!(!is_prime_modulus_v1(composite));
+        }
+        for prime in [2, 37, 65_537] {
+            assert!(is_prime_modulus_v1(prime));
         }
     }
     #[test]

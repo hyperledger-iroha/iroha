@@ -45,28 +45,19 @@ public enum VerifyingKeyBackendTag {
           "halo2/pasta/kaigi-roster-v1",
           "halo2/pasta/kaigi-usage-v1",
           "halo2/pasta/ivm-execution-v1",
-          "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-          "stark/fri",
-          "stark/fri/sha256-goldilocks",
-          "stark/fri/poseidon2-goldilocks",
-          "stark/fri/sha256_goldilocks.v1");
+          "stark/fri/poseidon-x7-goldilocks-6x64-v1");
 
   private static final Set<String> STARK_FRI_PRODUCTION_BACKENDS =
-      immutableSet(
-          "stark/fri",
-          "stark/fri/sha256-goldilocks",
-          "stark/fri/poseidon2-goldilocks",
-          "stark/fri/sha256_goldilocks.v1");
+      immutableSet("stark/fri/poseidon-x7-goldilocks-6x64-v1");
 
   private static final Set<String> PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS =
       immutableSet(
           "halo2/pasta/kaigi-roster-v1",
           "halo2/pasta/kaigi-usage-v1",
           "halo2/pasta/ivm-execution-v1",
-          "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4");

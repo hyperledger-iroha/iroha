@@ -3,30 +3,41 @@ use super::{
     JINDO_ENCODING_SLOTS_V1, JINDO_FIELD_ELEMENT_BYTES_V1, JINDO_MAX_BATCH_SIZE_V1,
     JINDO_RING_DEGREE_V1,
     field::JindoFieldElementV1,
-    parameters::JINDO_PARAMETERS_V1,
+    parameters::{JINDO_PARALLEL_REPETITIONS_V1, JINDO_PARAMETERS_V1},
     ring::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
 };
 use thiserror::Error;
-pub const JINDO_PROOF_MAGIC_V1: [u8; 4] = *b"IJP2";
-pub const JINDO_PROOF_VERSION_V1: u8 = 2;
+pub const JINDO_PROOF_MAGIC_V1: [u8; 4] = *b"IJP3";
+pub const JINDO_PROOF_VERSION_V1: u8 = 3;
 pub const JINDO_PROOF_HEADER_BYTES_V1: usize = 8;
-pub const JINDO_PROOF_OUTER_POLYNOMIALS_V1: usize = 7;
-pub const JINDO_PROOF_INNER_POLYNOMIALS_V1: usize = 12;
-pub const JINDO_PROOF_FIELD_ELEMENTS_V1: usize = 644;
-pub const JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1: usize =
-    2 * JINDO_RING_DEGREE_V1 * core::mem::size_of::<u64>();
+pub const JINDO_PROOF_OUTER_POLYNOMIALS_V1: usize = 7 * JINDO_PARALLEL_REPETITIONS_V1;
+pub const JINDO_PROOF_INNER_POLYNOMIALS_V1: usize = 12 * JINDO_PARALLEL_REPETITIONS_V1;
+pub const JINDO_PROOF_FIELD_ELEMENTS_V1: usize = 128 * JINDO_PARALLEL_REPETITIONS_V1 + 4 + 512;
+pub const JINDO_PROOF_OUTER_RESIDUE_BYTES_V1: usize = 5;
+pub const JINDO_PROOF_INNER_RESIDUE_BYTES_V1: usize = 6;
+pub const JINDO_PROOF_OUTER_POLYNOMIAL_BYTES_V1: usize =
+    2 * JINDO_RING_DEGREE_V1 * JINDO_PROOF_OUTER_RESIDUE_BYTES_V1;
+pub const JINDO_PROOF_INNER_POLYNOMIAL_BYTES_V1: usize =
+    2 * JINDO_RING_DEGREE_V1 * JINDO_PROOF_INNER_RESIDUE_BYTES_V1;
 pub const JINDO_PROOF_BYTES_V1: usize = JINDO_PROOF_HEADER_BYTES_V1
-    + (JINDO_PROOF_OUTER_POLYNOMIALS_V1 + JINDO_PROOF_INNER_POLYNOMIALS_V1)
-        * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1
+    + JINDO_PROOF_OUTER_POLYNOMIALS_V1 * JINDO_PROOF_OUTER_POLYNOMIAL_BYTES_V1
+    + JINDO_PROOF_INNER_POLYNOMIALS_V1 * JINDO_PROOF_INNER_POLYNOMIAL_BYTES_V1
     + JINDO_PROOF_FIELD_ELEMENTS_V1 * JINDO_FIELD_ELEMENT_BYTES_V1;
-const MASK_COMMITMENTS: usize = 3;
-const PARTIALS: usize = 1;
-const ENCODE_RESPONSES: usize = 3;
-const MLWE_RESPONSES: usize = 8;
-const INNER_COMMITMENTS: usize = 4;
-const MASK_SPLIT_EVALUATIONS: usize = JINDO_ENCODING_SLOTS_V1;
+pub(crate) const MASK_COMMITMENTS_PER_REPETITION: usize = 3;
+pub(crate) const PARTIALS_PER_REPETITION: usize = 1;
+pub(crate) const ENCODE_RESPONSES_PER_REPETITION: usize = 3;
+pub(crate) const MLWE_RESPONSES_PER_REPETITION: usize = 8;
+pub(crate) const INNER_COMMITMENTS_PER_REPETITION: usize = 4;
+pub(crate) const MASK_SPLIT_EVALUATIONS_PER_REPETITION: usize = JINDO_ENCODING_SLOTS_V1;
+const MASK_COMMITMENTS: usize = MASK_COMMITMENTS_PER_REPETITION * JINDO_PARALLEL_REPETITIONS_V1;
+const PARTIALS: usize = PARTIALS_PER_REPETITION * JINDO_PARALLEL_REPETITIONS_V1;
+const ENCODE_RESPONSES: usize = ENCODE_RESPONSES_PER_REPETITION * JINDO_PARALLEL_REPETITIONS_V1;
+const MLWE_RESPONSES: usize = MLWE_RESPONSES_PER_REPETITION * JINDO_PARALLEL_REPETITIONS_V1;
+const INNER_COMMITMENTS: usize = INNER_COMMITMENTS_PER_REPETITION * JINDO_PARALLEL_REPETITIONS_V1;
+const MASK_SPLIT_EVALUATIONS: usize =
+    MASK_SPLIT_EVALUATIONS_PER_REPETITION * JINDO_PARALLEL_REPETITIONS_V1;
 const BLIND_EVALUATIONS: usize = JINDO_MAX_BATCH_SIZE_V1;
 const SPLIT_EVALUATIONS: usize =
     JINDO_MAX_BATCH_SIZE_V1 * JINDO_PARAMETERS_V1.split * JINDO_ENCODING_SLOTS_V1;
@@ -37,7 +48,20 @@ const _: () = {
         MASK_SPLIT_EVALUATIONS + BLIND_EVALUATIONS + SPLIT_EVALUATIONS
             == JINDO_PROOF_FIELD_ELEMENTS_V1
     );
+    assert!(JINDO_INNER_MODULI_V1[0].modulus() < (1_u64 << 48));
+    assert!(JINDO_INNER_MODULI_V1[1].modulus() < (1_u64 << 48));
+    assert!(JINDO_OUTER_MODULI_V1[0].modulus() < (1_u64 << 40));
+    assert!(JINDO_OUTER_MODULI_V1[1].modulus() < (1_u64 << 40));
 };
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct JindoEvaluationProofRepetitionV1<'a> {
+    pub(crate) mask_commitments: &'a [JindoRnsPolynomialV1],
+    pub(crate) mask_split_evaluation: &'a [JindoFieldElementV1],
+    pub(crate) partials: &'a [JindoRnsPolynomialV1],
+    pub(crate) encode_responses: &'a [JindoRnsPolynomialV1],
+    pub(crate) mlwe_responses: &'a [JindoRnsPolynomialV1],
+    pub(crate) inner_commitments: &'a [JindoRnsPolynomialV1],
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct JindoEvaluationProofV1 {
     pub(crate) mask_commitments: Vec<JindoRnsPolynomialV1>,
@@ -50,6 +74,24 @@ pub(crate) struct JindoEvaluationProofV1 {
     pub(crate) split_evaluations: Vec<JindoFieldElementV1>,
 }
 impl JindoEvaluationProofV1 {
+    pub(crate) fn repetition(&self, repetition: usize) -> JindoEvaluationProofRepetitionV1<'_> {
+        debug_assert!(repetition < JINDO_PARALLEL_REPETITIONS_V1);
+        fn range(repetition: usize, width: usize) -> core::ops::Range<usize> {
+            repetition * width..(repetition + 1) * width
+        }
+        JindoEvaluationProofRepetitionV1 {
+            mask_commitments: &self.mask_commitments
+                [range(repetition, MASK_COMMITMENTS_PER_REPETITION)],
+            mask_split_evaluation: &self.mask_split_evaluation
+                [range(repetition, MASK_SPLIT_EVALUATIONS_PER_REPETITION)],
+            partials: &self.partials[range(repetition, PARTIALS_PER_REPETITION)],
+            encode_responses: &self.encode_responses
+                [range(repetition, ENCODE_RESPONSES_PER_REPETITION)],
+            mlwe_responses: &self.mlwe_responses[range(repetition, MLWE_RESPONSES_PER_REPETITION)],
+            inner_commitments: &self.inner_commitments
+                [range(repetition, INNER_COMMITMENTS_PER_REPETITION)],
+        }
+    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         mask_commitments: Vec<JindoRnsPolynomialV1>,
@@ -155,8 +197,11 @@ impl JindoEvaluationProofV1 {
                 statement: JINDO_MAX_BATCH_SIZE_V1 as u8,
             });
         }
-        if bytes[6] != 0 {
-            return Err(JindoProofCodecErrorV1::NonZeroFlags { flags: bytes[6] });
+        if bytes[6] as usize != JINDO_PARALLEL_REPETITIONS_V1 {
+            return Err(JindoProofCodecErrorV1::ParallelRepetitionCountMismatch {
+                proof: bytes[6],
+                expected: JINDO_PARALLEL_REPETITIONS_V1 as u8,
+            });
         }
         if bytes[7] != 0 {
             return Err(JindoProofCodecErrorV1::NonZeroReserved { reserved: bytes[7] });
@@ -169,6 +214,7 @@ impl JindoEvaluationProofV1 {
             &mut polynomial_index,
             MASK_COMMITMENTS,
             JINDO_OUTER_MODULI_V1,
+            JINDO_PROOF_OUTER_RESIDUE_BYTES_V1,
         )?;
         let mask_split_evaluation = read_fields(bytes, &mut cursor, MASK_SPLIT_EVALUATIONS)?;
         let partials = read_polynomials(
@@ -177,6 +223,7 @@ impl JindoEvaluationProofV1 {
             &mut polynomial_index,
             PARTIALS,
             JINDO_INNER_MODULI_V1,
+            JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
         )?;
         let encode_responses = read_polynomials(
             bytes,
@@ -184,6 +231,7 @@ impl JindoEvaluationProofV1 {
             &mut polynomial_index,
             ENCODE_RESPONSES,
             JINDO_INNER_MODULI_V1,
+            JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
         )?;
         let mlwe_responses = read_polynomials(
             bytes,
@@ -191,6 +239,7 @@ impl JindoEvaluationProofV1 {
             &mut polynomial_index,
             MLWE_RESPONSES,
             JINDO_INNER_MODULI_V1,
+            JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
         )?;
         let inner_commitments = read_polynomials(
             bytes,
@@ -198,6 +247,7 @@ impl JindoEvaluationProofV1 {
             &mut polynomial_index,
             INNER_COMMITMENTS,
             JINDO_OUTER_MODULI_V1,
+            JINDO_PROOF_OUTER_RESIDUE_BYTES_V1,
         )?;
         let blind_evaluations = read_fields(bytes, &mut cursor, BLIND_EVALUATIONS)?;
         let split_evaluations = read_fields(bytes, &mut cursor, SPLIT_EVALUATIONS)?;
@@ -216,13 +266,34 @@ impl JindoEvaluationProofV1 {
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(JINDO_PROOF_BYTES_V1);
         out.extend_from_slice(&JINDO_PROOF_MAGIC_V1);
-        out.extend_from_slice(&[JINDO_PROOF_VERSION_V1, JINDO_MAX_BATCH_SIZE_V1 as u8, 0, 0]);
-        write_polynomials(&mut out, &self.mask_commitments);
+        out.extend_from_slice(&[
+            JINDO_PROOF_VERSION_V1,
+            JINDO_MAX_BATCH_SIZE_V1 as u8,
+            JINDO_PARALLEL_REPETITIONS_V1 as u8,
+            0,
+        ]);
+        write_polynomials(
+            &mut out,
+            &self.mask_commitments,
+            JINDO_PROOF_OUTER_RESIDUE_BYTES_V1,
+        );
         write_fields(&mut out, &self.mask_split_evaluation);
-        write_polynomials(&mut out, &self.partials);
-        write_polynomials(&mut out, &self.encode_responses);
-        write_polynomials(&mut out, &self.mlwe_responses);
-        write_polynomials(&mut out, &self.inner_commitments);
+        write_polynomials(&mut out, &self.partials, JINDO_PROOF_INNER_RESIDUE_BYTES_V1);
+        write_polynomials(
+            &mut out,
+            &self.encode_responses,
+            JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
+        );
+        write_polynomials(
+            &mut out,
+            &self.mlwe_responses,
+            JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
+        );
+        write_polynomials(
+            &mut out,
+            &self.inner_commitments,
+            JINDO_PROOF_OUTER_RESIDUE_BYTES_V1,
+        );
         write_fields(&mut out, &self.blind_evaluations);
         write_fields(&mut out, &self.split_evaluations);
         debug_assert_eq!(out.len(), JINDO_PROOF_BYTES_V1);
@@ -235,15 +306,17 @@ fn read_polynomials(
     polynomial_index: &mut u16,
     count: usize,
     moduli: [JindoPrimeModulusV1; 2],
+    residue_bytes: usize,
 ) -> Result<Vec<JindoRnsPolynomialV1>, JindoProofCodecErrorV1> {
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
         for (modulus_index, (row, modulus)) in residues.iter_mut().zip(moduli).enumerate() {
             for (coefficient_index, coefficient) in row.iter_mut().enumerate() {
-                let end = *cursor + 8;
-                let value =
-                    u64::from_le_bytes(bytes[*cursor..end].try_into().expect("length prechecked"));
+                let end = *cursor + residue_bytes;
+                let mut encoded = [0_u8; 8];
+                encoded[..residue_bytes].copy_from_slice(&bytes[*cursor..end]);
+                let value = u64::from_le_bytes(encoded);
                 *cursor = end;
                 if value >= modulus.modulus() {
                     return Err(JindoProofCodecErrorV1::NonCanonicalResidue {
@@ -280,10 +353,10 @@ fn read_fields(
     }
     Ok(out)
 }
-fn write_polynomials(out: &mut Vec<u8>, values: &[JindoRnsPolynomialV1]) {
+fn write_polynomials(out: &mut Vec<u8>, values: &[JindoRnsPolynomialV1], residue_bytes: usize) {
     for value in values {
         for residue in value.residues().iter().flatten() {
-            out.extend_from_slice(&residue.to_le_bytes());
+            out.extend_from_slice(&residue.to_le_bytes()[..residue_bytes]);
         }
     }
 }
@@ -351,11 +424,13 @@ pub enum JindoProofCodecErrorV1 {
         /// Batch count required by the statement.
         statement: u8,
     },
-    /// A reserved proof-header flags byte is non-zero.
-    #[error("Jindo proof flags byte must be zero, got {flags}")]
-    NonZeroFlags {
-        /// Non-zero flags byte found in the header.
-        flags: u8,
+    /// The proof does not contain the exact 32 parallel repetitions.
+    #[error("Jindo proof declares {proof} parallel repetitions; expected {expected}")]
+    ParallelRepetitionCountMismatch {
+        /// Repetition count encoded in the proof.
+        proof: u8,
+        /// Repetition count required by the compiled profile.
+        expected: u8,
     },
     /// A reserved proof-header byte is non-zero.
     #[error("Jindo proof reserved byte must be zero, got {reserved}")]
@@ -401,17 +476,17 @@ mod tests {
     use super::*;
     const MASK_COMMITMENTS_OFFSET: usize = JINDO_PROOF_HEADER_BYTES_V1;
     const MASK_SPLIT_EVALUATION_OFFSET: usize =
-        MASK_COMMITMENTS_OFFSET + MASK_COMMITMENTS * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
+        MASK_COMMITMENTS_OFFSET + MASK_COMMITMENTS * JINDO_PROOF_OUTER_POLYNOMIAL_BYTES_V1;
     const PARTIALS_OFFSET: usize =
         MASK_SPLIT_EVALUATION_OFFSET + MASK_SPLIT_EVALUATIONS * JINDO_FIELD_ELEMENT_BYTES_V1;
     const ENCODE_RESPONSES_OFFSET: usize =
-        PARTIALS_OFFSET + PARTIALS * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
+        PARTIALS_OFFSET + PARTIALS * JINDO_PROOF_INNER_POLYNOMIAL_BYTES_V1;
     const MLWE_RESPONSES_OFFSET: usize =
-        ENCODE_RESPONSES_OFFSET + ENCODE_RESPONSES * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
+        ENCODE_RESPONSES_OFFSET + ENCODE_RESPONSES * JINDO_PROOF_INNER_POLYNOMIAL_BYTES_V1;
     const INNER_COMMITMENTS_OFFSET: usize =
-        MLWE_RESPONSES_OFFSET + MLWE_RESPONSES * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
+        MLWE_RESPONSES_OFFSET + MLWE_RESPONSES * JINDO_PROOF_INNER_POLYNOMIAL_BYTES_V1;
     const BLIND_EVALUATIONS_OFFSET: usize =
-        INNER_COMMITMENTS_OFFSET + INNER_COMMITMENTS * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
+        INNER_COMMITMENTS_OFFSET + INNER_COMMITMENTS * JINDO_PROOF_OUTER_POLYNOMIAL_BYTES_V1;
     const SPLIT_EVALUATIONS_OFFSET: usize =
         BLIND_EVALUATIONS_OFFSET + BLIND_EVALUATIONS * JINDO_FIELD_ELEMENT_BYTES_V1;
     fn proof() -> JindoEvaluationProofV1 {
@@ -429,7 +504,7 @@ mod tests {
     }
     #[test]
     fn exact_shape_roundtrips_and_has_frozen_size() {
-        assert_eq!(JINDO_PROOF_BYTES_V1, 331_912);
+        assert_eq!(JINDO_PROOF_BYTES_V1, 7_159_944);
         let encoded = proof().encode();
         assert_eq!(
             JindoEvaluationProofV1::decode_exact(&encoded, 4, encoded.len() as u32).unwrap(),
@@ -453,17 +528,30 @@ mod tests {
     #[test]
     fn every_header_field_and_legacy_magic_fail_closed() {
         let encoded = proof().encode();
-        let mut legacy = encoded.clone();
-        legacy[..4].copy_from_slice(b"IJP1");
+        for magic in [b"IJP1", b"IJP2"] {
+            let mut legacy = encoded.clone();
+            legacy[..4].copy_from_slice(magic);
+            assert_eq!(
+                JindoEvaluationProofV1::decode_exact(&legacy, 4, legacy.len() as u32),
+                Err(JindoProofCodecErrorV1::InvalidMagic)
+            );
+        }
+        let mut exact_old_wire = vec![0_u8; 331_912];
+        exact_old_wire[..4].copy_from_slice(b"IJP2");
+        exact_old_wire[4] = 2;
+        exact_old_wire[5] = 4;
         assert_eq!(
-            JindoEvaluationProofV1::decode_exact(&legacy, 4, legacy.len() as u32),
-            Err(JindoProofCodecErrorV1::InvalidMagic)
+            JindoEvaluationProofV1::decode_exact(&exact_old_wire, 4, JINDO_PROOF_BYTES_V1 as u32,),
+            Err(JindoProofCodecErrorV1::WrongLength {
+                bytes: 331_912,
+                expected: JINDO_PROOF_BYTES_V1 as u64,
+            })
         );
         for (index, replacement, expected) in [
             (
                 4,
-                1,
-                JindoProofCodecErrorV1::UnsupportedVersion { version: 1 },
+                2,
+                JindoProofCodecErrorV1::UnsupportedVersion { version: 2 },
             ),
             (
                 5,
@@ -473,7 +561,14 @@ mod tests {
                     statement: 4,
                 },
             ),
-            (6, 1, JindoProofCodecErrorV1::NonZeroFlags { flags: 1 }),
+            (
+                6,
+                31,
+                JindoProofCodecErrorV1::ParallelRepetitionCountMismatch {
+                    proof: 31,
+                    expected: 32,
+                },
+            ),
             (
                 7,
                 1,
@@ -498,15 +593,41 @@ mod tests {
     #[test]
     fn every_rns_phase_rejects_a_residue_equal_to_its_modulus() {
         let encoded = proof().encode();
-        for (offset, polynomial_index, modulus) in [
-            (MASK_COMMITMENTS_OFFSET, 0, JINDO_OUTER_MODULI_V1[0]),
-            (PARTIALS_OFFSET, 3, JINDO_INNER_MODULI_V1[0]),
-            (ENCODE_RESPONSES_OFFSET, 4, JINDO_INNER_MODULI_V1[0]),
-            (MLWE_RESPONSES_OFFSET, 7, JINDO_INNER_MODULI_V1[0]),
-            (INNER_COMMITMENTS_OFFSET, 15, JINDO_OUTER_MODULI_V1[0]),
+        for (offset, polynomial_index, modulus, width) in [
+            (
+                MASK_COMMITMENTS_OFFSET,
+                0,
+                JINDO_OUTER_MODULI_V1[0],
+                JINDO_PROOF_OUTER_RESIDUE_BYTES_V1,
+            ),
+            (
+                PARTIALS_OFFSET,
+                96,
+                JINDO_INNER_MODULI_V1[0],
+                JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
+            ),
+            (
+                ENCODE_RESPONSES_OFFSET,
+                128,
+                JINDO_INNER_MODULI_V1[0],
+                JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
+            ),
+            (
+                MLWE_RESPONSES_OFFSET,
+                224,
+                JINDO_INNER_MODULI_V1[0],
+                JINDO_PROOF_INNER_RESIDUE_BYTES_V1,
+            ),
+            (
+                INNER_COMMITMENTS_OFFSET,
+                480,
+                JINDO_OUTER_MODULI_V1[0],
+                JINDO_PROOF_OUTER_RESIDUE_BYTES_V1,
+            ),
         ] {
             let mut mutated = encoded.clone();
-            mutated[offset..offset + 8].copy_from_slice(&modulus.modulus().to_le_bytes());
+            mutated[offset..offset + width]
+                .copy_from_slice(&modulus.modulus().to_le_bytes()[..width]);
             assert_eq!(
                 JindoEvaluationProofV1::decode_exact(&mutated, 4, mutated.len() as u32),
                 Err(JindoProofCodecErrorV1::NonCanonicalResidue {
@@ -545,13 +666,13 @@ mod tests {
     #[test]
     fn frozen_phase_offsets_cover_the_wire_without_gaps() {
         assert_eq!(MASK_COMMITMENTS_OFFSET, 8);
-        assert_eq!(MASK_SPLIT_EVALUATION_OFFSET, 49_160);
-        assert_eq!(PARTIALS_OFFSET, 53_256);
-        assert_eq!(ENCODE_RESPONSES_OFFSET, 69_640);
-        assert_eq!(MLWE_RESPONSES_OFFSET, 118_792);
-        assert_eq!(INNER_COMMITMENTS_OFFSET, 249_864);
-        assert_eq!(BLIND_EVALUATIONS_OFFSET, 315_400);
-        assert_eq!(SPLIT_EVALUATIONS_OFFSET, 315_528);
+        assert_eq!(MASK_SPLIT_EVALUATION_OFFSET, 983_048);
+        assert_eq!(PARTIALS_OFFSET, 1_114_120);
+        assert_eq!(ENCODE_RESPONSES_OFFSET, 1_507_336);
+        assert_eq!(MLWE_RESPONSES_OFFSET, 2_686_984);
+        assert_eq!(INNER_COMMITMENTS_OFFSET, 5_832_712);
+        assert_eq!(BLIND_EVALUATIONS_OFFSET, 7_143_432);
+        assert_eq!(SPLIT_EVALUATIONS_OFFSET, 7_143_560);
         assert_eq!(
             SPLIT_EVALUATIONS_OFFSET + SPLIT_EVALUATIONS * JINDO_FIELD_ELEMENT_BYTES_V1,
             JINDO_PROOF_BYTES_V1

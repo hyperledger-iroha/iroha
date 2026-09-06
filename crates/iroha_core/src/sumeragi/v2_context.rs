@@ -14,9 +14,10 @@ use crate::{
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
+    smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
         GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly, WorldReadOnly,
-        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer,
+        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer_with_role,
         nexus_active_lane_ids, public_lane_validator_record_matches_key,
     },
 };
@@ -24,8 +25,10 @@ use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
+    consensus::ConsensusKeyRole,
     isi::RegisterBox,
-    nexus::PublicLaneValidatorStatus,
+    isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    parameter::system::ConsensusHandshakeMetadata,
     peer::PeerId,
     transaction::Executable,
 };
@@ -178,6 +181,30 @@ pub fn validate_signed_genesis_v2_authority(
     if !exact_authority {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
     }
+    let signed_network_id = NetworkId::from_genesis_hash(genesis.0.hash());
+    if context.network_id != signed_network_id {
+        return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
+    }
+    let metadata = iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    if context.mode != wire::ConsensusMode::from(metadata.mode)
+        || context.da_layout != metadata.sumeragi_v2.da_layout
+        || *context.nexus_amx_context_hash.as_ref() != metadata.sumeragi_v2.nexus_amx_context_hash
+        || *context.execution_policy_hash.as_ref() != metadata.sumeragi_v2.execution_policy_hash
+    {
+        return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
+    }
+    let (signed_mint_roster, signed_next_mint_roster) =
+        bind_signed_mint_finality_rosters(&metadata, signed_network_id)?;
+    if signed_mint_roster != context.kagemusha_mint_finality_epoch_roster
+        || signed_next_mint_roster
+            != context
+                .next_epoch_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.kagemusha_mint_finality_epoch_roster.clone())
+    {
+        return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
+    }
     // Establish the signed-genesis trust root before performing any
     // self-contained validation over the persisted, attacker-controlled
     // context. Besides preserving the precise authority-mismatch diagnostic,
@@ -186,6 +213,37 @@ pub fn validate_signed_genesis_v2_authority(
     VerifiedHeightContext::genesis(context.clone(), validator_set_pops.to_vec())
         .map_err(|error| V2GenesisBootstrapError::Adapter(error.to_string()))?;
     Ok(())
+}
+
+fn bind_signed_mint_finality_rosters(
+    metadata: &ConsensusHandshakeMetadata,
+    network_id: NetworkId,
+) -> Result<
+    (
+        KagemushaMintFinalityEpochRosterV1,
+        Option<KagemushaMintFinalityEpochRosterV1>,
+    ),
+    V2GenesisBootstrapError,
+> {
+    let bind = |template: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1|
+     -> Result<KagemushaMintFinalityEpochRosterV1, V2GenesisBootstrapError> {
+        let roster = template
+            .bind_network_id(network_id)
+            .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+        crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(
+            &roster,
+        )
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+        Ok(roster)
+    };
+    let epoch_roster = bind(&metadata.kagemusha_mint_finality.epoch_roster)?;
+    let next_epoch_roster = metadata
+        .kagemusha_mint_finality
+        .next_epoch_roster
+        .as_ref()
+        .map(bind)
+        .transpose()?;
+    Ok((epoch_roster, next_epoch_roster))
 }
 /// Verify the complete persisted height-one election against deterministically
 /// executed signed genesis state.
@@ -206,16 +264,7 @@ pub(crate) fn validate_staged_genesis_v2_authority(
     context: &wire::HeightContext,
     validator_set_pops: &[Vec<u8>],
 ) -> Result<(), V2GenesisBootstrapError> {
-    let expected = freeze_staged_genesis_v2(
-        genesis,
-        staged,
-        context.mode,
-        wire::SumeragiV2GenesisContextParameters {
-            da_layout: context.da_layout,
-            nexus_amx_context_hash: *context.nexus_amx_context_hash.as_ref(),
-            execution_policy_hash: *context.execution_policy_hash.as_ref(),
-        },
-    )?;
+    let expected = freeze_staged_genesis_v2(genesis, staged, context.mode)?;
     let (verified, _, _) = expected.into_parts();
     if verified.context() != context || verified.proofs_of_possession() != validator_set_pops {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
@@ -225,14 +274,20 @@ pub(crate) fn validate_staged_genesis_v2_authority(
 /// Freeze and cryptographically verify the height-one context from a validated
 /// but uncommitted genesis state block.
 ///
-/// `signed_parameters` must be decoded from the signed genesis handshake
-/// metadata. The function does not accept runtime consensus configuration.
+/// The function decodes the Sumeragi and Kagemusha inputs directly from the
+/// signed genesis handshake. It never accepts either from mutable runtime
+/// configuration or an attacker-controlled persisted height context.
 pub fn freeze_staged_genesis_v2(
     genesis: &GenesisBlock,
     staged: &StateBlock<'_>,
     mode: wire::ConsensusMode,
-    signed_parameters: wire::SumeragiV2GenesisContextParameters,
 ) -> Result<GenesisV2Bootstrap, V2GenesisBootstrapError> {
+    let signed_metadata = iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    if wire::ConsensusMode::from(signed_metadata.mode) != mode {
+        return Err(V2GenesisBootstrapError::SignedConsensusModeMismatch);
+    }
+    let signed_parameters = signed_metadata.sumeragi_v2;
     signed_parameters.validate()?;
     let authenticated_genesis = AuthenticatedGenesisBodyV1::authenticate(genesis)?;
     let staged_world = staged.world();
@@ -245,8 +300,13 @@ pub fn freeze_staged_genesis_v2(
         if !staged_world.peers().iter().any(|peer| peer == voter) {
             return Err(V2GenesisBootstrapError::VoterMissingFromStagedWorld);
         }
-        let staged_pop = live_consensus_key_pop_for_peer(staged_world, voter, 1)
-            .ok_or(V2GenesisBootstrapError::MissingLiveConsensusKey)?;
+        let staged_pop = live_consensus_key_pop_for_peer_with_role(
+            staged_world,
+            voter,
+            1,
+            ConsensusKeyRole::Validator,
+        )
+        .ok_or(V2GenesisBootstrapError::MissingLiveConsensusKey)?;
         if signed_pops.get(voter) != Some(&staged_pop) {
             return Err(V2GenesisBootstrapError::ProofOfPossessionMismatch);
         }
@@ -260,7 +320,7 @@ pub fn freeze_staged_genesis_v2(
                 power: 1,
             })
             .collect(),
-        wire::ConsensusMode::Npos => strict_v2_voting_roster(staged_world, &voters, None)
+        wire::ConsensusMode::Npos => strict_v2_voting_roster(staged_world, &voters, None, 1)
             .map_err(|error| V2GenesisBootstrapError::Stake(error.to_string()))?,
     };
     let proofs_of_possession = roster
@@ -273,6 +333,9 @@ pub fn freeze_staged_genesis_v2(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let network_id = staged.network_id;
+    if network_id != NetworkId::from_genesis_hash(genesis.0.hash()) {
+        return Err(V2GenesisBootstrapError::StagedNetworkIdMismatch);
+    }
     let (epoch_end_height, leader_seed) = match mode {
         wire::ConsensusMode::Permissioned => {
             let mut seed_preimage = b"sumeragi-v2:permissioned-leader-seed".to_vec();
@@ -288,15 +351,44 @@ pub fn freeze_staged_genesis_v2(
             (epoch_length, parameters.epoch_seed())
         }
     };
+    let (signed_mint_roster, signed_next_mint_roster) =
+        bind_signed_mint_finality_rosters(&signed_metadata, network_id)?;
+    if signed_mint_roster.epoch != 0
+        || signed_mint_roster.validators.len() != roster.len()
+        || signed_mint_roster
+            .validators
+            .iter()
+            .zip(&roster)
+            .any(|(mint, consensus)| mint.validator != consensus.validator)
+    {
+        return Err(V2GenesisBootstrapError::InvalidSignedMintFinalityRoster);
+    }
     let election = FrozenElectionInputs {
         epoch: 0,
+        kagemusha_mint_finality_epoch_roster: signed_mint_roster,
         epoch_end_height,
         mode,
         roster,
         leader_seed,
     };
-    let next_epoch_snapshot = finalized_next_epoch_snapshot(staged, &network_id, 1, &election)
-        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    let next_epoch_snapshot = if election.epoch_end_height == 1 {
+        let roster = signed_next_mint_roster.ok_or_else(|| {
+            V2GenesisBootstrapError::Context(
+                V2ContextBuildError::MissingNextKagemushaMintFinalityEpochId.to_string(),
+            )
+        })?;
+        Some(
+            finalized_next_epoch_snapshot_with_roster(staged, &network_id, 1, &election, roster)
+                .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?,
+        )
+    } else {
+        if signed_next_mint_roster.is_some() {
+            return Err(V2GenesisBootstrapError::Context(
+                V2ContextBuildError::UnexpectedNextKagemushaMintFinalityEpochRoster.to_string(),
+            ));
+        }
+        None
+    };
     let staged_nexus_amx_context_hash =
         verify_staged_nexus_amx_context_hash(staged, signed_parameters.nexus_amx_context_hash)?;
     let staged_execution_policy_hash =
@@ -354,16 +446,18 @@ pub fn signed_genesis_validator_pops(
 /// Compute the canonical Nexus/AMX commitment from a validated genesis state
 /// block without committing that block. The projection binds every Nexus and
 /// deterministic AMX input used by proposal assembly or validation, plus the
-/// canonically ordered active public-lane validator records and the complete
-/// retained lane-incarnation lineage, including retired lane identifiers.
+/// canonically ordered public-lane validator records whose retained tenure
+/// contains height one, and the complete retained lane-incarnation lineage,
+/// including retired lane identifiers.
 #[must_use]
 pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
-    let active_validators = staged
+    const GENESIS_CONTEXT_HEIGHT: wire::Height = 1;
+    let eligible_validators = staged
         .world()
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| validator_election_eligible_at_height(record, GENESIS_CONTEXT_HEIGHT))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
     let retained_lane_lineage = staged
@@ -381,7 +475,7 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
     iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
         &staged.nexus,
         &staged.pipeline,
-        &active_validators,
+        &eligible_validators,
         &retained_lane_lineage,
     )
 }
@@ -460,6 +554,15 @@ pub enum V2GenesisBootstrapError {
     /// NPoS mode omitted its signed on-chain election parameters.
     #[error("Sumeragi v2 NPoS genesis is missing election parameters")]
     MissingNposParameters,
+    /// The mode supplied by staged validation disagrees with signed metadata.
+    #[error("staged Sumeragi v2 mode differs from signed genesis metadata")]
+    SignedConsensusModeMismatch,
+    /// The signed networkless Pasta template disagrees with the exact frozen voter roster.
+    #[error("signed Kagemusha mint-finality roster differs from the frozen consensus roster")]
+    InvalidSignedMintFinalityRoster,
+    /// Staged execution used a network identity other than the final signed genesis hash.
+    #[error("staged network identity differs from the final signed genesis hash")]
+    StagedNetworkIdMismatch,
     /// Runtime-injected or otherwise drifted Nexus state differs from the
     /// commitment in signed genesis metadata.
     #[error(
@@ -502,6 +605,9 @@ pub enum V2GenesisBootstrapError {
 pub(crate) struct FrozenElectionInputs {
     /// Election epoch number.
     pub epoch: u64,
+    /// Identifier of the paired-Pasta mint-finality roster for this epoch.
+    pub kagemusha_mint_finality_epoch_roster:
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     /// Final height governed by this snapshot.
     pub epoch_end_height: wire::Height,
     /// Genesis-selected consensus mode.
@@ -539,17 +645,25 @@ pub(crate) fn build_genesis_height_context(
     if inputs.election.epoch_end_height < 1 {
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
+    let quorum = inputs.election.quorum()?;
+    let kagemusha_mint_finality_epoch_id = inputs
+        .election
+        .kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let context = wire::HeightContext {
         network_id: inputs.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: inputs.election.epoch,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: inputs.election.kagemusha_mint_finality_epoch_roster,
         epoch_end_height: inputs.election.epoch_end_height,
         next_epoch_snapshot: inputs.next_epoch_snapshot,
         mode: inputs.election.mode,
         parent_commit_qc: None,
         snapshot_bootstrap: None,
-        quorum: inputs.election.quorum()?,
+        quorum,
         roster: inputs.election.roster,
         nexus_amx_context_hash: inputs.nexus_amx_context_hash,
         execution_policy_hash: inputs.execution_policy_hash,
@@ -578,17 +692,24 @@ pub(crate) fn build_successor_height_context(
     if election.epoch_end_height < height {
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
+    let quorum = election.quorum()?;
+    let kagemusha_mint_finality_epoch_id = election
+        .kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let context = wire::HeightContext {
         network_id: parent.height_context.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height,
         epoch: election.epoch,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: election.kagemusha_mint_finality_epoch_roster,
         epoch_end_height: election.epoch_end_height,
         next_epoch_snapshot,
         mode: election.mode,
         parent_commit_qc: Some(parent.commit_qc.clone()),
         snapshot_bootstrap: None,
-        quorum: election.quorum()?,
+        quorum,
         roster: election.roster,
         nexus_amx_context_hash,
         execution_policy_hash: parent.height_context.execution_policy_hash,
@@ -605,6 +726,9 @@ fn successor_election_inputs(
     let election = match parent.height_context.next_epoch_snapshot.as_ref() {
         Some(snapshot) => FrozenElectionInputs {
             epoch: snapshot.epoch,
+            kagemusha_mint_finality_epoch_roster: snapshot
+                .kagemusha_mint_finality_epoch_roster
+                .clone(),
             epoch_end_height: snapshot.epoch_end_height,
             mode: snapshot.mode,
             roster: snapshot.roster.clone(),
@@ -612,6 +736,10 @@ fn successor_election_inputs(
         },
         None => FrozenElectionInputs {
             epoch: parent.height_context.epoch,
+            kagemusha_mint_finality_epoch_roster: parent
+                .height_context
+                .kagemusha_mint_finality_epoch_roster
+                .clone(),
             epoch_end_height: parent.height_context.epoch_end_height,
             mode: parent.height_context.mode,
             roster: parent.height_context.roster.clone(),
@@ -765,6 +893,28 @@ pub(crate) fn finalized_next_epoch_snapshot(
     if height != election.epoch_end_height {
         return Ok(None);
     }
+    let kagemusha_mint_finality_epoch_roster = state
+        .world()
+        .kagemusha_mint_finality_next_epoch_parameter()
+        .ok_or(V2ContextBuildError::MissingNextKagemushaMintFinalityEpochId)?
+        .roster;
+    finalized_next_epoch_snapshot_with_roster(
+        state,
+        network_id,
+        height,
+        election,
+        kagemusha_mint_finality_epoch_roster,
+    )
+    .map(Some)
+}
+
+fn finalized_next_epoch_snapshot_with_roster(
+    state: &impl StateReadOnly,
+    network_id: &NetworkId,
+    height: wire::Height,
+    election: &FrozenElectionInputs,
+    kagemusha_mint_finality_epoch_roster: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+) -> Result<wire::finality::FinalizedNextEpochSnapshot, V2ContextBuildError> {
     let successor_height = height
         .checked_add(1)
         .ok_or(V2ContextBuildError::HeightOverflow)?;
@@ -772,6 +922,14 @@ pub(crate) fn finalized_next_epoch_snapshot(
         .epoch
         .checked_add(1)
         .ok_or(V2ContextBuildError::EpochOverflow)?;
+    if kagemusha_mint_finality_epoch_roster.network_id != *network_id
+        || kagemusha_mint_finality_epoch_roster.epoch != epoch
+    {
+        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster);
+    }
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let npos_params = if election.mode == wire::ConsensusMode::Npos {
         Some(
             super::v2_npos::committed_epoch_length_blocks(state.world()).map_err(|error| {
@@ -812,15 +970,38 @@ pub(crate) fn finalized_next_epoch_snapshot(
             )
             .ok_or(V2ContextBuildError::MissingFinalizedEpochRoster)?;
             let active_lanes = nexus_active_lane_ids(state.nexus());
-            strict_v2_voting_roster(state.world(), &elected, Some(&active_lanes))?
+            strict_v2_voting_roster(
+                state.world(),
+                &elected,
+                Some(&active_lanes),
+                successor_height,
+            )?
         }
     };
+    if kagemusha_mint_finality_epoch_roster.validators.len() != roster.len()
+        || kagemusha_mint_finality_epoch_roster
+            .validators
+            .iter()
+            .zip(&roster)
+            .any(|(mint, consensus)| mint.validator != consensus.validator)
+        || crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(
+            &kagemusha_mint_finality_epoch_roster,
+        )
+        .is_err()
+    {
+        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster);
+    }
     let quorum = wire::DualQuorum::from_roster(&roster)?;
     let validator_set_pops = roster
         .iter()
         .map(|entry| {
-            live_consensus_key_pop_for_peer(state.world(), &entry.validator, successor_height)
-                .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
+            live_consensus_key_pop_for_peer_with_role(
+                state.world(),
+                &entry.validator,
+                successor_height,
+                ConsensusKeyRole::Validator,
+            )
+            .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
         })
         .collect::<Result<Vec<_>, _>>()?;
     wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
@@ -846,15 +1027,17 @@ pub(crate) fn finalized_next_epoch_snapshot(
         wire::ConsensusMode::Npos => authenticated_npos_seed
             .expect("NPoS branch authenticates the pre-boundary seed before roster selection"),
     };
-    Ok(Some(wire::finality::FinalizedNextEpochSnapshot {
+    Ok(wire::finality::FinalizedNextEpochSnapshot {
         epoch,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         epoch_end_height,
         mode: election.mode,
         roster,
         validator_set_pops,
         quorum,
         leader_seed,
-    }))
+    })
 }
 /// Canonical height-context construction failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -871,6 +1054,17 @@ pub(crate) enum V2ContextBuildError {
     /// The current election epoch cannot be incremented.
     #[error("Sumeragi v2 epoch overflows u64")]
     EpochOverflow,
+    /// An epoch boundary omitted its committed next paired-Pasta roster.
+    #[error(
+        "Sumeragi v2 epoch boundary is missing the committed Kagemusha V1 next-roster parameter"
+    )]
+    MissingNextKagemushaMintFinalityEpochId,
+    /// Signed genesis supplied a next roster at a height which is not an epoch boundary.
+    #[error("signed Sumeragi v2 genesis supplied an unused next Kagemusha V1 roster")]
+    UnexpectedNextKagemushaMintFinalityEpochRoster,
+    /// A supplied paired-Pasta roster is malformed or disagrees with the elected epoch.
+    #[error("invalid Kagemusha mint-finality epoch roster")]
+    InvalidKagemushaMintFinalityEpochRoster,
     /// NPoS state has no finalized roster for the imminent epoch.
     #[error("Sumeragi v2 NPoS boundary is missing its finalized next-epoch roster")]
     MissingFinalizedEpochRoster,
@@ -916,18 +1110,25 @@ mod tests {
         account::AccountId,
         block::{BlockHeader, SignedBlock},
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        isi::RegisterPeerWithPop,
+        isi::{RegisterCommitteePeerWithPop, RegisterPeerWithPop, SetParameter},
         metadata::Metadata,
         nexus::{
             DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneValidatorRecord,
             PublicLaneValidatorStatus,
         },
-        parameter::system::SumeragiNposParameters,
+        parameter::{
+            Parameter,
+            custom::CustomParameter,
+            system::{
+                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+                SumeragiNposParameters, consensus_metadata,
+            },
+        },
         peer::PeerId,
         prelude::{InstructionBox, TransactionBuilder},
     };
     use iroha_genesis::GenesisBlock;
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::{json::Json, numeric::Quantity};
     use std::num::NonZeroU64;
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -953,10 +1154,21 @@ mod tests {
     }
     fn genesis(mode: wire::ConsensusMode, powers: &[u64], end: u64) -> wire::HeightContext {
         let roster = roster(powers);
+        let network_id = test_network_id(0x41);
+        let kagemusha_mint_finality_epoch_roster =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster(network_id, 4, &roster);
         let next_epoch_snapshot = (end == 1).then(|| {
             let next_roster = roster.clone();
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id,
+                    5,
+                    &next_roster,
+                );
             wire::finality::FinalizedNextEpochSnapshot {
                 epoch: 5,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 epoch_end_height: 5,
                 mode,
                 quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
@@ -966,9 +1178,10 @@ mod tests {
             }
         });
         build_genesis_height_context(GenesisContextInputs {
-            network_id: test_network_id(0x41),
+            network_id,
             election: FrozenElectionInputs {
                 epoch: 4,
+                kagemusha_mint_finality_epoch_roster,
                 epoch_end_height: end,
                 mode,
                 roster,
@@ -992,6 +1205,14 @@ mod tests {
         voters: &[KeyPair],
         duplicate_first: bool,
         corrupt_first_pop: bool,
+    ) -> GenesisBlock {
+        signed_roster_genesis_with_extra(voters, duplicate_first, corrupt_first_pop, Vec::new())
+    }
+    fn signed_roster_genesis_with_extra(
+        voters: &[KeyPair],
+        duplicate_first: bool,
+        corrupt_first_pop: bool,
+        extra_instructions: Vec<InstructionBox>,
     ) -> GenesisBlock {
         let authority =
             KeyPair::try_from_seed(b"v2-context-genesis-authority".to_vec(), Algorithm::Ed25519)
@@ -1017,6 +1238,36 @@ mod tests {
                 PeerId::new(voters[0].public_key().clone()),
                 pop,
             )));
+        }
+        instructions.extend(extra_instructions);
+        if voters.len() == 4 && !duplicate_first && !corrupt_first_pop {
+            let mut roster = voters
+                .iter()
+                .map(|key| wire::ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+            let metadata = ConsensusHandshakeMetadata {
+                mode: SumeragiConsensusMode::Permissioned,
+                block_cadence_ms: NonZeroU64::new(1_000).expect("non-zero test cadence"),
+                wire_protocol_version: u32::from(wire::PROTOCOL_VERSION),
+                consensus_fingerprint: ConsensusFingerprint::new([0xA5; 32]),
+                kagemusha_mint_finality:
+                    crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
+                sumeragi_v2: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
+            };
+            metadata
+                .validate()
+                .expect("valid signed genesis consensus metadata fixture");
+            let metadata = norito::json::value::to_value(&metadata)
+                .expect("serialize signed genesis consensus metadata fixture");
+            let metadata = Json::from_norito_value_ref(&metadata)
+                .expect("encode signed genesis consensus metadata fixture");
+            instructions.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
+                CustomParameter::new(consensus_metadata::handshake_meta_id(), metadata),
+            ))));
         }
         let transaction = TransactionBuilder::new_genesis(
             AccountId::new(authority.public_key().clone()),
@@ -1067,6 +1318,42 @@ mod tests {
         assert_eq!(observed.len(), voters.len());
     }
     #[test]
+    fn signed_genesis_roster_ignores_proof_bound_committee_peers() {
+        let voters = [0x61_u8, 0x62, 0x63, 0x64].map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic BLS voter")
+        });
+        let committee = KeyPair::try_from_seed(vec![0x65; 32], Algorithm::BlsNormal)
+            .expect("deterministic BLS committee peer");
+        let committee_peer = PeerId::new(committee.public_key().clone());
+        let committee_pop = iroha_crypto::bls_normal_pop_prove(committee.private_key())
+            .expect("committee PoP fixture");
+        let genesis = signed_roster_genesis_with_extra(
+            &voters,
+            false,
+            false,
+            vec![InstructionBox::from(RegisterCommitteePeerWithPop::new(
+                committee_peer.clone(),
+                committee_pop,
+            ))],
+        );
+
+        let observed = signed_genesis_voting_peers(&genesis).expect("signed global roster");
+        let mut expected = voters
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(observed, expected);
+        assert!(!observed.contains(&committee_peer));
+        assert!(
+            !signed_genesis_validator_pops(&genesis)
+                .expect("signed validator PoPs")
+                .contains_key(&committee_peer),
+            "committee peer registrations must never widen the signed global voter roster"
+        );
+    }
+    #[test]
     fn signed_genesis_roster_rejects_duplicate_or_invalid_pop() {
         let voter = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
             .expect("deterministic BLS voter");
@@ -1113,8 +1400,14 @@ mod tests {
                         .expect("valid finality PoP")
                 })
                 .collect::<Vec<_>>();
+            let network_id = NetworkId::from_genesis_hash(genesis.0.hash());
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 0, &roster,
+                );
+            let signed_parameters = crate::kagemusha_v1_test_fixtures::genesis_context_parameters();
             let context = wire::HeightContext {
-                network_id: test_network_id(0x42),
+                network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -1125,16 +1418,11 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("canonical quorum"),
                 roster,
-                nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
-                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1024,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 4096,
-                    max_chunk_count: 8,
-                },
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
+                nexus_amx_context_hash: Hash::prehashed(signed_parameters.nexus_amx_context_hash),
+                execution_policy_hash: Hash::prehashed(signed_parameters.execution_policy_hash),
+                da_layout: signed_parameters.da_layout,
                 leader_seed: [0xA7; 32],
             };
             (context, validator_set_pops)
@@ -1175,12 +1463,7 @@ mod tests {
             0,
         ));
         assert!(matches!(
-            freeze_staged_genesis_v2(
-                &genesis,
-                &staged,
-                wire::ConsensusMode::Permissioned,
-                wire::SumeragiV2GenesisContextParameters::recommended(),
-            ),
+            freeze_staged_genesis_v2(&genesis, &staged, wire::ConsensusMode::Permissioned,),
             Err(V2GenesisBootstrapError::EmptyVotingRoster)
         ));
     }
@@ -1195,8 +1478,8 @@ mod tests {
             self_stake: Quantity::from(stake),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
         }
     }
@@ -1225,6 +1508,22 @@ mod tests {
             0,
             0,
         ));
+        staged_genesis_nexus_amx_context_hash(&block)
+    }
+    fn staged_context_hash_with_record(record: PublicLaneValidatorRecord) -> Hash {
+        let state = lane_hash_world(&[]);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        block
+            .world
+            .public_lane_validators
+            .insert((record.lane_id, record.validator.clone()), record);
         staged_genesis_nexus_amx_context_hash(&block)
     }
     #[test]
@@ -1270,6 +1569,48 @@ mod tests {
             verify_staged_nexus_amx_context_hash(&staged, [0; 32]),
             Err(V2GenesisBootstrapError::NexusAmxContextHashMismatch { .. })
         ));
+    }
+    #[test]
+    fn staged_genesis_hash_uses_height_one_half_open_validator_tenure() {
+        let peer = PeerId::new(
+            KeyPair::try_from_seed(vec![0x64; 32], Algorithm::BlsNormal)
+                .expect("validator")
+                .public_key()
+                .clone(),
+        );
+        let lane = LaneId::new(3);
+        let empty_hash = staged_context_hash(&lane_hash_world(&[]));
+        let mut record = lane_record(&peer, lane, 7);
+
+        record.status = PublicLaneValidatorStatus::PendingActivation(1);
+        assert_ne!(
+            staged_context_hash_with_record(record.clone()),
+            empty_hash,
+            "a due pending label cannot suppress height-one tenure"
+        );
+
+        record.status = PublicLaneValidatorStatus::Exiting(u64::MAX);
+        record.deactivation_height = Some(2);
+        assert_ne!(
+            staged_context_hash_with_record(record.clone()),
+            empty_hash,
+            "an exiting label cannot suppress retained height-one tenure"
+        );
+
+        record.status = PublicLaneValidatorStatus::Slashed(Hash::new(b"height-one slash"));
+        assert_ne!(
+            staged_context_hash_with_record(record.clone()),
+            empty_hash,
+            "a slashed label cannot suppress retained height-one tenure"
+        );
+
+        record.status = PublicLaneValidatorStatus::Exiting(u64::MAX);
+        record.deactivation_height = Some(1);
+        assert_eq!(
+            staged_context_hash_with_record(record),
+            empty_hash,
+            "the deactivation boundary is exclusive"
+        );
     }
     #[test]
     fn staged_execution_policy_hash_rejects_process_local_drift() {
@@ -1381,13 +1722,14 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"context fixture parent state"),
-                Hash::new(b"context fixture post state"),
-                Hash::new(b"context fixture ordinary writes"),
-                1,
-                Hash::new(b"context fixture executed block wire"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"context fixture parent state"),
+                    Hash::new(b"context fixture post state"),
+                    Hash::new(b"context fixture ordinary writes"),
+                    1,
+                    Hash::new(b"context fixture executed block wire"),
+                ),
             signers: vec![0, 1, 2, 3],
             aggregate_signature: vec![0xA5; 48],
         };
@@ -1412,8 +1754,17 @@ mod tests {
     fn boundary_successor_uses_only_the_finalized_next_epoch_snapshot() {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_roster = roster(&[1, 1, 1, 1]);
+        let next_epoch = parent_context.epoch + 1;
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                parent_context.network_id,
+                next_epoch,
+                &next_roster,
+            );
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
-            epoch: parent_context.epoch + 1,
+            epoch: next_epoch,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: 5,
             mode: parent_context.mode,
             quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
@@ -1439,8 +1790,17 @@ mod tests {
         assert_eq!(unchanged.roster, non_boundary.height_context.roster);
         let boundary_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
+        let next_epoch = boundary_context.epoch + 1;
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                boundary_context.network_id,
+                next_epoch,
+                &boundary_context.roster,
+            );
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
-            epoch: boundary_context.epoch + 1,
+            epoch: next_epoch,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: 9,
             mode: boundary_context.mode,
             roster: boundary_context.roster.clone(),
@@ -1495,7 +1855,6 @@ mod tests {
                     ),
                     activation_height: if index == 1 { SUCCESSOR_HEIGHT } else { 0 },
                     expiry_height: (expire_first && index == 0).then_some(SUCCESSOR_HEIGHT),
-                    hsm: None,
                     replaces: None,
                     status: if index == 1 {
                         ConsensusKeyStatus::Pending
@@ -1519,32 +1878,55 @@ mod tests {
         let expiring_view = expiring_state.view();
         let expiring_peer = &roster[0].validator;
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, BOUNDARY_HEIGHT)
-                .is_some(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                expiring_peer,
+                BOUNDARY_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_some(),
             "fixture key must still authenticate the boundary height"
         );
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, SUCCESSOR_HEIGHT)
-                .is_none(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                expiring_peer,
+                SUCCESSOR_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_none(),
             "a key is expired at its exclusive expiry height"
         );
         let scheduled_peer = &roster[1].validator;
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), scheduled_peer, BOUNDARY_HEIGHT)
-                .is_none(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                scheduled_peer,
+                BOUNDARY_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_none(),
             "a scheduled key must not activate early"
         );
         assert!(
-            live_consensus_key_pop_for_peer(
+            live_consensus_key_pop_for_peer_with_role(
                 expiring_view.world(),
                 scheduled_peer,
-                SUCCESSOR_HEIGHT
+                SUCCESSOR_HEIGHT,
+                ConsensusKeyRole::Validator,
             )
             .is_some(),
             "Pending is a durable schedule and becomes live at activation height"
         );
+        let kagemusha_mint_finality_epoch_roster =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+                *expiring_view.network_id(),
+                4,
+                &roster,
+            );
         let election = FrozenElectionInputs {
             epoch: 4,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: BOUNDARY_HEIGHT,
             mode: wire::ConsensusMode::Permissioned,
             roster,
@@ -1586,6 +1968,8 @@ mod tests {
             let mut block = world.block();
             let mut params = SumeragiNposParameters::default();
             params.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch");
+            params.evidence_horizon_blocks = 14;
+            params.slashing_delay_blocks = 7;
             block.parameters.get_mut().custom.insert(
                 SumeragiNposParameters::parameter_id(),
                 params.into_custom_parameter(),
@@ -1599,11 +1983,18 @@ mod tests {
             chain_id.clone(),
         );
         let view = state.view();
+        let election_roster = roster(&[1, 1, 1, 1]);
         let election = FrozenElectionInputs {
             epoch: 3,
+            kagemusha_mint_finality_epoch_roster:
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+                    *view.network_id(),
+                    3,
+                    &election_roster,
+                ),
             epoch_end_height: BOUNDARY_HEIGHT,
             mode: wire::ConsensusMode::Npos,
-            roster: roster(&[1, 1, 1, 1]),
+            roster: election_roster,
             leader_seed: [0x63; 32],
         };
         assert_eq!(
@@ -1613,13 +2004,21 @@ mod tests {
     }
     #[test]
     fn genesis_rejects_non_unit_consensus_power() {
+        let network_id = test_network_id(0x43);
+        let election_roster = roster(&[1, 2, 1, 1]);
         let error = build_genesis_height_context(GenesisContextInputs {
-            network_id: test_network_id(0x43),
+            network_id,
             election: FrozenElectionInputs {
                 epoch: 0,
+                kagemusha_mint_finality_epoch_roster:
+                    crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+                        network_id,
+                        0,
+                        &election_roster,
+                    ),
                 epoch_end_height: 10,
                 mode: wire::ConsensusMode::Permissioned,
-                roster: roster(&[1, 2, 1, 1]),
+                roster: election_roster,
                 leader_seed: [0; 32],
             },
             next_epoch_snapshot: None,
@@ -1642,25 +2041,35 @@ mod tests {
     }
     #[test]
     fn terminal_height_never_derives_an_unrepresentable_epoch_snapshot() {
-        let chain_id = ChainId::from("terminal-v2-context-builder-test");
-        let state = State::new_with_chain_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        let view = state.view();
-        let election = FrozenElectionInputs {
-            epoch: u64::MAX,
-            epoch_end_height: u64::MAX,
-            mode: wire::ConsensusMode::Permissioned,
-            roster: Vec::new(),
-            leader_seed: [0x7A; 32],
-        };
-        assert_eq!(
-            finalized_next_epoch_snapshot(&view, view.network_id(), u64::MAX, &election),
-            Ok(None),
-            "terminal construction must not inspect or increment next-epoch state"
-        );
+        let mut parent_context =
+            genesis(wire::ConsensusMode::Permissioned, &[1, 1, 1, 1], u64::MAX);
+        parent_context.height = u64::MAX - 1;
+
+        let mut grandparent_commit_qc = artifact(
+            genesis(wire::ConsensusMode::Permissioned, &[1, 1, 1, 1], u64::MAX),
+            None,
+        )
+        .commit_qc;
+        grandparent_commit_qc.round.height = u64::MAX - 2;
+        grandparent_commit_qc.proposal_round = grandparent_commit_qc.round;
+        grandparent_commit_qc.signers = vec![0, 1, 2];
+        parent_context.parent_commit_qc = Some(grandparent_commit_qc);
+
+        let mut parent = artifact(parent_context, None);
+        parent.commit_qc.signers = vec![0, 1, 2];
+        assert_eq!(parent.height, u64::MAX - 1);
+        parent
+            .validate()
+            .expect("MAX-1 finality artifact must be structurally valid");
+
+        let terminal =
+            build_successor_height_context(&parent, Hash::new(b"terminal nexus AMX context"), None)
+                .expect("terminal successor context");
+        assert_eq!(terminal.height, u64::MAX);
+        assert_eq!(terminal.epoch_end_height, u64::MAX);
+        assert_eq!(terminal.next_epoch_snapshot, None);
+        terminal
+            .validate()
+            .expect("the full terminal height context must validate");
     }
 }

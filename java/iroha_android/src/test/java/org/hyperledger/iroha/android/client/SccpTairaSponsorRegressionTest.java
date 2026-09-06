@@ -6,6 +6,7 @@ import org.junit.Test;
 public final class SccpTairaSponsorRegressionTest {
   @Test
   public void exactTairaSponsorSurvivesControllerOnlyWireIdentity() throws Exception {
-    SccpClientExactTests.signedSubmitPreservesExactTairaSponsorAcrossControllerOnlyWireIdentity();
+    SccpClientExactTests
+        .transactionCodecPreservesExactTairaSponsorAcrossControllerOnlyWireIdentity();
   }
 }

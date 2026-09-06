@@ -2,7 +2,10 @@
 #[cfg(feature = "telemetry")]
 use super::telemetry::record_renewal_metrics;
 use super::{
-    acme::{AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeConfig, CertificateBundle},
+    acme::{
+        AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeConfig,
+        CertificateBundle,
+    },
     provider::GatewayProviderBindingV1,
     telemetry::{TlsRenewalResult, TlsStateSnapshot},
 };
@@ -20,9 +23,50 @@ use tokio::{
 };
 /// Default automation poll interval (seconds).
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_mins(1);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TlsAutomationPollOutcome {
+    Continue,
+    UnexpectedExit,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TlsProviderQualification {
+    Qualified,
+    TransientlyUnavailable,
+    PermanentDrift,
+}
+enum TlsAutomationBlockingResult {
+    Processed(Result<Option<CertificateBundle>, AcmeAutomationError>),
+    TransientProviderUnavailable,
+    PermanentProviderDrift,
+}
+fn tls_automation_failure_is_transient(error: &AcmeAutomationError) -> bool {
+    matches!(
+        *error,
+        AcmeAutomationError::ClientUnavailable
+            | AcmeAutomationError::Client(AcmeClientError::Temporary { .. })
+    )
+}
+fn tls_provider_qualification(
+    expected: &GatewayProviderBindingV1,
+    client: &dyn AcmeClient,
+) -> TlsProviderQualification {
+    let Ok(observed) = client.qualification() else {
+        return TlsProviderQualification::TransientlyUnavailable;
+    };
+    if observed.test_marked
+        || observed.provider_handle != expected.provider_handle()
+        || observed.revision != expected.revision()
+        || observed.policy_digest != expected.policy_digest()
+    {
+        return TlsProviderQualification::PermanentDrift;
+    }
+    TlsProviderQualification::Qualified
+}
 /// Handle that manages TLS automation and updates gateway telemetry state.
 pub struct TlsAutomationHandle {
     automation: Mutex<AcmeAutomation<Arc<dyn AcmeClient>>>,
+    client_binding: GatewayProviderBindingV1,
+    client: Arc<dyn AcmeClient>,
     tls_state: Arc<RwLock<TlsStateSnapshot>>,
     hostnames: Vec<String>,
     poll_interval: Duration,
@@ -41,45 +85,122 @@ impl TlsAutomationHandle {
         tls_state: Arc<RwLock<TlsStateSnapshot>>,
     ) -> Result<Self, AcmeAutomationError> {
         let hostnames = config.hostnames.clone();
-        let automation = AcmeAutomation::try_new(config, client_binding, client)?;
+        let automation =
+            AcmeAutomation::try_new(config, client_binding.clone(), Arc::clone(&client))?;
         Ok(Self {
             automation: Mutex::new(automation),
+            client_binding,
+            client,
             tls_state,
             hostnames,
             poll_interval: DEFAULT_POLL_INTERVAL,
         })
     }
-    /// Spawn the automation loop on the Tokio runtime.
-    pub fn spawn(
+    /// Spawn the automation loop under Torii critical-worker supervision.
+    pub(crate) fn spawn(
         self: &Arc<Self>,
         telemetry: MaybeTelemetry,
         shutdown: ShutdownSignal,
-    ) -> JoinHandle<()> {
+    ) -> JoinHandle<crate::ToriiCriticalWorkerExit> {
         let handle = Arc::clone(self);
-        tokio::spawn(async move {
-            handle.run_loop(telemetry, shutdown).await;
-        })
+        tokio::spawn(async move { handle.run_loop(telemetry, shutdown).await })
     }
-    async fn run_loop(self: Arc<Self>, telemetry: MaybeTelemetry, shutdown: ShutdownSignal) {
-        self.poll_once(&telemetry).await;
+    async fn run_loop(
+        self: Arc<Self>,
+        telemetry: MaybeTelemetry,
+        shutdown: ShutdownSignal,
+    ) -> crate::ToriiCriticalWorkerExit {
+        if shutdown.is_sent() {
+            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+        }
         let mut ticker = tokio_time::interval(self.poll_interval);
         ticker.set_missed_tick_behavior(tokio_time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
+                biased;
                 _ = shutdown.receive() => {
                     iroha_logger::info!("SoraFS TLS automation loop received shutdown signal");
-                    break;
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                 }
                 _ = ticker.tick() => {
-                    self.poll_once(&telemetry).await;
+                    if shutdown.is_sent() {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
+                    if self.poll_once(&telemetry).await == TlsAutomationPollOutcome::UnexpectedExit {
+                        return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                    }
                 }
             }
         }
     }
-    async fn poll_once(&self, telemetry: &MaybeTelemetry) {
+    async fn poll_once(self: &Arc<Self>, telemetry: &MaybeTelemetry) -> TlsAutomationPollOutcome {
         let now = SystemTime::now();
-        let mut automation = self.automation.lock().await;
-        match automation.process(now) {
+        let handle = Arc::clone(self);
+        let processed = crate::panic_recovery::join_recoverable(
+            crate::panic_recovery::spawn_blocking_recoverable(move || {
+                match tls_provider_qualification(&handle.client_binding, handle.client.as_ref()) {
+                    TlsProviderQualification::TransientlyUnavailable => {
+                        TlsAutomationBlockingResult::TransientProviderUnavailable
+                    }
+                    TlsProviderQualification::PermanentDrift => {
+                        TlsAutomationBlockingResult::PermanentProviderDrift
+                    }
+                    TlsProviderQualification::Qualified => {
+                        let result = {
+                            let mut automation = handle.automation.blocking_lock();
+                            automation.process(now)
+                        };
+                        match tls_provider_qualification(
+                            &handle.client_binding,
+                            handle.client.as_ref(),
+                        ) {
+                            TlsProviderQualification::Qualified => {
+                                TlsAutomationBlockingResult::Processed(result)
+                            }
+                            TlsProviderQualification::TransientlyUnavailable => {
+                                // `AcmeAutomation::process` already qualified the provider after
+                                // any external order before accepting its result. A subsequent
+                                // unavailable probe is transient and cannot invalidate that result.
+                                TlsAutomationBlockingResult::Processed(result)
+                            }
+                            TlsProviderQualification::PermanentDrift => {
+                                drop(result);
+                                TlsAutomationBlockingResult::PermanentProviderDrift
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await;
+        let result = match processed {
+            Ok(TlsAutomationBlockingResult::Processed(result)) => result,
+            Ok(TlsAutomationBlockingResult::TransientProviderUnavailable) => {
+                self.record_failure(
+                    "TLS automation provider is temporarily unavailable",
+                    now,
+                    telemetry,
+                )
+                .await;
+                return TlsAutomationPollOutcome::Continue;
+            }
+            Ok(TlsAutomationBlockingResult::PermanentProviderDrift) => {
+                self.record_failure(
+                    "TLS automation provider identity or policy changed",
+                    now,
+                    telemetry,
+                )
+                .await;
+                return TlsAutomationPollOutcome::UnexpectedExit;
+            }
+            Err(error) => {
+                iroha_logger::error!(?error, "SoraFS TLS automation blocking worker failed");
+                self.record_failure("TLS automation blocking worker failed", now, telemetry)
+                    .await;
+                return TlsAutomationPollOutcome::UnexpectedExit;
+            }
+        };
+        match result {
             Ok(Some(bundle)) => {
                 iroha_logger::info!(
                     ?now,
@@ -87,14 +208,21 @@ impl TlsAutomationHandle {
                     "SoraFS TLS automation produced a renewed certificate"
                 );
                 self.record_success(now, &bundle, telemetry).await;
+                TlsAutomationPollOutcome::Continue
             }
             Ok(None) => {
                 // Not yet time to renew; nothing to log.
+                TlsAutomationPollOutcome::Continue
             }
             Err(err) => {
                 let reason = err.to_string();
                 iroha_logger::warn!(?err, hostnames = ?self.hostnames, "SoraFS TLS automation failed");
                 self.record_failure(&reason, now, telemetry).await;
+                if tls_automation_failure_is_transient(&err) {
+                    TlsAutomationPollOutcome::Continue
+                } else {
+                    TlsAutomationPollOutcome::UnexpectedExit
+                }
             }
         }
     }
@@ -149,17 +277,16 @@ impl TlsAutomationHandle {
     }
     #[cfg(test)]
     /// Test helper: execute a single automation tick with telemetry disabled.
-    pub async fn poll_once_for_tests(&self) {
-        self.poll_once(&MaybeTelemetry::disabled()).await;
+    pub async fn poll_once_for_tests(self: &Arc<Self>) {
+        let _ = self.poll_once(&MaybeTelemetry::disabled()).await;
     }
 }
 #[cfg(test)]
 mod tests {
-    use super::super::acme::{
-        AcmeClientError, AcmeClientIdentityV1, AcmeClientProbeError, CertificateOrder,
-    };
+    use super::super::acme::{AcmeClientIdentityV1, AcmeClientProbeError, CertificateOrder};
     use super::*;
     use crate::sorafs::gateway::ChallengeProfile;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     /// Test-only fake. Production constructors require a runtime-owned client.
     #[derive(Debug, Default)]
     struct SelfSignedAcmeClient;
@@ -189,6 +316,33 @@ mod tests {
                 ech_config: None,
                 not_after: SystemTime::now() + Duration::from_hours(90 * 24),
             })
+        }
+    }
+    #[derive(Debug, Default)]
+    struct DriftingAcmeClient {
+        qualification_calls: AtomicUsize,
+        order_calls: AtomicUsize,
+    }
+    impl AcmeClient for DriftingAcmeClient {
+        fn qualification(&self) -> Result<AcmeClientIdentityV1, AcmeClientProbeError> {
+            let call = self.qualification_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(AcmeClientIdentityV1 {
+                provider_handle: if call == 0 {
+                    "runtime://sorafs/gateway-acme/primary".to_owned()
+                } else {
+                    "runtime://sorafs/gateway-acme/substituted".to_owned()
+                },
+                revision: 1,
+                policy_digest: [0x51; 32],
+                test_marked: false,
+            })
+        }
+        fn order_certificate(
+            &self,
+            _order: &CertificateOrder,
+        ) -> Result<CertificateBundle, AcmeClientError> {
+            self.order_calls.fetch_add(1, Ordering::SeqCst);
+            Err(AcmeClientError::Rejected)
         }
     }
     fn sample_binding() -> GatewayProviderBindingV1 {
@@ -231,6 +385,77 @@ mod tests {
         let snapshot = tls_state.read().await.clone();
         assert!(snapshot.expiry().is_some(), "expected expiry after renewal");
         assert_eq!(snapshot.last_result(), TlsRenewalResult::Success);
+    }
+    #[tokio::test]
+    async fn supervised_automation_reports_preexisting_shutdown() {
+        let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
+        let handle = Arc::new(
+            TlsAutomationHandle::try_new(
+                sample_config(),
+                sample_binding(),
+                Arc::new(SelfSignedAcmeClient),
+                Arc::clone(&tls_state),
+            )
+            .expect("qualified TLS automation"),
+        );
+        let shutdown = ShutdownSignal::new();
+        shutdown.send();
+        let exit = handle
+            .spawn(MaybeTelemetry::disabled(), shutdown)
+            .await
+            .expect("TLS automation worker must join");
+        assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
+        assert!(
+            tls_state.read().await.expiry().is_none(),
+            "preexisting shutdown must prevent a new certificate order"
+        );
+    }
+    #[test]
+    fn only_explicitly_transient_acme_failures_are_retried() {
+        assert!(tls_automation_failure_is_transient(
+            &AcmeAutomationError::ClientUnavailable
+        ));
+        assert!(tls_automation_failure_is_transient(
+            &AcmeAutomationError::Client(AcmeClientError::Temporary { retry_after: None })
+        ));
+        for failure in [
+            AcmeAutomationError::InvalidClientBinding,
+            AcmeAutomationError::ClientSubstituted,
+            AcmeAutomationError::ClientStale,
+            AcmeAutomationError::ClientTestMarked,
+            AcmeAutomationError::Client(AcmeClientError::Rejected),
+            AcmeAutomationError::Client(AcmeClientError::Transport),
+        ] {
+            assert!(!tls_automation_failure_is_transient(&failure));
+        }
+    }
+    #[tokio::test]
+    async fn supervised_automation_exits_when_provider_identity_drifts() {
+        let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
+        let client = Arc::new(DriftingAcmeClient::default());
+        let runtime_client: Arc<dyn AcmeClient> = client.clone();
+        let handle = Arc::new(
+            TlsAutomationHandle::try_new(
+                sample_config(),
+                sample_binding(),
+                runtime_client,
+                Arc::clone(&tls_state),
+            )
+            .expect("initially qualified TLS automation"),
+        );
+        let exit = tokio::time::timeout(
+            Duration::from_secs(1),
+            handle.spawn(MaybeTelemetry::disabled(), ShutdownSignal::new()),
+        )
+        .await
+        .expect("permanent provider drift must stop the worker")
+        .expect("TLS automation worker must join");
+        assert_eq!(exit, crate::ToriiCriticalWorkerExit::UnexpectedExit);
+        assert_eq!(client.order_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            tls_state.read().await.last_result(),
+            TlsRenewalResult::Failure
+        );
     }
     #[tokio::test]
     async fn automation_records_failure_for_blank_hostnames() {

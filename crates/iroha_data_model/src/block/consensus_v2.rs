@@ -18,11 +18,13 @@ use crate::{
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use core::fmt;
+#[cfg(test)]
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
-use std::{collections::BTreeSet, vec::Vec};
+use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 /// Durable finality artifacts associated with canonical Sumeragi v2 blocks.
 pub mod finality;
 /// Canonical genesis/handshake fingerprint projection.
@@ -69,9 +71,22 @@ pub const MAX_DA_CHUNK_COUNT: u32 = 1024;
 /// round contains at most one distinct subject group per validator.
 pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT + 1;
 const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
-/// Tight allocation bound for one consensus signature or aggregate.
-pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
-const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 5;
+/// Allocation bound for one consensus signature or aggregate.
+///
+/// Ordinary BLS signatures remain compact. A Commit vote for a block containing
+/// KAGEMUSHA V1 top-ups additionally carries one paired Pasta finality-seal
+/// share, while its `CommitQC` carries the exact `2f + 1` share bundle. The
+/// bound covers the largest admitted 31-validator committee without making the
+/// auxiliary proof payload unbounded.
+pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 16 * 1024;
+/// Reserved envelope kind for one KAGEMUSHA V1 Commit-vote seal share.
+pub const KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1: u8 = 1;
+/// Reserved envelope kind for an KAGEMUSHA V1 CommitQC seal bundle.
+pub const KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1: u8 = 2;
+const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1: [u8; 16] = *b"iroha-kgm-sig-v1";
+const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1: usize = 16 + 1 + 2 + 4;
+const KAGEMUSHA_CONSENSUS_BLS_SIGNATURE_MAX_BYTES_V1: usize = 256;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 6;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// `NPoS` Sumeragi v2 handshake and domain-separation tag.
@@ -80,8 +95,6 @@ pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v2";
 pub const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
 /// BLS domain selected by an `NPoS` v2 genesis.
 pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
-/// Maximum block-local Kagemusha top-up anchors authenticated by one execution commitment.
-pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
 /// Consensus-wide upper bound for the canonical result-bearing block wire.
 ///
 /// This is the protocol authority shared by execution-commitment admission and
@@ -89,7 +102,7 @@ pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
 /// Kura hard limit; runtime configuration may select a lower bound but must
 /// never admit a larger consensus value.
 pub const MAX_EXECUTED_BLOCK_WIRE_BYTES: u64 = 256 * 1024 * 1024;
-const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-state-root";
+const KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:post-state-root";
 /// Canonical Native AMX application-manifest wire version.
 pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
 /// Maximum participant route/incarnation leaves committed by one global block.
@@ -119,8 +132,8 @@ pub const MERGE_CARRIER_COMMITMENT_VERSION_V1: u16 = 1;
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    227, 185, 109, 139, 5, 226, 144, 128, 127, 248, 158, 128, 128, 197, 220, 195, 180, 113, 16,
-    141, 61, 94, 144, 205, 65, 235, 216, 159, 48, 162, 211, 1,
+    252, 238, 165, 67, 6, 187, 192, 204, 100, 65, 162, 170, 111, 109, 245, 238, 230, 164, 4, 4, 1,
+    15, 225, 229, 13, 73, 186, 219, 203, 11, 169, 39,
 ];
 /// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
 ///
@@ -130,6 +143,18 @@ pub const RECOMMENDED_EXECUTION_POLICY_HASH: [u8; 32] = [
     63, 148, 116, 83, 117, 143, 142, 233, 11, 44, 102, 67, 122, 18, 143, 194, 45, 147, 196, 210,
     224, 202, 96, 194, 97, 216, 40, 183, 224, 184, 151, 195,
 ];
+/// Recommended deterministic data-availability layout.
+#[must_use]
+pub const fn recommended_data_availability_layout() -> DataAvailabilityLayout {
+    DataAvailabilityLayout {
+        encoding: PayloadEncoding::ReedSolomon16,
+        chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
+        data_shards: 4,
+        parity_shards: 2,
+        max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
+        max_chunk_count: MAX_DA_CHUNK_COUNT,
+    }
+}
 /// Block height in the v2 protocol.
 pub type Height = u64;
 /// View number within one block height.
@@ -145,6 +170,8 @@ pub type ValidatorIndex = u32;
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMode")]
 pub enum ConsensusMode {
     /// Every validator has voting power one.
     Permissioned,
@@ -194,6 +221,8 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ValidatorPower")]
 pub struct ValidatorPower {
     /// Validator identity and consensus public key.
     pub validator: PeerId,
@@ -208,6 +237,8 @@ pub struct ValidatorPower {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::DualQuorum")]
 pub struct DualQuorum {
     /// Required number of distinct validator signatures.
     pub min_signers: u32,
@@ -297,6 +328,8 @@ impl DualQuorum {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::DataAvailabilityLayout")]
 pub struct DataAvailabilityLayout {
     /// Payload encoding used before chunk dissemination.
     pub encoding: PayloadEncoding,
@@ -320,6 +353,8 @@ pub struct DataAvailabilityLayout {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadEncoding")]
 pub enum PayloadEncoding {
     /// Encode payload stripes with the deterministic RS16 layout.
     ReedSolomon16,
@@ -329,10 +364,16 @@ pub enum PayloadEncoding {
 ///
 /// The value is embedded in the signed consensus-genesis parameters. Live v2
 /// startup must reject a genesis which omits it; it must never reconstruct
-/// these fields from a node's mutable runtime configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+/// these fields from a node's mutable runtime configuration. The separately
+/// signed, network-independent KAGEMUSHA authority templates live beside
+/// this value in [`crate::parameter::system::ConsensusHandshakeMetadata`]; they
+/// are deliberately absent from this snapshot-reconstructible context and its
+/// secondary consensus fingerprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters")]
 pub struct SumeragiV2GenesisContextParameters {
     /// Mandatory deterministic data-availability layout for proposal bodies.
     pub da_layout: DataAvailabilityLayout,
@@ -351,16 +392,9 @@ impl SumeragiV2GenesisContextParameters {
     /// This value is serialized into, fingerprinted by, and signed with the
     /// genesis block. It is not a live-node fallback.
     #[must_use]
-    pub fn recommended() -> Self {
+    pub const fn recommended() -> Self {
         Self {
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
-                data_shards: 4,
-                parity_shards: 2,
-                max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
-                max_chunk_count: MAX_DA_CHUNK_COUNT,
-            },
+            da_layout: recommended_data_availability_layout(),
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
         }
@@ -399,6 +433,8 @@ pub type GenesisActiveNexusLaneRecord = ((LaneId, AccountId), PublicLaneValidato
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor")]
 pub struct SnapshotBootstrapAnchor {
     /// Last audited hash-only ledger height represented by the snapshot.
     pub snapshot_height: Height,
@@ -416,6 +452,8 @@ pub struct SnapshotBootstrapAnchor {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord")]
 pub struct SnapshotV2BootstrapRecord {
     /// Record layout version; currently [`Self::VERSION`].
     pub version: u16,
@@ -459,6 +497,8 @@ impl SnapshotV2BootstrapRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContext")]
 pub struct HeightContext {
     /// Exact genesis-derived network identity used for replay protection.
     pub network_id: NetworkId,
@@ -468,11 +508,21 @@ pub struct HeightContext {
     pub height: Height,
     /// Finalized validator-election epoch.
     pub epoch: u64,
+    /// Canonical identifier of the exact paired-Pasta validator-key roster authorized for this
+    /// epoch's KAGEMUSHA V1 mint-finality seals.
+    pub kagemusha_mint_finality_epoch_id: [u8; 32],
+    /// Complete bounded paired-Pasta public-key roster whose canonical digest equals
+    /// [`Self::kagemusha_mint_finality_epoch_id`]. Keeping the roster in the immutable context
+    /// makes historical top-up finality independently verifiable after key rotation.
+    pub kagemusha_mint_finality_epoch_roster:
+        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
     /// Complete transition selected from the committed pre-state when this is
-    /// the last height of an epoch. The `CommitQC` authenticates these bytes
-    /// through [`Self::id`]; non-boundary contexts must carry `None`.
+    /// the last height of an epoch and a successor height is representable. The
+    /// `CommitQC` authenticates these bytes through [`Self::id`]; non-boundary
+    /// contexts and the terminal `u64::MAX` height, which has no representable
+    /// successor, must carry `None`.
     #[norito(required)]
     pub next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     /// Consensus mode that selected the equal-vote committee.
@@ -515,6 +565,8 @@ impl HeightContext {
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
+            kagemusha_mint_finality_epoch_id: self.kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: self.kagemusha_mint_finality_epoch_roster.clone(),
             epoch_end_height: self.epoch_end_height,
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
@@ -556,17 +608,38 @@ impl HeightContext {
         if self.epoch_end_height < self.height {
             return Err(ValidationError::EpochEndsBeforeHeight);
         }
+        if self.kagemusha_mint_finality_epoch_id == [0; 32] {
+            return Err(ValidationError::InvalidKagemushaMintFinalityEpochId);
+        }
+        let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
+        if mint_roster.validate().is_err()
+            || mint_roster.network_id != self.network_id
+            || mint_roster.epoch != self.epoch
+            || mint_roster.validators.len() != self.roster.len()
+            || mint_roster
+                .validators
+                .iter()
+                .zip(&self.roster)
+                .any(|(mint, consensus)| mint.validator != consensus.validator)
+            || mint_roster.finality_epoch_id().ok() != Some(self.kagemusha_mint_finality_epoch_id)
+        {
+            return Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster);
+        }
         if self.nexus_amx_context_hash == Hash::prehashed([0; Hash::LENGTH]) {
             return Err(ValidationError::InvalidNexusAmxContextHash);
         }
         if self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH]) {
             return Err(ValidationError::InvalidExecutionPolicyHash);
         }
+        let is_terminal_context = self.height == u64::MAX
+            && self.epoch_end_height == u64::MAX
+            && self.next_epoch_snapshot.is_none();
         match (
             self.height == self.epoch_end_height,
             self.next_epoch_snapshot.as_ref(),
         ) {
             (true, Some(snapshot)) => snapshot.validate_against(self)?,
+            (true, None) if is_terminal_context => {}
             (true, None) => return Err(ValidationError::MissingNextEpochSnapshot),
             (false, Some(_)) => return Err(ValidationError::UnexpectedNextEpochSnapshot),
             (false, None) => {}
@@ -660,12 +733,17 @@ impl HeightContext {
     }
 }
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContextIdentity")]
 struct HeightContextIdentity {
     identity_version: u16,
     network_id: NetworkId,
     protocol_version: u16,
     height: Height,
     epoch: u64,
+    kagemusha_mint_finality_epoch_id: [u8; 32],
+    kagemusha_mint_finality_epoch_roster:
+        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     epoch_end_height: Height,
     next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     mode: ConsensusMode,
@@ -679,6 +757,8 @@ struct HeightContextIdentity {
     leader_seed: [u8; 32],
 }
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ParentCommitIdentity")]
 struct ParentCommitIdentity {
     context_id: HeightContextId,
     height: Height,
@@ -690,6 +770,8 @@ struct ParentCommitIdentity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContextId")]
 pub struct HeightContextId(
     /// Norito hash of the context's semantic identity projection.
     pub HashOf<HeightContext>,
@@ -698,6 +780,8 @@ pub struct HeightContextId(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusRound")]
 pub struct ConsensusRound {
     /// Context governing this round.
     pub context_id: HeightContextId,
@@ -719,6 +803,8 @@ pub struct ConsensusRound {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::GlobalPhase")]
 pub enum GlobalPhase {
     /// Certifies durable availability and deterministic validation.
     #[codec(index = 1)]
@@ -756,6 +842,8 @@ impl IntoSchema for GlobalPhase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::BlockSubject")]
 pub struct BlockSubject {
     /// Parent block hash, absent only for the genesis block.
     #[norito(required)]
@@ -769,6 +857,8 @@ pub struct BlockSubject {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1")]
 pub struct NativeAmxApplicationManifestMemberV1 {
     /// Zero-based index of the source entrypoint in the canonical external block payload.
     pub entrypoint_index: u64,
@@ -787,6 +877,8 @@ pub struct NativeAmxApplicationManifestMemberV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestLeafV1")]
 pub struct NativeAmxApplicationManifestLeafV1 {
     /// Exact leaf schema version. No legacy layout is decoded implicitly.
     pub version: u16,
@@ -895,6 +987,8 @@ pub fn native_amx_application_manifest_empty_root() -> Hash {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1")]
 pub struct MergeCarrierCommitmentV1 {
     /// Exact first-release projection version.
     pub version: u16,
@@ -930,18 +1024,20 @@ impl MergeCarrierCommitmentV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ExecutionCommitment")]
 pub struct ExecutionCommitment {
     /// Root of the witnessed pre-state values for keys changed by the block.
     pub parent_state_root: Hash,
     /// Root of the complete deterministic post-state projection.
     pub post_state_root: Hash,
-    /// Root of all canonical last-write-wins writes other than Kagemusha top-up anchors.
+    /// Root of all canonical last-write-wins writes other than KAGEMUSHA V1 top-ups.
     pub ordinary_writes_root: Hash,
-    /// Root of the canonical balanced Kagemusha top-up tree, when the block has top-ups.
+    /// Root of the canonical balanced KAGEMUSHA V1 top-up tree, when present.
     #[norito(required)]
-    pub topup_anchor_root: Option<Hash>,
-    /// Number of real Kagemusha top-up leaves committed by `topup_anchor_root`.
-    pub topup_anchor_count: u32,
+    pub kagemusha_top_up_root: Option<Hash>,
+    /// Number of real KAGEMUSHA V1 top-up leaves committed by `kagemusha_top_up_root`.
+    pub kagemusha_top_up_count: u32,
     /// Exact Native AMX application-manifest schema version.
     pub native_amx_application_manifest_version: u16,
     /// Merkle root of canonical separate-participant application leaves.
@@ -968,10 +1064,10 @@ pub struct ExecutionCommitment {
     pub executed_block_wire_hash: Hash,
 }
 impl ExecutionCommitment {
-    /// Construct a transition that contains neither Kagemusha top-up anchors
+    /// Construct a transition that contains neither KAGEMUSHA V1 top-ups
     /// nor a compact merge carrier.
     #[must_use]
-    pub fn without_topups_or_merge_carrier(
+    pub fn without_kagemusha_top_ups_or_merge_carrier(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
@@ -982,8 +1078,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root: None,
-            topup_anchor_count: 0,
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
             native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
@@ -997,15 +1093,14 @@ impl ExecutionCommitment {
     ///
     /// # Errors
     ///
-    /// Returns an error when root presence disagrees with the count, the
-    /// bounded top-up count is exceeded, or the combined post-state root is
-    /// not the canonical hash of the advertised top-up projection.
+    /// Returns an error when root presence disagrees with the count or the combined post-state
+    /// root is not the canonical hash of the advertised top-up projection.
     pub fn new_without_merge_carrier(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        kagemusha_top_up_root: Option<Hash>,
+        kagemusha_top_up_count: u32,
         executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
@@ -1013,8 +1108,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            kagemusha_top_up_root,
+            kagemusha_top_up_count,
             NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_empty_root(),
             0,
@@ -1036,8 +1131,8 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        kagemusha_top_up_root: Option<Hash>,
+        kagemusha_top_up_count: u32,
         native_amx_application_manifest_version: u16,
         native_amx_application_manifest_root: Hash,
         native_amx_application_manifest_count: u32,
@@ -1048,8 +1143,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            kagemusha_top_up_root,
+            kagemusha_top_up_count,
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
@@ -1072,8 +1167,8 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        kagemusha_top_up_root: Option<Hash>,
+        kagemusha_top_up_count: u32,
         native_amx_application_manifest_version: u16,
         native_amx_application_manifest_root: Hash,
         native_amx_application_manifest_count: u32,
@@ -1085,8 +1180,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            kagemusha_top_up_root,
+            kagemusha_top_up_count,
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
@@ -1110,8 +1205,8 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        kagemusha_top_up_root: Option<Hash>,
+        kagemusha_top_up_count: u32,
         native_amx_application_manifest_version: u16,
         native_amx_application_manifest_root: Hash,
         native_amx_application_manifest_count: u32,
@@ -1124,8 +1219,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            kagemusha_top_up_root,
+            kagemusha_top_up_count,
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
@@ -1154,19 +1249,18 @@ impl ExecutionCommitment {
         if let Some(merge_carrier) = self.merge_carrier {
             merge_carrier.validate()?;
         }
-        match (self.topup_anchor_count, self.topup_anchor_root) {
+        match (self.kagemusha_top_up_count, self.kagemusha_top_up_root) {
             (0, None) => {}
             (0, Some(_)) | (_, None) => {
                 return Err(ValidationError::InvalidExecutionCommitment);
             }
-            (count, Some(root)) if count <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK => {
+            (count, Some(root)) => {
                 if self.post_state_root
-                    != Self::topup_post_state_root(count, self.ordinary_writes_root, root)
+                    != Self::kagemusha_post_state_root_v1(count, self.ordinary_writes_root, root)
                 {
                     return Err(ValidationError::ExecutionCommitmentPostRootMismatch);
                 }
             }
-            (_, Some(_)) => return Err(ValidationError::TooManyKagemushaTopupAnchors),
         }
         if self.native_amx_application_manifest_version != NATIVE_AMX_APPLICATION_MANIFEST_VERSION {
             return Err(ValidationError::InvalidNativeAmxApplicationManifestVersion);
@@ -1192,29 +1286,143 @@ impl ExecutionCommitment {
     }
     /// Derive the canonical combined post-state root for a non-empty top-up tree.
     #[must_use]
-    pub fn topup_post_state_root(
-        topup_anchor_count: u32,
+    pub fn kagemusha_post_state_root_v1(
+        kagemusha_top_up_count: u32,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Hash,
+        kagemusha_top_up_root: Hash,
     ) -> Hash {
         let mut preimage = Vec::with_capacity(
-            KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN.len()
+            KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN_V1.len()
                 + 1
                 + core::mem::size_of::<u32>()
                 + 2 * Hash::LENGTH,
         );
-        preimage.extend_from_slice(KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN);
+        preimage.extend_from_slice(KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN_V1);
         preimage.push(0);
-        preimage.extend_from_slice(&topup_anchor_count.to_le_bytes());
+        preimage.extend_from_slice(&kagemusha_top_up_count.to_le_bytes());
         preimage.extend_from_slice(ordinary_writes_root.as_ref());
-        preimage.extend_from_slice(topup_anchor_root.as_ref());
+        preimage.extend_from_slice(kagemusha_top_up_root.as_ref());
         Hash::new(preimage)
     }
+}
+
+/// Borrowed components of one KAGEMUSHA V1 consensus-signature envelope.
+///
+/// The framing deliberately keeps the ordinary BLS signature first-class so
+/// generic finality verification can authenticate the same vote preimage while
+/// the KAGEMUSHA verifier separately checks the paired Pasta payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KagemushaConsensusSignatureEnvelopePartsV1<'a> {
+    /// Whether the auxiliary payload is a Commit-vote share or CommitQC bundle.
+    pub kind: u8,
+    /// Ordinary BLS signature or aggregate signature.
+    pub bls_signature: &'a [u8],
+    /// Canonical Norito bytes of the paired Pasta share or bundle.
+    pub auxiliary_payload: &'a [u8],
+}
+
+/// Encode one bounded KAGEMUSHA V1 consensus-signature envelope.
+///
+/// # Errors
+///
+/// Returns an error when the kind, BLS signature, auxiliary payload, or total
+/// length is outside the sole V1 framing contract.
+pub fn encode_kagemusha_consensus_signature_envelope_v1(
+    kind: u8,
+    bls_signature: &[u8],
+    auxiliary_payload: &[u8],
+) -> Result<Vec<u8>, ValidationError> {
+    if !matches!(
+        kind,
+        KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1
+            | KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1
+    ) || bls_signature.is_empty()
+        || bls_signature.len() > KAGEMUSHA_CONSENSUS_BLS_SIGNATURE_MAX_BYTES_V1
+        || auxiliary_payload.is_empty()
+    {
+        return Err(ValidationError::InvalidKagemushaSignatureEnvelope);
+    }
+    let bls_len = u16::try_from(bls_signature.len())
+        .map_err(|_| ValidationError::InvalidKagemushaSignatureEnvelope)?;
+    let auxiliary_len = u32::try_from(auxiliary_payload.len())
+        .map_err(|_| ValidationError::InvalidKagemushaSignatureEnvelope)?;
+    let total = KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1
+        .checked_add(bls_signature.len())
+        .and_then(|value| value.checked_add(auxiliary_payload.len()))
+        .ok_or(ValidationError::SignatureTooLarge)?;
+    if total > MAX_CONSENSUS_SIGNATURE_BYTES {
+        return Err(ValidationError::SignatureTooLarge);
+    }
+    let mut envelope = Vec::with_capacity(total);
+    envelope.extend_from_slice(&KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1);
+    envelope.push(kind);
+    envelope.extend_from_slice(&bls_len.to_le_bytes());
+    envelope.extend_from_slice(&auxiliary_len.to_le_bytes());
+    envelope.extend_from_slice(bls_signature);
+    envelope.extend_from_slice(auxiliary_payload);
+    Ok(envelope)
+}
+
+/// Decode one reserved KAGEMUSHA V1 consensus-signature envelope.
+///
+/// A byte string without the complete 128-bit reserved prefix is an ordinary
+/// BLS signature and returns `Ok(None)`. A prefixed but non-canonical frame
+/// fails closed.
+///
+/// # Errors
+///
+/// Returns an error for an unknown kind, empty component, length mismatch, or
+/// oversized frame.
+pub fn decode_kagemusha_consensus_signature_envelope_v1(
+    bytes: &[u8],
+) -> Result<Option<KagemushaConsensusSignatureEnvelopePartsV1<'_>>, ValidationError> {
+    if !bytes.starts_with(&KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1) {
+        return Ok(None);
+    }
+    if bytes.len() < KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1
+        || bytes.len() > MAX_CONSENSUS_SIGNATURE_BYTES
+    {
+        return Err(ValidationError::InvalidKagemushaSignatureEnvelope);
+    }
+    let kind = bytes[16];
+    if !matches!(
+        kind,
+        KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1
+            | KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1
+    ) {
+        return Err(ValidationError::InvalidKagemushaSignatureEnvelope);
+    }
+    let bls_len = usize::from(u16::from_le_bytes([bytes[17], bytes[18]]));
+    let auxiliary_len = usize::try_from(u32::from_le_bytes([
+        bytes[19], bytes[20], bytes[21], bytes[22],
+    ]))
+    .map_err(|_| ValidationError::InvalidKagemushaSignatureEnvelope)?;
+    let bls_start = KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1;
+    let bls_end = bls_start
+        .checked_add(bls_len)
+        .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope)?;
+    let auxiliary_end = bls_end
+        .checked_add(auxiliary_len)
+        .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope)?;
+    if bls_len == 0
+        || bls_len > KAGEMUSHA_CONSENSUS_BLS_SIGNATURE_MAX_BYTES_V1
+        || auxiliary_len == 0
+        || auxiliary_end != bytes.len()
+    {
+        return Err(ValidationError::InvalidKagemushaSignatureEnvelope);
+    }
+    Ok(Some(KagemushaConsensusSignatureEnvelopePartsV1 {
+        kind,
+        bls_signature: &bytes[bls_start..bls_end],
+        auxiliary_payload: &bytes[bls_end..auxiliary_end],
+    }))
 }
 /// One global Prepare or Commit vote.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::Vote")]
 pub struct Vote {
     /// Round in which the vote was issued.
     pub round: ConsensusRound,
@@ -1251,6 +1459,42 @@ impl Vote {
         };
         signature_preimage(b"iroha:sumeragi:v2:vote", &payload.encode())
     }
+    /// Borrow the ordinary BLS signature from either its raw representation or
+    /// the required KAGEMUSHA V1 Commit-vote envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signature framing is malformed or disagrees
+    /// with the vote phase/top-up commitment.
+    pub fn bls_signature(&self) -> Result<&[u8], ValidationError> {
+        match self.kagemusha_finality_seal_payload()? {
+            Some(_) => decode_kagemusha_consensus_signature_envelope_v1(&self.signature)?
+                .map(|parts| parts.bls_signature)
+                .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope),
+            None => Ok(&self.signature),
+        }
+    }
+    /// Borrow the canonical paired-Pasta Commit-vote seal payload when this vote certifies a
+    /// non-empty KAGEMUSHA V1 top-up root or carries an epoch-boundary roster rotation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required envelope is absent, an envelope occurs
+    /// on another vote kind, or its framing is malformed.
+    pub fn kagemusha_finality_seal_payload(&self) -> Result<Option<&[u8]>, ValidationError> {
+        let envelope = decode_kagemusha_consensus_signature_envelope_v1(&self.signature)?;
+        let commit = self.phase == GlobalPhase::Commit;
+        let required = commit && self.execution_commitment.kagemusha_top_up_count != 0;
+        match (commit, required, envelope) {
+            (true, _, Some(parts))
+                if parts.kind == KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1 =>
+            {
+                Ok(Some(parts.auxiliary_payload))
+            }
+            (true, false, None) | (false, false, None) => Ok(None),
+            _ => Err(ValidationError::InvalidKagemushaSignatureEnvelope),
+        }
+    }
     /// Validate the vote's context, signer, and signature presence.
     ///
     /// Cryptographic verification remains the authenticated-ingress adapter's
@@ -1267,13 +1511,16 @@ impl Vote {
         validate_proposal_round(self.proposal_round, self.round, context)?;
         validate_validator_index(self.signer, context)?;
         self.execution_commitment.validate()?;
-        require_signature(&self.signature)
+        require_signature(&self.signature)?;
+        self.bls_signature().map(|_| ())
     }
 }
 /// Canonical same-message fields authenticated by Prepare and Commit votes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::VoteSignaturePayload")]
 pub struct VoteSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -1292,6 +1539,8 @@ pub struct VoteSignaturePayload {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::QuorumCertificateRef")]
 pub struct QuorumCertificateRef {
     /// Certified round.
     pub round: ConsensusRound,
@@ -1325,6 +1574,8 @@ impl QuorumCertificateRef {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::QuorumCertificate")]
 pub struct QuorumCertificate {
     /// Certified round.
     pub round: ConsensusRound,
@@ -1353,6 +1604,42 @@ impl QuorumCertificate {
             execution_commitment: self.execution_commitment,
         }
     }
+    /// Borrow the ordinary BLS aggregate from either its raw representation or
+    /// the required KAGEMUSHA V1 CommitQC envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signature framing is malformed or disagrees
+    /// with the certificate phase/top-up commitment.
+    pub fn bls_aggregate_signature(&self) -> Result<&[u8], ValidationError> {
+        match self.kagemusha_finality_seal_payload()? {
+            Some(_) => decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?
+                .map(|parts| parts.bls_signature)
+                .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope),
+            None => Ok(&self.aggregate_signature),
+        }
+    }
+    /// Borrow the canonical paired-Pasta CommitQC seal bundle payload when the certificate
+    /// commits a non-empty KAGEMUSHA V1 top-up root or an epoch-boundary roster rotation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required envelope is absent, an envelope occurs
+    /// on another certificate kind, or its framing is malformed.
+    pub fn kagemusha_finality_seal_payload(&self) -> Result<Option<&[u8]>, ValidationError> {
+        let envelope = decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?;
+        let commit = self.phase == GlobalPhase::Commit;
+        let required = commit && self.execution_commitment.kagemusha_top_up_count != 0;
+        match (commit, required, envelope) {
+            (true, _, Some(parts))
+                if parts.kind == KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1 =>
+            {
+                Ok(Some(parts.auxiliary_payload))
+            }
+            (true, false, None) | (false, false, None) => Ok(None),
+            _ => Err(ValidationError::InvalidKagemushaSignatureEnvelope),
+        }
+    }
     /// Validate the certificate's context binding and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
@@ -1367,7 +1654,8 @@ impl QuorumCertificate {
         validate_proposal_round(self.proposal_round, self.round, context)?;
         self.execution_commitment.validate()?;
         context.validate_certificate_signers(&self.signers)?;
-        require_aggregate_signature(&self.aggregate_signature)
+        require_aggregate_signature(&self.aggregate_signature)?;
+        self.bls_aggregate_signature().map(|_| ())
     }
     /// Reconstruct the canonical vote preimage for one certified signer.
     ///
@@ -1400,6 +1688,8 @@ impl QuorumCertificate {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVote")]
 pub struct TimeoutVote {
     /// Round whose timer expired.
     pub round: ConsensusRound,
@@ -1459,6 +1749,8 @@ impl TimeoutVote {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVoteSignaturePayload")]
 pub struct TimeoutVoteSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -1472,6 +1764,8 @@ pub struct TimeoutVoteSignaturePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVoteGroup")]
 pub struct TimeoutVoteGroup {
     /// Highest `PrepareQC` reported by this group, or none when no lock exists.
     #[norito(required)]
@@ -1485,6 +1779,8 @@ pub struct TimeoutVoteGroup {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutCertificate")]
 pub struct TimeoutCertificate {
     /// Round whose timeout was certified.
     pub round: ConsensusRound,
@@ -1601,6 +1897,8 @@ impl TimeoutCertificate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutCertificateRef")]
 pub struct TimeoutCertificateRef {
     /// Timed-out round certified by the TC.
     pub round: ConsensusRound,
@@ -1619,6 +1917,8 @@ pub struct TimeoutCertificateRef {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ProposalJustification")]
 pub enum ProposalJustification {
     /// View-zero justification from the parent `CommitQC`.
     ParentCommit(ParentCommitJustification),
@@ -1629,6 +1929,8 @@ pub enum ProposalJustification {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ParentCommitJustification")]
 pub struct ParentCommitJustification {
     /// Parent `CommitQC`; absent only for the genesis block.
     #[norito(required)]
@@ -1638,6 +1940,8 @@ pub struct ParentCommitJustification {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutJustification")]
 pub struct TimeoutJustification {
     /// Certificate authorizing the new view.
     pub timeout_certificate: TimeoutCertificate,
@@ -1654,6 +1958,8 @@ pub struct TimeoutJustification {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadManifest")]
 pub struct PayloadManifest {
     /// Round for which the payload was proposed.
     pub round: ConsensusRound,
@@ -1807,10 +2113,131 @@ impl PayloadManifest {
         Ok(())
     }
 }
+/// One validated payload-manifest session reused across all of its chunks.
+///
+/// Construction validates the complete manifest and computes its canonical
+/// hash exactly once. Chunk signing and authentication then perform only the
+/// index-local length and content-hash work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedPayloadManifest {
+    manifest: PayloadManifest,
+    manifest_hash: HashOf<PayloadManifest>,
+    total_chunks: u32,
+    chunk_size_bytes: usize,
+    epoch: u64,
+    roster: Arc<[PeerId]>,
+}
+impl ValidatedPayloadManifest {
+    /// Validate and take ownership of one manifest for repeated chunk work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when `manifest` is not valid for
+    /// the immutable height `context`.
+    pub fn new(
+        context: &HeightContext,
+        manifest: PayloadManifest,
+    ) -> Result<Self, ValidationError> {
+        manifest.validate(context)?;
+        let total_chunks = u32::try_from(manifest.chunk_hashes.len())
+            .map_err(|_| ValidationError::ChunkCountTooLarge)?;
+        let chunk_size_bytes = usize::try_from(manifest.layout.chunk_size_bytes)
+            .map_err(|_| ValidationError::InvalidChunkLength)?;
+        let manifest_hash = HashOf::new(&manifest);
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>()
+            .into();
+        Ok(Self {
+            manifest,
+            manifest_hash,
+            total_chunks,
+            chunk_size_bytes,
+            epoch: context.epoch,
+            roster,
+        })
+    }
+    /// Borrow the validated wire manifest.
+    #[must_use]
+    pub const fn manifest(&self) -> &PayloadManifest {
+        &self.manifest
+    }
+    /// Consume this session and recover its validated wire manifest.
+    #[must_use]
+    pub fn into_manifest(self) -> PayloadManifest {
+        self.manifest
+    }
+    /// Return the once-computed canonical manifest hash.
+    #[must_use]
+    pub const fn manifest_hash(&self) -> HashOf<PayloadManifest> {
+        self.manifest_hash
+    }
+    /// Return the exact validator identity at `index` in the validated context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::SignerOutOfRange`] when `index` is outside
+    /// the frozen roster.
+    pub fn validator(&self, index: ValidatorIndex) -> Result<&PeerId, ValidationError> {
+        let index = usize::try_from(index).map_err(|_| ValidationError::SignerOutOfRange)?;
+        self.roster
+            .get(index)
+            .ok_or(ValidationError::SignerOutOfRange)
+    }
+
+    /// Build the signature payload for a locally encoded committed chunk.
+    ///
+    /// This path deliberately uses the hash already committed by the validated
+    /// manifest and does not inspect chunk bytes. It lets the canonical encoder
+    /// avoid hashing every large shard a second time before signing. Inbound or
+    /// otherwise untrusted chunks must use [`PayloadChunk::signature_payload`],
+    /// which hashes and compares their bytes before returning this payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when `index` is outside the
+    /// manifest or `sender` is outside the frozen roster.
+    pub fn committed_chunk_signature_payload(
+        &self,
+        index: u32,
+        sender: ValidatorIndex,
+    ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
+        let manifest = self.manifest();
+        let chunk_hash = self.chunk_hash(index)?;
+        self.validator(sender)?;
+        Ok(PayloadChunkSignaturePayload {
+            protocol_version: PROTOCOL_VERSION,
+            context_id: manifest.round.context_id,
+            epoch: self.epoch,
+            height: manifest.round.height,
+            view: manifest.round.view,
+            subject: manifest.subject,
+            manifest_hash: self.manifest_hash,
+            encoding: manifest.layout.encoding,
+            index,
+            total_chunks: self.total_chunks,
+            chunk_hash,
+            sender,
+        })
+    }
+
+    fn chunk_hash(&self, index: u32) -> Result<Hash, ValidationError> {
+        let index = usize::try_from(index).map_err(|_| ValidationError::ChunkIndexOutOfRange)?;
+        self.manifest
+            .chunk_hashes
+            .get(index)
+            .copied()
+            .ok_or(ValidationError::ChunkIndexOutOfRange)
+    }
+}
 /// One encoded payload chunk.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadChunk")]
 pub struct PayloadChunk {
     /// Manifest to which this chunk belongs.
     pub manifest_hash: HashOf<PayloadManifest>,
@@ -1820,32 +2247,10 @@ pub struct PayloadChunk {
     pub bytes: Vec<u8>,
     /// Sender index in the height context roster.
     pub sender: ValidatorIndex,
-    /// Sender signature over [`Self::signature_preimage`].
+    /// Sender signature over [`PayloadChunkSignaturePayload::signature_preimage`].
     pub signature: Vec<u8>,
 }
 impl PayloadChunk {
-    /// Validate the chunk's structural commitments and signature presence.
-    ///
-    /// Cryptographic signature verification remains the caller's
-    /// responsibility and must use [`Self::signature_preimage`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural validation error when this chunk does not match
-    /// `context` and `manifest` or carries no signature.
-    pub fn validate(
-        &self,
-        context: &HeightContext,
-        manifest: &PayloadManifest,
-    ) -> Result<(), ValidationError> {
-        if self.signature.is_empty() {
-            return Err(ValidationError::MissingChunkSignature);
-        }
-        if self.signature.len() > MAX_CONSENSUS_SIGNATURE_BYTES {
-            return Err(ValidationError::SignatureTooLarge);
-        }
-        self.signature_payload(context, manifest).map(|_| ())
-    }
     /// Build the canonical signature payload for this chunk.
     ///
     /// The total chunk count is deliberately not duplicated in
@@ -1857,74 +2262,44 @@ impl PayloadChunk {
     /// # Errors
     ///
     /// Returns a structural validation error when this chunk does not match
-    /// `context` and `manifest`.
+    /// the validated manifest session.
     pub fn signature_payload(
         &self,
-        context: &HeightContext,
-        manifest: &PayloadManifest,
+        validated: &ValidatedPayloadManifest,
     ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
-        manifest.validate(context)?;
-        if self.manifest_hash != HashOf::new(manifest) {
+        if self.manifest_hash != validated.manifest_hash() {
             return Err(ValidationError::ManifestHashMismatch);
         }
-        let total_chunks = u32::try_from(manifest.chunk_hashes.len())
-            .map_err(|_| ValidationError::ChunkCountTooLarge)?;
-        let index =
-            usize::try_from(self.index).map_err(|_| ValidationError::ChunkIndexOutOfRange)?;
-        let expected_hash = manifest
-            .chunk_hashes
-            .get(index)
-            .ok_or(ValidationError::ChunkIndexOutOfRange)?;
-        validate_encoded_chunk_len(manifest, self.bytes.len())?;
+        if self.bytes.len() != validated.chunk_size_bytes {
+            return Err(ValidationError::InvalidChunkLength);
+        }
+        let payload = validated.committed_chunk_signature_payload(self.index, self.sender)?;
         let chunk_hash = Hash::new(&self.bytes);
-        if &chunk_hash != expected_hash {
+        if chunk_hash != payload.chunk_hash {
             return Err(ValidationError::ChunkHashMismatch);
         }
-        if usize::try_from(self.sender)
-            .ok()
-            .is_none_or(|sender| sender >= context.roster.len())
-        {
-            return Err(ValidationError::SignerOutOfRange);
-        }
-        Ok(PayloadChunkSignaturePayload {
-            protocol_version: PROTOCOL_VERSION,
-            context_id: manifest.round.context_id,
-            epoch: context.epoch,
-            height: manifest.round.height,
-            view: manifest.round.view,
-            subject: manifest.subject,
-            manifest_hash: self.manifest_hash,
-            encoding: manifest.layout.encoding,
-            index: self.index,
-            total_chunks,
-            chunk_hash,
-            sender: self.sender,
-        })
+        Ok(payload)
     }
-    /// Return the domain-separated bytes that the sender must sign.
+    /// Validate signature presence and return the once-hashed signing payload.
     ///
     /// # Errors
     ///
-    /// Returns a structural validation error when this chunk does not match
-    /// `context` and `manifest`.
-    pub fn signature_preimage(
+    /// Returns a structural validation error when the signature bytes are
+    /// missing or oversized, or the chunk does not match the validated session.
+    pub fn validate_for_authentication(
         &self,
-        context: &HeightContext,
-        manifest: &PayloadManifest,
-    ) -> Result<Vec<u8>, ValidationError> {
-        const DOMAIN: &[u8] = b"iroha:sumeragi:v2:payload-chunk";
-        let payload = self.signature_payload(context, manifest)?;
-        let encoded = payload.encode();
-        let mut preimage = Vec::with_capacity(DOMAIN.len() + encoded.len());
-        preimage.extend_from_slice(DOMAIN);
-        preimage.extend_from_slice(&encoded);
-        Ok(preimage)
+        validated: &ValidatedPayloadManifest,
+    ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
+        require_signature(&self.signature)?;
+        self.signature_payload(validated)
     }
 }
 /// Canonical fields authenticated by a v2 payload-chunk signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadChunkSignaturePayload")]
 pub struct PayloadChunkSignaturePayload {
     /// Sumeragi protocol version.
     pub protocol_version: u16,
@@ -1951,10 +2326,19 @@ pub struct PayloadChunkSignaturePayload {
     /// Sender index in the height context roster.
     pub sender: ValidatorIndex,
 }
+impl PayloadChunkSignaturePayload {
+    /// Return the domain-separated canonical bytes authenticated by a chunk signature.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        signature_preimage(b"iroha:sumeragi:v2:payload-chunk", &self.encode())
+    }
+}
 /// Signed proposal for one round.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::Proposal")]
 pub struct Proposal {
     /// Proposed round.
     pub round: ConsensusRound,
@@ -2070,6 +2454,8 @@ impl Proposal {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2Equivocation")]
 pub enum SumeragiV2Equivocation {
     /// Two different leader proposals for one round.
     Proposal {
@@ -2163,6 +2549,8 @@ impl IntoSchema for SumeragiV2Equivocation {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyRequest")]
 pub struct CertifiedBodyRequest {
     /// Round in which the body was proposed.
     pub round: ConsensusRound,
@@ -2208,6 +2596,8 @@ impl CertifiedBodyRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyResponse")]
 pub struct CertifiedBodyResponse {
     /// Hash of the exact request being answered.
     pub request_hash: HashOf<CertifiedBodyRequest>,
@@ -2300,6 +2690,8 @@ impl CertifiedBodyResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyResponseSignaturePayload")]
 pub struct CertifiedBodyResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -2321,6 +2713,8 @@ pub struct CertifiedBodyResponseSignaturePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateRequest")]
 pub struct CommitCertificateRequest {
     /// Consensus protocol revision included in the signed request.
     pub protocol_version: u16,
@@ -2382,6 +2776,8 @@ impl CommitCertificateRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateResponse")]
 pub struct CommitCertificateResponse {
     /// Hash of the exact signed request being answered.
     pub request_hash: HashOf<CommitCertificateRequest>,
@@ -2453,6 +2849,8 @@ impl CommitCertificateResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateResponseSignaturePayload")]
 pub struct CommitCertificateResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -2474,6 +2872,8 @@ pub struct CommitCertificateResponseSignaturePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::GlobalBeaconPartialSignature")]
 pub struct GlobalBeaconPartialSignature {
     /// Exact active height context and view whose candidate will carry the pulse.
     pub round: ConsensusRound,
@@ -2504,9 +2904,32 @@ impl GlobalBeaconPartialSignature {
         Ok(())
     }
 }
-/// Payload variants decoded by the Sumeragi v2 network envelope.
+/// First-release wire tag for [`ConsensusMessageV2Payload::Proposal`].
+pub const CONSENSUS_MESSAGE_V2_PROPOSAL_TAG: u32 = 0;
+/// First-release wire tag for [`ConsensusMessageV2Payload::Vote`].
+pub const CONSENSUS_MESSAGE_V2_VOTE_TAG: u32 = 1;
+/// First-release wire tag for [`ConsensusMessageV2Payload::QuorumCertificate`].
+pub const CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG: u32 = 2;
+/// First-release wire tag for [`ConsensusMessageV2Payload::TimeoutVote`].
+pub const CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG: u32 = 3;
+/// First-release wire tag for [`ConsensusMessageV2Payload::TimeoutCertificate`].
+pub const CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG: u32 = 4;
+/// First-release wire tag for [`ConsensusMessageV2Payload::PayloadChunk`].
+pub const CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG: u32 = 5;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CertifiedBodyRequest`].
+pub const CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG: u32 = 6;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CertifiedBodyResponse`].
+pub const CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG: u32 = 7;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CommitCertificateRequest`].
+pub const CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG: u32 = 8;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CommitCertificateResponse`].
+pub const CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG: u32 = 9;
+/// First-release wire tag for [`ConsensusMessageV2Payload::GlobalBeaconPartialSignature`].
+pub const CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG: u32 = 10;
+/// First-release payload variants decoded by the Sumeragi v2 network envelope.
 ///
-/// Runtime admission rejects the retained legacy VRF variants below.
+/// The retired commit/reveal VRF variants have no wire representation here;
+/// finalized threshold-beacon partials are the sole randomness traffic.
 #[expect(
     clippy::large_enum_variant,
     reason = "consensus variants retain their canonical V1 Norito payloads inline; introducing indirection would change the signed wire representation"
@@ -2519,36 +2942,49 @@ impl GlobalBeaconPartialSignature {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload")]
 pub enum ConsensusMessageV2Payload {
     /// Leader proposal.
+    #[codec(index = 0)]
     Proposal(Proposal),
     /// Prepare or Commit vote.
+    #[codec(index = 1)]
     Vote(Vote),
     /// Aggregate `PrepareQC` or `CommitQC`.
+    #[codec(index = 2)]
     QuorumCertificate(QuorumCertificate),
     /// Individual timeout vote.
+    #[codec(index = 3)]
     TimeoutVote(TimeoutVote),
     /// Aggregate timeout certificate.
+    #[codec(index = 4)]
     TimeoutCertificate(TimeoutCertificate),
-    /// Payload manifest announcement or retransmission.
-    PayloadManifest(PayloadManifest),
     /// Encoded payload chunk.
+    #[codec(index = 5)]
     PayloadChunk(PayloadChunk),
     /// Request for a certified body.
+    #[codec(index = 6)]
     CertifiedBodyRequest(CertifiedBodyRequest),
     /// Response carrying a certified body.
+    #[codec(index = 7)]
     CertifiedBodyResponse(CertifiedBodyResponse),
     /// Request the durable `CommitQC` for the active height context.
+    #[codec(index = 8)]
     CommitCertificateRequest(CommitCertificateRequest),
     /// Response carrying the active height context's durable `CommitQC`.
+    #[codec(index = 9)]
     CommitCertificateResponse(CommitCertificateResponse),
     /// Adaptive global threshold-beacon share for one exact height and view.
+    #[codec(index = 10)]
     GlobalBeaconPartialSignature(GlobalBeaconPartialSignature),
 }
 /// Explicitly versioned Sumeragi v2 network envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMessageV2")]
 pub struct ConsensusMessageV2 {
     /// Protocol version; must equal [`PROTOCOL_VERSION`].
     pub protocol_version: u16,
@@ -2564,6 +3000,8 @@ pub struct ConsensusMessageV2 {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2StatusPhase")]
 pub enum SumeragiV2StatusPhase {
     /// Waiting for the expected leader's proposal.
     AwaitingProposal,
@@ -2587,6 +3025,8 @@ pub enum SumeragiV2StatusPhase {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2BodyState")]
 pub enum SumeragiV2BodyState {
     /// No manifest or body is held locally.
     Missing,
@@ -2605,6 +3045,8 @@ pub enum SumeragiV2BodyState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2HeightContextStatus")]
 pub struct SumeragiV2HeightContextStatus {
     /// Finalized validator-election epoch.
     pub epoch: u64,
@@ -2623,6 +3065,8 @@ pub struct SumeragiV2HeightContextStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2CommitQcStatus")]
 pub struct SumeragiV2CommitQcStatus {
     /// Stable reference to the exact durable `CommitQC`.
     pub certificate: QuorumCertificateRef,
@@ -2646,6 +3090,8 @@ pub type SumeragiV2Generation = u64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2VoteQuorumStatus")]
 pub struct SumeragiV2VoteQuorumStatus {
     /// Exact height-context round whose vote pool is summarized.
     pub round: ConsensusRound,
@@ -2668,6 +3114,8 @@ pub struct SumeragiV2VoteQuorumStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2TimeoutQuorumStatus")]
 pub struct SumeragiV2TimeoutQuorumStatus {
     /// Exact round whose timeout votes are summarized.
     pub round: ConsensusRound,
@@ -2691,6 +3139,8 @@ pub struct SumeragiV2TimeoutQuorumStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2OutboundIntentKind")]
 pub enum SumeragiV2OutboundIntentKind {
     /// Leader proposal intent.
     Proposal,
@@ -2716,6 +3166,8 @@ pub enum SumeragiV2OutboundIntentKind {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2OutboundIntentStage")]
 pub enum SumeragiV2OutboundIntentStage {
     /// The intent is fenced behind a safety-WAL append.
     PendingPersistence,
@@ -2734,6 +3186,8 @@ pub enum SumeragiV2OutboundIntentStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2OutboundIntentStatus")]
 pub struct SumeragiV2OutboundIntentStatus {
     /// Protocol role of the retained intent.
     pub kind: SumeragiV2OutboundIntentKind,
@@ -2763,6 +3217,8 @@ pub struct SumeragiV2OutboundIntentStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2LocalWorkStage")]
 pub enum SumeragiV2LocalWorkStage {
     /// No work is required for the active height.
     #[default]
@@ -2778,6 +3234,8 @@ pub enum SumeragiV2LocalWorkStage {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2WorkStatus")]
 pub struct SumeragiV2WorkStatus {
     /// Local candidate construction or proposal-admission work.
     pub candidate: SumeragiV2LocalWorkStage,
@@ -2801,6 +3259,8 @@ pub struct SumeragiV2WorkStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QueueKind")]
 pub enum SumeragiV2QueueKind {
     /// Authenticated semantic-admission/equivocation table.
     Ingress,
@@ -2833,6 +3293,8 @@ pub enum SumeragiV2QueueKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QueueStatus")]
 pub struct SumeragiV2QueueStatus {
     /// Queue being summarized.
     pub queue: SumeragiV2QueueKind,
@@ -2860,6 +3322,8 @@ pub struct SumeragiV2QueueStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2ProgressTransition")]
 pub enum SumeragiV2ProgressTransition {
     /// A leader proposal entered the reducer.
     ProposalAdmitted,
@@ -2897,6 +3361,8 @@ pub enum SumeragiV2ProgressTransition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2ProgressTransitionStatus")]
 pub struct SumeragiV2ProgressTransitionStatus {
     /// Reducer generation which emitted the transition.
     pub generation: SumeragiV2Generation,
@@ -2916,6 +3382,8 @@ pub struct SumeragiV2ProgressTransitionStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2LivenessBlocker")]
 pub enum SumeragiV2LivenessBlocker {
     /// The current view has not admitted its expected proposal.
     MissingProposal,
@@ -2945,6 +3413,8 @@ pub enum SumeragiV2LivenessBlocker {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2IgnoreReason")]
 pub enum SumeragiV2IgnoreReason {
     /// Input belongs to another height.
     WrongHeight,
@@ -2975,6 +3445,8 @@ pub enum SumeragiV2IgnoreReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2IgnoreCount")]
 pub struct SumeragiV2IgnoreCount {
     /// Reason whose occurrences are counted.
     pub reason: SumeragiV2IgnoreReason,
@@ -2993,6 +3465,8 @@ pub struct SumeragiV2IgnoreCount {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2LivenessStatus")]
 pub struct SumeragiV2LivenessStatus {
     /// Reducer generation which owns all reported volatile state.
     pub generation: SumeragiV2Generation,
@@ -3026,6 +3500,8 @@ pub struct SumeragiV2LivenessStatus {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QcResponse")]
 pub struct SumeragiV2QcResponse {
     /// Highest verified `PrepareQC` known to the reducer.
     #[norito(required)]
@@ -3042,6 +3518,8 @@ pub struct SumeragiV2QcResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2Status")]
 pub struct SumeragiV2Status {
     /// Active wire protocol version.
     pub protocol_version: u16,
@@ -3690,7 +4168,7 @@ pub enum ValidationError {
     VotingPowerNotOne,
     /// The frozen epoch end precedes the height governed by this context.
     EpochEndsBeforeHeight,
-    /// An epoch-ending context omitted its old-roster-authenticated transition.
+    /// A representable epoch-ending context omitted its old-roster-authenticated transition.
     MissingNextEpochSnapshot,
     /// A non-boundary context attempted to install an epoch transition.
     UnexpectedNextEpochSnapshot,
@@ -3724,6 +4202,10 @@ pub enum ValidationError {
     InvalidNexusAmxContextHash,
     /// The mandatory process-local execution-policy commitment is zero or non-canonical.
     InvalidExecutionPolicyHash,
+    /// The mandatory KAGEMUSHA V1 mint-finality epoch-roster commitment is zero.
+    InvalidKagemushaMintFinalityEpochId,
+    /// The embedded public Pasta roster does not exactly match its context commitment/election.
+    InvalidKagemushaMintFinalityEpochRoster,
     /// A certificate or message is bound to another height context.
     WrongHeightContext,
     /// Signer count cannot be represented on the wire.
@@ -3747,8 +4229,6 @@ pub enum ValidationError {
     InvalidExecutionCommitment,
     /// The result-bearing block wire commitment declares a zero or oversized byte length.
     InvalidExecutedBlockWireLength,
-    /// The advertised Kagemusha top-up count exceeds the consensus bound.
-    TooManyKagemushaTopupAnchors,
     /// A top-up execution commitment's combined post root is not canonical.
     ExecutionCommitmentPostRootMismatch,
     /// A Native AMX application manifest declared an unsupported version.
@@ -3769,6 +4249,9 @@ pub enum ValidationError {
     MissingAggregateSignature,
     /// A signature or aggregate exceeds the protocol allocation bound.
     SignatureTooLarge,
+    /// A paired-Pasta KAGEMUSHA V1 signature envelope is missing,
+    /// unexpected, malformed, or uses the wrong vote/certificate kind.
+    InvalidKagemushaSignatureEnvelope,
     /// Too few distinct validators signed.
     InsufficientSignerCount,
     /// The redundant signed-vote projection is not a strict supermajority.
@@ -3813,8 +4296,6 @@ pub enum ValidationError {
     ChunkHashMismatch,
     /// Encoded chunk length is inconsistent with the frozen layout.
     InvalidChunkLength,
-    /// A payload chunk does not carry a sender signature.
-    MissingChunkSignature,
     /// A certified body request's QC does not certify its requested subject
     /// in the exact requested round.
     CertifiedBodyCertificateMismatch,
@@ -3909,6 +4390,12 @@ impl fmt::Display for ValidationError {
             Self::InvalidExecutionPolicyHash => {
                 f.write_str("height context has an invalid execution-policy hash")
             }
+            Self::InvalidKagemushaMintFinalityEpochId => {
+                f.write_str("height context has an invalid KAGEMUSHA V1 mint-finality epoch id")
+            }
+            Self::InvalidKagemushaMintFinalityEpochRoster => f.write_str(
+                "height context KAGEMUSHA V1 mint-finality roster does not match its commitment",
+            ),
             Self::WrongHeightContext => f.write_str("message is bound to another height context"),
             Self::TooManySigners => f.write_str("signer count exceeds the wire range"),
             Self::SignerCountMismatch { expected, actual } => write!(
@@ -3929,9 +4416,6 @@ impl fmt::Display for ValidationError {
                     f,
                     "execution commitment block wire length must be between 1 and {MAX_EXECUTED_BLOCK_WIRE_BYTES} bytes"
                 )
-            }
-            Self::TooManyKagemushaTopupAnchors => {
-                f.write_str("execution commitment exceeds the Kagemusha top-up anchor limit")
             }
             Self::ExecutionCommitmentPostRootMismatch => {
                 f.write_str("execution commitment post-state root is not canonical")
@@ -3961,6 +4445,9 @@ impl fmt::Display for ValidationError {
                 f.write_str("certificate has an empty aggregate signature")
             }
             Self::SignatureTooLarge => f.write_str("consensus signature exceeds protocol bound"),
+            Self::InvalidKagemushaSignatureEnvelope => {
+                f.write_str("KAGEMUSHA V1 consensus signature envelope is invalid")
+            }
             Self::InsufficientSignerCount => {
                 f.write_str("insufficient distinct validator signatures")
             }
@@ -4007,7 +4494,6 @@ impl fmt::Display for ValidationError {
             Self::InvalidChunkLength => {
                 f.write_str("payload chunk length is inconsistent with the layout")
             }
-            Self::MissingChunkSignature => f.write_str("payload chunk signature is empty"),
             Self::CertifiedBodyCertificateMismatch => {
                 f.write_str("certified body request does not match its certificate")
             }
@@ -4192,4 +4678,178 @@ fn signature_preimage(domain: &[u8], encoded_payload: &[u8]) -> Vec<u8> {
     preimage.extend_from_slice(encoded_payload);
     preimage
 }
+
+/// Build deterministic paired-Pasta authority aligned to a unit-test consensus roster.
+#[cfg(test)]
+pub(crate) fn test_kagemusha_mint_finality_roster(
+    network_id: NetworkId,
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    use crate::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
+    };
+
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
+                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
+            })
+            .collect(),
+    }
+}
+
+/// Build deterministic signed-genesis context parameters for unit tests.
+#[cfg(test)]
+pub(crate) fn test_genesis_context_parameters() -> SumeragiV2GenesisContextParameters {
+    SumeragiV2GenesisContextParameters::recommended()
+}
+
+/// Build deterministic network-independent KAGEMUSHA genesis authority for unit tests.
+#[cfg(test)]
+pub(crate) fn test_kagemusha_mint_finality_genesis_parameters()
+-> crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
+    use crate::isi::kagemusha_v1::{
+        KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+    };
+
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"Sumeragi v2 unit-test genesis"),
+    ));
+    let mut roster = (1_u8..=4)
+        .map(|seed| {
+            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive deterministic test validator");
+            ValidatorPower {
+                validator: PeerId::new(key_pair.public_key().clone()),
+                power: 1,
+            }
+        })
+        .collect::<Vec<_>>();
+    roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let bound = test_kagemusha_mint_finality_roster(network_id, 0, &roster);
+    KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: bound.version,
+            epoch: bound.epoch,
+            validators: bound.validators,
+        },
+        next_epoch_roster: None,
+    }
+}
 include!("consensus_v2_tests.rs");
+
+#[cfg(test)]
+mod terminal_height_context_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn terminal_context() -> HeightContext {
+        let mut roster = (1_u8..=4)
+            .map(|seed| {
+                let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("derive deterministic terminal-height fixture keypair");
+                ValidatorPower {
+                    validator: PeerId::new(key_pair.public_key().clone()),
+                    power: 1,
+                }
+            })
+            .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let parent_round = ConsensusRound {
+            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"terminal-height parent context",
+            ))),
+            height: u64::MAX - 1,
+            view: 0,
+        };
+        let parent_commit_qc = QuorumCertificate {
+            round: parent_round,
+            proposal_round: parent_round,
+            phase: GlobalPhase::Commit,
+            subject: BlockSubject {
+                parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                    b"terminal-height grandparent block",
+                ))),
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"terminal-height parent block",
+                )),
+                payload_hash: Hash::new(b"terminal-height parent payload"),
+            },
+            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"terminal-height parent state"),
+                Hash::new(b"terminal-height post state"),
+                Hash::new(b"terminal-height ordinary writes"),
+                1,
+                Hash::new(b"terminal-height executed block wire"),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xA5; 48],
+        };
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"terminal-height genesis")),
+        );
+        let mint_finality_roster =
+            test_kagemusha_mint_finality_roster(network_id, u64::MAX, &roster);
+        let mint_finality_epoch_id = mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid terminal mint-finality roster");
+        HeightContext {
+            network_id,
+            protocol_version: PROTOCOL_VERSION,
+            height: u64::MAX,
+            epoch: u64::MAX,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+            epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: Some(parent_commit_qc),
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid terminal-height quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"terminal-height nexus AMX context"),
+            execution_policy_hash: Hash::new(b"terminal-height execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 8,
+            },
+            leader_seed: [0x7A; 32],
+        }
+    }
+
+    #[test]
+    fn only_terminal_epoch_boundary_may_omit_the_successor_snapshot() {
+        let terminal = terminal_context();
+        assert_eq!(terminal.validate(), Ok(()));
+
+        let mut nonterminal_boundary = terminal;
+        nonterminal_boundary.height = u64::MAX - 1;
+        nonterminal_boundary.epoch_end_height = u64::MAX - 1;
+        let parent = nonterminal_boundary
+            .parent_commit_qc
+            .as_mut()
+            .expect("terminal fixture has a parent CommitQC");
+        parent.round.height = u64::MAX - 2;
+        parent.proposal_round = parent.round;
+        assert_eq!(
+            nonterminal_boundary.validate(),
+            Err(ValidationError::MissingNextEpochSnapshot)
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_consensus_v2_schema_tests;

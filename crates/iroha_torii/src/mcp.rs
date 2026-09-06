@@ -47,16 +47,37 @@ use std::{
 use tower::ServiceExt as _;
 mod connect_session_tools;
 mod governance_ballot_tools;
+mod protocol;
+mod registry;
+mod resources;
+mod response;
+mod transaction_artifacts;
 use connect_session_tools::{build_connect_session_create_body, decode_canonical, required_string};
 use governance_ballot_tools::{
     governance_selector_v1_schema, iroha_gov_ballots_plain_tool,
     iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,
 };
+pub(crate) use protocol::{
+    ProtocolEra, ValidatedRequest as ValidatedProtocolRequest, ValidationError,
+    ValidationErrorKind, decorate_modern_response, validate_request as validate_protocol_request,
+};
+use registry::semantics::{
+    AuthorityClass, MutationNature, OperationKind, RetrySemantics, Sensitivity, ToolSemantics,
+    WorldBoundary, authority_for_route, mutation_nature_for_operation, sensitivity_for,
+    world_boundary_for_tool,
+};
+pub(crate) use response::{
+    BoundedJsonArray, bounded_jsonrpc_http_response, bounded_modern_jsonrpc_http_response,
+    jsonrpc_response_too_large,
+};
+use response::{
+    error_envelope_value, http_status_error_code, jsonrpc_error_response, jsonrpc_result_response,
+};
 const JSONRPC_VERSION: &str = "2.0";
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const MCP_PROTOCOL_VERSION: &str = protocol::LEGACY_PROTOCOL_VERSION;
 const JSONRPC_PARSE_ERROR: i64 = -32700;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
-const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+pub(crate) const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
 const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 const MCP_TOOL_EXECUTION_ERROR: i64 = -32001;
@@ -64,7 +85,13 @@ const MCP_RESPONSE_TOO_LARGE: i64 = -32002;
 const MCP_REQUEST_TIMEOUT: i64 = -32003;
 const MCP_DISPATCH_CAPACITY_EXHAUSTED: i64 = -32004;
 const MCP_RATE_LIMITED: i64 = -32029;
+const MODERN_IROHA_TOOL_EXECUTION_ERROR: i64 = 1_001;
+const MODERN_IROHA_RESPONSE_TOO_LARGE: i64 = 1_002;
+const MODERN_IROHA_REQUEST_TIMEOUT: i64 = 1_003;
+const MODERN_IROHA_DISPATCH_CAPACITY_EXHAUSTED: i64 = 1_004;
+const MODERN_IROHA_RATE_LIMITED: i64 = 1_029;
 const MCP_CANCELLATION_FINGERPRINT_DOMAIN: &[u8] = b"iroha.mcp.cancellation.client.v1\0";
+const MCP_CANCELLATION_NONCE_META_KEY: &str = "iroha/cancellationNonce";
 const MAX_MCP_PROJECTION_KEYS: usize = 64;
 const MAX_MCP_PROJECTION_KEY_CHARS: usize = 128;
 /// First-release ceiling for the explicitly advertised `tools/call_batch` extension.
@@ -94,6 +121,7 @@ pub(crate) const MCP_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MCP_ROUTE_EXECUTION_TIMEOUT: Duration = Duration::from_secs(10 * 60 + 15);
 const MCP_TOOL_NOT_ALLOWED: &str = "tool_not_allowed";
 const MCP_TOOL_NOT_FOUND: &str = "tool_not_found";
+const MCP_TOOL_UNAVAILABLE: &str = "tool_unavailable";
 const MCP_TOOL_EXECUTION_ERROR_CODE: &str = "tool_execution_error";
 const MCP_BATCH_TOO_LARGE_CODE: &str = "batch_too_large";
 const MCP_RESPONSE_TOO_LARGE_CODE: &str = "response_too_large";
@@ -108,7 +136,7 @@ const MCP_FLAT_BODY_SCHEMA_EXTENSION: &str = "x-iroha-mcp-flat-body";
 const NONZERO_UPPER_HEX_PATTERN: &str = "^(?!0+$)(?:[0-9A-F]{2})+$";
 const GOVERNANCE_PROPOSAL_ID_V1_PATTERN: &str = "^[0-9a-f]{64}$";
 const HEADER_X_API_TOKEN: &str = "x-api-token";
-const HEADER_MCP_PROTOCOL_VERSION: &str = "mcp-protocol-version";
+const HEADER_MCP_PROTOCOL_VERSION: &str = protocol::HEADER_PROTOCOL_VERSION;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ExactJsonRpcId {
@@ -144,7 +172,7 @@ struct McpInflightKey {
 }
 
 struct McpInflightEntry {
-    generation: Arc<()>,
+    cancellation_nonce: [u8; 32],
     cancellation: tokio::sync::watch::Sender<bool>,
 }
 
@@ -158,12 +186,12 @@ pub(crate) struct McpInflightRegistry {
 enum McpInflightRegistrationError {
     Duplicate,
     Capacity,
+    InvalidNonce,
 }
 
 struct McpInflightRegistration {
     registry: Arc<McpInflightRegistry>,
     key: McpInflightKey,
-    generation: Arc<()>,
     cancellation: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -171,6 +199,7 @@ impl McpInflightRegistry {
     fn register(
         self: &Arc<Self>,
         key: McpInflightKey,
+        cancellation_nonce: [u8; 32],
         capacity: usize,
     ) -> Result<McpInflightRegistration, McpInflightRegistrationError> {
         let mut entries = self
@@ -183,12 +212,11 @@ impl McpInflightRegistry {
         if entries.len() >= capacity {
             return Err(McpInflightRegistrationError::Capacity);
         }
-        let generation = Arc::new(());
         let (cancellation, receiver) = tokio::sync::watch::channel(false);
         entries.insert(
             key.clone(),
             McpInflightEntry {
-                generation: Arc::clone(&generation),
+                cancellation_nonce,
                 cancellation,
             },
         );
@@ -196,12 +224,11 @@ impl McpInflightRegistry {
         Ok(McpInflightRegistration {
             registry: Arc::clone(self),
             key,
-            generation,
             cancellation: receiver,
         })
     }
 
-    fn cancel(&self, key: &McpInflightKey) -> bool {
+    fn cancel(&self, key: &McpInflightKey, cancellation_nonce: &[u8; 32]) -> bool {
         let entries = self
             .entries
             .lock()
@@ -209,6 +236,9 @@ impl McpInflightRegistry {
         let Some(entry) = entries.get(key) else {
             return false;
         };
+        if entry.cancellation_nonce != *cancellation_nonce {
+            return false;
+        }
         entry.cancellation.send_replace(true);
         true
     }
@@ -234,12 +264,7 @@ impl Drop for McpInflightRegistration {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if entries
-            .get(&self.key)
-            .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation))
-        {
-            entries.remove(&self.key);
-        }
+        entries.remove(&self.key);
     }
 }
 
@@ -277,14 +302,12 @@ const DEFAULT_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 500;
 const MIN_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 50;
 const CANONICAL_TRANSACTION_HASH_HEX_BYTES: usize = iroha_crypto::Hash::LENGTH * 2;
 const QUERY_PROJECTION_SHARD_CATALOG_FIELDS: &[&str] = &["asset_definition_id", "limit", "offset"];
-/// OpenAPI-derived tool metadata used for MCP dispatch.
+/// Metadata and exact execution backing used for MCP dispatch.
 #[derive(Debug, Clone)]
 pub(crate) struct ToolSpec {
     pub(crate) name: String,
     pub(crate) description: String,
-    pub(crate) effect: ToolEffect,
-    pub(crate) method: Method,
-    pub(crate) path_template: String,
+    backing: ToolBacking,
     pub(crate) input_schema: Value,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +316,56 @@ pub(crate) enum ToolEffect {
     BuildInstruction,
     Write,
     Operator,
+}
+
+/// Purpose-built capabilities that execute locally inside the existing Torii
+/// MCP handler instead of projecting another HTTP route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InProcessTool {
+    TransactionsPrepare,
+    TransactionsInspect,
+}
+
+impl InProcessTool {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::TransactionsPrepare => "iroha.transactions.prepare",
+            Self::TransactionsInspect => "iroha.transactions.inspect",
+        }
+    }
+
+    fn semantics(self) -> ToolSemantics {
+        let (operation, requires_external_signature) = match self {
+            Self::TransactionsPrepare => (OperationKind::Construct, true),
+            Self::TransactionsInspect => (OperationKind::Observe, false),
+        };
+        ToolSemantics::try_new(
+            operation,
+            AuthorityClass::ListenerCredential,
+            MutationNature::None,
+            RetrySemantics::Safe,
+            WorldBoundary::ToriiLocal,
+            Sensitivity::Sensitive,
+            requires_external_signature,
+        )
+        .expect("in-process transaction tools have non-mutating semantics")
+    }
+}
+
+/// Exact execution backing for one advertised capability.
+#[derive(Clone, Debug)]
+enum ToolBacking {
+    /// Re-enter one exact route through Torii's authoritative in-process router.
+    Route {
+        /// Compatibility effect used while route-backed tools migrate to explicit semantics.
+        effect: ToolEffect,
+        /// Exact target method.
+        method: Method,
+        /// Exact target path template.
+        path_template: String,
+    },
+    /// Execute a pure bounded helper in the current Torii process.
+    InProcess(InProcessTool),
 }
 /// Unforgeable-over-HTTP marker for a route request dispatched internally by MCP.
 #[derive(Debug, Clone, Copy)]
@@ -498,6 +571,51 @@ fn musubi_v1_tool_definition(name: &str) -> Option<&'static MusubiV1ToolDefiniti
         .find(|definition| definition.name == name)
 }
 impl ToolSpec {
+    fn route(
+        name: String,
+        description: String,
+        effect: ToolEffect,
+        method: Method,
+        path_template: String,
+        input_schema: Value,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            backing: ToolBacking::Route {
+                effect,
+                method,
+                path_template,
+            },
+            input_schema,
+        }
+    }
+
+    fn in_process(tool: InProcessTool, description: String, input_schema: Value) -> Self {
+        Self {
+            name: tool.name().to_owned(),
+            description,
+            backing: ToolBacking::InProcess(tool),
+            input_schema,
+        }
+    }
+
+    const fn backing(&self) -> &ToolBacking {
+        &self.backing
+    }
+
+    fn route_backing(&self) -> Option<(ToolEffect, &Method, &str)> {
+        let ToolBacking::Route {
+            effect,
+            method,
+            path_template,
+        } = &self.backing
+        else {
+            return None;
+        };
+        Some((*effect, method, path_template.as_str()))
+    }
+
     pub(crate) fn descriptor(&self) -> Value {
         let mut obj = Map::new();
         obj.insert("name".into(), Value::String(self.name.clone()));
@@ -510,26 +628,85 @@ impl ToolSpec {
             sanitize_tool_input_schema(&self.input_schema),
         );
         obj.insert("outputSchema".into(), default_tool_output_schema());
-        obj.insert("annotations".into(), tool_annotations(self));
+        let semantics = tool_semantics(self);
+        obj.insert("annotations".into(), semantics.annotations().into_value());
+        let mut meta = Map::new();
+        meta.insert("iroha/semantics".into(), semantics.metadata());
+        if let Some(route_auth) = tool_route_auth_metadata(self) {
+            meta.insert("iroha/routeAuth".into(), route_auth);
+        }
+        obj.insert("_meta".into(), Value::Object(meta));
         Value::Object(obj)
     }
 }
-fn tool_annotations(tool: &ToolSpec) -> Value {
-    let read_only = match tool.effect {
-        ToolEffect::Read | ToolEffect::BuildInstruction => true,
-        ToolEffect::Write => false,
-        ToolEffect::Operator => catalog_descriptor_for_method_path(
-            CATALOG_PROJECTION_GROUPS,
-            &tool.method,
-            tool.path_template.as_str(),
-        )
-        .is_some_and(|route| route.effect() == RouteEffect::ReadOnly),
+
+fn tool_route_auth_metadata(tool: &ToolSpec) -> Option<Value> {
+    let (_, method, path_template) = tool.route_backing()?;
+    let descriptor =
+        catalog_descriptor_for_method_path(CATALOG_PROJECTION_GROUPS, method, path_template)?;
+    Some(norito::json!({
+        "schemaVersion": (descriptor.auth_metadata_schema_version()),
+        "stableRouteId": (descriptor.stable_route_id()),
+        "authentication": (descriptor.authentication().as_str()),
+        "admission": (descriptor.admission().as_str())
+    }))
+}
+fn tool_semantics(tool: &ToolSpec) -> ToolSemantics {
+    let (effect, method, path_template) = match tool.backing() {
+        ToolBacking::InProcess(tool) => return tool.semantics(),
+        ToolBacking::Route {
+            effect,
+            method,
+            path_template,
+        } => (*effect, method, path_template.as_str()),
     };
-    norito::json!({
-        "readOnlyHint": (read_only),
-        "destructiveHint": (!read_only),
-        "idempotentHint": (read_only)
-    })
+    let route =
+        catalog_descriptor_for_method_path(CATALOG_PROJECTION_GROUPS, method, path_template);
+    let operation = match effect {
+        ToolEffect::Read => OperationKind::Observe,
+        ToolEffect::BuildInstruction => OperationKind::Construct,
+        ToolEffect::Write => OperationKind::Mutate,
+        ToolEffect::Operator => match route.map(|route| route.effect()) {
+            Some(
+                RouteEffect::ReadOnly
+                | RouteEffect::ExpensiveCompute
+                | RouteEffect::LongLivedStream,
+            ) => OperationKind::Observe,
+            Some(RouteEffect::Mutation) | None => OperationKind::Mutate,
+        },
+    };
+    let authority = if effect == ToolEffect::Operator {
+        AuthorityClass::Operator
+    } else {
+        route
+            .map(authority_for_route)
+            .unwrap_or(AuthorityClass::ListenerCredential)
+    };
+    // TODO: Move audited `AdditiveOnly` declarations into explicit curated capability entries as
+    // each legacy `ToolEffect` descriptor is migrated. Unknown mutations stay destructive.
+    let mutation = mutation_nature_for_operation(operation, false);
+    let retry = match operation {
+        OperationKind::Observe | OperationKind::Construct => RetrySemantics::Safe,
+        OperationKind::Mutate if path_template == iroha_torii_shared::uri::TRANSACTION => {
+            RetrySemantics::ExactIdentityDeduplicated
+        }
+        OperationKind::Mutate => RetrySemantics::Unsafe,
+    };
+    let world = world_boundary_for_tool(&tool.name, path_template);
+    let sensitivity = sensitivity_for(authority, world, route.map(|route| route.surface()));
+    let requires_external_signature = operation == OperationKind::Construct
+        || authority.requires_external_signature()
+        || path_template == iroha_torii_shared::uri::TRANSACTION;
+    ToolSemantics::try_new(
+        operation,
+        authority,
+        mutation,
+        retry,
+        world,
+        sensitivity,
+        requires_external_signature,
+    )
+    .expect("MCP semantic classifier must preserve operation/mutation invariants")
 }
 fn sanitize_tool_input_schema(schema: &Value) -> Value {
     let root = match schema {
@@ -729,14 +906,14 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
                 &mut input_schema,
             );
             let effect = openapi_tool_effect(path, method_key, operation);
-            tools.push(ToolSpec {
-                name: format!("torii.{operation_id}"),
+            tools.push(ToolSpec::route(
+                format!("torii.{operation_id}"),
                 description,
                 effect,
                 method,
-                path_template: path.clone(),
+                path.clone(),
                 input_schema,
-            });
+            ));
         }
     }
     tools.push(iroha_connect_ws_ticket_tool());
@@ -752,8 +929,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_health_tool());
     tools.push(iroha_parameters_get_tool());
     tools.push(iroha_node_capabilities_tool());
-    tools.push(iroha_node_query_projection_checkpoint_plan_tool());
-    tools.push(iroha_node_query_projection_checkpoint_publish_tool());
     tools.push(iroha_node_query_projection_shard_catalog_tool());
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_da_ingest_tool());
@@ -795,7 +970,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_protected_namespaces_list_tool());
     tools.push(iroha_gov_protected_namespaces_update_tool());
     tools.push(iroha_gov_unlocks_stats_tool());
-    tools.push(iroha_gov_council_current_tool());
     tools.push(iroha_gov_citizens_count_tool());
     tools.push(iroha_aliases_resolve_tool());
     tools.push(iroha_aliases_resolve_index_tool());
@@ -874,6 +1048,8 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_instructions_get_tool());
     tools.push(iroha_blocks_list_tool());
     tools.push(iroha_blocks_get_tool());
+    tools.push(iroha_transactions_prepare_tool());
+    tools.push(iroha_transactions_inspect_tool());
     tools.push(iroha_transactions_submit_tool());
     tools.push(iroha_transactions_submit_and_wait_tool());
     tools.push(iroha_transactions_wait_tool());
@@ -1026,14 +1202,30 @@ fn visible_tools_for_policy<'a>(
         .filter(|tool| is_tool_allowed_by_policy(cfg, tool))
         .collect()
 }
+
+fn tool_is_runtime_available(app: &SharedAppState, tool: &ToolSpec) -> bool {
+    if matches!(
+        tool.name.as_str(),
+        "iroha.accounts.faucet.prepare" | "iroha.accounts.faucet.submit"
+    ) {
+        #[cfg(feature = "app_api")]
+        return app.account_faucet.is_some();
+        #[cfg(not(feature = "app_api"))]
+        return false;
+    }
+    true
+}
+
+fn visible_tools_for_app(app: &SharedAppState) -> Vec<&ToolSpec> {
+    visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice())
+        .into_iter()
+        .filter(|tool| tool_is_runtime_available(app, tool))
+        .collect()
+}
+
 pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
     let toolset_version = compute_toolset_version(tools);
-    let mut server_info = Map::new();
-    server_info.insert("name".into(), Value::String("iroha-torii-mcp".to_owned()));
-    server_info.insert(
-        "version".into(),
-        Value::String(env!("CARGO_PKG_VERSION").to_owned()),
-    );
+    let server_info = server_info_payload();
     let mut tools_cap = Map::new();
     tools_cap.insert("listChanged".into(), Value::Bool(false));
     let mut capabilities = Map::new();
@@ -1048,6 +1240,12 @@ pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
                     "callBatch": {
                         "method": "tools/call_batch",
                         "maxDispatches": MAX_JSONRPC_BATCH_DISPATCHES
+                    },
+                    "cancellation": {
+                        "notification": "notifications/cancelled",
+                        "nonceMetaKey": (MCP_CANCELLATION_NONCE_META_KEY),
+                        "nonceEncoding": "base64url-no-pad-32-byte",
+                        "requiresApiToken": true
                     }
                 }
             }
@@ -1068,6 +1266,46 @@ pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
         ),
     );
     Value::Object(out)
+}
+fn server_info_payload() -> Map {
+    let mut server_info = Map::new();
+    server_info.insert("name".into(), Value::String("iroha-torii-mcp".to_owned()));
+    server_info.insert(
+        "version".into(),
+        Value::String(env!("CARGO_PKG_VERSION").to_owned()),
+    );
+    server_info
+}
+fn modern_discovery_payload(tools: &[&ToolSpec]) -> Value {
+    let toolset_version = compute_toolset_version(tools);
+    let mut tools_capability = Map::new();
+    tools_capability.insert("listChanged".into(), Value::Bool(false));
+    let mut capabilities = Map::new();
+    capabilities.insert("tools".into(), Value::Object(tools_capability));
+    capabilities.insert("resources".into(), resources::resources_capability());
+    capabilities.insert(
+        "extensions".into(),
+        norito::json!({
+            "org.hyperledger.iroha/tools": {
+                "toolsetVersion": (toolset_version),
+                "callBatch": {
+                    "method": "tools/call_batch",
+                    "maxDispatches": MAX_JSONRPC_BATCH_DISPATCHES
+                }
+            }
+        }),
+    );
+    norito::json!({
+        "supportedVersions": [
+            (protocol::MODERN_PROTOCOL_VERSION),
+            (protocol::LEGACY_PROTOCOL_VERSION)
+        ],
+        "capabilities": (Value::Object(capabilities)),
+        "instructions": "Prefer curated iroha.* capabilities and rediscover schemas before each workflow. Keep signing keys and authentication secrets outside MCP. Prepare and inspect unsigned operations, sign with an external wallet or deployment-owned signer, then submit only the signed envelope.",
+        "_meta": {
+            "io.modelcontextprotocol/serverInfo": (Value::Object(server_info_payload()))
+        }
+    })
 }
 fn default_tool_output_schema() -> Value {
     norito::json!({
@@ -1107,12 +1345,13 @@ fn is_tool_allowed_by_policy(
     {
         return false;
     }
-    let profile_allowed = match (cfg.profile, tool.effect) {
-        (ToriiMcpProfile::Operator, _) => true,
-        (ToriiMcpProfile::Writer, ToolEffect::Operator) => false,
-        (ToriiMcpProfile::Writer, _) => true,
-        (ToriiMcpProfile::ReadOnly, ToolEffect::Read | ToolEffect::BuildInstruction) => true,
-        (ToriiMcpProfile::ReadOnly, ToolEffect::Write | ToolEffect::Operator) => false,
+    let semantics = tool_semantics(tool);
+    let profile_allowed = match (cfg.profile, semantics.operation(), semantics.authority()) {
+        (ToriiMcpProfile::Operator, _, _) => true,
+        (ToriiMcpProfile::Writer, _, AuthorityClass::Operator) => false,
+        (ToriiMcpProfile::Writer, _, _) => true,
+        (ToriiMcpProfile::ReadOnly, OperationKind::Observe | OperationKind::Construct, _) => true,
+        (ToriiMcpProfile::ReadOnly, OperationKind::Mutate, _) => false,
     };
     if !profile_allowed {
         return false;
@@ -1168,7 +1407,7 @@ fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
     if let Some(definition) = musubi_v1_tool_definition(name) {
         return definition.effect;
     }
-    if is_manual_read_tool_name(name) {
+    if is_audited_manual_read_tool_name(name) {
         return ToolEffect::Read;
     }
     ToolEffect::Write
@@ -1176,78 +1415,51 @@ fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
 fn is_operator_tool_name(name: &str) -> bool {
     name == "iroha.gov.protected_namespaces.update"
 }
-fn is_manual_read_tool_name(name: &str) -> bool {
+fn is_audited_manual_read_tool_name(name: &str) -> bool {
     matches!(
         name,
-        "iroha.connect.ws.ticket"
-            | "iroha.connect.session.status"
+        "iroha.connect.session.status"
+            | "iroha.vpn.profile"
+            | "iroha.vpn.sessions.get"
+            | "iroha.vpn.receipts.list"
             | "iroha.health"
-            | "iroha.accounts.qr"
-            | "iroha.accounts.transactions"
-            | "iroha.accounts.history"
-            | "iroha.accounts.onboard.plan"
-            | "iroha.da.commitments.prove"
-            | "iroha.da.pin_intents.prove"
+            | "iroha.parameters.get"
+            | "iroha.node.capabilities"
             | "iroha.node.query_projection_checkpoint"
-            | "iroha.node.query_projection_checkpoint_plan"
-            | "iroha.node.query_projection_shard_catalog"
-            | "iroha.queries.submit"
+            | "iroha.da.proof_policies"
+            | "iroha.da.proof_policy_snapshot"
+            | "iroha.runtime.abi.active"
+            | "iroha.runtime.abi.hash"
+            | "iroha.runtime.metrics"
+            | "iroha.runtime.upgrades.list"
+            | "iroha.gov.proposals.get"
+            | "iroha.gov.locks.get"
+            | "iroha.gov.referenda.get"
+            | "iroha.gov.tally.get"
+            | "iroha.gov.protected_namespaces.list"
+            | "iroha.gov.unlocks.stats"
+            | "iroha.gov.citizens.count"
+            | "iroha.nfts.chain.list"
+            | "iroha.rwas.chain.list"
+            | "iroha.iso20022.status.get"
+            | "iroha.da.commitments.list"
+            | "iroha.da.commitments.prove"
+            | "iroha.da.commitments.verify"
+            | "iroha.da.pin_intents.list"
+            | "iroha.da.pin_intents.prove"
+            | "iroha.da.pin_intents.verify"
+            | "iroha.proofs.query"
+            | "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get"
             | "iroha.gov.ballots.zk_v1"
             | "iroha.gov.ballots.zk_v1.ballot_proof"
             | "iroha.gov.ballots.plain"
-    ) || name.ends_with(".get")
-        || name.ends_with(".list")
-        || name.ends_with(".query")
-        || name.ends_with(".status")
-        || name.ends_with(".profile")
-        || name.ends_with(".capabilities")
-        || name.ends_with(".versions")
-        || name.ends_with(".current")
-        || name.ends_with(".stats")
-        || name.ends_with(".audit")
-        || name.ends_with(".proof")
-        || name.ends_with(".bundle")
-        || name.ends_with(".bundles")
-        || name.ends_with(".retention")
-        || name.ends_with(".metrics")
-        || name.ends_with(".active")
-        || name.ends_with(".hash")
-        || name.ends_with(".rbc")
-        || name.ends_with(".phases")
-        || name.ends_with(".params")
-        || name.ends_with(".leader")
-        || name.ends_with(".qc")
-        || name.ends_with(".checkpoints")
-        || name.ends_with(".consensus_keys")
-        || name.ends_with(".bls_keys")
-        || name.ends_with(".telemetry")
-        || name.ends_with(".sessions")
-        || name.ends_with(".collectors")
-        || name.ends_with(".count")
-        || name.ends_with(".penalties")
-        || name.ends_with(".epoch")
-        || name.ends_with(".proof_policies")
-        || name.ends_with(".proof_policy_snapshot")
-        || name.ends_with(".verify")
-        || name.ends_with(".resolve")
-        || name.ends_with(".resolve_index")
-        || name.ends_with(".by_account")
-        || name.ends_with(".search")
-        || name.ends_with(".releases")
-        || name.ends_with(".instructions")
-        || name.ends_with(".assets")
-        || name.ends_with(".permissions")
-        || name.ends_with(".portfolio")
-        || name.ends_with(".holders")
-        || name.ends_with(".definitions")
-        || name.ends_with(".chain.list")
-        || name.ends_with(".wait")
+            | "iroha.transactions.query"
+            | "iroha.transactions.visible.query"
+            | "iroha.queries.submit"
+    )
 }
 pub(crate) fn jsonrpc_invalid_request(message: &str) -> Value {
     jsonrpc_error_response(None, JSONRPC_INVALID_REQUEST, message, None)
-}
-pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
-    jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, message, None)
 }
 /// Return the number of rate-limit tokens represented by one parsed MCP request.
 ///
@@ -1278,6 +1490,13 @@ pub(crate) fn jsonrpc_request_timeout() -> Value {
         })),
     )
 }
+pub(crate) fn jsonrpc_request_timeout_for_headers(headers: &HeaderMap) -> Value {
+    let mut response = jsonrpc_request_timeout();
+    if protocol::header_declares_modern(headers) {
+        remap_modern_application_error(&mut response);
+    }
+    response
+}
 /// Return a typed JSON-RPC payload for a request-body transport failure.
 pub(crate) fn jsonrpc_request_body_read_failed() -> Value {
     jsonrpc_error_response(
@@ -1296,6 +1515,13 @@ pub(crate) fn jsonrpc_rate_limited() -> Value {
             "error": "rate_limited"
         })),
     )
+}
+pub(crate) fn jsonrpc_rate_limited_for_headers(headers: &HeaderMap) -> Value {
+    let mut response = jsonrpc_rate_limited();
+    if protocol::header_declares_modern(headers) {
+        remap_modern_application_error(&mut response);
+    }
+    response
 }
 /// Return whether an optional browser Origin is trusted for MCP transport use.
 ///
@@ -1341,6 +1567,29 @@ pub(crate) fn jsonrpc_transport_error_response(
         .insert(ReviewedProtocolNativeError::McpJsonRpc(kind));
     response
 }
+
+/// Apply the stateless protocol's early-error envelope rules before returning
+/// one handler-owned transport failure. Before a body can be parsed, an exact
+/// protocol-version header is the only available era signal.
+pub(crate) fn jsonrpc_transport_error_response_for_headers(
+    headers: &HeaderMap,
+    kind: ReviewedMcpJsonRpcError,
+    mut payload: Value,
+) -> Response {
+    adapt_transport_error_for_headers(headers, &mut payload);
+    jsonrpc_transport_error_response(kind, payload)
+}
+
+fn adapt_transport_error_for_headers(headers: &HeaderMap, payload: &mut Value) {
+    if protocol::header_declares_modern(headers) {
+        remap_modern_application_error(payload);
+        if payload.get("id").is_some_and(Value::is_null)
+            && let Some(payload) = payload.as_object_mut()
+        {
+            payload.remove("id");
+        }
+    }
+}
 pub(crate) fn protocol_version_is_supported(headers: &HeaderMap, allow_missing: bool) -> bool {
     let mut versions = headers.get_all(HEADER_MCP_PROTOCOL_VERSION).iter();
     let Some(version) = versions.next() else {
@@ -1371,27 +1620,49 @@ fn authenticated_cancellation_client_fingerprint(
     app: &SharedAppState,
     headers: &HeaderMap,
 ) -> Option<[u8; 32]> {
-    if !app.require_api_token {
-        return None;
-    }
-    let mut values = headers.get_all(HEADER_X_API_TOKEN).iter();
-    let token = values.next()?.to_str().ok()?;
-    if values.next().is_some() || !app.api_tokens_set.contains(token) {
-        return None;
-    }
+    let principal = app.authenticated_api_token_principal(headers)?;
     let mut hasher = Blake3Hasher::new();
     hasher.update(MCP_CANCELLATION_FINGERPRINT_DOMAIN);
-    hasher.update(token.as_bytes());
+    hasher.update(principal.as_bytes());
     Some(*hasher.finalize().as_bytes())
+}
+
+fn cancellation_nonce_from_params(params: &Map) -> Result<Option<[u8; 32]>, ()> {
+    let Some(meta) = params.get("_meta") else {
+        return Ok(None);
+    };
+    let Some(meta) = meta.as_object() else {
+        return Err(());
+    };
+    let Some(encoded) = meta.get(MCP_CANCELLATION_NONCE_META_KEY) else {
+        return Ok(None);
+    };
+    let Some(encoded) = encoded.as_str() else {
+        return Err(());
+    };
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| ())?;
+    let nonce: [u8; 32] = decoded.try_into().map_err(|_| ())?;
+    if base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce) != encoded {
+        return Err(());
+    }
+    Ok(Some(nonce))
 }
 
 fn register_authenticated_inflight_request(
     app: &SharedAppState,
     headers: &HeaderMap,
     id: Option<&Value>,
+    params: &Map,
 ) -> Result<Option<McpInflightRegistration>, McpInflightRegistrationError> {
     let Some(client_fingerprint) = authenticated_cancellation_client_fingerprint(app, headers)
     else {
+        return Ok(None);
+    };
+    let cancellation_nonce = cancellation_nonce_from_params(params)
+        .map_err(|()| McpInflightRegistrationError::InvalidNonce)?;
+    let Some(cancellation_nonce) = cancellation_nonce else {
         return Ok(None);
     };
     let Some(request_id) = id.and_then(ExactJsonRpcId::from_value) else {
@@ -1403,6 +1674,7 @@ fn register_authenticated_inflight_request(
                 client_fingerprint,
                 request_id,
             },
+            cancellation_nonce,
             app.mcp.max_inflight_dispatches.get(),
         )
         .map(Some)
@@ -1431,6 +1703,17 @@ fn cancellation_registration_error(
     error: McpInflightRegistrationError,
     capacity: usize,
 ) -> JsonRpcRequestOutcome {
+    if error == McpInflightRegistrationError::InvalidNonce {
+        return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "cancellation nonce must be canonical unpadded base64url encoding exactly 32 bytes",
+            Some(norito::json!({
+                "error_code": "invalid_cancellation_nonce",
+                "meta_key": (MCP_CANCELLATION_NONCE_META_KEY)
+            })),
+        ));
+    }
     let (message, error_code) = match error {
         McpInflightRegistrationError::Duplicate => (
             "an authenticated MCP request with this id is already in flight",
@@ -1440,6 +1723,7 @@ fn cancellation_registration_error(
             "the authenticated MCP cancellation registry is at capacity",
             "cancellation_registry_capacity_exhausted",
         ),
+        McpInflightRegistrationError::InvalidNonce => unreachable!("handled above"),
     };
     JsonRpcRequestOutcome::Response(jsonrpc_error_response(
         id,
@@ -1513,7 +1797,7 @@ pub(crate) async fn handle_jsonrpc_request(
                     })),
                 ));
             }
-            let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+            let visible_tools = visible_tools_for_app(&app);
             JsonRpcRequestOutcome::Response(jsonrpc_result_response(
                 id,
                 capabilities_payload(&visible_tools),
@@ -1524,17 +1808,21 @@ pub(crate) async fn handle_jsonrpc_request(
         }
         "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(id, &app, &params)),
         "tools/call_batch" | "tools/call" => {
-            let registration =
-                match register_authenticated_inflight_request(&app, inbound_headers, id.as_ref()) {
-                    Ok(registration) => registration,
-                    Err(error) => {
-                        return cancellation_registration_error(
-                            id,
-                            error,
-                            app.mcp.max_inflight_dispatches.get(),
-                        );
-                    }
-                };
+            let registration = match register_authenticated_inflight_request(
+                &app,
+                inbound_headers,
+                id.as_ref(),
+                &params,
+            ) {
+                Ok(registration) => registration,
+                Err(error) => {
+                    return cancellation_registration_error(
+                        id,
+                        error,
+                        app.mcp.max_inflight_dispatches.get(),
+                    );
+                }
+            };
             if method == "tools/call_batch" {
                 finish_cancellable_dispatch(
                     registration,
@@ -1556,6 +1844,205 @@ pub(crate) async fn handle_jsonrpc_request(
             Some(norito::json!({ "method": method })),
         )),
     }
+}
+/// Dispatch one request after its HTTP protocol metadata has selected an MCP era.
+///
+/// The 2025 compatibility path retains the existing lifecycle. The native 2026
+/// path adds mandatory discovery, removes legacy lifecycle-only methods, and
+/// decorates successful results with stateless protocol metadata.
+pub(crate) async fn handle_validated_jsonrpc_request(
+    app: SharedAppState,
+    inbound_headers: &HeaderMap,
+    request: Value,
+    validated: &ValidatedProtocolRequest,
+) -> JsonRpcRequestOutcome {
+    if validated.era == ProtocolEra::Legacy {
+        return handle_jsonrpc_request(app, inbound_headers, request).await;
+    }
+
+    let id = request
+        .as_object()
+        .and_then(|request| request.get("id"))
+        .cloned();
+    let mut outcome = match validated.method.as_str() {
+        "server/discover" => {
+            let only_meta = request
+                .as_object()
+                .and_then(|request| request.get("params"))
+                .and_then(Value::as_object)
+                .is_some_and(|params| params.len() == 1 && params.contains_key("_meta"));
+            if !only_meta {
+                JsonRpcRequestOutcome::Response(jsonrpc_error_response(
+                    id,
+                    JSONRPC_INVALID_PARAMS,
+                    "server/discover accepts no params beyond standard _meta",
+                    None,
+                ))
+            } else {
+                let visible_tools = visible_tools_for_app(&app);
+                JsonRpcRequestOutcome::Response(jsonrpc_result_response(
+                    id,
+                    modern_discovery_payload(&visible_tools),
+                ))
+            }
+        }
+        "tools/list" | "tools/call" | "tools/call_batch" => {
+            handle_jsonrpc_request(app, inbound_headers, request).await
+        }
+        "resources/list" => {
+            let params = validated_modern_request_params(&request);
+            JsonRpcRequestOutcome::Response(handle_resources_list(id, params))
+        }
+        "resources/read" => {
+            let params = validated_modern_request_params(&request);
+            JsonRpcRequestOutcome::Response(
+                handle_resources_read(id, &app, inbound_headers, params).await,
+            )
+        }
+        _ => JsonRpcRequestOutcome::Response(jsonrpc_error_response(
+            id,
+            JSONRPC_METHOD_NOT_FOUND,
+            "method not found",
+            Some(norito::json!({ "method": (validated.method.as_str()) })),
+        )),
+    };
+    if let JsonRpcRequestOutcome::Response(response) = &mut outcome {
+        decorate_modern_response(validated.method.as_str(), response);
+        remap_modern_application_error(response);
+    }
+    outcome
+}
+
+fn validated_modern_request_params(request: &Value) -> &Map {
+    request
+        .get("params")
+        .and_then(Value::as_object)
+        .expect("modern protocol validation requires object params")
+}
+
+fn handle_resources_list(id: Option<Value>, params: &Map) -> Value {
+    if let Err(message) = reject_unknown_arguments(params, &["_meta", "cursor"], "resources/list") {
+        return jsonrpc_error_response(id, JSONRPC_INVALID_PARAMS, &message, None);
+    }
+    if params.contains_key("cursor") {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "resources/list cursor is invalid for the complete fixed resource catalogue",
+            Some(norito::json!({ "error_code": "invalid_resource_cursor" })),
+        );
+    }
+    match resources::resources_list_result() {
+        Ok(result) => jsonrpc_result_response(id, result),
+        Err(_) => jsonrpc_error_response(
+            id,
+            JSONRPC_INTERNAL_ERROR,
+            "MCP resource catalogue is unavailable",
+            Some(norito::json!({ "error_code": "resource_registry_invalid" })),
+        ),
+    }
+}
+
+async fn handle_resources_read(
+    id: Option<Value>,
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    params: &Map,
+) -> Value {
+    if let Err(message) = reject_unknown_arguments(params, &["_meta", "uri"], "resources/read") {
+        return jsonrpc_error_response(id, JSONRPC_INVALID_PARAMS, &message, None);
+    }
+    let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "resources/read params.uri must be a string",
+            None,
+        );
+    };
+    match resources::read_resource(app, inbound_headers, uri).await {
+        Ok(result) => jsonrpc_result_response(id, result),
+        Err(resources::ResourceReadError::UnknownUri(uri)) => jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "Resource not found",
+            Some(norito::json!({ "uri": uri })),
+        ),
+        Err(resources::ResourceReadError::CapacityExhausted) => jsonrpc_error_response(
+            id,
+            MCP_DISPATCH_CAPACITY_EXHAUSTED,
+            "mcp resource dispatch capacity is exhausted",
+            Some(norito::json!({
+                "error_code": "dispatch_capacity_exhausted",
+                "max_inflight_dispatches": (app.mcp.max_inflight_dispatches.get()),
+                "retryable": true
+            })),
+        ),
+        Err(resources::ResourceReadError::RouteStatus(status)) => jsonrpc_error_response(
+            id,
+            JSONRPC_INTERNAL_ERROR,
+            "MCP resource route rejected the read",
+            Some(norito::json!({
+                "error_code": "resource_route_failed",
+                "target_status": status
+            })),
+        ),
+        Err(
+            resources::ResourceReadError::InvalidRegistry(_)
+            | resources::ResourceReadError::DispatchFailed(_)
+            | resources::ResourceReadError::MalformedRouteResponse(_)
+            | resources::ResourceReadError::BodyEncodingFailed(_),
+        ) => jsonrpc_error_response(
+            id,
+            JSONRPC_INTERNAL_ERROR,
+            "MCP resource read failed",
+            Some(norito::json!({ "error_code": "resource_read_failed" })),
+        ),
+    }
+}
+
+fn remap_modern_application_error(response: &mut Value) {
+    remap_modern_error_code(response);
+    if let Some(results) = response
+        .pointer_mut("/result/results")
+        .and_then(Value::as_array_mut)
+    {
+        for result in results {
+            remap_modern_error_code(result);
+        }
+    }
+}
+
+fn remap_modern_error_code(response: &mut Value) {
+    let Some(code) = response
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_i64)
+    else {
+        return;
+    };
+    let modern = match code {
+        MCP_TOOL_EXECUTION_ERROR => MODERN_IROHA_TOOL_EXECUTION_ERROR,
+        MCP_RESPONSE_TOO_LARGE => MODERN_IROHA_RESPONSE_TOO_LARGE,
+        MCP_REQUEST_TIMEOUT => MODERN_IROHA_REQUEST_TIMEOUT,
+        MCP_DISPATCH_CAPACITY_EXHAUSTED => MODERN_IROHA_DISPATCH_CAPACITY_EXHAUSTED,
+        MCP_RATE_LIMITED => MODERN_IROHA_RATE_LIMITED,
+        _ => return,
+    };
+    if let Some(code) = response
+        .get_mut("error")
+        .and_then(|error| error.get_mut("code"))
+    {
+        *code = Value::from(modern);
+    }
+}
+
+/// Return the top-level JSON-RPC error code, if the value is an error response.
+pub(crate) fn jsonrpc_response_error_code(response: &Value) -> Option<i64> {
+    response
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_i64)
 }
 fn validate_initialize_params(params: &Map) -> Result<(), &'static str> {
     if !params
@@ -1633,10 +2120,16 @@ pub(crate) fn handle_cancelled_notification(
     let Some(request_id) = params.get("requestId").and_then(ExactJsonRpcId::from_value) else {
         return;
     };
-    let _ = app.mcp_inflight_requests.cancel(&McpInflightKey {
-        client_fingerprint,
-        request_id,
-    });
+    let Ok(Some(cancellation_nonce)) = cancellation_nonce_from_params(params) else {
+        return;
+    };
+    let _ = app.mcp_inflight_requests.cancel(
+        &McpInflightKey {
+            client_fingerprint,
+            request_id,
+        },
+        &cancellation_nonce,
+    );
 }
 
 /// Return true when a payload is a syntactically valid JSON-RPC response.
@@ -1672,7 +2165,7 @@ fn is_jsonrpc_integer(value: &Value) -> bool {
     value.as_f64().is_some_and(|number| number.fract() == 0.0)
 }
 fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
-    let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+    let visible_tools = visible_tools_for_app(app);
     let toolset_version = compute_toolset_version(&visible_tools);
     let list_changed = params
         .get("toolset_version")
@@ -1777,6 +2270,25 @@ async fn handle_named_tool_call(
             Some(norito::json!({ "name": (name), "error_code": (MCP_TOOL_NOT_ALLOWED) })),
         );
     }
+    if !tool_is_runtime_available(&app, tool_spec) {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tool is unavailable in this node's runtime configuration",
+            Some(norito::json!({ "name": (name), "error_code": (MCP_TOOL_UNAVAILABLE) })),
+        );
+    }
+    if let Err(message) = validate_tool_arguments(tool_spec, arguments) {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            message.as_str(),
+            Some(norito::json!({
+                "name": name,
+                "error_code": "tool_schema_validation_failed"
+            })),
+        );
+    }
     let _long_poll_permit = if is_long_poll_tool(name) {
         match app.mcp_long_poll_inflight.clone().try_acquire_owned() {
             Ok(permit) => Some(permit),
@@ -1810,16 +2322,36 @@ async fn handle_named_tool_call(
             );
         }
     };
-    if let Err(message) = validate_tool_arguments(tool_spec, arguments) {
-        return jsonrpc_error_response(
-            id,
-            JSONRPC_INVALID_PARAMS,
-            message.as_str(),
-            Some(norito::json!({
-                "name": name,
-                "error_code": "tool_schema_validation_failed"
-            })),
-        );
+    if let ToolBacking::InProcess(in_process) = tool_spec.backing() {
+        let tool_result = match in_process {
+            InProcessTool::TransactionsPrepare => {
+                match dispatch_iroha_transactions_prepare(&app, arguments) {
+                    Ok(result) => mcp_tool_success(result),
+                    Err(err) => mcp_tool_error(err),
+                }
+            }
+            InProcessTool::TransactionsInspect => {
+                match dispatch_iroha_transactions_inspect(&app, arguments) {
+                    Ok(result) => mcp_tool_success(result),
+                    Err(err) => mcp_tool_error(err),
+                }
+            }
+        };
+        return jsonrpc_result_response(id, tool_result);
+    }
+    let purpose_built_dispatch = match validate_purpose_built_dispatch_backing(tool_spec) {
+        Ok(purpose_built_dispatch) => purpose_built_dispatch,
+        Err(error) => {
+            return jsonrpc_result_response(id, mcp_tool_error(error));
+        }
+    };
+    if !purpose_built_dispatch {
+        let tool_result =
+            match dispatch_openapi_tool(&app, inbound_headers, tool_spec, arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            };
+        return jsonrpc_result_response(id, tool_result);
     }
     let tool_result = match name {
         "iroha.connect.ws.ticket" => build_connect_ws_ticket(arguments, inbound_headers)
@@ -1891,30 +2423,6 @@ async fn handle_named_tool_call(
         }
         "iroha.node.capabilities" => {
             match dispatch_iroha_node_capabilities(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.node.query_projection_checkpoint_plan" => {
-            match dispatch_iroha_node_query_projection_checkpoint_plan(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.node.query_projection_checkpoint_publish" => {
-            match dispatch_iroha_node_query_projection_checkpoint_publish(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2206,12 +2714,6 @@ async fn handle_named_tool_call(
         }
         "iroha.gov.unlocks.stats" => {
             match dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.council.current" => {
-            match dispatch_iroha_gov_council_current(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2734,10 +3236,9 @@ async fn handle_named_tool_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        _ => match dispatch_openapi_tool(&app, inbound_headers, tool_spec, arguments).await {
-            Ok(result) => mcp_tool_success(result),
-            Err(err) => mcp_tool_error(err),
-        },
+        _ => mcp_tool_error(format!(
+            "purpose-built dispatch contract `{name}` has no implementation"
+        )),
     };
     jsonrpc_result_response(id, tool_result)
 }
@@ -3001,9 +3502,9 @@ fn custom_advertised_pattern_matches(pattern: &str, value: &str) -> Option<bool>
         ),
         "^(?!0{64}$)[0-9a-f]{64}$" => Some(lower_hex_is_nonzero(value, 64)),
         "^(?!0{128}$)[0-9a-f]{128}$" => Some(lower_hex_is_nonzero(value, 128)),
-        "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$" => Some(
+        "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$" => Some(
             value
-                .strip_prefix("/v1/offline/operations/")
+                .strip_prefix("/v1/kagemusha/operations/")
                 .is_some_and(|suffix| lower_hex_is_nonzero(suffix, 64)),
         ),
         "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$" => {
@@ -3255,287 +3756,6 @@ fn mcp_tool_error(message: String) -> Value {
         "structuredContent": envelope
     })
 }
-fn error_envelope_value(code: &str, message: &str, details: Option<Value>) -> Value {
-    let mut envelope = Map::new();
-    envelope.insert("code".into(), Value::String(code.to_owned()));
-    envelope.insert("message".into(), Value::String(message.to_owned()));
-    if let Some(details) = details {
-        envelope.insert("details".into(), details);
-    }
-    Value::Object(envelope)
-}
-
-struct BoundedJsonSizeCounter {
-    encoded_bytes: usize,
-    max_bytes: usize,
-    depth: usize,
-}
-
-impl BoundedJsonSizeCounter {
-    fn new(max_bytes: usize) -> Self {
-        Self {
-            encoded_bytes: 0,
-            max_bytes,
-            depth: 0,
-        }
-    }
-
-    fn admit(&mut self, additional: usize) -> Result<(), BoundedJsonError> {
-        let next = self
-            .encoded_bytes
-            .checked_add(additional)
-            .ok_or(BoundedJsonError::BodyTooLarge)?;
-        if next > self.max_bytes {
-            return Err(BoundedJsonError::BodyTooLarge);
-        }
-        self.encoded_bytes = next;
-        Ok(())
-    }
-}
-
-impl JsonWriteSink for BoundedJsonSizeCounter {
-    fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
-        self.admit(value.len_utf8())
-    }
-
-    fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
-        self.admit(value.len())
-    }
-
-    fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
-        let next = self
-            .depth
-            .checked_add(1)
-            .ok_or(BoundedJsonError::Unsupported)?;
-        if next >= json::MAX_JSON_VALUE_NESTING_DEPTH {
-            return Err(BoundedJsonError::Unsupported);
-        }
-        self.depth = next;
-        Ok(())
-    }
-
-    fn end_container(&mut self) {
-        debug_assert!(self.depth > 0);
-        self.depth = self.depth.saturating_sub(1);
-    }
-}
-
-fn bounded_json_value_len(value: &Value, max_bytes: usize) -> Result<usize, BoundedJsonError> {
-    let mut counter = BoundedJsonSizeCounter::new(max_bytes);
-    value.write_json_to(&mut counter)?;
-    Ok(counter.encoded_bytes)
-}
-
-/// Accumulate one JSON array without allowing retained response values to grow
-/// past the final MCP envelope budget.
-pub(crate) struct BoundedJsonArray {
-    values: Vec<Value>,
-    encoded_bytes: usize,
-    max_bytes: usize,
-}
-
-impl BoundedJsonArray {
-    /// Reserve the bounded item count and account for the surrounding `[]`.
-    pub(crate) fn new(capacity: usize, max_bytes: usize) -> Result<Self, BoundedJsonError> {
-        if max_bytes < 2 {
-            return Err(BoundedJsonError::BodyTooLarge);
-        }
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(capacity)
-            .map_err(|_| BoundedJsonError::AllocationFailed)?;
-        Ok(Self {
-            values,
-            encoded_bytes: 2,
-            max_bytes,
-        })
-    }
-
-    /// Retain one value only if its exact compact JSON representation fits.
-    pub(crate) fn try_push(&mut self, value: Value) -> Result<(), BoundedJsonError> {
-        let separator_bytes = usize::from(!self.values.is_empty());
-        let remaining = self
-            .max_bytes
-            .checked_sub(self.encoded_bytes)
-            .and_then(|remaining| remaining.checked_sub(separator_bytes))
-            .ok_or(BoundedJsonError::BodyTooLarge)?;
-        let value_bytes = bounded_json_value_len(&value, remaining)?;
-        self.encoded_bytes = self
-            .encoded_bytes
-            .checked_add(separator_bytes)
-            .and_then(|bytes| bytes.checked_add(value_bytes))
-            .ok_or(BoundedJsonError::BodyTooLarge)?;
-        self.values.push(value);
-        Ok(())
-    }
-
-    /// Finish the array after every retained value has been admitted.
-    pub(crate) fn into_values(self) -> Vec<Value> {
-        self.values
-    }
-}
-
-fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value {
-    let mut obj = Map::new();
-    obj.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
-    obj.insert("id".into(), id.unwrap_or(Value::Null));
-    obj.insert("result".into(), result);
-    Value::Object(obj)
-}
-pub(crate) fn jsonrpc_response_too_large(id: Option<Value>, max_response_bytes: usize) -> Value {
-    jsonrpc_error_response(
-        id,
-        MCP_RESPONSE_TOO_LARGE,
-        "mcp response exceeds the configured envelope byte limit",
-        Some(norito::json!({
-            "error_code": MCP_RESPONSE_TOO_LARGE_CODE,
-            "max_response_bytes": max_response_bytes
-        })),
-    )
-}
-
-/// Serialize the final JSON-RPC value behind the same byte budget used for the
-/// accepted request. This prevents both route output and batch metadata from
-/// turning a small MCP request into an unbounded response allocation.
-pub(crate) fn bounded_jsonrpc_http_response(payload: Value, max_response_bytes: usize) -> Response {
-    let response_id = payload.get("id").cloned();
-    let encoded = match json::to_json_bounded_boxed(&payload, max_response_bytes) {
-        Ok(encoded) => encoded.into_vec(),
-        Err(BoundedJsonError::BodyTooLarge) => {
-            let error = compact_jsonrpc_response_too_large(response_id);
-            let Ok(encoded) = json::to_json_bounded_boxed(&error, max_response_bytes) else {
-                return private_no_store_response(StatusCode::INTERNAL_SERVER_ERROR);
-            };
-            encoded.into_vec()
-        }
-        Err(BoundedJsonError::AllocationFailed) => {
-            let error = jsonrpc_error_response(
-                response_id,
-                JSONRPC_INTERNAL_ERROR,
-                "failed to allocate MCP response storage",
-                Some(norito::json!({ "error_code": "allocation_failed" })),
-            );
-            return private_no_store_response((StatusCode::OK, crate::utils::JsonBody(error)));
-        }
-        Err(BoundedJsonError::Unsupported | BoundedJsonError::LengthMismatch) => {
-            let error = jsonrpc_error_response(
-                response_id,
-                JSONRPC_INTERNAL_ERROR,
-                "failed to serialize MCP response",
-                Some(norito::json!({ "error_code": "response_serialization_failed" })),
-            );
-            return private_no_store_response((StatusCode::OK, crate::utils::JsonBody(error)));
-        }
-    };
-    let response = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(encoded))
-        .expect("build bounded MCP JSON response");
-    private_no_store_response(response)
-}
-fn compact_jsonrpc_response_too_large(id: Option<Value>) -> Value {
-    let mut data = Map::new();
-    data.insert(
-        "error_code".into(),
-        Value::String(MCP_RESPONSE_TOO_LARGE_CODE.to_owned()),
-    );
-    let mut error = Map::new();
-    error.insert("code".into(), Value::from(MCP_RESPONSE_TOO_LARGE));
-    error.insert(
-        "message".into(),
-        Value::String("response too large".to_owned()),
-    );
-    error.insert("data".into(), Value::Object(data));
-    let mut response = Map::new();
-    response.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
-    response.insert("id".into(), id.unwrap_or(Value::Null));
-    response.insert("error".into(), Value::Object(error));
-    Value::Object(response)
-}
-
-fn jsonrpc_error_response(
-    id: Option<Value>,
-    code: i64,
-    message: &str,
-    data: Option<Value>,
-) -> Value {
-    let input_data = match data {
-        Some(Value::Object(map)) => map,
-        Some(other) => {
-            let mut map = Map::new();
-            map.insert("details".into(), other);
-            map
-        }
-        None => Map::new(),
-    };
-    let label = input_data
-        .get("error_code")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| jsonrpc_error_code_label(code).to_owned());
-    let mut data_object = if input_data.contains_key("code") {
-        input_data.clone()
-    } else {
-        let mut details_object = input_data.clone();
-        details_object.remove("error_code");
-        let details = if details_object.is_empty() {
-            Some(norito::json!({ "layer": "mcp" }))
-        } else {
-            Some(Value::Object(details_object))
-        };
-        let mut envelope = match error_envelope_value(label.as_str(), message, details) {
-            Value::Object(map) => map,
-            _ => Map::new(),
-        };
-        for (key, value) in input_data {
-            envelope.entry(key).or_insert(value);
-        }
-        envelope
-    };
-    data_object
-        .entry("error_code".into())
-        .or_insert_with(|| Value::String(label));
-    let mut err = Map::new();
-    err.insert("code".into(), Value::from(code));
-    err.insert("message".into(), Value::String(message.to_owned()));
-    err.insert("data".into(), Value::Object(data_object));
-    let mut obj = Map::new();
-    obj.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
-    obj.insert("id".into(), id.unwrap_or(Value::Null));
-    obj.insert("error".into(), Value::Object(err));
-    Value::Object(obj)
-}
-fn jsonrpc_error_code_label(code: i64) -> &'static str {
-    match code {
-        JSONRPC_PARSE_ERROR => "parse_error",
-        JSONRPC_INVALID_REQUEST => "invalid_request",
-        JSONRPC_METHOD_NOT_FOUND => "method_not_found",
-        JSONRPC_INVALID_PARAMS => "invalid_params",
-        JSONRPC_INTERNAL_ERROR => "internal_error",
-        MCP_TOOL_EXECUTION_ERROR => MCP_TOOL_EXECUTION_ERROR_CODE,
-        MCP_RESPONSE_TOO_LARGE => MCP_RESPONSE_TOO_LARGE_CODE,
-        MCP_REQUEST_TIMEOUT => "request_timeout",
-        MCP_RATE_LIMITED => "rate_limited",
-        MCP_DISPATCH_CAPACITY_EXHAUSTED => "dispatch_capacity_exhausted",
-        _ => "unknown_error",
-    }
-}
-fn http_status_error_code(status: u64) -> &'static str {
-    match status {
-        400 => "bad_request",
-        401 => "unauthorized",
-        403 => "forbidden",
-        404 => "not_found",
-        405 => "method_not_allowed",
-        409 => "conflict",
-        413 => "payload_too_large",
-        415 => "unsupported_media_type",
-        422 => "unprocessable_entity",
-        429 => "rate_limited",
-        500..=599 => "server_error",
-        _ => "http_error",
-    }
-}
 fn parse_parameters(spec: &Value, value: Option<&Value>) -> Vec<ParameterInfo> {
     let Some(array) = value.and_then(Value::as_array) else {
         return Vec::new();
@@ -3595,6 +3815,7 @@ fn build_input_schema(
     let mut required = Vec::new();
     let mut has_request_body = false;
     let mut request_body_required = false;
+    let mut content_type_schema = string_schema();
     if !path_props.is_empty() {
         let mut path_schema = Map::new();
         path_schema.insert("type".into(), Value::String("object".to_owned()));
@@ -3651,8 +3872,17 @@ fn build_input_schema(
                 "description": "Base64-encoded request body payload for binary formats."
             }),
         );
+        let media_types = request_body_media_types(spec, request_body);
+        if let [media_type] = media_types.as_slice() {
+            content_type_schema = norito::json!({
+                "type": "string",
+                "const": (media_type),
+                "default": (media_type),
+                "description": "The sole media type accepted by this route. Omission uses this value."
+            });
+        }
     }
-    properties.insert("content_type".into(), string_schema());
+    properties.insert("content_type".into(), content_type_schema);
     properties.insert("accept".into(), string_schema());
     properties.insert(
         "project".into(),
@@ -3690,6 +3920,16 @@ fn build_input_schema(
         }
     }
     Value::Object(schema)
+}
+fn request_body_media_types(spec: &Value, request_body: &Value) -> Vec<String> {
+    let request_body = deref_openapi_value(spec, request_body);
+    let Some(content) = request_body.get("content").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut media_types: Vec<_> = content.keys().cloned().collect();
+    media_types.sort();
+    media_types.dedup();
+    media_types
 }
 fn build_request_body_schema(spec: &Value, request_body: &Value) -> Option<Value> {
     let request_body = deref_openapi_value(spec, request_body);
@@ -3903,21 +4143,14 @@ fn catalog_route_requires_operator(route: &RouteDescriptor) -> bool {
         )
 }
 fn tool_requires_operator(tool: &ToolSpec) -> bool {
-    tool.effect == ToolEffect::Operator
-        || catalog_descriptor_for_method_path(
-            CATALOG_PROJECTION_GROUPS,
-            &tool.method,
-            tool.path_template.as_str(),
-        )
-        .is_some_and(catalog_route_requires_operator)
+    tool_semantics(tool).authority() == AuthorityClass::Operator
 }
 fn is_audited_protocol_handshake_tool(tool: &ToolSpec) -> bool {
+    let Some((_, method, path_template)) = tool.route_backing() else {
+        return false;
+    };
     matches!(
-        (
-            tool.name.as_str(),
-            tool.method.as_str(),
-            tool.path_template.as_str()
-        ),
+        (tool.name.as_str(), method.as_str(), path_template),
         ("iroha.connect.ws.ticket", "GET", "/v1/connect/ws")
             | (
                 "iroha.connect.session.create",
@@ -3944,8 +4177,10 @@ fn is_audited_protocol_handshake_tool(tool: &ToolSpec) -> bool {
 }
 fn apply_catalog_auth_schemas_to_tools(tools: &mut [ToolSpec], groups: &[CatalogProjectionGroup]) {
     for tool in tools {
-        let Some(descriptor) =
-            catalog_descriptor_for_method_path(groups, &tool.method, tool.path_template.as_str())
+        let Some((_, method, path_template)) = tool.route_backing() else {
+            continue;
+        };
+        let Some(descriptor) = catalog_descriptor_for_method_path(groups, method, path_template)
         else {
             continue;
         };
@@ -3972,6 +4207,15 @@ fn apply_catalog_auth_schemas_to_tools(tools: &mut [ToolSpec], groups: &[Catalog
                     ),
                 );
             }
+            AuthenticationPolicy::OptionalCanonicalAccountSignature => {
+                properties.insert(
+                    "headers".to_owned(),
+                    canonical_account_auth_headers_schema(
+                        "Optional canonical proof signed for the exact target method, path, query, and body. Omit the envelope for the anonymous public-dataspace view.",
+                    ),
+                );
+                continue;
+            }
             AuthenticationPolicy::OperatorSignature => {
                 if properties.contains_key("operator_auth") {
                     continue;
@@ -3993,6 +4237,34 @@ fn apply_catalog_auth_schemas_to_tools(tools: &mut [ToolSpec], groups: &[Catalog
         }
     }
 }
+
+/// Verify that a name-dispatched purpose-built wrapper advertises the exact
+/// method and path template which its implementation executes.
+///
+/// `Ok(false)` identifies route-backed tools which use the generic adapter.
+/// Keeping that distinction explicit makes constructor drift fail closed both
+/// while building the registry and in tests which inject their own tool set.
+fn validate_purpose_built_dispatch_backing(tool: &ToolSpec) -> Result<bool, String> {
+    let Some((expected_method, expected_path_template)) =
+        purpose_built_dispatch_route_contract(&tool.name)
+    else {
+        return Ok(false);
+    };
+    let Some((_, method, path_template)) = tool.route_backing() else {
+        return Err(format!(
+            "purpose-built tool `{}` must use HTTP route backing",
+            tool.name
+        ));
+    };
+    if method.as_str() != expected_method || path_template != expected_path_template {
+        return Err(format!(
+            "purpose-built tool `{}` backing drifted: expected {} {}, got {} {}",
+            tool.name, expected_method, expected_path_template, method, path_template
+        ));
+    }
+    Ok(true)
+}
+
 fn validate_tool_registry(
     tools: &[ToolSpec],
     groups: &[CatalogProjectionGroup],
@@ -4011,8 +4283,42 @@ fn validate_tool_registry(
         if !names.insert(tool.name.as_str()) {
             return Err(format!("duplicate tool name `{}`", tool.name));
         }
-        let descriptor =
-            catalog_descriptor_for_method_path(groups, &tool.method, tool.path_template.as_str());
+        let (effect, method, path_template) = match tool.backing() {
+            ToolBacking::InProcess(in_process) => {
+                if tool.name != in_process.name() {
+                    return Err(format!(
+                        "in-process tool `{}` must use its canonical name `{}`",
+                        tool.name,
+                        in_process.name()
+                    ));
+                }
+                if !tool.name.starts_with("iroha.") {
+                    return Err(format!(
+                        "in-process tool `{}` is outside the explicit iroha.* namespace",
+                        tool.name
+                    ));
+                }
+                continue;
+            }
+            ToolBacking::Route {
+                effect,
+                method,
+                path_template,
+            } => {
+                if matches!(
+                    tool.name.as_str(),
+                    "iroha.transactions.prepare" | "iroha.transactions.inspect"
+                ) {
+                    return Err(format!(
+                        "in-process tool name `{}` cannot use HTTP route backing",
+                        tool.name
+                    ));
+                }
+                (*effect, method, path_template.as_str())
+            }
+        };
+        validate_purpose_built_dispatch_backing(tool)?;
+        let descriptor = catalog_descriptor_for_method_path(groups, method, path_template);
         if let Some(route) = descriptor {
             if route.authentication() == AuthenticationPolicy::ProtocolHandshake
                 && !is_audited_protocol_handshake_tool(tool)
@@ -4033,7 +4339,7 @@ fn validate_tool_registry(
                 ));
             }
             if route.effect() == RouteEffect::Mutation
-                && matches!(tool.effect, ToolEffect::Read | ToolEffect::BuildInstruction)
+                && matches!(effect, ToolEffect::Read | ToolEffect::BuildInstruction)
             {
                 return Err(format!(
                     "mutating route tool `{}` cannot advertise a non-mutating effect",
@@ -4053,6 +4359,9 @@ fn validate_tool_registry(
             Some(AuthenticationPolicy::CanonicalAccountSignature) => {
                 validate_canonical_auth_tool_schema(tool)?;
             }
+            Some(AuthenticationPolicy::OptionalCanonicalAccountSignature) => {
+                validate_optional_canonical_auth_tool_schema(tool)?;
+            }
             Some(AuthenticationPolicy::OperatorSignature) => {
                 validate_operator_auth_tool_schema(tool)?;
             }
@@ -4067,24 +4376,22 @@ fn validate_tool_registry(
             }
             continue;
         }
-        if catalog_mcp_projection_decision(groups, &tool.method, tool.path_template.as_str())
-            != Some(true)
-        {
+        if catalog_mcp_projection_decision(groups, method, path_template) != Some(true) {
             return Err(format!(
                 "OpenAPI-derived tool `{}` lacks an enabled exact catalog MCP projection for {} {}",
-                tool.name, tool.method, tool.path_template
+                tool.name, method, path_template
             ));
         }
         descriptor.expect("an enabled catalog MCP projection has an exact descriptor");
-        let Some(method_key) = canonical_tool_method_key(&tool.method) else {
+        let Some(method_key) = canonical_tool_method_key(method) else {
             return Err(format!(
                 "OpenAPI-derived tool `{}` uses unsupported HTTP method {}",
-                tool.name, tool.method
+                tool.name, method
             ));
         };
         let expected = format!(
             "torii.{}",
-            generated_operation_id(method_key, tool.path_template.as_str())
+            generated_operation_id(method_key, path_template)
         );
         if tool.name != expected {
             return Err(format!(
@@ -4096,6 +4403,15 @@ fn validate_tool_registry(
     Ok(())
 }
 fn validate_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
+    validate_canonical_auth_tool_schema_with_requirement(tool, true)
+}
+fn validate_optional_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
+    validate_canonical_auth_tool_schema_with_requirement(tool, false)
+}
+fn validate_canonical_auth_tool_schema_with_requirement(
+    tool: &ToolSpec,
+    authentication_required: bool,
+) -> Result<(), String> {
     let schema = tool.input_schema.as_object().ok_or_else(|| {
         format!(
             "canonical-auth tool `{}` must publish an object input schema",
@@ -4156,7 +4472,7 @@ fn validate_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
                     Some(CANONICAL_PADDED_BASE64_PATTERN),
                 )
         });
-        if schema_requires(schema, "canonical_auth")
+        if schema_requires(schema, "canonical_auth") == authentication_required
             && constrained
             && auth_schema_has_exclusive_branches(
                 auth,
@@ -4231,7 +4547,7 @@ fn validate_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
         CANONICAL_WITNESS_MAX_ENCODED_BYTES,
         Some(CANONICAL_PADDED_BASE64_PATTERN),
     );
-    if !schema_requires(schema, "headers")
+    if schema_requires(schema, "headers") != authentication_required
         || !constrained
         || !auth_schema_has_exclusive_branches(
             headers.expect("closed headers schema exists"),
@@ -4574,7 +4890,7 @@ fn should_skip_operation(
     if operation_uses_streaming_transport(spec, operation) {
         return true;
     }
-    if path.starts_with("/openapi") {
+    if path == "/openapi.json" {
         return true;
     }
     if !expose_operator_routes {
@@ -4618,15 +4934,28 @@ async fn dispatch_openapi_tool(
     tool: &ToolSpec,
     arguments: &Map,
 ) -> Result<Value, String> {
-    validate_governance_openapi_dispatch(tool, arguments)?;
-    let route = fill_path_template(&tool.path_template, arguments.get("path"))?;
+    let Some((_, method, path_template)) = tool.route_backing() else {
+        return Err(format!(
+            "in-process tool `{}` cannot be dispatched through the HTTP route adapter",
+            tool.name
+        ));
+    };
+    validate_governance_openapi_dispatch(method, path_template, arguments)?;
+    let route = fill_path_template(path_template, arguments.get("path"))?;
     let route = append_query(route, arguments.get("query"))?;
-    let (body, content_type) = build_request_body(arguments)?;
+    let default_content_type = tool
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("content_type"))
+        .and_then(|schema| schema.get("const"))
+        .and_then(Value::as_str);
+    let (body, content_type) = build_request_body(arguments, default_content_type)?;
     let accept = arguments.get("accept").and_then(Value::as_str);
     let structured = dispatch_route_borrowed(
         app,
         inbound_headers,
-        tool.method.clone(),
+        method.clone(),
         route.as_str(),
         arguments.get("headers"),
         body,
@@ -4852,7 +5181,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_runtime_upgrades_list => "/v1/runtime/upgrades";
         dispatch_iroha_gov_protected_namespaces_list => "/v1/gov/protected-namespaces";
         dispatch_iroha_gov_unlocks_stats => "/v1/gov/unlocks/stats";
-        dispatch_iroha_gov_council_current => "/v1/gov/council/current";
         dispatch_iroha_gov_citizens_count => "/v1/gov/citizens";
         dispatch_iroha_nfts_chain_list => "/v1/nfts";
         dispatch_iroha_rwas_chain_list => "/v1/rwas";
@@ -4883,9 +5211,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_assets_list => "/v1/explorer/assets";
         dispatch_iroha_nfts_list => "/v1/explorer/nfts";
         dispatch_iroha_rwas_list => "/v1/explorer/rwas";
-        dispatch_iroha_transactions_list => "/v1/explorer/transactions";
-        dispatch_iroha_instructions_list => "/v1/explorer/instructions";
-        dispatch_iroha_blocks_list => "/v1/explorer/blocks";
     }
     query_post {
         dispatch_iroha_accounts_query => "/v1/accounts/query";
@@ -4898,6 +5223,97 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_bridge_finality_proof => "/v1/bridge/finality/{height}";
         dispatch_iroha_bridge_finality_bundle => "/v1/bridge/finality/bundle/{height}";
     }
+}
+async fn dispatch_explorer_history_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+    route: &str,
+    query_fields: &[&str],
+    context: &str,
+) -> Result<Value, String> {
+    let route = append_explorer_history_query_arguments(
+        route.to_owned(),
+        arguments,
+        query_fields,
+        context,
+    )?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_transactions_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_explorer_history_list(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/explorer/transactions",
+        &[
+            "cursor",
+            "limit",
+            "authority",
+            "block",
+            "status",
+            "asset_id",
+        ],
+        "Explorer transaction history request",
+    )
+    .await
+}
+async fn dispatch_iroha_instructions_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_explorer_history_list(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/explorer/instructions",
+        &[
+            "cursor",
+            "limit",
+            "authority",
+            "account",
+            "transaction_hash",
+            "transaction_status",
+            "block",
+            "kind",
+            "asset_id",
+        ],
+        "Explorer instruction history request",
+    )
+    .await
+}
+async fn dispatch_iroha_blocks_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_explorer_history_list(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/explorer/blocks",
+        &["cursor", "limit"],
+        "Explorer block history request",
+    )
+    .await
 }
 /// Render an exact MCP account input into the strict ASCII auth-header form.
 fn vpn_canonical_auth_account_header_value(account: &str) -> Result<String, String> {
@@ -5248,93 +5664,6 @@ async fn dispatch_iroha_vpn_receipts_list(
             .map(str::to_owned),
     )
     .await
-}
-async fn dispatch_iroha_node_query_projection_checkpoint_plan(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/node/query/projection/checkpoint/plan",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_node_query_projection_checkpoint_publish(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/node/query/projection/checkpoint/publish",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-fn build_iroha_node_query_projection_checkpoint_body(
-    arguments: &Map,
-) -> Result<BorrowedMcpJson<'_>, String> {
-    let body = match arguments.get("body") {
-        Some(body) => Some(
-            body.as_object()
-                .ok_or_else(|| "`body` must be an object".to_owned())?,
-        ),
-        None => None,
-    };
-    let fallback_emitted_at = if body.is_none_or(|body| !body.contains_key("emitted_at_unix")) {
-        arguments.get("emitted_at_unix")
-    } else {
-        None
-    };
-    let fallback_shards = if body.is_none_or(|body| !body.contains_key("shards")) {
-        arguments.get("shards")
-    } else {
-        None
-    };
-    let field_count = body
-        .map_or(0, Map::len)
-        .checked_add(usize::from(fallback_emitted_at.is_some()))
-        .and_then(|count| count.checked_add(usize::from(fallback_shards.is_some())))
-        .ok_or_else(|| "checkpoint body field count overflow".to_owned())?;
-    let mut payload =
-        BorrowedMcpJsonObject::try_with_capacity(field_count, "borrowed checkpoint body fields")?;
-    if let Some(body) = body {
-        for (key, value) in body {
-            payload.insert_value(key, value);
-        }
-    }
-    if let Some(emitted_at_unix) = fallback_emitted_at {
-        payload.insert_value("emitted_at_unix", emitted_at_unix);
-    }
-    if let Some(shards) = fallback_shards {
-        payload.insert_value("shards", shards);
-    }
-    if !payload.contains_key("shards") {
-        return Err("`shards` is required".to_owned());
-    }
-    Ok(BorrowedMcpJson::Object(payload.sorted()))
 }
 async fn dispatch_iroha_node_query_projection_shard_catalog(
     app: &SharedAppState,
@@ -6954,6 +7283,61 @@ async fn dispatch_iroha_blocks_get(
     )
     .await
 }
+fn dispatch_iroha_transactions_prepare(
+    app: &SharedAppState,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let bytes = canonical_padded_base64_argument(arguments, "transaction_payload_base64")?;
+    transaction_artifacts::prepare_transaction_payload_bytes(app.state.network_id_ref(), &bytes)
+        .map(|artifact| artifact.to_mcp_value())
+        .map_err(|error| error.to_string())
+}
+
+fn dispatch_iroha_transactions_inspect(
+    app: &SharedAppState,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let (kind, field) = match (
+        arguments.contains_key("transaction_payload_base64"),
+        arguments.contains_key("signed_transaction_base64"),
+    ) {
+        (true, false) => (
+            transaction_artifacts::TransactionArtifactKind::TransactionPayload,
+            "transaction_payload_base64",
+        ),
+        (false, true) => (
+            transaction_artifacts::TransactionArtifactKind::SignedTransaction,
+            "signed_transaction_base64",
+        ),
+        _ => {
+            return Err(
+                "exactly one of transaction_payload_base64 or signed_transaction_base64 is required"
+                    .to_owned(),
+            );
+        }
+    };
+    let bytes = canonical_padded_base64_argument(arguments, field)?;
+    transaction_artifacts::inspect_transaction_artifact(app.state.network_id_ref(), kind, &bytes)
+        .map(|artifact| artifact.to_mcp_value())
+        .map_err(|error| error.to_string())
+}
+
+fn canonical_padded_base64_argument(arguments: &Map, field: &str) -> Result<Vec<u8>, String> {
+    let encoded = arguments
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{field} must be a string"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| format!("{field} must be canonical padded standard Base64: {error}"))?;
+    if bytes.is_empty() || base64::engine::general_purpose::STANDARD.encode(&bytes) != encoded {
+        return Err(format!(
+            "{field} must be non-empty canonical padded standard Base64"
+        ));
+    }
+    Ok(bytes)
+}
+
 async fn dispatch_iroha_transactions_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -7846,9 +8230,12 @@ fn require_governance_openapi_json_body(arguments: &Map) -> Result<&Value, Strin
         .get("body")
         .ok_or_else(|| "`body` is required for governance MCP identifier preflight".to_owned())
 }
-fn validate_governance_openapi_dispatch(tool: &ToolSpec, arguments: &Map) -> Result<(), String> {
-    let Some(validation) = governance_openapi_validation(&tool.method, tool.path_template.as_str())
-    else {
+fn validate_governance_openapi_dispatch(
+    method: &Method,
+    path_template: &str,
+    arguments: &Map,
+) -> Result<(), String> {
+    let Some(validation) = governance_openapi_validation(method, path_template) else {
         return Ok(());
     };
     match validation {
@@ -7872,9 +8259,6 @@ fn extract_runtime_upgrade_id_argument(arguments: &Map) -> Result<String, String
 fn extract_height_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_value_argument(arguments, "height", &["height", "block_height"], &[])
 }
-fn extract_view_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_value_argument(arguments, "view", &["view"], &[])
-}
 fn extract_definition_id_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(arguments, "definition_id", &["definition_id"], &[])
 }
@@ -7886,22 +8270,6 @@ fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
 }
 fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(arguments, "rwa_id", &["rwa_id", "id"], &[])
-}
-fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "bundle_id_hex",
-        &["bundle_id_hex", "bundle_id"],
-        &["bundle_id"],
-    )
-}
-fn extract_certificate_id_hex_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "certificate_id_hex",
-        &["certificate_id_hex", "certificate_id", "id"],
-        &["certificate_id", "id"],
-    )
 }
 fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(
@@ -7997,6 +8365,7 @@ enum ExtraHeaderPolicy {
     Default,
     ConnectManagement,
     CanonicalAccountAuthentication,
+    OptionalCanonicalAccountAuthentication,
     OperatorAuthentication,
 }
 impl ExtraHeaderPolicy {
@@ -8004,7 +8373,9 @@ impl ExtraHeaderPolicy {
         match self {
             Self::Default => false,
             Self::ConnectManagement => lowered == "authorization",
-            Self::CanonicalAccountAuthentication => is_canonical_account_auth_header(lowered),
+            Self::CanonicalAccountAuthentication | Self::OptionalCanonicalAccountAuthentication => {
+                is_canonical_account_auth_header(lowered)
+            }
             Self::OperatorAuthentication => is_operator_auth_header(lowered),
         }
     }
@@ -8018,6 +8389,9 @@ fn target_extra_header_policy(
     Ok(match descriptor.authentication() {
         AuthenticationPolicy::CanonicalAccountSignature => {
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+        }
+        AuthenticationPolicy::OptionalCanonicalAccountSignature => {
+            ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
         }
         AuthenticationPolicy::OperatorSignature => ExtraHeaderPolicy::OperatorAuthentication,
         AuthenticationPolicy::NestedRouteAuthentication => {
@@ -8107,15 +8481,10 @@ async fn dispatch_route_with_borrowed_headers(
             headers.insert(remote_addr_header, value);
         }
     }
-    let router = {
-        let guard = app
-            .mcp_dispatch_router
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard
-            .clone()
-            .ok_or_else(|| "mcp router unavailable".to_owned())?
-    };
+    let router = app
+        .mcp_dispatch_router
+        .load()
+        .ok_or_else(|| "mcp router unavailable".to_owned())?;
     let service = router
         .into_make_service_with_connect_info::<SocketAddr>()
         .oneshot(dispatched_connect_addr)
@@ -8138,7 +8507,10 @@ fn dispatched_remote_ip(inbound_headers: &HeaderMap) -> Option<IpAddr> {
 fn dispatched_connect_addr(remote_ip: Option<IpAddr>) -> SocketAddr {
     SocketAddr::new(remote_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 0)
 }
-fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String> {
+fn build_request_body<'a>(
+    arguments: &'a Map,
+    default_content_type: Option<&'a str>,
+) -> Result<(Vec<u8>, Option<&'a str>), String> {
     if arguments.contains_key("body") && arguments.contains_key("body_base64") {
         return Err("`body` and `body_base64` are mutually exclusive".to_owned());
     }
@@ -8155,11 +8527,11 @@ fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String
                     .ok_or_else(|| "`content_type` must be a string".to_owned())
             })
             .transpose()?
+            .or(default_content_type)
             .or(Some(crate::utils::NORITO_MIME_TYPE));
         return Ok((bytes, content_type));
     }
     if let Some(body_value) = arguments.get("body") {
-        let bytes = encode_mcp_json_body(body_value, "encode body")?;
         let content_type = arguments
             .get("content_type")
             .map(|value| {
@@ -8168,10 +8540,29 @@ fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String
                     .ok_or_else(|| "`content_type` must be a string".to_owned())
             })
             .transpose()?
+            .or(default_content_type)
             .or(Some("application/json"));
+        let bytes = if content_type.is_some_and(is_raw_text_request_media_type) {
+            body_value
+                .as_str()
+                .ok_or_else(|| "text or XML `body` must be a string".to_owned())?
+                .as_bytes()
+                .to_vec()
+        } else {
+            encode_mcp_json_body(body_value, "encode body")?
+        };
         return Ok((bytes, content_type));
     }
     Ok((Vec::new(), None))
+}
+fn is_raw_text_request_media_type(content_type: &str) -> bool {
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    essence == "application/xml" || essence == "text/xml" || essence.starts_with("text/")
 }
 fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<String, String> {
     let empty_args = Map::new();
@@ -8298,6 +8689,7 @@ fn forward_onboarding_auth_header(out: &mut HeaderMap, inbound: &HeaderMap) -> R
     out.insert(header_name, value);
     Ok(())
 }
+#[cfg(test)]
 fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(), String> {
     apply_extra_headers_with_policy(out, value, ExtraHeaderPolicy::Default)
 }
@@ -8307,7 +8699,8 @@ fn apply_extra_headers_with_policy(
     policy: ExtraHeaderPolicy,
 ) -> Result<(), String> {
     match policy {
-        ExtraHeaderPolicy::CanonicalAccountAuthentication => {
+        ExtraHeaderPolicy::CanonicalAccountAuthentication
+        | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication => {
             remove_canonical_account_auth_headers(out)
         }
         ExtraHeaderPolicy::OperatorAuthentication => remove_operator_auth_headers(out),
@@ -8319,6 +8712,7 @@ fn apply_extra_headers_with_policy(
             if matches!(
                 policy,
                 ExtraHeaderPolicy::CanonicalAccountAuthentication
+                    | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                     | ExtraHeaderPolicy::OperatorAuthentication
             ) =>
         {
@@ -8340,6 +8734,7 @@ fn apply_extra_headers_with_policy(
         if matches!(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                 | ExtraHeaderPolicy::OperatorAuthentication
         ) && !policy.allows_reserved_extra_header(&lowered)
         {
@@ -8356,6 +8751,7 @@ fn apply_extra_headers_with_policy(
         let mut header_value = if matches!(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                 | ExtraHeaderPolicy::OperatorAuthentication
         ) {
             let exact = raw_value.as_str().ok_or_else(|| {
@@ -8375,8 +8771,10 @@ fn apply_extra_headers_with_policy(
         if matches!(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                 | ExtraHeaderPolicy::OperatorAuthentication
-        ) {
+        ) || (policy == ExtraHeaderPolicy::ConnectManagement && lowered == "authorization")
+        {
             header_value.set_sensitive(true);
         }
         out.insert(header_name, header_value);
@@ -8397,7 +8795,8 @@ fn validate_target_authentication_headers(
         }
     }
     match policy {
-        ExtraHeaderPolicy::CanonicalAccountAuthentication => {
+        ExtraHeaderPolicy::CanonicalAccountAuthentication
+        | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication => {
             let has = |name: &str| names.contains(name);
             let signature_tuple = has(HEADER_X_IROHA_ACCOUNT)
                 && has(HEADER_X_IROHA_SIGNATURE)
@@ -8567,7 +8966,11 @@ fn remove_operator_auth_headers(headers: &mut HeaderMap) {
         headers.remove(HeaderName::from_static(name));
     }
 }
-/// Prevent intermediaries from retaining target-derived MCP responses.
+/// Prevent generic HTTP intermediaries from retaining target-derived MCP responses.
+///
+/// Native MCP cache hints live inside complete results and are keyed by the
+/// request method, result-affecting params, and authorization scope. They do
+/// not make the shared JSON-RPC POST URL safe for ordinary HTTP caching.
 pub(crate) fn private_no_store_response(response: impl IntoResponse) -> Response {
     let mut response = response.into_response();
     response.headers_mut().insert(
@@ -8804,13 +9207,13 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
-const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 62;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 109_160;
+const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;
+const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 107_288;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0x0c, 0xc8, 0x36, 0xd3, 0xe6, 0xed, 0x66, 0x07, 0xd4, 0xef, 0x2f, 0xae, 0x0a, 0x0b, 0xe9, 0x3b,
-    0x8b, 0x25, 0x5f, 0xcb, 0xdb, 0x25, 0x5a, 0x1c, 0x93, 0x84, 0x98, 0xd4, 0x52, 0xeb, 0xc5, 0x92,
+    0xf9, 0x08, 0xda, 0x8b, 0x71, 0x82, 0xe5, 0xd3, 0xfe, 0x09, 0xf8, 0xb8, 0x49, 0xec, 0xe1, 0x47,
+    0xe8, 0x97, 0xa7, 0xb2, 0x7f, 0xc9, 0x81, 0x00, 0x36, 0x95, 0xa2, 0x58, 0x4c, 0x34, 0x79, 0x8d,
 ];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
@@ -8826,6 +9229,265 @@ struct ManualStaticToolDescriptor {
 
 static MANUAL_STATIC_TOOL_DESCRIPTORS: LazyLock<BTreeMap<String, ManualStaticToolDescriptor>> =
     LazyLock::new(load_manual_static_tool_descriptors);
+
+/// Route contracts for purpose-built dispatchers whose descriptors are not
+/// loaded from `manual_tool_descriptors_v1.json`.
+///
+/// `handle_named_tool_call` admits a route-backed tool to its specialized
+/// name-dispatch match only when it appears here or in the immutable descriptor
+/// asset below. Therefore adding a specialized match arm without an execution
+/// contract cannot silently bypass the generic backing-driven adapter.
+const INLINE_PURPOSE_BUILT_DISPATCH_ROUTES: &[(&str, &str, &str)] = &[
+    ("iroha.connect.session.status", "GET", "/v1/connect/status"),
+    ("iroha.vpn.profile", "GET", "/v1/vpn/profile"),
+    ("iroha.vpn.quotes.create", "POST", "/v1/vpn/quotes"),
+    ("iroha.vpn.sessions.create", "POST", "/v1/vpn/sessions"),
+    (
+        "iroha.vpn.sessions.get",
+        "GET",
+        "/v1/vpn/sessions/{session_id}",
+    ),
+    ("iroha.vpn.receipts.list", "GET", "/v1/vpn/receipts"),
+    ("iroha.vpn.receipts.submit", "POST", "/v1/vpn/receipts"),
+    ("iroha.health", "GET", "/health"),
+    ("iroha.parameters.get", "GET", "/v1/parameters"),
+    ("iroha.node.capabilities", "GET", "/v1/node/capabilities"),
+    (
+        "iroha.node.query_projection_checkpoint",
+        "GET",
+        "/v1/node/query/projection/checkpoint",
+    ),
+    ("iroha.da.ingest", "POST", "/v1/da/ingest"),
+    ("iroha.da.proof_policies", "GET", "/v1/da/proof-policies"),
+    (
+        "iroha.da.proof_policy_snapshot",
+        "GET",
+        "/v1/da/proof-policies/snapshot",
+    ),
+    ("iroha.da.commitments.list", "POST", "/v1/da/commitments"),
+    (
+        "iroha.da.commitments.prove",
+        "POST",
+        "/v1/da/commitments/prove",
+    ),
+    (
+        "iroha.da.commitments.verify",
+        "POST",
+        "/v1/da/commitments/verify",
+    ),
+    ("iroha.da.pin_intents.list", "POST", "/v1/da/pin-intents"),
+    (
+        "iroha.da.pin_intents.prove",
+        "POST",
+        "/v1/da/pin-intents/prove",
+    ),
+    (
+        "iroha.da.pin_intents.verify",
+        "POST",
+        "/v1/da/pin-intents/verify",
+    ),
+    ("iroha.runtime.abi.active", "GET", "/v1/runtime/abi/active"),
+    ("iroha.runtime.abi.hash", "GET", "/v1/runtime/abi/hash"),
+    ("iroha.runtime.metrics", "GET", "/v1/runtime/metrics"),
+    ("iroha.runtime.upgrades.list", "GET", "/v1/runtime/upgrades"),
+    (
+        "iroha.runtime.upgrades.propose",
+        "POST",
+        "/v1/runtime/upgrades/propose",
+    ),
+    ("iroha.proofs.query", "POST", "/v1/proofs/query"),
+    (
+        "iroha.gov.proposals.deploy_contract",
+        "POST",
+        "/v1/gov/proposals/deploy-contract",
+    ),
+    (
+        "iroha.gov.parliament.attempts.draft",
+        "POST",
+        "/v1/gov/parliament/attempts/draft",
+    ),
+    (
+        "iroha.gov.parliament.attempts.get",
+        "GET",
+        "/v1/gov/parliament/attempts/{governance_attempt_id}",
+    ),
+    (
+        "iroha.gov.parliament.ballots.timed_ovn_casting_context.get",
+        "GET",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context",
+    ),
+    (
+        "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get",
+        "POST",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
+    ),
+    (
+        "iroha.gov.parliament.ballots.tle_release_context.get",
+        "GET",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context",
+    ),
+    (
+        "iroha.gov.parliament.ballots.tle_partial_release.create",
+        "POST",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release",
+    ),
+    (
+        "iroha.gov.parliament.transitions.draft",
+        "POST",
+        "/v1/gov/parliament/transitions/draft",
+    ),
+    ("iroha.gov.proposals.get", "GET", "/v1/gov/proposals/{id}"),
+    ("iroha.gov.locks.get", "GET", "/v1/gov/locks/{rid}"),
+    ("iroha.gov.referenda.get", "GET", "/v1/gov/referenda/{id}"),
+    ("iroha.gov.tally.get", "GET", "/v1/gov/tally/{id}"),
+    ("iroha.gov.ballots.zk_v1", "POST", "/v1/gov/ballots/zk-v1"),
+    (
+        "iroha.gov.ballots.zk_v1.ballot_proof",
+        "POST",
+        "/v1/gov/ballots/zk-v1/ballot-proof",
+    ),
+    ("iroha.gov.ballots.plain", "POST", "/v1/gov/ballots/plain"),
+    (
+        "iroha.gov.protected_namespaces.list",
+        "GET",
+        "/v1/gov/protected-namespaces",
+    ),
+    (
+        "iroha.gov.protected_namespaces.update",
+        "POST",
+        "/v1/gov/protected-namespaces",
+    ),
+    ("iroha.gov.unlocks.stats", "GET", "/v1/gov/unlocks/stats"),
+    ("iroha.gov.citizens.count", "GET", "/v1/gov/citizens"),
+    ("iroha.contracts.call", "POST", "/v1/contracts/call"),
+    (
+        "iroha.accounts.faucet.prepare",
+        "POST",
+        "/v1/accounts/faucet/prepare",
+    ),
+    (
+        "iroha.accounts.faucet.submit",
+        "POST",
+        "/v1/accounts/faucet",
+    ),
+    ("iroha.transactions.query", "POST", "/v1/transactions/query"),
+    (
+        "iroha.transactions.visible.query",
+        "POST",
+        "/v1/transactions/visible/query",
+    ),
+    (
+        "iroha.subscriptions.pause",
+        "POST",
+        "/v1/subscriptions/{subscription_id}/pause",
+    ),
+    (
+        "iroha.subscriptions.resume",
+        "POST",
+        "/v1/subscriptions/{subscription_id}/resume",
+    ),
+    (
+        "iroha.subscriptions.cancel",
+        "POST",
+        "/v1/subscriptions/{subscription_id}/cancel",
+    ),
+    (
+        "iroha.subscriptions.keep",
+        "POST",
+        "/v1/subscriptions/{subscription_id}/keep",
+    ),
+    (
+        "iroha.subscriptions.usage",
+        "POST",
+        "/v1/subscriptions/{subscription_id}/usage",
+    ),
+    (
+        "iroha.subscriptions.charge_now",
+        "POST",
+        "/v1/subscriptions/{subscription_id}/charge-now",
+    ),
+    ("iroha.nfts.chain.list", "GET", "/v1/nfts"),
+    ("iroha.rwas.chain.list", "GET", "/v1/rwas"),
+    (
+        "iroha.iso20022.pacs008.submit",
+        "POST",
+        "/v1/iso20022/pacs008",
+    ),
+    (
+        "iroha.iso20022.pacs009.submit",
+        "POST",
+        "/v1/iso20022/pacs009",
+    ),
+    (
+        "iroha.iso20022.pacs002.submit",
+        "POST",
+        "/v1/iso20022/pacs002",
+    ),
+    (
+        "iroha.iso20022.pacs004.submit",
+        "POST",
+        "/v1/iso20022/pacs004",
+    ),
+    (
+        "iroha.iso20022.camt056.submit",
+        "POST",
+        "/v1/iso20022/camt056",
+    ),
+    (
+        "iroha.iso20022.sese023.submit",
+        "POST",
+        "/v1/iso20022/sese023",
+    ),
+    (
+        "iroha.iso20022.sese024.submit",
+        "POST",
+        "/v1/iso20022/sese024",
+    ),
+    (
+        "iroha.iso20022.sese025.submit",
+        "POST",
+        "/v1/iso20022/sese025",
+    ),
+    (
+        "iroha.iso20022.colr012.submit",
+        "POST",
+        "/v1/iso20022/colr012",
+    ),
+    (
+        "iroha.iso20022.status.get",
+        "GET",
+        "/v1/iso20022/messages/{msg_id}",
+    ),
+    ("iroha.queries.submit", "POST", "/v1/query"),
+    (
+        "iroha.transactions.submit",
+        "POST",
+        "/v1/pipeline/transactions",
+    ),
+    (
+        "iroha.transactions.submit_and_wait",
+        "POST",
+        "/v1/pipeline/transactions",
+    ),
+];
+
+fn purpose_built_dispatch_route_contract(name: &str) -> Option<(&'static str, &'static str)> {
+    if let Some((_, method, path_template)) = INLINE_PURPOSE_BUILT_DISPATCH_ROUTES
+        .iter()
+        .find(|(tool_name, _, _)| *tool_name == name)
+    {
+        return Some((*method, *path_template));
+    }
+    MANUAL_STATIC_TOOL_DESCRIPTORS
+        .values()
+        .find(|descriptor| descriptor.name == name)
+        .map(|descriptor| {
+            (
+                descriptor.method.as_str(),
+                descriptor.path_template.as_str(),
+            )
+        })
+}
 
 fn take_manual_static_tool_asset_string(
     record: &mut Map,
@@ -9010,14 +9672,14 @@ fn manual_static_tool(function: &str, expected_name: &str) -> ToolSpec {
         descriptor.name, expected_name,
         "manual MCP descriptor wrapper `{function}` name drifted"
     );
-    ToolSpec {
-        name: descriptor.name.clone(),
-        effect: descriptor.effect,
-        description: descriptor.description.clone(),
-        method: descriptor.method.clone(),
-        path_template: descriptor.path_template.clone(),
-        input_schema: descriptor.input_schema.clone(),
-    }
+    ToolSpec::route(
+        descriptor.name.clone(),
+        descriptor.description.clone(),
+        descriptor.effect,
+        descriptor.method.clone(),
+        descriptor.path_template.clone(),
+        descriptor.input_schema.clone(),
+    )
 }
 
 macro_rules! manual_tool {
@@ -9034,8 +9696,6 @@ manual_tool! {
     iroha_connect_ws_ticket_tool => "iroha.connect.ws.ticket";
     iroha_connect_session_create_tool => "iroha.connect.session.create";
     iroha_connect_session_delete_tool => "iroha.connect.session.delete";
-    iroha_node_query_projection_checkpoint_plan_tool => "iroha.node.query_projection_checkpoint_plan";
-    iroha_node_query_projection_checkpoint_publish_tool => "iroha.node.query_projection_checkpoint_publish";
     iroha_node_query_projection_shard_catalog_tool => "iroha.node.query_projection_shard_catalog";
     iroha_da_manifests_get_tool => "iroha.da.manifests.get";
     iroha_runtime_upgrades_activate_tool => "iroha.runtime.upgrades.activate";
@@ -9126,35 +9786,35 @@ fn account_faucet_tool_input_schema(path: &str) -> Value {
     Value::Object(schema)
 }
 fn iroha_accounts_faucet_prepare_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.accounts.faucet.prepare".to_owned(),
-        effect: ToolEffect::Write,
-        description: "Validate one faucet proof-of-work claim and return an exact faucet-authority-signed transaction envelope. Successful ledger execution consumes the claim through a durable authority-scoped consensus marker, so distinct preparations of the same claim cannot both commit."
+    ToolSpec::route(
+        "iroha.accounts.faucet.prepare".to_owned(),
+        "Validate one faucet proof-of-work claim and return an exact faucet-authority-signed transaction envelope. Successful ledger execution consumes the claim through a durable authority-scoped consensus marker, so distinct preparations of the same claim cannot both commit."
             .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/accounts/faucet/prepare".to_owned(),
-        input_schema: account_faucet_tool_input_schema("/v1/accounts/faucet/prepare"),
-    }
+        ToolEffect::Write,
+        Method::POST,
+        "/v1/accounts/faucet/prepare".to_owned(),
+        account_faucet_tool_input_schema("/v1/accounts/faucet/prepare"),
+    )
 }
 fn iroha_accounts_faucet_submit_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.accounts.faucet.submit".to_owned(),
-        effect: ToolEffect::Write,
-        description: "Submit only the exact authenticated envelope returned by iroha.accounts.faucet.prepare. Consensus rejects a semantic claim already consumed through any peer, binding, restart, or generic transaction ingress."
+    ToolSpec::route(
+        "iroha.accounts.faucet.submit".to_owned(),
+        "Submit only the exact authenticated envelope returned by iroha.accounts.faucet.prepare. Consensus rejects a semantic claim already consumed through any peer, binding, restart, or generic transaction ingress."
             .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/accounts/faucet".to_owned(),
-        input_schema: account_faucet_tool_input_schema("/v1/accounts/faucet"),
-    }
+        ToolEffect::Write,
+        Method::POST,
+        "/v1/accounts/faucet".to_owned(),
+        account_faucet_tool_input_schema("/v1/accounts/faucet"),
+    )
 }
 fn simple_manual_get_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::GET,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::GET,
+        path_template.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
@@ -9165,7 +9825,7 @@ fn simple_manual_get_tool(name: &str, description: &str, path_template: &str) ->
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn simple_manual_raw_body_post_tool(
     name: &str,
@@ -9173,13 +9833,13 @@ fn simple_manual_raw_body_post_tool(
     path_template: &str,
     body_description: &str,
 ) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        path_template.to_owned(),
+        norito::json!({
             "type": "object",
             "x-iroha-mcp-flat-body": true,
             "additionalProperties": true,
@@ -9196,7 +9856,7 @@ fn simple_manual_raw_body_post_tool(
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_vpn_profile_tool() -> ToolSpec {
     simple_manual_get_tool(
@@ -9264,14 +9924,14 @@ fn vpn_canonical_auth_schema() -> Value {
     })
 }
 fn iroha_vpn_quotes_create_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.vpn.quotes.create".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.vpn.quotes.create"),
-        description: "Create a Sora VPN XOR escrow quote. `canonical_auth` must be signed for POST /v1/vpn/quotes and the exact Norito JSON serialization of `body`; outer MCP authentication is never reused for the inner target."
+    ToolSpec::route(
+        "iroha.vpn.quotes.create".to_owned(),
+        "Create a Sora VPN XOR escrow quote. `canonical_auth` must be signed for POST /v1/vpn/quotes and the exact Norito JSON serialization of `body`; outer MCP authentication is never reused for the inner target."
             .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/vpn/quotes".to_owned(),
-        input_schema: norito::json!({
+        manual_tool_effect_from_name("iroha.vpn.quotes.create"),
+        Method::POST,
+        "/v1/vpn/quotes".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "x-iroha-mcp-strict-body": true,
@@ -9291,17 +9951,17 @@ fn iroha_vpn_quotes_create_tool() -> ToolSpec {
             },
             "required": ["body", "canonical_auth"]
         }),
-    }
+    )
 }
 fn iroha_vpn_sessions_create_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.vpn.sessions.create".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.vpn.sessions.create"),
-        description: "Create a Sora VPN session after committing the quoted XOR escrow payment. `canonical_auth` must be signed for POST /v1/vpn/sessions and the exact Norito JSON serialization of `body`; outer MCP authentication is never reused for the inner target."
+    ToolSpec::route(
+        "iroha.vpn.sessions.create".to_owned(),
+        "Create a Sora VPN session after committing the quoted XOR escrow payment. `canonical_auth` must be signed for POST /v1/vpn/sessions and the exact Norito JSON serialization of `body`; outer MCP authentication is never reused for the inner target."
             .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/vpn/sessions".to_owned(),
-        input_schema: norito::json!({
+        manual_tool_effect_from_name("iroha.vpn.sessions.create"),
+        Method::POST,
+        "/v1/vpn/sessions".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "x-iroha-mcp-strict-body": true,
@@ -9323,17 +9983,17 @@ fn iroha_vpn_sessions_create_tool() -> ToolSpec {
             },
             "required": ["body", "canonical_auth"]
         }),
-    }
+    )
 }
 fn iroha_vpn_sessions_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.vpn.sessions.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.vpn.sessions.get"),
-        description: "Fetch a Sora VPN session with `canonical_auth` signed for the exact inner GET path; outer MCP authentication is never reused for the inner target."
+    ToolSpec::route(
+        "iroha.vpn.sessions.get".to_owned(),
+        "Fetch a Sora VPN session with `canonical_auth` signed for the exact inner GET path; outer MCP authentication is never reused for the inner target."
             .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/vpn/sessions/{session_id}".to_owned(),
-        input_schema: norito::json!({
+        manual_tool_effect_from_name("iroha.vpn.sessions.get"),
+        Method::GET,
+        "/v1/vpn/sessions/{session_id}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
@@ -9344,17 +10004,17 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
             "required": ["session_id", "canonical_auth"],
             "description": "Provide the exact `session_id` plus a proof signed for the resolved inner path."
         }),
-    }
+    )
 }
 fn iroha_vpn_receipts_submit_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.vpn.receipts.submit".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.vpn.receipts.submit"),
-        description: "Submit a relay receipt plus client usage voucher for Sora VPN XOR settlement. `canonical_auth` must be signed for POST /v1/vpn/receipts and the exact Norito JSON serialization of `body`; outer MCP authentication is never reused for the inner target."
+    ToolSpec::route(
+        "iroha.vpn.receipts.submit".to_owned(),
+        "Submit a relay receipt plus client usage voucher for Sora VPN XOR settlement. `canonical_auth` must be signed for POST /v1/vpn/receipts and the exact Norito JSON serialization of `body`; outer MCP authentication is never reused for the inner target."
             .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/vpn/receipts".to_owned(),
-        input_schema: norito::json!({
+        manual_tool_effect_from_name("iroha.vpn.receipts.submit"),
+        Method::POST,
+        "/v1/vpn/receipts".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "x-iroha-mcp-strict-body": true,
@@ -9375,17 +10035,17 @@ fn iroha_vpn_receipts_submit_tool() -> ToolSpec {
             },
             "required": ["body", "canonical_auth"]
         }),
-    }
+    )
 }
 fn iroha_vpn_receipts_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.vpn.receipts.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.vpn.receipts.list"),
-        description: "List canonical Sora VPN receipts with `canonical_auth` signed for GET /v1/vpn/receipts; outer MCP authentication is never reused for the inner target."
+    ToolSpec::route(
+        "iroha.vpn.receipts.list".to_owned(),
+        "List canonical Sora VPN receipts with `canonical_auth` signed for GET /v1/vpn/receipts; outer MCP authentication is never reused for the inner target."
             .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/vpn/receipts".to_owned(),
-        input_schema: norito::json!({
+        manual_tool_effect_from_name("iroha.vpn.receipts.list"),
+        Method::GET,
+        "/v1/vpn/receipts".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
@@ -9394,7 +10054,7 @@ fn iroha_vpn_receipts_list_tool() -> ToolSpec {
             },
             "required": ["canonical_auth"]
         }),
-    }
+    )
 }
 fn iroha_health_tool() -> ToolSpec {
     simple_manual_get_tool(
@@ -9615,14 +10275,14 @@ fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> To
             "accept": { "type": "string" }
         }
     });
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: path_template.to_owned(),
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        path_template.to_owned(),
         input_schema,
-    }
+    )
 }
 fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
     iroha_gov_post_tool(
@@ -9632,13 +10292,13 @@ fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
     )
 }
 fn iroha_gov_parliament_attempt_draft_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.parliament.attempts.draft".to_owned(),
-        effect: ToolEffect::BuildInstruction,
-        description: "Draft one canonical attempt-based Parliament proposal for local signing. The canonical account proof must bind the exact V1 JSON body.".to_owned(),
-        method: Method::POST,
-        path_template: "/v1/gov/parliament/attempts/draft".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.gov.parliament.attempts.draft".to_owned(),
+        "Draft one canonical attempt-based Parliament proposal for local signing. The canonical account proof must bind the exact V1 JSON body.".to_owned(),
+        ToolEffect::BuildInstruction,
+        Method::POST,
+        "/v1/gov/parliament/attempts/draft".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["body"],
@@ -9664,18 +10324,17 @@ fn iroha_gov_parliament_attempt_draft_tool() -> ToolSpec {
                 "accept": { "type": "string", "const": "application/json" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_parliament_attempt_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.parliament.attempts.get".to_owned(),
-        effect: ToolEffect::Read,
-        description:
-            "Read one complete committed Parliament attempt by its exact canonical identifier."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.gov.parliament.attempts.get".to_owned(),
+        "Read one complete committed Parliament attempt by its exact canonical identifier."
+            .to_owned(),
+        ToolEffect::Read,
+        Method::GET,
+        "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -9700,18 +10359,17 @@ fn iroha_gov_parliament_attempt_get_tool() -> ToolSpec {
                 "accept": { "type": "string", "const": "application/json" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_parliament_tle_release_context_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.parliament.ballots.tle_release_context.get".to_owned(),
-        effect: ToolEffect::Read,
-        description: "Read one Core-authorized bounded public TLE release context for a Parliament ballot already in Opening. No ballot corpora, shares, secrets, or individual openings are returned."
+    ToolSpec::route(
+        "iroha.gov.parliament.ballots.tle_release_context.get".to_owned(),
+        "Read one Core-authorized bounded public TLE release context for a Parliament ballot already in Opening. No ballot corpora, shares, secrets, or individual openings are returned."
             .to_owned(),
-        method: Method::GET,
-        path_template:
-            "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context".to_owned(),
-        input_schema: norito::json!({
+        ToolEffect::Read,
+        Method::GET,
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -9736,18 +10394,17 @@ fn iroha_gov_parliament_tle_release_context_get_tool() -> ToolSpec {
                 "accept": { "type": "string", "const": "application/json" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_parliament_timed_ovn_casting_context_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.parliament.ballots.timed_ovn_casting_context.get".to_owned(),
-        effect: ToolEffect::Read,
-        description: "Inspect one node-local Core-replay-validated public timed-OVN casting context. This unauthenticated-by-consensus view is for diagnostics only and MUST NOT be used as native-wallet or seed-unsealing input."
+    ToolSpec::route(
+        "iroha.gov.parliament.ballots.timed_ovn_casting_context.get".to_owned(),
+        "Inspect one node-local Core-replay-validated public timed-OVN casting context. This unauthenticated-by-consensus view is for diagnostics only and MUST NOT be used as native-wallet or seed-unsealing input."
             .to_owned(),
-        method: Method::GET,
-        path_template:
-            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context".to_owned(),
-        input_schema: norito::json!({
+        ToolEffect::Read,
+        Method::GET,
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -9772,20 +10429,18 @@ fn iroha_gov_parliament_timed_ovn_casting_context_get_tool() -> ToolSpec {
                 "accept": { "type": "string", "const": "application/json" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_parliament_timed_ovn_casting_proof_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get".to_owned(),
-        effect: manual_tool_effect_from_name(
-            "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get",
-        ),
-        description: format!(
+    ToolSpec::route(
+        "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get".to_owned(),
+        format!(
             "Transport one bounded consensus-authenticated Parliament casting-proof page as canonical Norito (`{PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1}`). The MCP response body is base64 canonical Norito, not a verified wallet context: native code MUST independently pin the network id and exact checkpoint context, verify every finality proof and membership witness, and replay the archive before accessing seed material."
         ),
-        method: Method::POST,
-        path_template: "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof".to_owned(),
-        input_schema: norito::json!({
+        manual_tool_effect_from_name("iroha.gov.parliament.ballots.timed_ovn_casting_proof.get"),
+        Method::POST,
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path", "trusted_checkpoint_height"],
@@ -9816,18 +10471,17 @@ fn iroha_gov_parliament_timed_ovn_casting_proof_get_tool() -> ToolSpec {
                 }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_parliament_tle_partial_release_create_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.parliament.ballots.tle_partial_release.create".to_owned(),
-        effect: ToolEffect::Write,
-        description: "Request this node's Core-authorized proof-carrying TLE partial release for one Parliament ballot in Opening. The request has no body and returns no secret-share material."
+    ToolSpec::route(
+        "iroha.gov.parliament.ballots.tle_partial_release.create".to_owned(),
+        "Request this node's Core-authorized proof-carrying TLE partial release for one Parliament ballot in Opening. The request has no body and returns no secret-share material."
             .to_owned(),
-        method: Method::POST,
-        path_template:
-            "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release".to_owned(),
-        input_schema: norito::json!({
+        ToolEffect::Write,
+        Method::POST,
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -9852,16 +10506,16 @@ fn iroha_gov_parliament_tle_partial_release_create_tool() -> ToolSpec {
                 "accept": { "type": "string", "const": "application/json" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_parliament_transition_draft_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.parliament.transitions.draft".to_owned(),
-        effect: ToolEffect::BuildInstruction,
-        description: "Draft one exact closed Parliament lifecycle transition for local signing. Consensus rechecks authority, state, phase, proof, and roster bindings.".to_owned(),
-        method: Method::POST,
-        path_template: "/v1/gov/parliament/transitions/draft".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.gov.parliament.transitions.draft".to_owned(),
+        "Draft one exact closed Parliament lifecycle transition for local signing. Consensus rechecks authority, state, phase, proof, and roster bindings.".to_owned(),
+        ToolEffect::BuildInstruction,
+        Method::POST,
+        "/v1/gov/parliament/transitions/draft".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["body"],
@@ -9888,21 +10542,20 @@ fn iroha_gov_parliament_transition_draft_tool() -> ToolSpec {
                 "accept": { "type": "string", "const": "application/json" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_proposals_get_tool() -> ToolSpec {
     let proposal_id_schema = governance_proposal_id_v1_schema(
         "Exact 64-character lowercase hexadecimal governance proposal id.",
     );
-    ToolSpec {
-        name: "iroha.gov.proposals.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.proposals.get"),
-        description:
-            "Fetch governance proposal detail by canonical `path.id` (`/v1/gov/proposals/{id}`)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/proposals/{id}".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.gov.proposals.get".to_owned(),
+        "Fetch governance proposal detail by canonical `path.id` (`/v1/gov/proposals/{id}`)."
+            .to_owned(),
+        manual_tool_effect_from_name("iroha.gov.proposals.get"),
+        Method::GET,
+        "/v1/gov/proposals/{id}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -9922,20 +10575,18 @@ fn iroha_gov_proposals_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_locks_get_tool() -> ToolSpec {
     let referendum_id_schema =
         governance_selector_v1_schema("Canonical first-release governance referendum selector.");
-    ToolSpec {
-        name: "iroha.gov.locks.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.locks.get"),
-        description:
-            "Fetch governance lock records by canonical `path.rid` (`/v1/gov/locks/{rid}`)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/locks/{rid}".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.gov.locks.get".to_owned(),
+        "Fetch governance lock records by canonical `path.rid` (`/v1/gov/locks/{rid}`).".to_owned(),
+        manual_tool_effect_from_name("iroha.gov.locks.get"),
+        Method::GET,
+        "/v1/gov/locks/{rid}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -9955,20 +10606,19 @@ fn iroha_gov_locks_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_referenda_get_tool() -> ToolSpec {
     let referendum_id_schema =
         governance_selector_v1_schema("Canonical first-release governance referendum selector.");
-    ToolSpec {
-        name: "iroha.gov.referenda.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.referenda.get"),
-        description:
-            "Fetch governance referendum detail by canonical `path.id` (`/v1/gov/referenda/{id}`)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/referenda/{id}".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.gov.referenda.get".to_owned(),
+        "Fetch governance referendum detail by canonical `path.id` (`/v1/gov/referenda/{id}`)."
+            .to_owned(),
+        manual_tool_effect_from_name("iroha.gov.referenda.get"),
+        Method::GET,
+        "/v1/gov/referenda/{id}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -9988,19 +10638,18 @@ fn iroha_gov_referenda_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_tally_get_tool() -> ToolSpec {
     let tally_id_schema =
         governance_selector_v1_schema("Canonical first-release governance tally selector.");
-    ToolSpec {
-        name: "iroha.gov.tally.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.tally.get"),
-        description: "Fetch governance tally detail by canonical `path.id` (`/v1/gov/tally/{id}`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/tally/{id}".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.gov.tally.get".to_owned(),
+        "Fetch governance tally detail by canonical `path.id` (`/v1/gov/tally/{id}`).".to_owned(),
+        manual_tool_effect_from_name("iroha.gov.tally.get"),
+        Method::GET,
+        "/v1/gov/tally/{id}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -10020,7 +10669,7 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
     simple_manual_get_tool(
@@ -10043,13 +10692,6 @@ fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
         "/v1/gov/unlocks/stats",
     )
 }
-fn iroha_gov_council_current_tool() -> ToolSpec {
-    simple_manual_get_tool(
-        "iroha.gov.council.current",
-        "Fetch current governance council set (`/v1/gov/council/current`).",
-        "/v1/gov/council/current",
-    )
-}
 fn iroha_gov_citizens_count_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.gov.citizens.count",
@@ -10058,13 +10700,13 @@ fn iroha_gov_citizens_count_tool() -> ToolSpec {
     )
 }
 fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        path_template.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": true,
             "properties": {
@@ -10080,7 +10722,7 @@ fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str)
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_contracts_call_tool() -> ToolSpec {
     iroha_contracts_post_tool(
@@ -10104,13 +10746,13 @@ fn iroha_transactions_visible_query_tool() -> ToolSpec {
     )
 }
 fn transactions_query_tool(name: &str, path_template: &str, description: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        path_template.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
@@ -10135,7 +10777,7 @@ fn transactions_query_tool(name: &str, path_template: &str, description: &str) -
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
     MUSUBI_V1_TOOL_DEFINITIONS.iter().map(|definition| {
@@ -10161,13 +10803,13 @@ fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
                     definition.path
                 )
             });
-        ToolSpec {
-            name: definition.name.to_owned(),
-            description: definition.description.to_owned(),
-            effect: definition.effect,
-            method: Method::POST,
-            path_template: definition.path.to_owned(),
-            input_schema: norito::json!({
+        ToolSpec::route(
+            definition.name.to_owned(),
+            definition.description.to_owned(),
+            definition.effect,
+            Method::POST,
+            definition.path.to_owned(),
+            norito::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "x-iroha-mcp-strict-body": true,
@@ -10181,7 +10823,7 @@ fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
                     "accept": { "type": "string" }
                 }
             }),
-        }
+        )
     })
 }
 fn iroha_subscriptions_cancel_tool() -> ToolSpec {
@@ -10272,13 +10914,13 @@ fn iroha_subscription_draft_action_tool(name: &str, description: &str, action: &
         "pause" | "keep" => {}
         _ => unreachable!("subscription draft action tool uses a closed action set"),
     }
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: format!("/v1/subscriptions/{{subscription_id}}/{action}"),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        format!("/v1/subscriptions/{{subscription_id}}/{action}"),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["subscription_id", "body"],
@@ -10302,7 +10944,7 @@ fn iroha_subscription_draft_action_tool(name: &str, description: &str, action: &
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_subscription_action_tool(
     name: &str,
@@ -10310,13 +10952,13 @@ fn iroha_subscription_action_tool(
     action: &str,
     body_description: &str,
 ) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: format!("/v1/subscriptions/{{subscription_id}}/{action}"),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        format!("/v1/subscriptions/{{subscription_id}}/{action}"),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
@@ -10341,7 +10983,7 @@ fn iroha_subscription_action_tool(
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_nfts_chain_list_tool() -> ToolSpec {
     simple_manual_get_tool(
@@ -10359,15 +11001,14 @@ fn iroha_rwas_chain_list_tool() -> ToolSpec {
 }
 include!("mcp/iso20022_tools.rs");
 fn iroha_queries_submit_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.queries.submit".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.queries.submit"),
-        description:
-            "Submit a versioned SignedQuery encoded as canonical Norito bytes in `body_base64`."
-                .to_owned(),
-        method: Method::POST,
-        path_template: iroha_torii_shared::uri::QUERY.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.queries.submit".to_owned(),
+        "Submit a versioned SignedQuery encoded as canonical Norito bytes in `body_base64`."
+            .to_owned(),
+        manual_tool_effect_from_name("iroha.queries.submit"),
+        Method::POST,
+        iroha_torii_shared::uri::QUERY.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["body_base64"],
@@ -10383,16 +11024,70 @@ fn iroha_queries_submit_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
+}
+fn iroha_transactions_prepare_tool() -> ToolSpec {
+    ToolSpec::in_process(
+        InProcessTool::TransactionsPrepare,
+        "Validate and freeze one already-built canonical unsigned TransactionPayload for external signing. This pure in-process Torii capability does not quote or rewrite fees, simulate state, sign, submit, or make a nested network request.".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["transaction_payload_base64"],
+            "properties": {
+                "transaction_payload_base64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "pattern": (CANONICAL_PADDED_BASE64_PATTERN),
+                    "description": "Canonical padded standard-Base64 bytes emitted by TransactionBuilder::encode_payload."
+                }
+            }
+        }),
+    )
+}
+fn iroha_transactions_inspect_tool() -> ToolSpec {
+    ToolSpec::in_process(
+        InProcessTool::TransactionsInspect,
+        "Structurally inspect exactly one canonical unsigned TransactionPayload or fixed-V1 SignedTransaction wire inside Torii. Signed envelopes receive canonical signature verification, but this pure operation does not perform state admission, fee quoting, execution, simulation, signing, submission, or a nested network request.".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "oneOf": [
+                {
+                    "required": ["transaction_payload_base64"],
+                    "not": { "required": ["signed_transaction_base64"] }
+                },
+                {
+                    "required": ["signed_transaction_base64"],
+                    "not": { "required": ["transaction_payload_base64"] }
+                }
+            ],
+            "properties": {
+                "transaction_payload_base64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "pattern": (CANONICAL_PADDED_BASE64_PATTERN),
+                    "description": "Canonical padded standard-Base64 bytes emitted by TransactionBuilder::encode_payload."
+                },
+                "signed_transaction_base64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "pattern": (CANONICAL_PADDED_BASE64_PATTERN),
+                    "description": "Canonical padded standard-Base64 fixed-V1 SignedTransaction wire bytes."
+                }
+            }
+        }),
+    )
 }
 fn iroha_transactions_submit_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.transactions.submit".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.transactions.submit"),
-        description: "Submit a versioned SignedTransaction encoded as canonical Norito bytes in `body_base64`.".to_owned(),
-        method: Method::POST,
-        path_template: iroha_torii_shared::uri::TRANSACTION.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.transactions.submit".to_owned(),
+        "Submit a versioned SignedTransaction encoded as canonical Norito bytes in `body_base64`."
+            .to_owned(),
+        manual_tool_effect_from_name("iroha.transactions.submit"),
+        Method::POST,
+        iroha_torii_shared::uri::TRANSACTION.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["body_base64"],
@@ -10408,16 +11103,16 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.transactions.submit_and_wait".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.transactions.submit_and_wait"),
-        description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll exact global pipeline status until state-resolved Applied; state-resolved Rejected and Expired fail. Status polling decodes only exact HTTP 200 payloads, treats only HTTP 404 as pending, and rejects every other HTTP status. The Applied result has exactly `status`, `hash`, `terminal_kind`, `attempts`, `elapsed_ms`, optional `submit`, and `final`.".to_owned(),
-        method: Method::POST,
-        path_template: iroha_torii_shared::uri::TRANSACTION.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.transactions.submit_and_wait".to_owned(),
+        "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll exact global pipeline status until state-resolved Applied; state-resolved Rejected and Expired fail. Status polling decodes only exact HTTP 200 payloads, treats only HTTP 404 as pending, and rejects every other HTTP status. The Applied result has exactly `status`, `hash`, `terminal_kind`, `attempts`, `elapsed_ms`, optional `submit`, and `final`.".to_owned(),
+        manual_tool_effect_from_name("iroha.transactions.submit_and_wait"),
+        Method::POST,
+        iroha_torii_shared::uri::TRANSACTION.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["body_base64"],
@@ -10455,7 +11150,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 /// Build the HTTP status + JSON-RPC error payload for oversized requests.
 pub(crate) fn oversized_payload_response(max_request_bytes: usize) -> (StatusCode, Value) {
@@ -10470,17 +11165,6 @@ pub(crate) fn oversized_payload_response(max_request_bytes: usize) -> (StatusCod
                 "max_request_bytes": max_request_bytes
             })),
         ),
-    )
-}
-/// Build the JSON-RPC payload for internal dispatch failures.
-pub(crate) fn internal_error_payload(message: &str) -> Value {
-    jsonrpc_error_response(
-        None,
-        MCP_TOOL_EXECUTION_ERROR,
-        message,
-        Some(norito::json!({
-            "kind": "dispatch_error"
-        })),
     )
 }
 pub(crate) fn invalid_json_payload(err: &json::Error) -> Value {
@@ -10552,10 +11236,28 @@ mod tests {
             iroha_runtime_upgrades_list_tool(),
             iroha_gov_protected_namespaces_list_tool(),
             iroha_gov_unlocks_stats_tool(),
-            iroha_gov_council_current_tool(),
             iroha_gov_citizens_count_tool(),
             iroha_nfts_chain_list_tool(),
             iroha_rwas_chain_list_tool(),
+        ];
+        let audited_names = [
+            "iroha.da.proof_policies",
+            "iroha.da.proof_policy_snapshot",
+            "iroha.gov.citizens.count",
+            "iroha.gov.council.current",
+            "iroha.gov.protected_namespaces.list",
+            "iroha.gov.unlocks.stats",
+            "iroha.health",
+            "iroha.nfts.chain.list",
+            "iroha.node.capabilities",
+            "iroha.node.query_projection_checkpoint",
+            "iroha.parameters.get",
+            "iroha.runtime.abi.active",
+            "iroha.runtime.abi.hash",
+            "iroha.runtime.metrics",
+            "iroha.runtime.upgrades.list",
+            "iroha.rwas.chain.list",
+            "iroha.vpn.profile",
         ];
         let expected_schema = norito::json!({
             "type": "object",
@@ -10569,14 +11271,25 @@ mod tests {
             }
         });
 
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), audited_names.len());
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<BTreeSet<_>>(),
+            audited_names.into_iter().collect::<BTreeSet<_>>()
+        );
         for tool in tools {
-            assert_eq!(tool.effect, manual_tool_effect_from_name(&tool.name));
-            assert_eq!(tool.method, Method::GET);
+            assert!(is_audited_manual_read_tool_name(&tool.name));
+            let (effect, method, path_template) = tool
+                .route_backing()
+                .expect("simple manual GET tool must be route-backed");
+            assert_eq!(effect, manual_tool_effect_from_name(&tool.name));
+            assert_eq!(method, &Method::GET);
             assert_eq!(tool.input_schema, expected_schema);
             assert!(!tool.name.is_empty());
             assert!(!tool.description.is_empty());
-            assert!(tool.path_template.starts_with('/'));
+            assert!(path_template.starts_with('/'));
         }
     }
 
@@ -10596,8 +11309,11 @@ mod tests {
 
         assert_eq!(tools.len(), 9);
         for tool in tools {
-            assert_eq!(tool.effect, manual_tool_effect_from_name(&tool.name));
-            assert_eq!(tool.method, Method::POST);
+            let (effect, method, _) = tool
+                .route_backing()
+                .expect("simple manual POST tool must be route-backed");
+            assert_eq!(effect, manual_tool_effect_from_name(&tool.name));
+            assert_eq!(method, &Method::POST);
             let schema = tool.input_schema.as_object().expect("input schema");
             assert_eq!(
                 schema.get("additionalProperties").and_then(Value::as_bool),
@@ -10623,6 +11339,23 @@ mod tests {
             assert!(properties.contains_key("headers"));
             assert!(properties.contains_key("accept"));
         }
+    }
+
+    #[test]
+    fn transaction_prepare_and_inspect_store_in_process_backings() {
+        let prepare = iroha_transactions_prepare_tool();
+        assert!(matches!(
+            prepare.backing(),
+            ToolBacking::InProcess(InProcessTool::TransactionsPrepare)
+        ));
+        assert!(prepare.route_backing().is_none());
+
+        let inspect = iroha_transactions_inspect_tool();
+        assert!(matches!(
+            inspect.backing(),
+            ToolBacking::InProcess(InProcessTool::TransactionsInspect)
+        ));
+        assert!(inspect.route_backing().is_none());
     }
 
     #[test]
@@ -10779,7 +11512,10 @@ mod tests {
                 .expect_err("untrusted or ambiguous checkpoint request must fail closed");
         }
         let tool = iroha_gov_parliament_timed_ovn_casting_proof_get_tool();
-        assert_eq!(tool.method, Method::POST);
+        let (_, method, _) = tool
+            .route_backing()
+            .expect("casting-proof tool must be route-backed");
+        assert_eq!(method, &Method::POST);
         assert!(
             tool.description
                 .contains("MUST independently pin the network id")

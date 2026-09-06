@@ -8,7 +8,7 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 
 /** Closed SCCP payload kinds admitted by the first-release bridge flow. */
-enum class SccpPayloadKindV1(val wireKey: String) {
+internal enum class SccpPayloadKindV1(val wireKey: String) {
     TRANSFER("transfer");
 
     companion object {
@@ -17,7 +17,7 @@ enum class SccpPayloadKindV1(val wireKey: String) {
 }
 
 /** Unified strict detached-signing response returned by both SCCP submit endpoints. */
-class SccpBridgeSubmitResponse(
+internal class SccpBridgeSubmitResponse(
     val submitted: Boolean,
     val payloadKind: SccpPayloadKindV1,
     val messageIdHex: String,
@@ -34,7 +34,7 @@ class SccpBridgeSubmitResponse(
 )
 
 /** Exact decoder for the unified two-phase SCCP signing response. */
-object SccpBridgeSubmitResponseParser {
+internal object SccpBridgeSubmitResponseParser {
     @JvmStatic fun parse(bytes: ByteArray): SccpBridgeSubmitResponse {
         val value = root(bytes)
         val unknown = value.keys.firstOrNull { it !in FIELDS }
@@ -70,6 +70,9 @@ object SccpBridgeSubmitResponseParser {
             "backend must be one closed SCCP verifier label"
         }
         val counterpartyDomain = integer(value, "counterparty_domain", 1, 5)
+        require(counterpartyDomain in setOf(1, 2, 4, 5)) {
+            "counterparty_domain is unsupported or retired"
+        }
         val counterpartyChain = text(value, "counterparty_chain")
         val counterparty = SccpNetworkV1.fromProfileKey(counterpartyChain)
         require(counterparty?.isExternal == true && counterparty.domainId == counterpartyDomain) {
@@ -174,14 +177,17 @@ object SccpBridgeSubmitResponseParser {
     private val CLOSED_BACKENDS = setOf(
         "evm-groth16-bn254-v1",
         "tron-groth16-bn254-v1",
+        "ton-groth16-bls12381-v1",
         "bridge/sccp/native/ethereum-beacon-v1",
         "bridge/sccp/native/bsc-parlia-v1",
         "bridge/sccp/native/tron-dpos-v1",
+        "bridge/sccp/native/ton-masterchain-v1",
     )
 
     private fun backendsForDomain(domain: Int): Set<String> = when (domain) {
         1 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1")
         2 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1")
+        4 -> setOf("ton-groth16-bls12381-v1", "bridge/sccp/native/ton-masterchain-v1")
         5 -> setOf("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1")
         else -> emptySet()
     }

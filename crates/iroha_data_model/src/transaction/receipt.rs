@@ -31,6 +31,8 @@ pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::transaction::receipt::TransactionSubmissionReceiptPayload")]
 pub struct TransactionSubmissionReceiptPayload {
     /// Canonical hash of the submitted transaction entrypoint.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -65,6 +67,8 @@ impl TransactionSubmissionReceiptPayload {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::transaction::receipt::TransactionSubmissionReceipt")]
 pub struct TransactionSubmissionReceipt {
     /// Canonical receipt payload.
     pub payload: TransactionSubmissionReceiptPayload,
@@ -355,3 +359,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_receipt_schema_tests;

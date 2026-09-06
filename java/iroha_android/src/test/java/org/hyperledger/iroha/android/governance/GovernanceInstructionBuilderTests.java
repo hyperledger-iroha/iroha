@@ -6,7 +6,6 @@ import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
-import org.hyperledger.iroha.android.model.instructions.PersistCouncilForEpochInstruction;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
 /** Regression tests covering the governance instruction builders. */
@@ -24,7 +23,6 @@ public final class GovernanceInstructionBuilderTests {
     castZkBallotRejectsInvalidHexHints();
     castPlainBallotRoundTrip();
     castPlainBallotRejectsNoncanonicalQuantities();
-    persistCouncilRoundTrip();
     System.out.println("[IrohaAndroid] GovernanceInstructionBuilderTests passed.");
   }
 
@@ -217,21 +215,6 @@ public final class GovernanceInstructionBuilderTests {
       }
       assert readbackFailed : "readback accepted noncanonical Quantity `" + amount + "`";
     }
-  }
-
-  private static void persistCouncilRoundTrip() {
-    final String memberA = sampleI105(0x21);
-    final String memberB = sampleI105(0x22);
-    final String alternate = sampleI105(0x23);
-    final PersistCouncilForEpochInstruction instruction =
-        PersistCouncilForEpochInstruction.builder()
-            .setEpoch(99)
-            .addMember(memberA)
-            .addMember(memberB)
-            .addAlternate(alternate)
-            .build();
-    assert instruction.members().equals(List.of(memberA, memberB)) : "members mismatch";
-    assert instruction.alternates().equals(List.of(alternate)) : "alternates mismatch";
   }
 
   private static String sampleI105(final int fill) {

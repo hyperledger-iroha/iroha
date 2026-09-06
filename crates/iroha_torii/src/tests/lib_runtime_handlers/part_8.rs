@@ -1042,6 +1042,7 @@ async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
             ToriiReadEndpointV1::AccountGet,
             ToriiFanoutRouteScopeV1::TargetAccount {
                 account_id: ALICE_ID.to_string(),
+                caller_account_id: Some(ALICE_ID.to_string()),
             },
             ToriiReadFanoutMergeV1::Account,
             vec![ALICE_ID.to_string()],
@@ -1077,6 +1078,7 @@ async fn incoming_torii_proxy_rejects_every_non_v1_schema_before_dispatch() {
             visited_peer_ids: Vec::new(),
             request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
                 ToriiReadEndpointV1::AccountGet,
+                ToriiFanoutRouteScopeV1::AllDataspaces,
                 route,
                 vec![ALICE_ID.to_string()],
                 None,
@@ -1117,6 +1119,7 @@ async fn incoming_torii_proxy_rejects_expired_and_excessive_authenticated_deadli
             visited_peer_ids: Vec::new(),
             request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
                 ToriiReadEndpointV1::AccountGet,
+                ToriiFanoutRouteScopeV1::AllDataspaces,
                 route,
                 vec![ALICE_ID.to_string()],
                 None,
@@ -1173,6 +1176,7 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         visited_peer_ids: vec![sender_peer_id],
         request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             vec![ALICE_ID.to_string()],
             None,
@@ -1247,6 +1251,7 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         visited_peer_ids: vec![untrusted_peer_id],
         request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             vec![ALICE_ID.to_string()],
             None,
@@ -1317,6 +1322,7 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
         )],
         request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             vec![ALICE_ID.to_string()],
             None,

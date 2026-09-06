@@ -93,9 +93,9 @@ fun TairaXorJettonMaster.sendSccpWalletMintAck(
 fun TairaXorJettonMaster.sendSccpMasterBurn(
     self,
     from: address,
+    lockSequence: uint64,
     queryId: uint64,
     messageId: uint256,
-    bridgeAddress: address,
     jettonAmount: coins,
     tail: SccpMasterBurnTail,
     config: SendParams = {},
@@ -105,9 +105,9 @@ fun TairaXorJettonMaster.sendSccpMasterBurn(
         value: config.value,
         dest: self.address,
         body: SccpMasterBurn {
+            lockSequence,
             queryId,
             messageId,
-            bridgeAddress,
             jettonAmount,
             tail: tail.toCell(),
         },
@@ -146,6 +146,27 @@ fun TairaXorJettonMaster.sendRequestWalletAddress(
         value: config.value,
         dest: self.address,
         body: RequestWalletAddress { queryId, ownerAddress, includeOwnerAddress },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonMaster.sendSccpDisableMinting(
+    self,
+    from: address,
+    signature0: cell?,
+    signature1: cell?,
+    tail: SccpDisableMintingTail,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpDisableMinting {
+            signature0,
+            signature1,
+            tail: tail.toCell(),
+        },
     });
     return net.send(from, genericMsg);
 }
@@ -190,4 +211,97 @@ fun TairaXorJettonMaster.getWalletAddress(self, ownerAddress: address): address 
 
 fun TairaXorJettonMaster.getSccpRouteConfigurationHash(self): uint256 {
     return net.runGetMethod(self.address, "get_sccp_route_configuration_hash");
+}
+
+fun TairaXorJettonMaster.getSccpBridgeConfigCellHash(self): uint256 {
+    return net.runGetMethod(self.address, "get_sccp_bridge_config_cell_hash");
+}
+
+fun TairaXorJettonMaster.getSccpDestinationBindingHash(self): uint256 {
+    return net.runGetMethod(self.address, "get_sccp_destination_binding_hash");
+}
+
+fun TairaXorJettonMaster.getSccpDeploymentCodeHashes(self): (uint256, uint256, uint256) {
+    return net.runGetMethod(self.address, "get_sccp_deployment_code_hashes");
+}
+
+fun TairaXorJettonMaster.getSccpBridgeAddress(self): address {
+    return net.runGetMethod(self.address, "get_sccp_bridge_address");
+}
+
+fun TairaXorJettonMaster.getSccpInitialStateHashes(self): (uint256, uint256) {
+    return net.runGetMethod(self.address, "get_sccp_initial_state_hashes");
+}
+
+fun TairaXorJettonMaster.getSccpMintBreakerGuardians(self): (
+    uint256,
+    uint256,
+    uint256,
+    uint256,
+    uint256,
+) {
+    return net.runGetMethod(self.address, "get_sccp_mint_breaker_guardians");
+}
+
+fun TairaXorJettonMaster.getSccpMaxWrappedSupply(self): coins {
+    return net.runGetMethod(self.address, "get_sccp_max_wrapped_supply");
+}
+
+fun TairaXorJettonMaster.getSccpMintingDisabled(self): bool {
+    return net.runGetMethod(self.address, "get_sccp_minting_disabled");
+}
+
+fun TairaXorJettonMaster.getSccpPendingMintCount(self): uint16 {
+    return net.runGetMethod(self.address, "get_sccp_pending_mint_count");
+}
+
+fun TairaXorJettonMaster.getSccpFundingParameters(self): (coins, coins, coins) {
+    return net.runGetMethod(self.address, "get_sccp_funding_parameters");
+}
+
+fun TairaXorJettonMaster.getSccpReplayState(self, operation: uint8, shard: uint8): (
+    uint256,
+    uint256,
+    uint64,
+    uint64,
+) {
+    return net.runGetMethod(self.address, "get_sccp_replay_state", [operation, shard]);
+}
+
+fun TairaXorJettonMaster.getSccpVerifyReplayMembership(
+    self,
+    operation: uint8,
+    replayId: uint256,
+    payloadSha256: uint256,
+    amountScale9: uint128,
+    principal: address,
+    auxiliaryIdentitySha256: uint256,
+    witness: SccpReplayWitnessV1,
+): bool {
+    return net.runGetMethod(
+        self.address,
+        "get_sccp_verify_replay_membership",
+        [
+            operation,
+            replayId,
+            payloadSha256,
+            amountScale9,
+            principal,
+            auxiliaryIdentitySha256,
+            witness.toCell(),
+        ],
+    );
+}
+
+fun TairaXorJettonMaster.getSccpVerifyReplayNonMembership(
+    self,
+    operation: uint8,
+    replayId: uint256,
+    witness: SccpReplayWitnessV1,
+): bool {
+    return net.runGetMethod(
+        self.address,
+        "get_sccp_verify_replay_non_membership",
+        [operation, replayId, witness.toCell()],
+    );
 }

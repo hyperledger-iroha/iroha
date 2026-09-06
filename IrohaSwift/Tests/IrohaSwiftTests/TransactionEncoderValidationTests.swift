@@ -189,26 +189,6 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
-    func testPersistCouncilRejectsInvalidMemberAccount() throws {
-        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 2, count: 32))
-        let authority = try canonicalAuthorityLiteral(from: signingKey)
-        let request = PersistCouncilRequest(networkId: TestNetworkIds.canonical,
-                                            authority: authority,
-                                            epoch: 1,
-                                            members: ["bob"],
-                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                            ttlMs: nil)
-
-        XCTAssertThrowsError(
-            try SwiftTransactionEncoder.encodePersistCouncil(request: request,
-                                                             signingKey: signingKey,
-                                                             creationTimeMs: 10)
-        ) { error in
-            XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAccountId(field: "members[0]", value: "bob"))
-        }
-    }
-
     func testRemoveMetadataRejectsMalformedAssetTarget() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 3, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)

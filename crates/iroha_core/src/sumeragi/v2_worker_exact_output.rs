@@ -186,8 +186,10 @@ struct PendingExactOutput {
     /// Kura-verified authority observed only after State committed this height.
     ///
     /// This never relaxes ordinary exact-output ownership. It only proves that
-    /// a ticketless GlobalV2 topology target is superseded by the exact durable
-    /// finality artifact when a committed roster transition removes that target.
+    /// a ticketless topology target is superseded when the existing applied-height
+    /// handoff contract can authenticate its typed claim from the exact durable
+    /// finality artifact, with read-only Kura evidence where the claim requires it.
+    /// This does not infer a topology delta.
     applied_height_finality: Option<wire::finality::V2FinalityArtifact>,
     /// Writer-flushed sidecar cursor receipts not yet applied by lane work.
     admitted_sidecar_chunks: VecDeque<CertifiedMergeSidecarChunkAdmission>,
@@ -640,7 +642,7 @@ impl PendingExactOutput {
                     .messages
                     .iter()
                     .zip(&fanout.message_hashes)
-                    .any(|(message, expected)| HashOf::new(message) != *expected)
+                    .any(|(message, expected)| message.exact_output_hash() != *expected)
             {
                 return Err(format!(
                     "Sumeragi v2 {operation} found altered exact-output payload"
@@ -1716,7 +1718,7 @@ impl PendingExactOutput {
             .zip(&fanout.message_hashes)
             .zip(&fanout.message_classes)
             .any(|((message, expected_hash), expected_class)| {
-                HashOf::new(message) != *expected_hash
+                message.exact_output_hash() != *expected_hash
                     || exact_output_class(message).as_ref() != Ok(expected_class)
             })
         {
@@ -2350,7 +2352,7 @@ impl PendingExactOutput {
                     .messages
                     .iter()
                     .zip(&fanout.message_hashes)
-                    .any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)
+                    .any(|(message, expected_hash)| message.exact_output_hash() != *expected_hash)
             {
                 return Err(
                     "Sumeragi v2 retained output changed before finality handoff".to_owned(),
@@ -2419,7 +2421,7 @@ impl PendingExactOutput {
                             "Sumeragi v2 exact-output target has no expected payload identity"
                                 .to_owned()
                         })?;
-                    if HashOf::new(&current.data) != *expected_hash {
+                    if current.data.exact_output_hash() != *expected_hash {
                         return Err(
                             "Sumeragi v2 returned output changed before finality handoff"
                                 .to_owned(),
@@ -2860,9 +2862,11 @@ impl PendingExactOutput {
         Ok(())
     }
     /// Drive exact output fairly until drained, blocked, or the deterministic budget is spent.
-    fn drive_with_budget_ack<Attempt>(
+    fn drive_with_budget_ack_and_durable_history<Attempt>(
         &mut self,
         attempt_budget: usize,
+        durable_history: Option<&Kura>,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
         mut attempt: Attempt,
     ) -> Result<ExactOutputDriveOutcome, String>
     where
@@ -3170,16 +3174,22 @@ impl PendingExactOutput {
                             .as_ref()
                             .is_some_and(|artifact| {
                                 self.fanouts.get(fanout_index).is_some_and(|fanout| {
-                                    matches!(
+                                    let claim_durable_history = if matches!(
                                         &fanout.rollover_claim,
-                                        ExactOutputRolloverClaim::GlobalV2(_)
-                                    ) && applied_height_reconstruction_covers(
+                                        ExactOutputRolloverClaim::DurableKuraReplicaAdvert { .. }
+                                            | ExactOutputRolloverClaim::QueuePlanAdmission { .. }
+                                    ) {
+                                        durable_history
+                                    } else {
+                                        None
+                                    };
+                                    applied_height_reconstruction_covers(
                                         &fanout.messages,
                                         &fanout.semantic_peers(),
                                         &fanout.rollover_claim,
                                         artifact,
                                         None,
-                                        None,
+                                        claim_durable_history,
                                     )
                                     .is_ok()
                                 })
@@ -3195,10 +3205,24 @@ impl PendingExactOutput {
                         // cumulative Close.
                         // Retaining this ticketless worker copy could consume
                         // the only shared non-roster slot forever. Exact durable
-                        // finality also supersedes a same-height GlobalV2
-                        // occurrence after a committed roster transition; its
-                        // typed creation scope prevents unrelated ticketless
-                        // topology traffic from taking that release path.
+                        // finality also supersedes a same-height occurrence once
+                        // State commits that height, whether actor rank was lost
+                        // to a topology change or waiter exhaustion. Reusing the
+                        // applied-height handoff verifier admits only claims it can
+                        // authenticate from finality alone or from the exact
+                        // read-only Kura source supplied by production services;
+                        // typed scope prevents unrelated ticketless topology
+                        // traffic from taking that release path.
+                        if let Some(ExactOutputRolloverClaim::DurableKuraReplicaAdvert {
+                            source_height,
+                            ..
+                        }) = self
+                            .fanouts
+                            .get(fanout_index)
+                            .map(|fanout| &fanout.rollover_claim)
+                        {
+                            released_kura_replica_advert_heights.insert(*source_height);
+                        }
                         drop(message);
                         self.fanouts
                             .get_mut(fanout_index)
@@ -3250,6 +3274,33 @@ impl PendingExactOutput {
         Ok(ExactOutputDriveOutcome::Drained)
     }
     #[cfg(test)]
+    fn drive_with_budget_ack<Attempt>(
+        &mut self,
+        attempt_budget: usize,
+        attempt: Attempt,
+    ) -> Result<ExactOutputDriveOutcome, String>
+    where
+        Attempt: FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+            &ExactTargetRoute,
+            u8,
+        ) -> Result<
+            ExactOutputAttemptOutcome,
+            NetworkActorAdmissionError<Post<NetworkMessage>>,
+        >,
+    {
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let outcome = self.drive_with_budget_ack_and_durable_history(
+            attempt_budget,
+            None,
+            &mut released_kura_replica_advert_heights,
+            attempt,
+        )?;
+        debug_assert!(released_kura_replica_advert_heights.is_empty());
+        Ok(outcome)
+    }
+    #[cfg(test)]
     fn drive_with_budget<Attempt>(
         &mut self,
         attempt_budget: usize,
@@ -3271,6 +3322,8 @@ impl PendingExactOutput {
     }
     fn drive_bounded_with_ack<Attempt>(
         &mut self,
+        durable_history: &Kura,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
         attempt: Attempt,
     ) -> Result<ExactOutputDriveOutcome, String>
     where
@@ -3284,7 +3337,12 @@ impl PendingExactOutput {
             NetworkActorAdmissionError<Post<NetworkMessage>>,
         >,
     {
-        self.drive_with_budget_ack(self.drive_attempt_budget, attempt)
+        self.drive_with_budget_ack_and_durable_history(
+            self.drive_attempt_budget,
+            Some(durable_history),
+            released_kura_replica_advert_heights,
+            attempt,
+        )
     }
     #[cfg(test)]
     fn drive_with<Attempt>(&mut self, attempt: Attempt) -> Result<Option<usize>, String>
@@ -3369,72 +3427,20 @@ fn durable_history_source_covers(
         }
         (
             ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
-                responder: claimed_responder,
-                source_round,
-                source_subject,
-                ..
+                network_id, proof, ..
             },
-            BlockMessage::V2(message),
+            _,
         ) => {
-            let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = &message.payload
-            else {
-                return Err("durable body response changed payload kind".to_owned());
-            };
-            if source_round.height > maximum_source_height {
+            if proof.source_round().height > maximum_source_height {
                 return Err("durable body response belongs to a future height".to_owned());
             }
-            let source = kura
-                .v2_finality_artifact(source_round.height)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "durable body response lost its Kura finality source".to_owned())?;
-            if &source.height_context.network_id != source_network_id
-                || source.context_id() != source_round.context_id
-                || source.subject != *source_subject
+            if network_id != source_network_id
+                || proof.network_id() != *source_network_id
+                || !proof.covers_message_in_network(source_network_id, message)
             {
                 return Err(
-                    "durable body response differs from its Kura finality source".to_owned(),
+                    "durable body response differs from its prepared Kura source".to_owned(),
                 );
-            }
-            response
-                .validate(&source.height_context)
-                .map_err(|error| error.to_string())?;
-            if &response.responder != claimed_responder {
-                return Err(
-                    "durable body response is not bound to the serving network identity".to_owned(),
-                );
-            }
-            Signature::try_from_bytes(&response.signature)
-                .map_err(|error| error.to_string())?
-                .verify(
-                    response.responder.public_key(),
-                    &response.signature_preimage(),
-                )
-                .map_err(|error| error.to_string())?;
-            let block_height = usize::try_from(source_round.height)
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .ok_or_else(|| "durable body source height is not representable".to_owned())?;
-            let block = kura
-                .get_block(block_height)
-                .ok_or_else(|| "durable body response lost its canonical Kura block".to_owned())?;
-            let proposal = block.canonical_resultless_proposal();
-            let canonical_wire = proposal.encode_wire().map_err(|error| error.to_string())?;
-            if block.hash() != source_subject.block_hash
-                || canonical_wire != response.body
-                || Hash::new(&canonical_wire) != source_subject.payload_hash
-            {
-                return Err("durable body response differs from its canonical Kura body".to_owned());
-            }
-            let (manifest, _) = encode_payload(
-                &source.height_context,
-                *source_round,
-                *source_subject,
-                &canonical_wire,
-            )
-            .map_err(|error| error.to_string())?
-            .into_parts();
-            if manifest != response.manifest {
-                return Err("durable body response manifest is not Kura-reconstructible".to_owned());
             }
             Ok(())
         }

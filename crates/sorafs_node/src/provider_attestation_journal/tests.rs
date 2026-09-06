@@ -524,7 +524,7 @@ impl FakeApprovalSigner {
     fn new(fixture: &Fixture) -> Self {
         let owner = fixture.request.payload().binding.completed_by.clone();
         Self {
-            handle: "hsm://sorafs/musubi/provider-attestation/primary".to_owned(),
+            handle: "provider://sorafs/musubi/provider-attestation/primary".to_owned(),
             controller_policy_digest: musubi_provider_attestation_controller_policy_digest_v1(
                 &owner,
             )

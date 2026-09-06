@@ -61,16 +61,16 @@ public extension ToriiClient {
 
     /// Emit historical account transfer summaries and then keep streaming live updates.
     func accountTransferHistoryPublisher(accountId: String,
-                                         page: UInt64? = nil,
-                                         perPage: UInt64? = nil,
+                                         cursor: String? = nil,
+                                         limit: UInt32? = nil,
                                          assetDefinitionId: String? = nil,
                                          lastEventId: String? = nil,
                                          maxItems: UInt64? = nil,
                                          dedupeLimit: Int = 10_000,
                                          scheduler: DispatchQueue? = .main) -> AnyPublisher<ToriiExplorerTransferSummary, ToriiClientError> {
         makeStreamPublisher({ self.streamAccountTransferHistory(accountId: accountId,
-                                                               page: page,
-                                                               perPage: perPage,
+                                                               cursor: cursor,
+                                                               limit: limit,
                                                                assetDefinitionId: assetDefinitionId,
                                                                lastEventId: lastEventId,
                                                                maxItems: maxItems,

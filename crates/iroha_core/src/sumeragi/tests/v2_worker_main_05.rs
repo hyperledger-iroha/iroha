@@ -43,27 +43,20 @@ fn zero_cleanup_deadline_polls_an_already_buffered_completion() {
     ));
 }
 #[test]
-fn finalized_cleanup_without_context_worker_retains_all_local_files() {
-    let (mut service, keys) = fixture();
+fn finalized_cleanup_without_context_worker_reports_unavailability() {
+    let (service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    let chunk_root = directory.path().join("chunk-root-is-a-file");
-    std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
-    service.chunk_root = chunk_root.clone();
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
     assert_eq!(outcome.warnings().len(), 1);
     assert!(outcome.warnings()[0].reason().contains("unavailable"));
-    assert!(chunk_root.is_file());
 }
 #[test]
 fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     drop(command_rx);
     let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
@@ -84,15 +77,10 @@ fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
     assert!(outcome.warnings()[0].reason().contains("disconnected"));
 }
 #[test]
-fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
+fn prelatched_finalized_cleanup_does_not_mutate_the_io_queue() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    let chunk_root = directory.path().join("retained-chunks");
-    std::fs::create_dir_all(&chunk_root).expect("seed retained chunk root");
-    std::fs::write(chunk_root.join("chunk"), b"retained").expect("seed retained chunk");
-    service.chunk_root = chunk_root.clone();
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
     service.io = Some(V2IoHandle {
@@ -106,7 +94,6 @@ fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
     assert!(command_rx.try_recv().is_err());
-    assert!(chunk_root.join("chunk").is_file());
     assert_eq!(outcome.warnings().len(), 1);
     assert!(outcome.warnings()[0].reason().contains("restart"));
 }
@@ -115,8 +102,6 @@ fn finalized_cleanup_does_not_wait_for_post_retire_completion() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     let (_completion_tx, completion_rx) = mpsc::sync_channel(2);
     let join = thread::spawn(move || {
@@ -138,8 +123,6 @@ fn finalized_cleanup_releases_rollover_after_retire_enqueue() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     let (completion_tx, completion_rx) = mpsc::sync_channel(1);
     let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
@@ -177,8 +160,6 @@ fn finalized_cleanup_full_queue_timeout_allows_normal_worker_disconnect() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let output_guard = Arc::clone(&service.output_guard);
     let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
     let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
@@ -246,7 +227,6 @@ fn cleanup_job_fixture(
     service: &ProductionV2Services,
     receipt: &KuraV2CommitReceipt,
     body_root: &Path,
-    chunk_root: PathBuf,
 ) -> PostFinalityCleanupJob {
     let bodies = V2BodyStore::open(body_root, service.context.clone())
         .expect("open cleanup body fixture")
@@ -255,7 +235,6 @@ fn cleanup_job_fixture(
     PostFinalityCleanupJob {
         identity: CleanupWorkerIdentity::from_receipt(receipt),
         bodies,
-        chunk_root,
     }
 }
 #[test]
@@ -267,41 +246,27 @@ fn cleanup_submission_is_bounded_and_never_waits_for_capacity() {
     let (sender, _receiver) = mpsc::sync_channel(1);
     let submission = V2CleanupSubmission { sender };
     submission
-        .try_submit(cleanup_job_fixture(
-            &service,
-            &receipt,
-            first_root.path(),
-            first_root.path().join("chunks"),
-        ))
+        .try_submit(cleanup_job_fixture(&service, &receipt, first_root.path()))
         .expect("first cleanup fills the bounded queue");
     let started = Instant::now();
     let error = submission
-        .try_submit(cleanup_job_fixture(
-            &service,
-            &receipt,
-            second_root.path(),
-            second_root.path().join("chunks"),
-        ))
+        .try_submit(cleanup_job_fixture(&service, &receipt, second_root.path()))
         .expect_err("second cleanup cannot exceed queue capacity");
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(error.contains("queue is full"));
 }
 #[test]
-fn cleanup_worker_job_removes_bodies_and_chunks_off_the_consensus_path() {
+fn cleanup_worker_job_removes_bodies_off_the_consensus_path() {
     let (service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     let root = TempDir::new().expect("cleanup execution root");
-    let chunk_root = root.path().join("chunks");
-    std::fs::create_dir_all(&chunk_root).expect("create cleanup chunks");
-    std::fs::write(chunk_root.join("chunk"), b"chunk").expect("seed cleanup chunk");
-    let job = cleanup_job_fixture(&service, &receipt, root.path(), chunk_root.clone());
+    let job = cleanup_job_fixture(&service, &receipt, root.path());
     let context_directory = root
         .path()
         .join(hex::encode(service.context.id().0.as_ref()));
     assert!(context_directory.is_dir());
     execute_post_finality_cleanup(job);
     assert!(!context_directory.exists());
-    assert!(!chunk_root.exists());
 }
 fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {
     CertifiedMergeLedgerReference {
@@ -809,6 +774,8 @@ fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
             phase: super::super::FairV2IngressLeaderWirePhase::Chunk,
             semantic_origin: sender.clone(),
             canonical_wire_hash: Hash::new(envelope.encode()),
+            vote_statement_hash: None,
+            timeout_prepare_view: None,
         },
         slot: super::super::FairV2IngressLeaderWireSlot {
             semantic_origin: sender.clone(),
@@ -1047,8 +1014,10 @@ fn productive_chunk_at_view(
     )
     .payload()
     .to_vec();
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("fixture data chunk"),
         sender: proposer,
@@ -1057,8 +1026,9 @@ fn productive_chunk_at_view(
     chunk.signature = Signature::new(
         keys[proposer_index].private_key(),
         &chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -1145,7 +1115,6 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
     let (mut service, keys) = fixture_with_block_payload();
     service.max_orphan_chunks = 1;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let gate_directory = TempDir::new().expect("temporary productive-chunk ingress gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
     let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
@@ -1535,7 +1504,6 @@ fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
     let (mut service, keys) = fixture_with_block_payload();
     service.max_orphan_chunks = 16;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let gate_directory = TempDir::new().expect("temporary reconstructed-chunk gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
     let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
@@ -1601,7 +1569,6 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     allow_fixture_block_payload(&mut service.context);
     service.max_orphan_chunks = 4;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let gate_directory = TempDir::new().expect("temporary productive-orphan gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -1616,8 +1583,10 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     );
     let (manifest, chunks) = payload.into_parts();
     assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut completing_chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("one fixture chunk"),
         sender: 0,
@@ -1626,8 +1595,9 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     completing_chunk.signature = Signature::new(
         keys[0].private_key(),
         &completing_chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("canonical chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("canonical chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -1757,12 +1727,13 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     allow_fixture_block_payload(&mut service.context);
     service.max_orphan_chunks = 4;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let (manifest, chunks) = payload.into_parts();
     assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut payload_chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("one fixture chunk"),
         sender: 0,
@@ -1771,8 +1742,9 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     payload_chunk.signature = Signature::new(
         keys[0].private_key(),
         &payload_chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("canonical chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("canonical chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -2163,6 +2135,19 @@ fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
             .expect("first registration"),
         expected_manifest
     );
+    let first_frames = service
+        .outbound_chunks
+        .get(&HashOf::new(&expected_manifest))
+        .expect("first registration retains chunks")
+        .messages
+        .iter()
+        .map(|message| {
+            let NetworkMessage::SumeragiBlock(envelope) = message else {
+                panic!("retained payload chunk changed network lane")
+            };
+            Arc::clone(envelope)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         service
             .register_outbound_payload(service.active_tag, encoded)
@@ -2177,10 +2162,31 @@ fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
         messages.messages.len(),
         expected_manifest.chunk_hashes.len()
     );
-    assert!(messages.messages.iter().all(|message| matches!(
-        &message.payload,
-        wire::ConsensusMessageV2Payload::PayloadChunk(chunk) if !chunk.signature.is_empty()
-    )));
+    assert!(
+        messages
+            .messages
+            .iter()
+            .zip(first_frames)
+            .all(|(message, first)| matches!(
+                message,
+                NetworkMessage::SumeragiBlock(envelope) if Arc::ptr_eq(envelope, &first)
+            ))
+    );
+    assert!(messages.messages.iter().all(|message| {
+        let NetworkMessage::SumeragiBlock(envelope) = message else {
+            return false;
+        };
+        envelope.as_ref().encoded_len().is_some()
+            && matches!(
+                envelope.as_message(),
+                BlockMessage::V2(message)
+                    if matches!(
+                        &message.payload,
+                        wire::ConsensusMessageV2Payload::PayloadChunk(chunk)
+                            if !chunk.signature.is_empty()
+                    )
+            )
+    }));
 }
 #[test]
 fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral() {
@@ -2406,7 +2412,7 @@ fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
         proposal_round: protected_round,
         phase: wire::GlobalPhase::Commit,
         subject: protected_subject,
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"live protected Commit parent state"),
             Hash::new(b"live protected Commit post state"),
             Hash::new(b"live protected Commit writes"),
@@ -2434,7 +2440,7 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
     let _command_rx = attach_locked_candidate_io(&mut service, 4);
     let decided_subject = locked_candidate_subject(b"live leader-wire Decision cut");
     service
-        .finish_runtime_step_reconciliation(Some(decided_subject))
+        .finish_runtime_step_reconciliation(Some(decided_subject), Some(service.leader_wire_recovery_authority.with_durable_decision()))
         .expect("publish Decision and close live leader-wire admission");
     for view in [service.active_tag.view(), service.active_tag.view() + 1] {
         let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
@@ -2478,9 +2484,17 @@ fn outbound_payload_retention_is_constant_across_many_view_changes() {
             .outbound_chunks
             .values()
             .flat_map(|retained| retained.messages.iter())
-            .map(|message| match &message.payload {
-                wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => chunk.bytes.len(),
-                _ => 0,
+            .map(|message| {
+                let NetworkMessage::SumeragiBlock(envelope) = message else {
+                    return 0;
+                };
+                let BlockMessage::V2(message) = envelope.as_message() else {
+                    return 0;
+                };
+                match &message.payload {
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => chunk.bytes.len(),
+                    _ => 0,
+                }
             })
             .sum::<usize>();
         max_manifests = max_manifests.max(service.outbound_chunks.len());
@@ -2570,13 +2584,14 @@ fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         height: service.context.height,
         view: 0,
     };
-    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"worker prepared parent state"),
-        Hash::new(b"worker prepared post state"),
-        Hash::new(b"worker prepared ordinary writes"),
-        1,
-        Hash::new(b"worker prepared executed block wire"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"worker prepared parent state"),
+            Hash::new(b"worker prepared post state"),
+            Hash::new(b"worker prepared ordinary writes"),
+            1,
+            Hash::new(b"worker prepared executed block wire"),
+        );
     let vote = |phase| wire::Vote {
         round,
         proposal_round: round,

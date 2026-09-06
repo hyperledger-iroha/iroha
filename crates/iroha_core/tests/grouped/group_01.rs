@@ -40,11 +40,7 @@ mod fraud_monitoring;
 mod gov_auto_close_zk_requires_tally;
 #[path = "../gov_bond_escrow.rs"]
 mod gov_bond_escrow;
-#[path = "../gov_citizen_service.rs"]
-mod gov_citizen_service;
 #[path = "../gov_citizenship.rs"]
 mod gov_citizenship;
-#[path = "../gov_draw_replace.rs"]
-mod gov_draw_replace;
 #[path = "../gov_finalize_real_vk.rs"]
 mod gov_finalize_real_vk;

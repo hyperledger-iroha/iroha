@@ -6,7 +6,7 @@
 //! When the Rust data model changes, this binary produces different
 //! bytes, causing the Kotlin parity tests to fail until the
 //! corresponding encoder is updated.
-use iroha_crypto::{Hash, PublicKey, default_bfv_programmed_hidden_program, sha256};
+use iroha_crypto::{Hash, PublicKey, default_bfv_programmed_hidden_program};
 use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
 use iroha_data_model::account::{
     AccountId, NewAccount, OpaqueAccountId, address::ChainDiscriminantGuard,
@@ -17,22 +17,20 @@ use iroha_data_model::identifier::{
     IdentifierPolicyId, IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
 };
 use iroha_data_model::isi::identifier::ClaimIdentifier;
-use iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation;
 use iroha_data_model::isi::register::{Register, RegisterBox};
+use iroha_data_model::isi::smart_contract_code::{
+    AcceptContractOwnership, ActivateContractInstance, CancelContractOwnershipOffer,
+    DeactivateContractInstance, OfferContractOwnership, SetContractParliamentDelegation,
+};
 use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
-use iroha_data_model::offline::{
-    KagemushaDevicePublicKeyV2, OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
-    OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME,
-    OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM, OfflineAndroidKeyMintChallenge,
-    OfflineDeviceAttestationRegistration,
-};
 use iroha_data_model::prelude::Quantity;
 use iroha_data_model::ram_lfe::{
     RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
     RamLfeProgramId, RamLfeReceiptAttestation,
 };
+use iroha_data_model::smart_contract::{ContractAddress, ContractLifecycleOwnerV1};
 use std::env;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
@@ -46,7 +44,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!(
-            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|hidden-ram-fhe-program|offline-device-attestation>",
+            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program>",
             args[0]
         );
         std::process::exit(1);
@@ -56,93 +54,88 @@ fn main() {
         "transfer-asset" => emit_transfer_asset(),
         "transfer-asset-scoped" => emit_transfer_asset_scoped(),
         "claim-identifier" => emit_claim_identifier(),
+        "contract-lifecycle" => emit_contract_lifecycle(),
         "hidden-ram-fhe-program" => emit_hidden_ram_fhe_program(),
-        "offline-device-attestation" => emit_offline_device_attestation(),
         other => {
             eprintln!("Unknown fixture: {other}");
             std::process::exit(1);
         }
     }
 }
-fn emit_offline_device_attestation() {
-    // Synthetic unit-test bytes only. This fixture proves canonical wire parity and is not
-    // physical-device attestation or release evidence.
-    const P256_GENERATOR: &str = concat!(
-        "04",
-        "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
-        "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
-    );
+fn emit_contract_lifecycle() {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
+    let contract_address: ContractAddress =
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+            .parse()
+            .expect("canonical contract address");
     let account_id = parity_account_id();
-    let assertion_public_key = hex::decode(P256_GENERATOR).expect("P-256 generator hex");
-    let signing_certificate_sha256 = sha256(b"abi20-unit-test-signing-certificate").to_vec();
-    let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&assertion_public_key)
-        .expect("canonical P-256 device authority");
-    let recent_block_hash = Hash::new(b"abi20-unit-test-block");
-    let challenge = OfflineAndroidKeyMintChallenge {
-        version: 1,
-        device_id: "abi20-android-unit-test-device".to_owned(),
-        account_id: account_id.clone(),
-        asset_definition_id: None,
-        ios_team_id: None,
-        ios_bundle_id: None,
-        ios_environment: None,
-        android_package_name: Some("org.hyperledger.iroha.abi20.fixture".to_owned()),
-        android_signing_certificate_sha256: Some(signing_certificate_sha256.clone()),
-        public_key,
-        assertion_scheme: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME.to_owned(),
-        assertion_key_algorithm: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
-            .to_owned(),
-        assertion_usage_count_limit: Some(1),
-        one_use: true,
-        recent_block_height: 42,
-        recent_block_hash,
-        expires_at_ms: 2_000_000_000_000,
+    let code_hash = Hash::new(b"contract-lifecycle-activation-parity");
+    let deactivate = DeactivateContractInstance {
+        contract_address: contract_address.clone(),
+        expected_revision: 5,
+        reason: Some("planned rotation".to_owned()),
     };
-    let challenge_hash = challenge
-        .canonical_challenge_hash()
-        .expect("encode Android KeyMint challenge");
-    let attestation_report = b"abi20-unit-test-not-physical-attestation-evidence".to_vec();
-    let attestation_report_hash = Hash::new(&attestation_report);
-    let mut evidence = b"offline-device-attestation-evidence-v1".to_vec();
-    evidence.extend_from_slice(attestation_report_hash.as_ref());
-    let evidence_hash = Hash::new(&evidence);
-    let registration = OfflineDeviceAttestationRegistration {
-        version: 1,
-        platform: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM.to_owned(),
-        key_id: hex::encode(sha256(&assertion_public_key)),
-        device_id: challenge.device_id,
-        account_id: account_id.clone(),
-        asset_definition_id: None,
-        ios_team_id: None,
-        ios_bundle_id: None,
-        ios_environment: None,
-        android_package_name: challenge.android_package_name,
-        android_signing_certificate_sha256: Some(signing_certificate_sha256),
-        public_key,
-        assertion_scheme: challenge.assertion_scheme,
-        assertion_key_algorithm: challenge.assertion_key_algorithm,
-        assertion_public_key,
-        assertion_usage_count_limit: Some(1),
-        one_use: true,
-        challenge_hash,
-        attestation_report_hash,
-        attestation_report,
-        evidence_hash,
-        evidence,
-        recent_block_height: 42,
-        recent_block_hash,
-        expires_at_ms: 2_000_000_000_000,
+    let activate = ActivateContractInstance {
+        contract_address: contract_address.clone(),
+        expected_revision: 6,
+        code_hash,
     };
-    let registration_archive = norito::to_bytes(&registration).expect("encode registration");
-    let registration_id = Hash::new(&registration_archive);
-    let instruction_archive =
-        norito::to_bytes(&RegisterOfflineDeviceAttestation::new(registration))
-            .expect("encode registration instruction");
-    println!("{}", hex::encode(registration_archive));
-    println!("{}", hex::encode(instruction_archive));
-    println!("{}", hex::encode(challenge_hash.as_ref()));
+    let set_delegation = SetContractParliamentDelegation {
+        contract_address: contract_address.clone(),
+        expected_revision: 7,
+        delegated: true,
+    };
+    let offer_account = OfferContractOwnership {
+        contract_address: contract_address.clone(),
+        expected_revision: 8,
+        new_owner: ContractLifecycleOwnerV1::Account(account_id.clone()),
+    };
+    let offer_parliament = OfferContractOwnership {
+        contract_address: contract_address.clone(),
+        expected_revision: 9,
+        new_owner: ContractLifecycleOwnerV1::Parliament,
+    };
+    let accept = AcceptContractOwnership {
+        contract_address: contract_address.clone(),
+        expected_revision: 10,
+    };
+    let cancel = CancelContractOwnershipOffer {
+        contract_address: contract_address.clone(),
+        expected_revision: 11,
+    };
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&deactivate).expect("encode deactivation"))
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&activate).expect("encode activation"))
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&set_delegation).expect("encode delegation"))
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&offer_account).expect("encode account ownership offer"))
+    );
+    println!(
+        "{}",
+        hex::encode(
+            norito::to_bytes(&offer_parliament).expect("encode Parliament ownership offer")
+        )
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&accept).expect("encode ownership acceptance"))
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&cancel).expect("encode ownership-offer cancellation"))
+    );
+    println!("{contract_address}");
     println!("{account_id}");
-    println!("{}", hex::encode(registration_id.as_ref()));
+    println!("{code_hash}");
 }
 fn emit_hidden_ram_fhe_program() {
     let program = default_bfv_programmed_hidden_program();

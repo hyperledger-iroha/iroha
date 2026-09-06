@@ -72,7 +72,8 @@ async fn sccp_submit_ingress_rejects_missing_token_without_polling_body() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["expected-token".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["expected-token"]));
     }
     let router = sccp_ingress_test_router(app);
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
@@ -96,7 +97,7 @@ async fn sccp_submit_ingress_fails_closed_when_required_tokens_are_unconfigured(
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         state.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_queue_timeout = Duration::ZERO;
@@ -127,7 +128,8 @@ async fn sccp_submit_ingress_rejects_duplicate_tokens_before_rate_body_and_admis
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["expected-token".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["expected-token"]));
         state.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_queue_timeout = Duration::ZERO;
@@ -284,7 +286,7 @@ async fn sccp_submit_wrong_methods_bypass_proof_admission_and_body_polling() {
         &headers,
         Some(remote_ip),
         policy.rate_limit_hint,
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let router = sccp_ingress_test_router(Arc::clone(&app));
     for method in [axum::http::Method::GET, axum::http::Method::PUT] {
@@ -324,7 +326,7 @@ async fn sccp_submit_ingress_rejects_exhausted_rate_limit_without_polling_body()
             &headers,
             Some(remote_ip),
             policy.rate_limit_hint,
-            app.api_token_enforced(),
+            app.authenticated_api_token_principal(&headers),
         )
     });
     assert_eq!(
@@ -755,9 +757,7 @@ async fn openapi_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-123".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-123"]));
     }
     let headers = HeaderMap::new();
     let missing = super::handler_openapi(
@@ -1096,6 +1096,11 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
             validator_two_peer_id.clone(),
         ),
     ] {
+        let deactivation_height = matches!(
+            &status,
+            iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Exited
+        )
+        .then_some(2);
         world.public_lane_validators_mut_for_testing().insert(
             (
                 iroha_data_model::nexus::LaneId::SINGLE,
@@ -1110,8 +1115,8 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                 self_stake: Quantity::from(1_u64),
                 metadata: iroha_data_model::metadata::Metadata::default(),
                 status,
-                activation_epoch: Some(0),
-                activation_height: Some(0),
+                activation_height: 1,
+                deactivation_height,
                 last_reward_epoch: None,
             },
         );
@@ -1305,7 +1310,8 @@ async fn proof_rate_limit_sets_retry_after_header() {
             std::time::Duration::from_secs(1),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(3),
-            iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES.get(),
+            usize::try_from(iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES.get())
+                .expect("proof body limit fits target address space"),
             std::time::Duration::from_millis(
                 iroha_config::parameters::defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
             ),
@@ -1373,9 +1379,7 @@ async fn profiling_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-456".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-456"]));
     }
     let params: routing::profiling::ProfileParams =
         norito::json::from_value(norito::json!({})).expect("defaults");
@@ -1436,17 +1440,17 @@ async fn telemetry_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    // Status tail
-    let resp = super::handler_status_tail(
-        State(app.clone()),
-        headers.clone(),
-        None,
-        axum::extract::Path("peers".to_string()),
-        axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
-    )
-    .await
-    .expect("ok")
-    .into_response();
+    // Exact status probes
+    let remote = axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
+    let resp = super::handler_status_blocks(State(app.clone()), headers.clone(), remote)
+        .await
+        .expect("blocks status")
+        .into_response();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let resp = super::handler_status_peers(State(app.clone()), headers.clone(), remote)
+        .await
+        .expect("peers status")
+        .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     // Metrics
     let text = super::handler_metrics(
@@ -1647,12 +1651,10 @@ async fn app_api_get_by_id_not_found_returns_404() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
 }
-#[cfg(feature = "app_api")]
 struct RuntimeApiRouterFixture {
-    router: axum::Router,
+    router: crate::TestApiRouterRuntime,
     _kiso_child: iroha_futures::supervisor::Child,
 }
-#[cfg(feature = "app_api")]
 impl RuntimeApiRouterFixture {
     fn standard(chain_id: &'static str) -> Self {
         let kura = Kura::blank_kura_for_testing();
@@ -1697,12 +1699,54 @@ impl RuntimeApiRouterFixture {
             OnlinePeersProvider::new(peers_rx),
             None,
             runtime_deps,
-        );
+        )
+        .expect("valid Torii runtime API fixture");
         Self {
-            router: torii.api_router_for_tests(),
+            router: torii
+                .api_router_for_tests()
+                .expect("test Torii router initializes"),
             _kiso_child: child,
         }
     }
+
+    async fn shutdown(self) {
+        self.router.shutdown().await;
+    }
+}
+#[cfg(not(feature = "app_api"))]
+#[tokio::test]
+async fn public_sorafs_gateway_routes_are_mounted_without_app_api() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
+
+    let fixture = RuntimeApiRouterFixture::standard("sorafs-public-gateway-no-app-api-test");
+    for path in [
+        "/v1/sorafs/cid/example",
+        "/.well-known/sorafs/manifest",
+        "/sorafs/cid/example",
+        "/sorafs/cid/example/index.html",
+    ] {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .body(Body::empty())
+            .expect("public SoraFS gateway mount probe");
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("public SoraFS gateway mount response");
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "GET-only public gateway path must remain mounted without app_api: {path}"
+        );
+    }
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1739,6 +1783,7 @@ async fn retired_server_contract_deploy_routes_are_absent() {
             .expect("response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
     }
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1786,6 +1831,7 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
     let response = fixture
         .router
+        .router()
         .oneshot(request)
         .await
         .expect("retired-route response");
@@ -1800,6 +1846,7 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         0,
         "an HTTP request must not create pre-commit pin-registry state"
     );
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1824,7 +1871,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
         key_pair: KeyPair,
     }
     impl RouterGovernanceDagSigner {
-        const HANDLE: &'static str = "pkcs11:governance-dag:retired-appeal-route-primary";
+        const HANDLE: &'static str = "provider:governance-dag:retired-appeal-route-primary";
         const PEER_ID: &'static [u8] = b"12D3KooWRetiredAppealRoutePublisher";
         fn new() -> Self {
             Self {
@@ -2039,7 +2086,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
         state,
         runtime_deps,
     );
-    let router = fixture.router;
+    let router = fixture.router.router();
     let files_before = snapshot_files(&storage_root);
     let pending_before = sorafs_node.pending_governance_publication_count();
     for path in [
@@ -2072,6 +2119,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
         files_before,
         "retired publication routes must not mutate the Governance DAG, publish index, or durable outbox"
     );
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2083,7 +2131,7 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
     };
     use tower::ServiceExt as _;
     let fixture = RuntimeApiRouterFixture::standard("contracts-aliases-router-test");
-    let router = fixture.router;
+    let router = fixture.router.router();
     for path in ["/v1/contracts/aliases", "/v1/contracts/call/simulate"] {
         let mut request = Request::builder()
             .method(Method::POST)
@@ -2119,6 +2167,7 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         .await
         .expect("public query response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2139,8 +2188,14 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = fixture.router.oneshot(request).await.expect("response");
+    let response = fixture
+        .router
+        .router()
+        .oneshot(request)
+        .await
+        .expect("response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2152,7 +2207,7 @@ async fn retired_sorafs_mutation_routes_are_absent() {
     };
     use tower::ServiceExt as _;
     let fixture = RuntimeApiRouterFixture::standard("sorafs-retired-por-router-test");
-    let router = fixture.router;
+    let router = fixture.router.router();
     for path in [
         "/v1/sorafs/capacity/dispute",
         "/v1/sorafs/capacity/schedule",
@@ -2214,6 +2269,7 @@ async fn retired_sorafs_mutation_routes_are_absent() {
             "live SoraFS route was removed accidentally: {method} {path}"
         );
     }
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2232,7 +2288,12 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
             [127, 0, 0, 1],
             0,
         ))));
-    let response = fixture.router.oneshot(request).await.expect("response");
+    let response = fixture
+        .router
+        .router()
+        .oneshot(request)
+        .await
+        .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     let body = torii_body_bytes(response, "body").await;
     let text = String::from_utf8(body.to_vec()).expect("utf8");
@@ -2240,6 +2301,7 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
         text.contains("\"items\""),
         "expected SCCP recent-messages JSON payload, got: {text}"
     );
+    fixture.shutdown().await;
 }
 #[test]
 fn iso_error_mapping_returns_expected_variants() {
@@ -2296,36 +2358,6 @@ fn push_into_queue_error_sets_reject_code_header() {
             .and_then(|v| v.to_str().ok()),
         Some("PRTRY:ALREADY_COMMITTED")
     );
-}
-#[test]
-fn push_into_queue_confidential_policy_rejection_maps_to_forbidden() {
-    use nonzero_ext::nonzero;
-    let err = super::Error::PushIntoQueue {
-        source: Box::new(queue::Error::ConfidentialPolicyAdmissionRejected {
-            reason: TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                "shield not permitted by policy".to_owned(),
-            )),
-            detail: "shield not permitted by policy".to_owned(),
-        }),
-        backpressure: queue::BackpressureState::Healthy {
-            queued: 0,
-            capacity: nonzero!(1_usize),
-        },
-    };
-    let response = err.into_response();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        torii_response_header(&response, "x-iroha-reject-code"),
-        Some("PRTRY:CONFIDENTIAL_POLICY_REJECTED")
-    );
-    let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
-        .expect("response body")
-        .to_bytes();
-    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("queue error envelope");
-    assert_eq!(payload.code, "queue_confidential_policy_rejected");
-    let details = payload.details.expect("queue error details");
-    assert_eq!(details.retry_after_seconds, None);
-    assert_eq!(details.queue.expect("queue snapshot").state, "healthy");
 }
 #[test]
 fn push_into_queue_unresolved_route_maps_to_bad_request() {

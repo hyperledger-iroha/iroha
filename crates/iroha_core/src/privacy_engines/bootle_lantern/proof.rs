@@ -1742,6 +1742,8 @@ fn bootle_lantern_presentation_envelope_v1(
     proof: Vec<u8>,
 ) -> PrivacyProofEnvelopeV1 {
     PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,

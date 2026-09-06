@@ -1854,7 +1854,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
         "30e1e0f718530767610746544385b9ff5a86c4d10ab2988deb6841bc67ac3d0e"
     ),
     "admit_authenticated_payload": (
-        "75847fc4c1eab251ef73c3c05ca08b1a32b1b103585b3c0b5ff0049456ccb00e"
+        "2478a7a99ae8c94e6039a7c820a418692dc3d6c135017a80665d4cbd307fc570"
     ),
     "prune_ingress_records": (
         "7aabe892539e8914e9fe3486e439efe6e04e8b625183897f8c9d5d128bc0e73b"

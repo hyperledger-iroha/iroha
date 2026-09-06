@@ -2,7 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import java.util.Objects;
 
-/** Canonical request signing material for Torii app endpoints. */
+/** Canonical request signing material for authenticated Torii endpoints. */
 public final class ToriiCanonicalRequestAuth {
 
   private final String accountId;

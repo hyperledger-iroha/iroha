@@ -49,6 +49,7 @@ type Resolver = dyn Fn(&str) -> Result<Vec<IpAddr>, ResolveFailure> + Send + Syn
 enum ResolveFailure {
     Deadline,
     Lookup,
+    ProviderPanic,
     TooManyAddresses,
 }
 struct ResolveJob {
@@ -167,6 +168,9 @@ impl ResolverPool {
             Ok(Err(ResolveFailure::Lookup)) => Err(GatewayComplianceError::InvalidFeed(
                 "DNS resolution failed".into(),
             )),
+            Ok(Err(ResolveFailure::ProviderPanic)) => Err(GatewayComplianceError::InvalidFeed(
+                "DNS resolver provider panicked".into(),
+            )),
             Ok(Err(ResolveFailure::Deadline)) => Err(GatewayComplianceError::FetchTimeout),
             Err(mpsc::RecvTimeoutError::Timeout) => Err(GatewayComplianceError::FetchTimeout),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(GatewayComplianceError::InvalidFeed(
@@ -189,7 +193,8 @@ fn resolver_worker(receiver: Arc<Mutex<Receiver<ResolveJob>>>, resolver: Arc<Res
         let result = if Instant::now() >= job.deadline {
             Err(ResolveFailure::Deadline)
         } else {
-            resolver(&job.hostname)
+            iroha_core::panic_hook::catch_unwind_suppressed(|| resolver(&job.hostname))
+                .unwrap_or(Err(ResolveFailure::ProviderPanic))
         };
         let _ = job.reply.try_send(result);
     }
@@ -1014,5 +1019,34 @@ mod tests {
             2,
             "expired queued jobs must be discarded before system resolution"
         );
+    }
+    #[test]
+    fn resolver_provider_panic_is_suppressed_and_worker_recovers() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let resolver_calls = Arc::clone(&calls);
+        let resolver: Arc<Resolver> = Arc::new(move |_| {
+            let call_index = resolver_calls.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                iroha_core::panic_hook::is_suppressed(),
+                "resolver provider panic must not trigger the process panic hook"
+            );
+            if call_index == 0 {
+                panic!("injected resolver provider panic");
+            }
+            Ok(vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))])
+        });
+        let pool = ResolverPool::new_with(1, 1, resolver).expect("bounded resolver");
+
+        assert!(matches!(
+            pool.resolve("feed.example", Duration::from_secs(1)),
+            Err(GatewayComplianceError::InvalidFeed(message))
+                if message == "DNS resolver provider panicked"
+        ));
+        assert_eq!(
+            pool.resolve("feed.example", Duration::from_secs(1))
+                .expect("resolver worker must survive the provider panic"),
+            vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 }

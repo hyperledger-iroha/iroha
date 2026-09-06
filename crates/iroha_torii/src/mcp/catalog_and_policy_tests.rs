@@ -1,9 +1,11 @@
 // MCP catalog, policy, authentication, and schema regressions.
 use super::*;
+use crate::McpDispatchRouterOwner;
 use crate::tests_runtime_handlers::{
     app_auth_test_guard, checked_torii_test_ed25519_keypair, mk_app_state_for_tests,
     mk_app_state_for_tests_with_world, signed_app_headers, world_with_account,
 };
+use base64::Engine as _;
 use iroha_config::parameters::actual::ToriiMcpProfile;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
@@ -39,6 +41,29 @@ fn canonical_test_witness_header() -> String {
     .expect("bounded canonical witness header")
 }
 const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
+fn test_faucet_runtime_config() -> iroha_config::parameters::actual::ToriiFaucet {
+    iroha_config::parameters::actual::ToriiFaucet {
+        authority: AccountAddress::parse_encoded(TEST_ACCOUNT_I105, None)
+            .expect("canonical faucet authority")
+            .to_account_id()
+            .expect("faucet authority account id"),
+        private_key_file: "/runtime-only/mcp-test-faucet.key".into(),
+        signer: checked_torii_test_ed25519_keypair(0x7a, "derive MCP faucet test signer"),
+        asset_definition_id: TEST_ASSET_ID.to_owned(),
+        amount: 1_u32.into(),
+        pow_difficulty_bits: std::num::NonZeroU8::new(1).expect("nonzero"),
+        pow_scrypt_log_n: 1,
+        pow_scrypt_r: 1,
+        pow_scrypt_p: 1,
+        pow_max_anchor_age_blocks: std::num::NonZeroU64::new(1).expect("nonzero"),
+        pow_adaptive_lookback_blocks: 1,
+        pow_adaptive_claims_per_extra_bit: 1,
+        pow_adaptive_max_extra_bits: 1,
+        pow_beacon_seed_enabled: false,
+    }
+}
+
 #[test]
 fn catalog_dispatch_matching_handles_exact_parameters_and_wildcards() {
     assert!(route_template_matches(
@@ -110,6 +135,11 @@ fn target_policy_requires_inner_canonical_proof_only_for_canonical_route() {
         ExtraHeaderPolicy::CanonicalAccountAuthentication
     );
     assert_eq!(
+        target_extra_header_policy(&Method::GET, "/v1/explorer/transactions")
+            .expect("cataloged dataspace route"),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
+    );
+    assert_eq!(
         target_extra_header_policy(&Method::GET, "/health").expect("cataloged public route"),
         ExtraHeaderPolicy::Default
     );
@@ -123,11 +153,12 @@ fn every_catalog_canonical_auth_tool_publishes_a_strict_required_envelope() {
     let tools = build_tool_specs(&cfg);
     let mut covered = 0_usize;
     for tool in &tools {
-        let Some(descriptor) = catalog_descriptor_for_method_path(
-            CATALOG_PROJECTION_GROUPS,
-            &tool.method,
-            tool.path_template.as_str(),
-        ) else {
+        let Some((_, method, path_template)) = tool.route_backing() else {
+            continue;
+        };
+        let Some(descriptor) =
+            catalog_descriptor_for_method_path(CATALOG_PROJECTION_GROUPS, method, path_template)
+        else {
             continue;
         };
         if descriptor.authentication() == AuthenticationPolicy::CanonicalAccountSignature {
@@ -135,7 +166,7 @@ fn every_catalog_canonical_auth_tool_publishes_a_strict_required_envelope() {
             validate_canonical_auth_tool_schema(tool).unwrap_or_else(|error| {
                 panic!(
                     "{} {} failed schema validation: {error}",
-                    tool.method, tool.path_template
+                    method, path_template
                 )
             });
         }
@@ -146,6 +177,41 @@ fn every_catalog_canonical_auth_tool_publishes_a_strict_required_envelope() {
     );
 }
 #[test]
+fn every_catalog_optional_canonical_auth_tool_publishes_a_strict_optional_envelope() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    let mut covered = 0_usize;
+    for tool in &tools {
+        let Some((_, method, path_template)) = tool.route_backing() else {
+            continue;
+        };
+        let Some(descriptor) =
+            catalog_descriptor_for_method_path(CATALOG_PROJECTION_GROUPS, method, path_template)
+        else {
+            continue;
+        };
+        if descriptor.authentication() == AuthenticationPolicy::OptionalCanonicalAccountSignature {
+            covered += 1;
+            validate_optional_canonical_auth_tool_schema(tool).unwrap_or_else(|error| {
+                panic!(
+                    "{} {} failed optional schema validation: {error}",
+                    method, path_template
+                )
+            });
+            let schema = tool.input_schema.as_object().expect("root object schema");
+            assert!(
+                !schema_requires(schema, "headers"),
+                "{} must preserve anonymous dispatch",
+                tool.name
+            );
+        }
+    }
+    assert!(
+        covered > 0,
+        "optional canonical-auth projection is non-empty"
+    );
+}
+#[test]
 fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
@@ -153,11 +219,12 @@ fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
     let tools = build_tool_specs(&cfg);
     let mut covered = 0_usize;
     for tool in &tools {
-        let Some(descriptor) = catalog_descriptor_for_method_path(
-            CATALOG_PROJECTION_GROUPS,
-            &tool.method,
-            tool.path_template.as_str(),
-        ) else {
+        let Some((_, method, path_template)) = tool.route_backing() else {
+            continue;
+        };
+        let Some(descriptor) =
+            catalog_descriptor_for_method_path(CATALOG_PROJECTION_GROUPS, method, path_template)
+        else {
             continue;
         };
         if descriptor.authentication() == AuthenticationPolicy::OperatorSignature {
@@ -165,12 +232,48 @@ fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
             validate_operator_auth_tool_schema(tool).unwrap_or_else(|error| {
                 panic!(
                     "{} {} failed operator schema validation: {error}",
-                    tool.method, tool.path_template
+                    method, path_template
                 )
             });
         }
     }
     assert!(covered > 0, "operator-auth catalog projection is non-empty");
+}
+#[test]
+fn every_catalog_tool_descriptor_publishes_exact_route_auth_metadata() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    let mut covered = 0_usize;
+    for tool in &tools {
+        let Some((_, method, path_template)) = tool.route_backing() else {
+            continue;
+        };
+        let Some(descriptor) =
+            catalog_descriptor_for_method_path(CATALOG_PROJECTION_GROUPS, method, path_template)
+        else {
+            continue;
+        };
+        covered += 1;
+        let published = tool.descriptor();
+        assert_eq!(
+            published["_meta"]["iroha/routeAuth"],
+            norito::json!({
+                "schemaVersion": (descriptor.auth_metadata_schema_version()),
+                "stableRouteId": (descriptor.stable_route_id()),
+                "authentication": (descriptor.authentication().as_str()),
+                "admission": (descriptor.admission().as_str())
+            }),
+            "{} {} route-auth metadata",
+            method,
+            path_template
+        );
+    }
+    assert!(
+        covered > 0,
+        "catalog-backed MCP tool projection is non-empty"
+    );
 }
 #[test]
 fn canonical_target_headers_require_one_complete_unambiguous_proof() {
@@ -216,6 +319,47 @@ fn canonical_target_headers_require_one_complete_unambiguous_proof() {
         )
         .expect_err("ambiguous or incomplete target proof must fail closed");
     }
+}
+
+#[test]
+fn optional_canonical_target_headers_allow_absence_but_reject_partial_proofs() {
+    let mut outer = HeaderMap::new();
+    outer.insert(
+        HEADER_X_IROHA_ACCOUNT,
+        HeaderValue::from_static("outer-account"),
+    );
+    apply_extra_headers_with_policy(
+        &mut outer,
+        None,
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect("anonymous dataspace dispatch");
+    assert!(
+        !outer.contains_key(HEADER_X_IROHA_ACCOUNT),
+        "outer canonical identity must not bleed into the target request"
+    );
+    apply_extra_headers_with_policy(
+        &mut HeaderMap::new(),
+        Some(&norito::json!({})),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect_err("a supplied but empty authentication envelope must fail closed");
+    apply_extra_headers_with_policy(
+        &mut HeaderMap::new(),
+        Some(&norito::json!({ "X-Iroha-Account": "operator@sora" })),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect_err("partial optional authentication must fail closed");
+
+    let witness = canonical_test_witness_header();
+    let mut authenticated = HeaderMap::new();
+    apply_extra_headers_with_policy(
+        &mut authenticated,
+        Some(&norito::json!({ "X-Iroha-Witness": witness })),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect("complete optional witness");
+    assert!(authenticated.contains_key(HEADER_X_IROHA_WITNESS));
 }
 
 #[test]
@@ -538,24 +682,24 @@ fn submission_receipt_signer_fixture_uses_checked_ed25519_key_generation() {
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
 fn sample_tool(name: &str, method: Method, effect: ToolEffect) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
+    ToolSpec::route(
+        name.to_owned(),
+        "sample".to_owned(),
         effect,
-        description: "sample".to_owned(),
         method,
-        path_template: "/v1/sample".to_owned(),
-        input_schema: norito::json!({ "type": "object" }),
-    }
+        "/v1/sample".to_owned(),
+        norito::json!({ "type": "object" }),
+    )
 }
 fn sample_tool_at(name: &str, method: Method, path_template: &str, effect: ToolEffect) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
+    ToolSpec::route(
+        name.to_owned(),
+        "sample".to_owned(),
         effect,
-        description: "sample".to_owned(),
         method,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({ "type": "object" }),
-    }
+        path_template.to_owned(),
+        norito::json!({ "type": "object" }),
+    )
 }
 fn schema_value_at<'a>(schema: &'a Value, path: &[&str]) -> &'a Value {
     path.iter().fold(schema, |value, key| {
@@ -592,7 +736,7 @@ fn remote_addr_probe_payload(
     payload.insert("header".into(), header_remote);
     Value::Object(payload)
 }
-fn install_remote_addr_probe_router(app: &mut SharedAppState) {
+fn install_remote_addr_probe_router(app: &mut SharedAppState) -> McpDispatchRouterOwner {
     let allow = vec![crate::limits::parse_cidr("127.0.0.0/8").expect("loopback cidr")];
     let router: axum::Router = axum::Router::new().route(
         iroha_torii_shared::uri::HEALTH,
@@ -618,17 +762,12 @@ fn install_remote_addr_probe_router(app: &mut SharedAppState) {
             }
         })),
     );
-    let app = std::sync::Arc::get_mut(app).expect("unique app state");
-    let mut guard = app
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = Some(router);
+    app.mcp_dispatch_router.install(router)
 }
 fn install_request_counting_router(
     app: &mut SharedAppState,
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-) {
+) -> McpDispatchRouterOwner {
     let router: axum::Router =
         axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
             let calls = std::sync::Arc::clone(&calls);
@@ -642,22 +781,17 @@ fn install_request_counting_router(
                 )
             }
         }));
-    let app = std::sync::Arc::get_mut(app).expect("unique app state");
-    let mut guard = app
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = Some(router);
+    app.mcp_dispatch_router.install(router)
 }
-fn install_api_token_probe_router(app: &mut SharedAppState, configured_tokens: &[&str]) {
+fn install_api_token_probe_router(
+    app: &mut SharedAppState,
+    configured_tokens: &[&str],
+) -> McpDispatchRouterOwner {
     let state = std::sync::Arc::get_mut(app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = std::sync::Arc::new(
-        configured_tokens
-            .iter()
-            .map(|token| (*token).to_owned())
-            .collect(),
-    );
+    state.api_token_digests = std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(
+        configured_tokens.iter().copied(),
+    ));
     let router = axum::Router::new()
         .route(
             iroha_torii_shared::uri::HEALTH,
@@ -667,11 +801,7 @@ fn install_api_token_probe_router(app: &mut SharedAppState, configured_tokens: &
             std::sync::Arc::clone(app),
             crate::enforce_api_token,
         ));
-    let mut guard = app
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = Some(router);
+    app.mcp_dispatch_router.install(router)
 }
 #[tokio::test]
 async fn tool_dispatch_fails_fast_when_inflight_capacity_is_exhausted() {
@@ -773,20 +903,25 @@ async fn long_poll_quota_preserves_capacity_for_bounded_tools() {
 async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits() {
     let started = std::sync::Arc::new(tokio::sync::Notify::new());
     let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let block_first_status_poll = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let router_started = std::sync::Arc::clone(&started);
     let router_release = std::sync::Arc::clone(&release);
+    let router_block_first_status_poll = std::sync::Arc::clone(&block_first_status_poll);
     let router =
         axum::Router::new().fallback_service(tower::service_fn(move |request: Request<Body>| {
             let started = std::sync::Arc::clone(&router_started);
             let release = std::sync::Arc::clone(&router_release);
+            let block_first_status_poll = std::sync::Arc::clone(&router_block_first_status_poll);
             async move {
                 if request
                     .uri()
                     .path()
                     .contains("/pipeline/transactions/status")
                 {
-                    started.notify_one();
-                    release.notified().await;
+                    if block_first_status_poll.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        started.notify_one();
+                        release.notified().await;
+                    }
                     Ok::<_, std::convert::Infallible>(
                         Response::builder()
                             .status(StatusCode::NOT_FOUND)
@@ -804,7 +939,7 @@ async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits
             }
         }));
     let mut app = mk_app_state_for_tests();
-    let (global, long_poll) = {
+    let (global, long_poll, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
         state.mcp.profile = ToriiMcpProfile::Writer;
@@ -812,13 +947,11 @@ async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits
             std::sync::Arc::new(vec![iroha_health_tool(), iroha_transactions_wait_tool()]);
         state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
         state.mcp_long_poll_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+        let owner = state.mcp_dispatch_router.install(router);
         (
             std::sync::Arc::clone(&state.mcp_dispatch_inflight),
             std::sync::Arc::clone(&state.mcp_long_poll_inflight),
+            owner,
         )
     };
     let wait_arguments = norito::json!({
@@ -887,6 +1020,125 @@ async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits
 }
 
 #[tokio::test]
+async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let route_release = std::sync::Arc::clone(&release);
+    let router =
+        axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
+            let started_tx = started_tx.clone();
+            let release = std::sync::Arc::clone(&route_release);
+            async move {
+                let _ = started_tx.send(());
+                release.notified().await;
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Body::empty())
+                        .expect("pending status response"),
+                )
+            }
+        }));
+    let mut app = mk_app_state_for_tests();
+    let (global, long_poll, _mcp_dispatch_router_owner) = {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_token_digests =
+            std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(["client"]));
+        state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
+        state.mcp_tools = std::sync::Arc::new(vec![iroha_transactions_wait_tool()]);
+        state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        state.mcp_long_poll_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let owner = state.mcp_dispatch_router.install(router);
+        (
+            std::sync::Arc::clone(&state.mcp_dispatch_inflight),
+            std::sync::Arc::clone(&state.mcp_long_poll_inflight),
+            owner,
+        )
+    };
+    let wait_arguments = norito::json!({
+        "query": { "hash": ("ab".repeat(32)) },
+        "timeout_ms": 1,
+        "poll_interval_ms": 100
+    });
+    let cancellation_nonce = cancellation_test_nonce(0x41);
+    let wait_request = norito::json!({
+        "jsonrpc": (JSONRPC_VERSION),
+        "id": "cancel-long-poll",
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.wait",
+            "arguments": (wait_arguments.clone()),
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce.as_str()) }
+        }
+    });
+    let wait_app = std::sync::Arc::clone(&app);
+    let wait_headers = cancellation_test_headers("client");
+    let first_wait =
+        tokio::spawn(
+            async move { handle_jsonrpc_request(wait_app, &wait_headers, wait_request).await },
+        );
+    tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("first long poll reaches nested status route")
+        .expect("nested status router remains live");
+    assert_eq!(global.available_permits(), 1);
+    assert_eq!(long_poll.available_permits(), 0);
+
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client"),
+        &cancel_notification(Value::String("cancel-long-poll".to_owned())),
+    );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), first_wait)
+            .await
+            .expect("cancelled long poll completes")
+            .expect("long-poll task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 2);
+    assert_eq!(long_poll.available_permits(), 1);
+
+    let replacement_request = norito::json!({
+        "jsonrpc": (JSONRPC_VERSION),
+        "id": "replacement-long-poll",
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.wait",
+            "arguments": (wait_arguments),
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce.as_str()) }
+        }
+    });
+    let second_app = std::sync::Arc::clone(&app);
+    let second_headers = cancellation_test_headers("client");
+    let second_wait = tokio::spawn(async move {
+        handle_jsonrpc_request(second_app, &second_headers, replacement_request).await
+    });
+    tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("replacement long poll reaches nested status route")
+        .expect("nested status router remains live");
+    assert_eq!(global.available_permits(), 1);
+    assert_eq!(long_poll.available_permits(), 0);
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client"),
+        &cancel_notification(Value::String("replacement-long-poll".to_owned())),
+    );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), second_wait)
+            .await
+            .expect("replacement long poll cancellation completes")
+            .expect("replacement long-poll task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 2);
+    assert_eq!(long_poll.available_permits(), 1);
+    drop(release);
+}
+
+#[tokio::test]
 async fn faucet_tools_dispatch_only_exact_json_bodies_to_exact_routes() {
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let route_seen = std::sync::Arc::clone(&seen);
@@ -919,11 +1171,7 @@ async fn faucet_tools_dispatch_only_exact_json_bodies_to_exact_routes() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    *std::sync::Arc::get_mut(&mut app)
-        .expect("unique app state")
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+    let _mcp_dispatch_router_owner = app.mcp_dispatch_router.install(router);
     let prepare_body = norito::json!({
         "schema": "iroha.accounts.faucet.prepare.v1",
         "binding": {},
@@ -992,15 +1240,13 @@ async fn faucet_tools_reject_noncanonical_argument_shapes_before_dispatch() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    {
+    let _mcp_dispatch_router_owner = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.mcp.profile = ToriiMcpProfile::Writer;
+        state.account_faucet = Some(test_faucet_runtime_config());
         state.mcp_tools = std::sync::Arc::new(build_tool_specs(&state.mcp));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
-    }
+        state.mcp_dispatch_router.install(router)
+    };
     for (name, invalid_arguments) in [
         (
             "iroha.accounts.faucet.prepare",
@@ -1066,20 +1312,40 @@ fn cancellation_test_headers(token: &'static str) -> HeaderMap {
     headers
 }
 
+fn cancellation_test_nonce(fill: u8) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([fill; 32])
+}
+
 fn cancellable_health_request(id: Value) -> Value {
+    cancellable_health_request_with_nonce(id, cancellation_test_nonce(0x41).as_str())
+}
+
+fn cancellable_health_request_with_nonce(id: Value, cancellation_nonce: &str) -> Value {
     norito::json!({
         "jsonrpc": (JSONRPC_VERSION),
         "id": (id),
         "method": "tools/call",
-        "params": { "name": "iroha.health", "arguments": {} }
+        "params": {
+            "name": "iroha.health",
+            "arguments": {},
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce) }
+        }
     })
 }
 
 fn cancel_notification(id: Value) -> Value {
+    cancel_notification_with_nonce(id, cancellation_test_nonce(0x41).as_str())
+}
+
+fn cancel_notification_with_nonce(id: Value, cancellation_nonce: &str) -> Value {
     norito::json!({
         "jsonrpc": (JSONRPC_VERSION),
         "method": "notifications/cancelled",
-        "params": { "requestId": (id), "reason": "test cancellation" }
+        "params": {
+            "requestId": (id),
+            "reason": "test cancellation",
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce) }
+        }
     })
 }
 
@@ -1104,6 +1370,78 @@ fn cancellation_keys_preserve_lossless_json_id_representation() {
     );
     assert!(ExactJsonRpcId::from_value(&oversized_a).is_none());
     assert!(ExactJsonRpcId::from_value(&oversized_b).is_none());
+
+    let valid_nonce = cancellation_test_nonce(0x5a);
+    let params = norito::json!({
+        "_meta": { "iroha/cancellationNonce": (valid_nonce.clone()) }
+    });
+    assert_eq!(
+        cancellation_nonce_from_params(params.as_object().expect("params")),
+        Ok(Some([0x5a; 32]))
+    );
+    for invalid in [
+        norito::json!({ "_meta": "not-an-object" }),
+        norito::json!({ "_meta": { "iroha/cancellationNonce": 7 } }),
+        norito::json!({ "_meta": { "iroha/cancellationNonce": "short" } }),
+        norito::json!({
+            "_meta": { "iroha/cancellationNonce": (format!("{valid_nonce}=")) }
+        }),
+    ] {
+        assert_eq!(
+            cancellation_nonce_from_params(invalid.as_object().expect("params")),
+            Err(())
+        );
+    }
+}
+
+#[tokio::test]
+async fn malformed_authenticated_cancellation_nonce_is_rejected() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_token_digests =
+            std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(["client"]));
+    }
+    let request = cancellable_health_request_with_nonce(
+        Value::String("invalid-nonce".to_owned()),
+        "not-canonical",
+    );
+    let outcome = handle_jsonrpc_request(app, &cancellation_test_headers("client"), request).await;
+    let JsonRpcRequestOutcome::Response(response) = outcome else {
+        panic!("malformed cancellation nonce must return a JSON-RPC error");
+    };
+    assert_eq!(
+        response.pointer("/error/code").and_then(Value::as_i64),
+        Some(JSONRPC_INVALID_PARAMS)
+    );
+    assert_eq!(
+        response
+            .pointer("/error/data/error_code")
+            .and_then(Value::as_str),
+        Some("invalid_cancellation_nonce")
+    );
+}
+
+#[test]
+fn authenticated_call_without_nonce_remains_non_cancellable() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_token_digests =
+            std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(["client"]));
+    }
+    let params = norito::json!({ "name": "iroha.health", "arguments": {} });
+    assert!(matches!(
+        register_authenticated_inflight_request(
+            &app,
+            &cancellation_test_headers("client"),
+            Some(&Value::String("ordinary".to_owned())),
+            params.as_object().expect("params"),
+        ),
+        Ok(None)
+    ));
 }
 
 #[tokio::test]
@@ -1132,20 +1470,18 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    {
+    let _mcp_dispatch_router_owner = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.api_token_digests =
+            std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(["client"]));
         state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
-    }
-    let request: Value = json::from_str(
-        r#"{"jsonrpc":"2.0","id":18446744073709551616,"method":"tools/call","params":{"name":"iroha.health","arguments":{}}}"#,
-    )
-    .expect("oversized-id request");
+        state.mcp_dispatch_router.install(router)
+    };
+    let cancellation_nonce = cancellation_test_nonce(0x41);
+    let request_json = r#"{"jsonrpc":"2.0","id":18446744073709551616,"method":"tools/call","params":{"name":"iroha.health","arguments":{},"_meta":{"iroha/cancellationNonce":"__NONCE__"}}}"#
+        .replace("__NONCE__", &cancellation_nonce);
+    let request: Value = json::from_str(&request_json).expect("oversized-id request");
     let headers = cancellation_test_headers("client");
     let JsonRpcRequestOutcome::Response(response) =
         handle_jsonrpc_request(std::sync::Arc::clone(&app), &headers, request).await
@@ -1176,10 +1512,10 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
         .await
         .expect("largest supported numeric id reaches dispatch");
 
-    let notification: Value = json::from_str(
-        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":18446744073709551617}}"#,
-    )
-    .expect("oversized cancellation notification");
+    let notification_json = r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":18446744073709551617,"_meta":{"iroha/cancellationNonce":"__NONCE__"}}}"#
+        .replace("__NONCE__", &cancellation_nonce);
+    let notification: Value =
+        json::from_str(&notification_json).expect("oversized cancellation notification");
     handle_cancelled_notification(&app, &cancellation_test_headers("client"), &notification);
     tokio::task::yield_now().await;
     assert!(
@@ -1202,7 +1538,7 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
 }
 
 #[tokio::test]
-async fn cancellation_is_bound_to_authenticated_client_exact_id_and_generation() {
+async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     let started_a = std::sync::Arc::new(tokio::sync::Notify::new());
     let started_b = std::sync::Arc::new(tokio::sync::Notify::new());
     let release_a = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1244,22 +1580,17 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_generation()
             }
         }));
     let mut app = mk_app_state_for_tests();
-    let global = {
+    let (global, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(
-            ["client-a".to_owned(), "client-b".to_owned()]
-                .into_iter()
-                .collect(),
-        );
+        state.api_token_digests = std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens([
+            "client-a", "client-b",
+        ]));
         state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(4).expect("nonzero");
         state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
         state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
-        std::sync::Arc::clone(&state.mcp_dispatch_inflight)
+        let owner = state.mcp_dispatch_router.install(router);
+        (std::sync::Arc::clone(&state.mcp_dispatch_inflight), owner)
     };
     let shared_id = Value::String("shared".to_owned());
     let app_a = std::sync::Arc::clone(&app);
@@ -1282,7 +1613,10 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_generation()
     let duplicate = handle_jsonrpc_request(
         std::sync::Arc::clone(&app),
         &cancellation_test_headers("client-a"),
-        cancellable_health_request(shared_id.clone()),
+        cancellable_health_request_with_nonce(
+            shared_id.clone(),
+            cancellation_test_nonce(0x42).as_str(),
+        ),
     )
     .await;
     let JsonRpcRequestOutcome::Response(duplicate) = duplicate else {
@@ -1327,29 +1661,206 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_generation()
     ));
     assert_eq!(global.available_permits(), 4);
 
+    let replacement_nonce = cancellation_test_nonce(0x43);
     let reused_app = std::sync::Arc::clone(&app);
     let reused_headers = cancellation_test_headers("client-a");
-    let reused_request = cancellable_health_request(shared_id.clone());
+    let reused_request =
+        cancellable_health_request_with_nonce(shared_id.clone(), replacement_nonce.as_str());
     let reused = tokio::spawn(async move {
         handle_jsonrpc_request(reused_app, &reused_headers, reused_request).await
     });
     tokio::time::timeout(Duration::from_secs(2), started_a.notified())
         .await
-        .expect("reused id starts after generation cleanup");
+        .expect("reused id with a new nonce starts after cleanup");
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client-a"),
-        &cancel_notification(shared_id),
+        &cancel_notification(shared_id.clone()),
+    );
+    {
+        let key = McpInflightKey {
+            client_fingerprint: authenticated_cancellation_client_fingerprint(
+                &app,
+                &cancellation_test_headers("client-a"),
+            )
+            .expect("authenticated client fingerprint"),
+            request_id: ExactJsonRpcId::from_value(&shared_id).expect("exact shared id"),
+        };
+        let entries = app
+            .mcp_inflight_requests
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = entries.get(&key).expect("replacement remains registered");
+        assert_eq!(entry.cancellation_nonce, [0x43; 32]);
+        assert!(
+            !*entry.cancellation.borrow(),
+            "a delayed cancellation for the retired nonce must not affect ID reuse"
+        );
+    }
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client-a"),
+        &cancel_notification_with_nonce(shared_id, replacement_nonce.as_str()),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), reused)
             .await
-            .expect("reused id cancellation completes")
-            .expect("reused id task joins"),
+            .expect("replacement nonce cancellation completes")
+            .expect("replacement request task joins"),
         JsonRpcRequestOutcome::Cancelled
     ));
     assert_eq!(global.available_permits(), 4);
     drop((release_a, release_b));
+}
+
+#[tokio::test]
+async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop() {
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let route_release = std::sync::Arc::clone(&release);
+    let router =
+        axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
+            let started_tx = started_tx.clone();
+            let release = std::sync::Arc::clone(&route_release);
+            async move {
+                let _ = started_tx.send(());
+                release.notified().await;
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::NO_CONTENT)
+                        .body(Body::empty())
+                        .expect("response"),
+                )
+            }
+        }));
+    let mut app = mk_app_state_for_tests();
+    let (global, _mcp_dispatch_router_owner) = {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_token_digests =
+            std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(["client"]));
+        state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
+        state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
+        state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        let owner = state.mcp_dispatch_router.install(router);
+        (std::sync::Arc::clone(&state.mcp_dispatch_inflight), owner)
+    };
+    let first_app = std::sync::Arc::clone(&app);
+    let first_headers = cancellation_test_headers("client");
+    let first = tokio::spawn(async move {
+        handle_jsonrpc_request(
+            first_app,
+            &first_headers,
+            cancellable_health_request(Value::String("one".to_owned())),
+        )
+        .await
+    });
+    let second_app = std::sync::Arc::clone(&app);
+    let second_headers = cancellation_test_headers("client");
+    let second = tokio::spawn(async move {
+        handle_jsonrpc_request(
+            second_app,
+            &second_headers,
+            cancellable_health_request(Value::String("two".to_owned())),
+        )
+        .await
+    });
+    for label in ["first", "second"] {
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{label} request reaches nested route"))
+            .expect("nested router remains live");
+    }
+    assert_eq!(global.available_permits(), 0);
+
+    let overflow_id = Value::String("overflow".to_owned());
+    let overflow = handle_jsonrpc_request(
+        std::sync::Arc::clone(&app),
+        &cancellation_test_headers("client"),
+        cancellable_health_request(overflow_id.clone()),
+    )
+    .await;
+    let JsonRpcRequestOutcome::Response(overflow) = overflow else {
+        panic!("capacity overflow must return a JSON-RPC error");
+    };
+    assert_eq!(overflow.get("id"), Some(&overflow_id));
+    assert_eq!(
+        overflow.pointer("/error/code").and_then(Value::as_i64),
+        Some(MCP_DISPATCH_CAPACITY_EXHAUSTED)
+    );
+    assert_eq!(
+        overflow
+            .pointer("/error/data/error_code")
+            .and_then(Value::as_str),
+        Some("cancellation_registry_capacity_exhausted")
+    );
+    assert_eq!(
+        overflow
+            .pointer("/error/data/max_inflight_dispatches")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        overflow
+            .pointer("/error/data/retryable")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client"),
+        &cancel_notification(Value::String("one".to_owned())),
+    );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), first)
+            .await
+            .expect("first cancellation completes")
+            .expect("first request task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 1);
+
+    let replacement_app = std::sync::Arc::clone(&app);
+    let replacement_headers = cancellation_test_headers("client");
+    let replacement = tokio::spawn(async move {
+        handle_jsonrpc_request(
+            replacement_app,
+            &replacement_headers,
+            cancellable_health_request(Value::String("replacement".to_owned())),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("replacement request reaches nested route")
+        .expect("nested router remains live");
+    assert_eq!(global.available_permits(), 0);
+
+    for request_id in ["two", "replacement"] {
+        handle_cancelled_notification(
+            &app,
+            &cancellation_test_headers("client"),
+            &cancel_notification(Value::String(request_id.to_owned())),
+        );
+    }
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), second)
+            .await
+            .expect("second cancellation completes")
+            .expect("second request task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), replacement)
+            .await
+            .expect("replacement cancellation completes")
+            .expect("replacement request task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 2);
+    drop(release);
 }
 
 #[test]
@@ -1358,7 +1869,8 @@ fn anonymous_or_invalid_tokens_have_no_cancellation_identity() {
     assert!(authenticated_cancellation_client_fingerprint(&app, &HeaderMap::new()).is_none());
     let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = std::sync::Arc::new(["valid".to_owned()].into_iter().collect());
+    state.api_token_digests =
+        std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid"]));
     assert!(
         authenticated_cancellation_client_fingerprint(&app, &cancellation_test_headers("invalid"))
             .is_none()
@@ -1380,6 +1892,20 @@ fn capabilities_payload_includes_toolset_version() {
     assert!(
         !toolset_version.is_empty(),
         "toolsetVersion must not be empty"
+    );
+    let cancellation = payload
+        .pointer("/capabilities/experimental/iroha/tools/cancellation")
+        .and_then(Value::as_object)
+        .expect("cancellation extension metadata");
+    assert_eq!(
+        cancellation.get("nonceMetaKey").and_then(Value::as_str),
+        Some(MCP_CANCELLATION_NONCE_META_KEY)
+    );
+    assert_eq!(
+        cancellation
+            .get("requiresApiToken")
+            .and_then(Value::as_bool),
+        Some(true)
     );
 }
 #[test]
@@ -1631,9 +2157,55 @@ fn generic_request_body_rejects_dual_representations() {
         "body": { "reviewed": true },
         "body_base64": "ZXhlY3V0ZWQ="
     });
-    let error = build_request_body(arguments.as_object().expect("object"))
+    let error = build_request_body(arguments.as_object().expect("object"), None)
         .expect_err("dual body representations must not pick a hidden winner");
     assert!(error.contains("mutually exclusive"));
+}
+
+#[test]
+fn generic_xml_request_body_uses_exact_text_bytes_and_media_type() {
+    let xml = "<Document><MsgId>exact</MsgId></Document>";
+    let arguments = norito::json!({ "body": xml });
+    let (body, content_type) = build_request_body(
+        arguments.as_object().expect("object"),
+        Some("application/xml"),
+    )
+    .expect("XML body");
+
+    assert_eq!(body, xml.as_bytes());
+    assert_eq!(content_type, Some("application/xml"));
+}
+
+#[test]
+fn generated_iso_tool_advertises_raw_xml_as_its_default_media_type() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name == "torii.post_v1_iso20022_pacs008")
+        .expect("OpenAPI-derived pacs.008 tool");
+    let properties = tool
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("tool properties");
+
+    assert_eq!(
+        properties
+            .get("content_type")
+            .and_then(|schema| schema.get("const"))
+            .and_then(Value::as_str),
+        Some("application/xml")
+    );
+    assert_eq!(
+        properties
+            .get("body")
+            .and_then(|schema| schema.get("type"))
+            .and_then(Value::as_str),
+        Some("string")
+    );
 }
 #[test]
 fn initialize_requires_the_standard_client_shape() {
@@ -1855,6 +2427,64 @@ fn whole_catalog_publishes_self_contained_input_schemas() {
         .unwrap_or_else(|error| panic!("{error}"));
     }
 }
+
+#[tokio::test]
+async fn disabled_faucet_tools_are_omitted_and_rejected_at_runtime() {
+    let mut app = mk_app_state_for_tests();
+    let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+    assert!(state.account_faucet.is_none());
+    state.mcp.profile = ToriiMcpProfile::Writer;
+    state.mcp_tools = std::sync::Arc::new(vec![
+        iroha_health_tool(),
+        iroha_accounts_faucet_prepare_tool(),
+        iroha_accounts_faucet_submit_tool(),
+    ]);
+    let visible = visible_tools_for_app(&app);
+    assert_eq!(
+        visible
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["iroha.health"]
+    );
+    for name in [
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
+    ] {
+        let response = handle_named_tool_call(
+            Some(Value::String(format!("disabled-{name}"))),
+            std::sync::Arc::clone(&app),
+            &HeaderMap::new(),
+            name,
+            &Map::new(),
+        )
+        .await;
+        assert_eq!(
+            response
+                .pointer("/error/data/error_code")
+                .and_then(Value::as_str),
+            Some(MCP_TOOL_UNAVAILABLE)
+        );
+    }
+}
+
+#[test]
+fn unreviewed_manual_tool_names_fail_closed_to_write() {
+    for name in [
+        "iroha.future.get",
+        "iroha.future.list",
+        "iroha.future.query",
+        "iroha.future.telemetry",
+        "iroha.future.wait",
+    ] {
+        assert_eq!(
+            manual_tool_effect_from_name(name),
+            ToolEffect::Write,
+            "unreviewed name `{name}` must not gain read-only policy access from its suffix"
+        );
+    }
+}
+
 #[test]
 fn raw_body_tool_accepts_advertised_flat_shortcuts() {
     let tool = simple_manual_raw_body_post_tool(
@@ -1885,13 +2515,13 @@ fn raw_body_tool_accepts_advertised_flat_shortcuts() {
 }
 #[test]
 fn descriptor_publishes_canonical_connect_sid_schema() {
-    let tool = ToolSpec {
-        name: "iroha.connect.session.delete".to_owned(),
-        effect: ToolEffect::Write,
-        description: "Delete/purge an Iroha Connect session by SID.".to_owned(),
-        method: Method::DELETE,
-        path_template: "/v1/connect/session/{sid}".to_owned(),
-        input_schema: norito::json!({
+    let tool = ToolSpec::route(
+        "iroha.connect.session.delete".to_owned(),
+        "Delete/purge an Iroha Connect session by SID.".to_owned(),
+        ToolEffect::Write,
+        Method::DELETE,
+        "/v1/connect/session/{sid}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
@@ -1902,7 +2532,7 @@ fn descriptor_publishes_canonical_connect_sid_schema() {
             },
             "required": ["sid"]
         }),
-    };
+    );
     let descriptor = tool.descriptor();
     let schema = descriptor
         .get("inputSchema")
@@ -2001,18 +2631,28 @@ fn openapi_tool_effects_drive_policy() {
     let query = tools
         .iter()
         .find(|tool| {
-            tool.method == Method::POST && tool.path_template == iroha_torii_shared::uri::QUERY
+            tool.route_backing()
+                .is_some_and(|(_, method, path_template)| {
+                    method == &Method::POST && path_template == iroha_torii_shared::uri::QUERY
+                })
         })
         .expect("query tool");
-    assert_eq!(query.effect, ToolEffect::Read);
+    let (query_effect, _, _) = query.route_backing().expect("query tool is route-backed");
+    assert_eq!(query_effect, ToolEffect::Read);
     assert!(is_tool_allowed_by_policy(&read_only_cfg, query));
     let protected_update = tools
         .iter()
         .find(|tool| {
-            tool.method == Method::POST && tool.path_template == "/v1/gov/protected-namespaces"
+            tool.route_backing()
+                .is_some_and(|(_, method, path_template)| {
+                    method == &Method::POST && path_template == "/v1/gov/protected-namespaces"
+                })
         })
         .expect("protected namespace update tool");
-    assert_eq!(protected_update.effect, ToolEffect::Operator);
+    let (protected_update_effect, _, _) = protected_update
+        .route_backing()
+        .expect("protected namespace update tool is route-backed");
+    assert_eq!(protected_update_effect, ToolEffect::Operator);
     assert!(!is_tool_allowed_by_policy(&read_only_cfg, protected_update));
 }
 #[test]
@@ -2021,14 +2661,17 @@ fn get_tools_follow_exact_catalog_operator_authorization() {
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
-    for tool in tools.iter().filter(|tool| tool.method == Method::GET) {
-        let catalog_requires_operator = catalog_descriptor_for_method_path(
-            CATALOG_PROJECTION_GROUPS,
-            &tool.method,
-            tool.path_template.as_str(),
-        )
-        .is_some_and(catalog_route_requires_operator);
-        let expected = catalog_requires_operator || tool.effect == ToolEffect::Operator;
+    for tool in &tools {
+        let Some((effect, method, path_template)) = tool.route_backing() else {
+            continue;
+        };
+        if method != &Method::GET {
+            continue;
+        }
+        let catalog_requires_operator =
+            catalog_descriptor_for_method_path(CATALOG_PROJECTION_GROUPS, method, path_template)
+                .is_some_and(catalog_route_requires_operator);
+        let expected = catalog_requires_operator || effect == ToolEffect::Operator;
         assert_eq!(tool_requires_operator(tool), expected, "{}", tool.name);
     }
     for route in CATALOG_PROJECTION_GROUPS
@@ -2043,9 +2686,12 @@ fn get_tools_follow_exact_catalog_operator_authorization() {
     {
         assert!(
             tools.iter().any(|tool| {
-                tool.method == Method::GET
-                    && tool.path_template == route.path()
-                    && tool_requires_operator(tool)
+                tool.route_backing()
+                    .is_some_and(|(_, method, path_template)| {
+                        method == &Method::GET
+                            && path_template == route.path()
+                            && tool_requires_operator(tool)
+                    })
             }),
             "compiled operator GET is missing an operator-only MCP tool: {}",
             route.path()
@@ -2077,11 +2723,14 @@ fn signer_backed_prepare_and_submit_tools_are_mutating() {
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
     let effect = |name: &str| {
-        tools
+        let tool = tools
             .iter()
             .find(|tool| tool.name == name)
-            .map(|tool| tool.effect)
-            .unwrap_or_else(|| panic!("missing tool {name}"))
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        let Some((effect, _, _)) = tool.route_backing() else {
+            panic!("tool {name} must be route-backed")
+        };
+        effect
     };
     assert_eq!(effect("iroha.accounts.onboard.prepare"), ToolEffect::Write);
     assert_eq!(effect("iroha.accounts.faucet.prepare"), ToolEffect::Write);
@@ -2138,12 +2787,15 @@ fn operator_sumeragi_snapshot_tools_are_absent_from_mcp() {
 #[test]
 fn canonical_account_and_pipeline_tools_use_first_class_routes() {
     let account_tool = iroha_accounts_get_tool();
-    assert_eq!(account_tool.path_template, "/v1/accounts/{account_id}");
+    let (_, _, account_path) = account_tool
+        .route_backing()
+        .expect("account lookup tool is route-backed");
+    assert_eq!(account_path, "/v1/accounts/{account_id}");
     let status_tool = iroha_transactions_status_tool();
-    assert_eq!(
-        status_tool.path_template,
-        "/v1/pipeline/transactions/status"
-    );
+    let (_, _, status_path) = status_tool
+        .route_backing()
+        .expect("transaction status tool is route-backed");
+    assert_eq!(status_path, "/v1/pipeline/transactions/status");
     assert!(
         status_tool.description.contains("typed pipeline status"),
         "status tool description should advertise the typed contract"
@@ -2220,18 +2872,18 @@ fn transaction_wait_descriptors_are_closed_and_use_exact_canonical_hashes() {
 }
 #[test]
 fn tool_descriptor_sanitizes_top_level_function_schema_keywords() {
-    let tool = ToolSpec {
-        name: "iroha.test.invalid_schema".to_owned(),
-        effect: ToolEffect::Write,
-        description: "sample".to_owned(),
-        method: Method::POST,
-        path_template: "/v1/test".to_owned(),
-        input_schema: norito::json!({
+    let tool = ToolSpec::route(
+        "iroha.test.invalid_schema".to_owned(),
+        "sample".to_owned(),
+        ToolEffect::Write,
+        Method::POST,
+        "/v1/test".to_owned(),
+        norito::json!({
             "oneOf": [{ "type": "string" }, { "type": "null" }],
             "enum": ["bad"],
             "not": { "type": "null" }
         }),
-    };
+    );
     let descriptor = tool.descriptor();
     let schema = descriptor
         .get("inputSchema")
@@ -2870,6 +3522,10 @@ fn connect_management_extra_headers_allow_authorization_only() {
             .and_then(|value| value.to_str().ok()),
         Some("Bearer management")
     );
+    assert!(
+        out.get("authorization")
+            .is_some_and(HeaderValue::is_sensitive)
+    );
     assert!(!out.contains_key("x-iroha-account"));
     assert!(!out.contains_key("x-iroha-remote-addr"));
 }
@@ -3120,22 +3776,21 @@ fn every_openapi_derived_tool_has_an_enabled_exact_catalog_projection() {
     let tools = build_tool_specs(&cfg);
     let mut derived_count = 0_usize;
     for tool in tools.iter().filter(|tool| tool.name.starts_with("torii.")) {
+        let Some((_, method, path_template)) = tool.route_backing() else {
+            panic!("OpenAPI-derived tool {} must be route-backed", tool.name)
+        };
         derived_count += 1;
         assert_eq!(
-            catalog_mcp_projection_decision(
-                CATALOG_PROJECTION_GROUPS,
-                &tool.method,
-                tool.path_template.as_str(),
-            ),
+            catalog_mcp_projection_decision(CATALOG_PROJECTION_GROUPS, method, path_template,),
             Some(true),
             "OpenAPI-derived tool is not explicitly enabled by the exact catalog method/path pair: {} {} ({})",
-            tool.method,
-            tool.path_template,
+            method,
+            path_template,
             tool.name,
         );
-        assert!(!tool.path_template.ends_with("/sse"));
+        assert!(!path_template.ends_with("/sse"));
         assert!(!matches!(
-            tool.path_template.as_str(),
+            path_template,
             "/metrics" | "/debug/pprof/profile"
         ));
     }
@@ -3485,15 +4140,14 @@ fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
             .collect::<Vec<_>>();
         assert_eq!(matching_tools.len(), 1, "MCP tool {tool_name}");
         let tool = matching_tools[0];
-        assert_eq!(tool.method, Method::POST);
-        assert_eq!(tool.path_template, path);
-        assert_eq!(tool.effect, ToolEffect::Read);
+        let (effect, method, path_template) = tool
+            .route_backing()
+            .expect("curated Musubi query tool is route-backed");
+        assert_eq!(method, &Method::POST);
+        assert_eq!(path_template, path);
+        assert_eq!(effect, ToolEffect::Read);
         assert_eq!(
-            catalog_mcp_projection_decision(
-                CATALOG_PROJECTION_GROUPS,
-                &tool.method,
-                tool.path_template.as_str(),
-            ),
+            catalog_mcp_projection_decision(CATALOG_PROJECTION_GROUPS, method, path_template,),
             Some(true)
         );
     }
@@ -3536,21 +4190,23 @@ fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
     );
 }
 #[test]
-fn offline_lifecycle_routes_are_available_to_operator_mcp_tools() {
+fn kagemusha_routes_are_available_to_operator_mcp_tools() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
     for path in [
-        iroha_torii_shared::route_catalog::offline::READINESS_PATH,
-        iroha_torii_shared::route_catalog::offline::RECIPIENT_LINEAGE_PATH,
-        iroha_torii_shared::route_catalog::offline::TOP_UP_PATH,
-        iroha_torii_shared::route_catalog::offline::REDEEM_PATH,
-        iroha_torii_shared::route_catalog::offline::OPERATION_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::READINESS_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::TOP_UP_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::REDEEM_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::OPERATION_PATH,
     ] {
         assert!(
-            tools.iter().any(|tool| tool.path_template == path),
-            "universal offline route is missing from the operator MCP registry: {path}"
+            tools.iter().any(|tool| {
+                tool.route_backing()
+                    .is_some_and(|(_, _, path_template)| path_template == path)
+            }),
+            "universal KAGEMUSHA route is missing from the operator MCP registry: {path}"
         );
     }
 }
@@ -3667,13 +4323,12 @@ fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
             validate_tool_registry(&[operator_route_with_write_effect.clone()], GROUPS).is_ok(),
             "a route's operator admission must not overwrite its semantic effect: {name}"
         );
+        let (_, method, path_template) = operator_route_with_write_effect
+            .route_backing()
+            .expect("operator test tool is route-backed");
         assert!(
-            catalog_descriptor_for_method_path(
-                GROUPS,
-                &operator_route_with_write_effect.method,
-                operator_route_with_write_effect.path_template.as_str(),
-            )
-            .is_some_and(catalog_route_requires_operator),
+            catalog_descriptor_for_method_path(GROUPS, method, path_template)
+                .is_some_and(catalog_route_requires_operator),
             "catalog admission must still keep the route out of writer visibility: {name}"
         );
     }
@@ -3688,6 +4343,37 @@ fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
             .expect_err("protocol handshakes need an exact audited wrapper")
             .contains("lacks an exact audited MCP wrapper")
     );
+}
+
+#[test]
+fn tool_registry_validation_rejects_in_process_name_mismatch() {
+    let mut tool = ToolSpec::in_process(
+        InProcessTool::TransactionsPrepare,
+        "sample".to_owned(),
+        norito::json!({ "type": "object" }),
+    );
+    tool.name = "iroha.transactions.prepare.alias".to_owned();
+
+    validate_tool_registry(&[tool], &[])
+        .expect_err("an in-process tool must use the name reserved for its exact implementation");
+}
+
+#[test]
+fn tool_registry_validation_rejects_routes_using_reserved_in_process_names() {
+    for in_process in [
+        InProcessTool::TransactionsPrepare,
+        InProcessTool::TransactionsInspect,
+    ] {
+        let tool = sample_tool_at(
+            in_process.name(),
+            Method::POST,
+            "/v1/tests/reserved-in-process-name",
+            ToolEffect::Write,
+        );
+        validate_tool_registry(&[tool], &[]).expect_err(
+            "a route-backed tool must not claim the name of an in-process implementation",
+        );
+    }
 }
 
 #[test]
@@ -3706,25 +4392,25 @@ fn audited_faucet_handshake_allowlist_requires_exact_name_method_and_path() {
         wrong_name.name.push_str(".alias");
         assert!(!is_audited_protocol_handshake_tool(&wrong_name));
 
-        let mut wrong_method = exact.clone();
-        wrong_method.method = Method::PUT;
+        let wrong_method = sample_tool_at(name, Method::PUT, path, ToolEffect::Write);
         assert!(!is_audited_protocol_handshake_tool(&wrong_method));
 
-        let mut wrong_path = exact;
-        wrong_path.path_template.push('/');
+        let wrong_path_template = format!("{path}/");
+        let wrong_path =
+            sample_tool_at(name, Method::POST, &wrong_path_template, ToolEffect::Write);
         assert!(!is_audited_protocol_handshake_tool(&wrong_path));
     }
 }
 #[test]
-fn tool_registry_honors_universal_offline_mcp_projection() {
+fn tool_registry_honors_universal_kagemusha_mcp_projection() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
-    for route in route_catalog::offline::ROUTES {
+    for route in route_catalog::kagemusha::ROUTES {
         let method = match route.method() {
             CatalogHttpMethod::Any => {
-                panic!("offline routes must never use protocol-wide ANY matching")
+                panic!("KAGEMUSHA routes must never use protocol-wide ANY matching")
             }
             CatalogHttpMethod::Get => Method::GET,
             CatalogHttpMethod::Post => Method::POST,
@@ -3733,10 +4419,12 @@ fn tool_registry_honors_universal_offline_mcp_projection() {
             CatalogHttpMethod::Delete => Method::DELETE,
         };
         assert!(
-            tools
-                .iter()
-                .any(|tool| tool.method == method && tool.path_template == route.path()),
-            "cataloged universal offline route is missing from MCP: {} {}",
+            tools.iter().any(|tool| tool.route_backing().is_some_and(
+                |(_, tool_method, path_template)| {
+                    tool_method == &method && path_template == route.path()
+                }
+            )),
+            "cataloged universal KAGEMUSHA route is missing from MCP: {} {}",
             route.method().as_str(),
             route.path()
         );
@@ -3748,9 +4436,12 @@ fn tool_registry_honors_universal_offline_mcp_projection() {
             .any(|tool| tool.name == "iroha.transactions.submit")
     );
     assert!(tools.iter().any(|tool| {
-        tool.method == Method::POST
-            && tool.path_template == iroha_torii_shared::uri::TRANSACTION
-            && tool.name.starts_with("torii.")
+        tool.name.starts_with("torii.")
+            && tool
+                .route_backing()
+                .is_some_and(|(_, method, path_template)| {
+                    method == &Method::POST && path_template == iroha_torii_shared::uri::TRANSACTION
+                })
     }));
 }
 #[test]

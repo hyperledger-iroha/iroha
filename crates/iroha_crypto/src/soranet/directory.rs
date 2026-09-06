@@ -457,6 +457,8 @@ fn guard_directory_parent_path_identifies_open_file(
 /// Norito-encoded guard directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::directory::GuardDirectorySnapshotV2")]
 pub struct GuardDirectorySnapshotV2 {
     /// Snapshot schema version (`2`).
     pub version: u8,
@@ -798,7 +800,8 @@ pub fn compute_snapshot_digest(bytes: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 /// Governance issuer record embedded in guard directory snapshots.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::directory::GuardDirectoryIssuerV1")]
 pub struct GuardDirectoryIssuerV1 {
     /// Stable issuer fingerprint.
     pub fingerprint: [u8; 32],
@@ -808,7 +811,8 @@ pub struct GuardDirectoryIssuerV1 {
     pub mldsa65_public: Vec<u8>,
 }
 /// Relay entry embedded in guard directory snapshots.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::directory::GuardDirectoryRelayEntryV2")]
 pub struct GuardDirectoryRelayEntryV2 {
     /// Serialized `RelayCertificateBundleV2` payload.
     pub certificate: Vec<u8>,
@@ -1604,3 +1608,6 @@ mod tests {
         assert!(err.to_string().contains("signature verification"));
     }
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

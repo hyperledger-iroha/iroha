@@ -170,144 +170,6 @@
       }
     },
     {
-      "function": "iroha_node_query_projection_checkpoint_plan_tool",
-      "name": "iroha.node.query_projection_checkpoint_plan",
-      "effect": "read",
-      "description": "Validate that uploaded shard refs exactly cover the canonical live query projection shard set and preview the rebuilt checkpoint (`/v1/node/query/projection/checkpoint/plan`).",
-      "method": "POST",
-      "path_template": "/v1/node/query/projection/checkpoint/plan",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "emitted_at_unix": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Unix timestamp recorded on the checkpoint descriptor itself. Defaults to the node clock when omitted."
-          },
-          "shards": {
-            "type": "array",
-            "description": "Uploaded shard references that must exactly cover the canonical non-empty live query snapshot.",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "resource",
-                "partition_id",
-                "archive_emitted_at_unix",
-                "manifest_digest_hex",
-                "storage_ticket_hex"
-              ],
-              "properties": {
-                "resource": {
-                  "type": "string",
-                  "description": "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`)."
-                },
-                "partition_id": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "asset_definition_id": {
-                  "type": "string"
-                },
-                "archive_emitted_at_unix": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "manifest_digest_hex": {
-                  "type": "string"
-                },
-                "storage_ticket_hex": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "body": {
-            "type": "object"
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "function": "iroha_node_query_projection_checkpoint_publish_tool",
-      "name": "iroha.node.query_projection_checkpoint_publish",
-      "effect": "write",
-      "description": "Rebuild uploaded shard refs that exactly cover the canonical live shard set and persist the query projection checkpoint (`/v1/node/query/projection/checkpoint/publish`).",
-      "method": "POST",
-      "path_template": "/v1/node/query/projection/checkpoint/publish",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "emitted_at_unix": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Unix timestamp recorded on the checkpoint descriptor itself. Defaults to the node clock when omitted."
-          },
-          "shards": {
-            "type": "array",
-            "description": "Uploaded shard references that must exactly cover the canonical non-empty live query snapshot before the checkpoint is persisted.",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "resource",
-                "partition_id",
-                "archive_emitted_at_unix",
-                "manifest_digest_hex",
-                "storage_ticket_hex"
-              ],
-              "properties": {
-                "resource": {
-                  "type": "string",
-                  "description": "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`)."
-                },
-                "partition_id": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "asset_definition_id": {
-                  "type": "string"
-                },
-                "archive_emitted_at_unix": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "manifest_digest_hex": {
-                  "type": "string"
-                },
-                "storage_ticket_hex": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "body": {
-            "type": "object"
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
       "function": "iroha_node_query_projection_shard_catalog_tool",
       "name": "iroha.node.query_projection_shard_catalog",
       "effect": "read",
@@ -2768,28 +2630,62 @@
       "function": "iroha_transactions_list_tool",
       "name": "iroha.transactions.list",
       "effect": "read",
-      "description": "List explorer transactions with optional flat query filters.",
+      "description": "List visible explorer transactions through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
       "method": "GET",
       "path_template": "/v1/explorer/transactions",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "query": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1424,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 25
+              },
+              "authority": {
+                "type": "string"
+              },
+              "block": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "status": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              }
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1424,
+            "pattern": "^[A-Za-z0-9_-]+$"
           },
           "limit": {
-            "type": "integer"
-          },
-          "offset": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 25
           },
           "authority": {
             "type": "string"
           },
           "block": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1
           },
           "status": {
             "type": "string"
@@ -2851,22 +2747,64 @@
       "function": "iroha_instructions_list_tool",
       "name": "iroha.instructions.list",
       "effect": "read",
-      "description": "List explorer instructions with optional flat query filters.",
+      "description": "List visible explorer instructions through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
       "method": "GET",
       "path_template": "/v1/explorer/instructions",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "query": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1424,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 25
+              },
+              "authority": {
+                "type": "string"
+              },
+              "account": {
+                "type": "string"
+              },
+              "transaction_hash": {
+                "type": "string"
+              },
+              "transaction_status": {
+                "type": "string"
+              },
+              "block": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "kind": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              }
+            }
           },
-          "page": {
-            "type": "integer"
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1424,
+            "pattern": "^[A-Za-z0-9_-]+$"
           },
-          "per_page": {
-            "type": "integer"
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 25
           },
           "authority": {
             "type": "string"
@@ -2881,7 +2819,8 @@
             "type": "string"
           },
           "block": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1
           },
           "kind": {
             "type": "string"
@@ -2947,22 +2886,42 @@
       "function": "iroha_blocks_list_tool",
       "name": "iroha.blocks.list",
       "effect": "read",
-      "description": "List explorer blocks with optional flat query filters.",
+      "description": "List visible explorer block summaries through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
       "method": "GET",
       "path_template": "/v1/explorer/blocks",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "query": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1424,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 25
+              }
+            }
           },
-          "page": {
-            "type": "integer"
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1424,
+            "pattern": "^[A-Za-z0-9_-]+$"
           },
-          "per_page": {
-            "type": "integer"
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 25
           },
           "headers": {
             "type": "object",

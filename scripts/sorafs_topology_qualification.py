@@ -381,7 +381,7 @@ def _validate_qualification_payload(
     if payload.get("runtime_handle_kinds") != [
         "monitoring",
         "external_signer",
-        "kms",
+        "key_custody",
         "webauthn",
     ]:
         errors.append(

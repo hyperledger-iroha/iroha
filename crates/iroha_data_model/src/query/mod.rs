@@ -1353,6 +1353,12 @@ mod model {
         FindSorafsPopAuditDigestBySequence(sorafs::prelude::FindSorafsPopAuditDigestBySequence),
         /// Fetch constant-time authoritative `PoP` registry anchors and counters.
         FindSorafsPopRegistryStatus(sorafs::prelude::FindSorafsPopRegistryStatus),
+        /// Fetch one commitment-only citizen bond by immutable serial commitment.
+        FindSorafsCitizenBondBySerialCommitment(
+            sorafs::prelude::FindSorafsCitizenBondBySerialCommitment,
+        ),
+        /// Fetch the current frozen citizen-bond membership snapshot.
+        FindSorafsCitizenBondSnapshot(sorafs::prelude::FindSorafsCitizenBondSnapshot),
         /// Fetch one chain-authoritative repair task by canonical ticket identifier.
         FindSorafsRepairTask(sorafs::prelude::FindSorafsRepairTask),
         /// Fetch a cursor-bounded page of chain-authoritative repair tasks.
@@ -1558,6 +1564,10 @@ mod model {
         SorafsPopAuditDigest(crate::sorafs::pop_registry::PopRegistryAuditDigestRecordV1),
         /// Authoritative `PoP` registry anchors and counters.
         SorafsPopRegistryStatus(crate::sorafs::pop_registry::PopRegistryStatusV1),
+        /// Commitment-only citizen-bond record.
+        SorafsCitizenBond(crate::sorafs::anonymity::SorafsCitizenBondV1),
+        /// Current frozen citizen-bond membership snapshot.
+        SorafsCitizenBondSnapshot(crate::sorafs::anonymity::SorafsCitizenBondSnapshotV1),
         /// Finalized chain-authoritative repair task, lease, outcome, slash, and appeal.
         SorafsRepairTask(crate::sorafs::moderation_ledger::RepairFinalizedTaskV1),
         /// Cursor-bounded chain-authoritative repair-task page.
@@ -1582,7 +1592,7 @@ mod model {
         ),
         /// Active authoritative `SoraFS` moderation policy payload.
         SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
-        /// Authoritative appeal intake, `PoP` snapshot, and sortition lifecycle.
+        /// Authoritative appeal intake, citizen-bond snapshot, and sortition lifecycle.
         SorafsModerationAppeal(crate::sorafs::moderation_ledger::ModerationAppealRecordV1),
         /// Payload-free, PoP-verified juror eligibility record.
         SorafsModerationJurorEligibility(

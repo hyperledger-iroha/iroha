@@ -19,7 +19,6 @@ import {
   encodeAccountIdNoritoValue,
   noritoDecodeInstructionBoxArchive,
   noritoEncodeInstructionBoxArchive,
-  validateNoritoFrame,
 } from "./norito.js";
 import {
   KotodamaQuantity,
@@ -95,22 +94,19 @@ const TRANSFER_SCHEMA_HASH = Buffer.from(
   "a4174c78d6341f8f98fc2adae8ed67b9",
   HEX_ENCODING,
 );
-const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
-  "862a7d77075d4d23ff6c1261db027811",
-  HEX_ENCODING,
-);
 const MAX_BROWSER_INSTRUCTIONS = 64;
 const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
 const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
 const DEFAULT_TRANSACTION_TTL_MS = 100_000;
 const TRANSACTION_ADMISSION_ORDINARY_TAG = 0;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
-const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
+const SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS = new Set([
   "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
   "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload",
   "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload",
   "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode",
   "iroha.instruction.v1::smart_contract_code::CommitContractDeployment",
+  "iroha.kagemusha.v1.top_up",
 ]);
 const TRANSFER_INPUT_FIELDS = new Set([
   "networkId",
@@ -1878,7 +1874,7 @@ function validateTransferExecutable(payload, context) {
   return sourceOwner;
 }
 
-function validateSmartContractDeploymentExecutable(payload, context) {
+function validateBrowserInstructionExecutable(payload, context) {
   const executable = new Reader(payload, context);
   if (executable.readU32("variant") !== 0) {
     fail(UNSUPPORTED_EXECUTABLE, `${context} must use Executable::Instructions`);
@@ -1895,8 +1891,9 @@ function validateSmartContractDeploymentExecutable(payload, context) {
     );
   }
   for (let index = 0; index < Number(count); index += 1) {
+    const instructionArchive = instructions.readField(`item[${index}]`);
     const instruction = new Reader(
-      instructions.readField(`item[${index}]`),
+      instructionArchive,
       `${context}.instructions[${index}]`,
     );
     const wireId = validateStringArchive(
@@ -1904,10 +1901,10 @@ function validateSmartContractDeploymentExecutable(payload, context) {
       `${context}.instructions[${index}].wireId`,
       { maxBytes: 256 },
     );
-    if (!SMART_CONTRACT_DEPLOYMENT_WIRE_IDS.has(wireId)) {
+    if (!SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS.has(wireId)) {
       fail(
         UNSUPPORTED_INSTRUCTION,
-        `${context}.instructions[${index}] uses unsupported deployment instruction ${wireId}`,
+        `${context}.instructions[${index}] uses unsupported browser instruction ${wireId}`,
       );
     }
     const frameContainer = new Reader(
@@ -1915,15 +1912,11 @@ function validateSmartContractDeploymentExecutable(payload, context) {
       `${context}.instructions[${index}].frameContainer`,
       false,
     );
-    const frame = frameContainer.readField("frame");
+    frameContainer.readField("frame");
     frameContainer.assertEof();
     instruction.assertEof();
     try {
-      validateNoritoFrame(frame, {
-        context: `${context}.instructions[${index}].frame`,
-        expectedTypeName: wireId,
-        requireNonEmptyPayload: true,
-      });
+      noritoDecodeInstructionBoxArchive(instructionArchive);
     } catch (error) {
       fail(
         MALFORMED_INSTRUCTION,
@@ -1936,26 +1929,8 @@ function validateSmartContractDeploymentExecutable(payload, context) {
 }
 
 function validateCanonicalInstructionBox(payload, context) {
-  const instruction = new Reader(payload, context);
-  const wireId = validateStringArchive(
-    instruction.readField("wireId"),
-    `${context}.wireId`,
-    { maxBytes: 256 },
-  );
-  const frameContainer = new Reader(
-    instruction.readField("frameContainer"),
-    `${context}.frameContainer`,
-    false,
-  );
-  const frame = frameContainer.readField("frame");
-  frameContainer.assertEof();
-  instruction.assertEof();
   try {
-    validateNoritoFrame(frame, {
-      context: `${context}.frame`,
-      expectedTypeName: wireId,
-      requireNonEmptyPayload: true,
-    });
+    noritoDecodeInstructionBoxArchive(payload);
   } catch (error) {
     fail(
       MALFORMED_INSTRUCTION,
@@ -2211,7 +2186,7 @@ function validateInstructionTransactionPayload(
           "transaction payload.executable",
         );
       }
-      validateSmartContractDeploymentExecutable(
+      validateBrowserInstructionExecutable(
         executable,
         "transaction payload.executable",
       );
@@ -2640,7 +2615,7 @@ export function buildBrowserTransferPayload(input) {
 
 /**
  * Build a canonical browser-safe transaction payload containing only current
- * native smart-contract deployment instructions. No private key is accepted or
+ * explicitly supported native instructions. No private key is accepted or
  * retained; the returned payload is intended for a local/external signer.
  *
  * @param {object} input

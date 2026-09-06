@@ -16,13 +16,15 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
+iroha_service_model = { workspace = true }
 napi = { version = "3.5.1", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-derive = { version = "3.3.2", default-features = false, features = ["type-def"] }
-iroha_crypto = { workspace = true, features = ["node-crypto", "sm", "gost"], default-features = false }
+iroha_crypto = { workspace = true, features = ["node-crypto", "sm", "gost", "pqc"], default-features = false }
 iroha_core = { workspace = true, features = ["node"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model", "transparent_api", "gost", "sm", "bls"], default-features = false }
 iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
+iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

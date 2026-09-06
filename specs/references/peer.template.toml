@@ -84,7 +84,7 @@ expected_hash_file = "genesis.expected_hash"
 # consensus_ingress_burst = 300
 # consensus_ingress_bytes_per_sec = 67_108_864
 # consensus_ingress_bytes_burst = 134_217_728
-# Revision-4 Proposal/Vote/QC/timeout, PayloadManifest/PayloadChunk,
+# Revision-4 Proposal (including its manifest), Vote/QC/timeout, PayloadChunk,
 # body/certificate recovery, and global threshold-beacon partial signatures use the critical policy;
 # CertifiedBodyResponse and BlockSync traffic use the bulk policy. These local
 # resource caps do not alter the signed full-committee quorum or mandatory RS16 layout.
@@ -118,8 +118,8 @@ expected_hash_file = "genesis.expected_hash"
 # commands = 1024
 # authenticated_non_validator_sources = 2
 # bodies = 161
-# body_bytes = 242221056
-# body_source_bytes = 34603008
+# body_bytes = 1176502272
+# body_source_bytes = 35651584
 # chunks = 2048
 # ready_bodies = 128
 
@@ -130,9 +130,7 @@ expected_hash_file = "genesis.expected_hash"
 # activation_lead_blocks = 1
 # overlap_grace_blocks = 8
 # expiry_grace_blocks = 0
-# require_hsm = false
 # allowed_algorithms = ["bls_normal"]
-# allowed_hsm_providers = ["pkcs11", "softkey", "yubihsm"]
 
 [torii]
 # address =
@@ -154,11 +152,11 @@ expected_hash_file = "genesis.expected_hash"
 [torii.operator_auth]
 # enabled = false
 # require_mtls = false
-# token_fallback = "bootstrap"
-# token_source = "operator"
-# tokens = []
+# tokens = [] # Unique 32..=256-byte visible-ASCII x-iroha-operator-token values; required until the first credential exists.
 # rate_per_minute = 30
 # burst = 10
+# ephemeral_state_capacity = 4096 # Each of challenges, sessions, and lockout identities; maximum 65536.
+# credential_capacity = 64 # Maximum persisted WebAuthn credentials; maximum 1024.
 # lockout_failures = 5
 # lockout_window_secs = 300
 # lockout_duration_secs = 900

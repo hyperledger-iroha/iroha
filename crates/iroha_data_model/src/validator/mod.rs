@@ -9,9 +9,14 @@ use norito::codec::{Decode, Encode};
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validator::ValidatorMode")]
 pub enum ValidatorMode {
     /// Permissioned networks: admins register peers directly; staking admission is bypassed.
     Permissioned,
     /// Public `NPoS`: validators activate via stake-backed admission and epoch elections.
     PublicNpos,
 }
+
+#[cfg(test)]
+mod captured_validator_schema_tests;

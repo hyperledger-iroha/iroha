@@ -232,6 +232,10 @@ mod model {
         SorafsPopAuditDigest(u64),
         /// Failed to find authoritative `SoraFS` `PoP` registry status
         SorafsPopRegistryStatus,
+        /// Failed to find a `SoraFS` citizen bond by immutable serial commitment.
+        SorafsCitizenBond([u8; 32]),
+        /// Failed to find the current frozen citizen-bond snapshot.
+        SorafsCitizenBondSnapshot,
         /// Failed to find chain-authoritative `SoraFS` repair task `{0}`
         SorafsRepairTask(String),
         /// Failed to find chain-authoritative `SoraFS` repair status

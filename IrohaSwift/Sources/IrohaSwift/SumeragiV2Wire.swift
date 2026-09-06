@@ -223,8 +223,6 @@ public struct SumeragiV2MergeCarrierCommitment: Equatable, Sendable {
 
 /// Deterministic state-transition commitment authenticated by consensus votes.
 public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
-    /// Maximum number of Kagemusha top-up anchors committed by one block.
-    public static let maximumTopUpAnchorCount: UInt32 = 16
     /// Canonical Native AMX application-manifest wire version.
     public static let canonicalNativeAmxApplicationManifestVersion: UInt16 = 1
     /// Maximum participant route/incarnation leaves committed by one global block.
@@ -233,8 +231,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     public let parentStateRoot: SumeragiV2Hash
     public let postStateRoot: SumeragiV2Hash
     public let ordinaryWritesRoot: SumeragiV2Hash
-    public let topUpAnchorRoot: SumeragiV2Hash?
-    public let topUpAnchorCount: UInt32
+    public let kagemushaTopUpRoot: SumeragiV2Hash?
+    public let kagemushaTopUpCount: UInt32
     public let nativeAmxApplicationManifestVersion: UInt16
     public let nativeAmxApplicationManifestRoot: SumeragiV2Hash
     public let nativeAmxApplicationManifestCount: UInt32
@@ -247,8 +245,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         parentStateRoot: SumeragiV2Hash,
         postStateRoot: SumeragiV2Hash,
         ordinaryWritesRoot: SumeragiV2Hash,
-        topUpAnchorRoot: SumeragiV2Hash?,
-        topUpAnchorCount: UInt32,
+        kagemushaTopUpRoot: SumeragiV2Hash?,
+        kagemushaTopUpCount: UInt32,
         nativeAmxApplicationManifestVersion: UInt16,
         nativeAmxApplicationManifestRoot: SumeragiV2Hash,
         nativeAmxApplicationManifestCount: UInt32,
@@ -257,23 +255,20 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         executedBlockWireLen: UInt64,
         executedBlockWireHash: SumeragiV2Hash
     ) throws {
-        guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil) else {
+        guard (kagemushaTopUpCount == 0) == (kagemushaTopUpRoot == nil) else {
             throw SumeragiV2WireError.invalid(
-                "execution commitment top-up count and root presence disagree"
+                "execution commitment KAGEMUSHA top-up count and root presence disagree"
             )
         }
-        guard topUpAnchorCount <= Self.maximumTopUpAnchorCount else {
-            throw SumeragiV2WireError.invalid("execution commitment has too many top-up anchors")
-        }
-        if let topUpAnchorRoot {
-            let expectedPostStateRoot = Self.topUpPostStateRoot(
-                count: topUpAnchorCount,
+        if let kagemushaTopUpRoot {
+            let expectedPostStateRoot = Self.kagemushaTopUpPostStateRoot(
+                count: kagemushaTopUpCount,
                 ordinaryWritesRoot: ordinaryWritesRoot,
-                topUpAnchorRoot: topUpAnchorRoot
+                kagemushaTopUpRoot: kagemushaTopUpRoot
             )
             guard postStateRoot.bytes == expectedPostStateRoot else {
                 throw SumeragiV2WireError.invalid(
-                    "execution commitment post-state root does not match its top-up projection"
+                    "execution commitment post-state root does not match its KAGEMUSHA top-up projection"
                 )
             }
         }
@@ -305,8 +300,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         self.parentStateRoot = parentStateRoot
         self.postStateRoot = postStateRoot
         self.ordinaryWritesRoot = ordinaryWritesRoot
-        self.topUpAnchorRoot = topUpAnchorRoot
-        self.topUpAnchorCount = topUpAnchorCount
+        self.kagemushaTopUpRoot = kagemushaTopUpRoot
+        self.kagemushaTopUpCount = kagemushaTopUpCount
         self.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion
         self.nativeAmxApplicationManifestRoot = nativeAmxApplicationManifestRoot
         self.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount
@@ -321,8 +316,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             parentStateRoot.bytes,
             postStateRoot.bytes,
             ordinaryWritesRoot.bytes,
-            sumeragiV2Option(topUpAnchorRoot?.bytes),
-            sumeragiV2U32(topUpAnchorCount),
+            sumeragiV2Option(kagemushaTopUpRoot?.bytes),
+            sumeragiV2U32(kagemushaTopUpCount),
             sumeragiV2U16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes,
             sumeragiV2U32(nativeAmxApplicationManifestCount),
@@ -341,12 +336,12 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ordinaryWritesRoot: SumeragiV2Hash(
                 reader.field("execution commitment ordinary writes")
             ),
-            topUpAnchorRoot: sumeragiV2DecodeOption(
-                reader.field("execution commitment top-up root"),
+            kagemushaTopUpRoot: sumeragiV2DecodeOption(
+                reader.field("execution commitment KAGEMUSHA top-up root"),
                 decode: SumeragiV2Hash.init
             ),
-            topUpAnchorCount: sumeragiV2DecodeU32(
-                reader.field("execution commitment top-up count")
+            kagemushaTopUpCount: sumeragiV2DecodeU32(
+                reader.field("execution commitment KAGEMUSHA top-up count")
             ),
             nativeAmxApplicationManifestVersion: sumeragiV2DecodeU16(
                 reader.field("execution commitment Native AMX application-manifest version")
@@ -376,16 +371,16 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         return value
     }
 
-    private static func topUpPostStateRoot(
+    private static func kagemushaTopUpPostStateRoot(
         count: UInt32,
         ordinaryWritesRoot: SumeragiV2Hash,
-        topUpAnchorRoot: SumeragiV2Hash
+        kagemushaTopUpRoot: SumeragiV2Hash
     ) -> Data {
-        var preimage = Data("iroha:kagemusha:v2:post-state-root".utf8)
+        var preimage = Data("iroha:kagemusha:v1:post-state-root".utf8)
         preimage.append(0)
         preimage.append(sumeragiV2U32(count))
         preimage.append(ordinaryWritesRoot.bytes)
-        preimage.append(topUpAnchorRoot.bytes)
+        preimage.append(kagemushaTopUpRoot.bytes)
         return IrohaHash.hash(preimage)
     }
 
@@ -1266,14 +1261,14 @@ public struct SumeragiV2CommitCertificateResponse: Equatable, Sendable {
     }
 }
 
-/// Canonical v2 network payload union in Rust declaration order.
+/// Client-facing v2 payload subset retaining the canonical Rust tags 0...9.
+/// Validator-internal threshold-beacon shares use tag 10 and are not an SDK API.
 public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
     case proposal(SumeragiV2Proposal)
     case vote(SumeragiV2Vote)
     case quorumCertificate(SumeragiV2QuorumCertificate)
     case timeoutVote(SumeragiV2TimeoutVote)
     case timeoutCertificate(SumeragiV2TimeoutCertificate)
-    case payloadManifest(SumeragiV2PayloadManifest)
     case payloadChunk(SumeragiV2PayloadChunk)
     case certifiedBodyRequest(SumeragiV2CertifiedBodyRequest)
     case certifiedBodyResponse(SumeragiV2CertifiedBodyResponse)
@@ -1287,12 +1282,11 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
         case .quorumCertificate(let value): return sumeragiV2Enum(2, value.encode())
         case .timeoutVote(let value): return sumeragiV2Enum(3, value.encode())
         case .timeoutCertificate(let value): return sumeragiV2Enum(4, value.encode())
-        case .payloadManifest(let value): return sumeragiV2Enum(5, value.encode())
-        case .payloadChunk(let value): return sumeragiV2Enum(6, value.encode())
-        case .certifiedBodyRequest(let value): return sumeragiV2Enum(7, value.encode())
-        case .certifiedBodyResponse(let value): return sumeragiV2Enum(8, value.encode())
-        case .commitCertificateRequest(let value): return sumeragiV2Enum(9, value.encode())
-        case .commitCertificateResponse(let value): return sumeragiV2Enum(10, value.encode())
+        case .payloadChunk(let value): return sumeragiV2Enum(5, value.encode())
+        case .certifiedBodyRequest(let value): return sumeragiV2Enum(6, value.encode())
+        case .certifiedBodyResponse(let value): return sumeragiV2Enum(7, value.encode())
+        case .commitCertificateRequest(let value): return sumeragiV2Enum(8, value.encode())
+        case .commitCertificateResponse(let value): return sumeragiV2Enum(9, value.encode())
         }
     }
 
@@ -1307,12 +1301,11 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
         case 2: return try .quorumCertificate(SumeragiV2QuorumCertificate.decode(payload))
         case 3: return try .timeoutVote(SumeragiV2TimeoutVote.decode(payload))
         case 4: return try .timeoutCertificate(SumeragiV2TimeoutCertificate.decode(payload))
-        case 5: return try .payloadManifest(SumeragiV2PayloadManifest.decode(payload))
-        case 6: return try .payloadChunk(SumeragiV2PayloadChunk.decode(payload))
-        case 7: return try .certifiedBodyRequest(SumeragiV2CertifiedBodyRequest.decode(payload))
-        case 8: return try .certifiedBodyResponse(SumeragiV2CertifiedBodyResponse.decode(payload))
-        case 9: return try .commitCertificateRequest(SumeragiV2CommitCertificateRequest.decode(payload))
-        case 10: return try .commitCertificateResponse(SumeragiV2CommitCertificateResponse.decode(payload))
+        case 5: return try .payloadChunk(SumeragiV2PayloadChunk.decode(payload))
+        case 6: return try .certifiedBodyRequest(SumeragiV2CertifiedBodyRequest.decode(payload))
+        case 7: return try .certifiedBodyResponse(SumeragiV2CertifiedBodyResponse.decode(payload))
+        case 8: return try .commitCertificateRequest(SumeragiV2CommitCertificateRequest.decode(payload))
+        case 9: return try .commitCertificateResponse(SumeragiV2CommitCertificateResponse.decode(payload))
         default: throw SumeragiV2WireError.invalid("unknown consensus payload \(tag)")
         }
     }

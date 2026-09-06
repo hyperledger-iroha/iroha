@@ -14,8 +14,8 @@ use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
     fastpq::{
-        FastpqOperationKind, FastpqPublicInputs, FastpqStateTransition, FastpqTransitionBatch,
-        TRANSFER_TRANSCRIPTS_METADATA_KEY,
+        FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
+        FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY,
     },
     nexus::{
         AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtRemoteSpendClaimV1, ProofBlob,
@@ -59,7 +59,7 @@ pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
 /// this relation because its descriptor binding is not recoverable.
 pub const AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY: &str = "axt_fastpq_remote_spend_claims_v1";
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
-pub const DEFAULT_PARAMETER: &str = "fastpq-lane-balanced";
+pub const DEFAULT_PARAMETER: &str = fastpq_isi::FASTPQ_FINAL_V1_ID;
 /// Nominal first-release schema identity for the outer AXT proof payload.
 #[cfg(test)]
 const AXT_FASTPQ_PROOF_PAYLOAD_SCHEMA_NAME: &str =
@@ -742,18 +742,62 @@ fn transition_batch_from_model_owned(dto: FastpqTransitionBatch) -> TransitionBa
 fn operation_to_model(operation: &OperationKind) -> FastpqOperationKind {
     match operation {
         OperationKind::Transfer => FastpqOperationKind::Transfer,
+        OperationKind::Mint => FastpqOperationKind::Mint,
+        OperationKind::Burn => FastpqOperationKind::Burn,
+        OperationKind::RoleGrant {
+            role_id,
+            permission_id,
+            epoch,
+        } => FastpqOperationKind::RoleGrant(FastpqRolePermissionDelta {
+            role_id: *role_id,
+            permission_id: *permission_id,
+            epoch: *epoch,
+        }),
+        OperationKind::RoleRevoke {
+            role_id,
+            permission_id,
+            epoch,
+        } => FastpqOperationKind::RoleRevoke(FastpqRolePermissionDelta {
+            role_id: *role_id,
+            permission_id: *permission_id,
+            epoch: *epoch,
+        }),
         OperationKind::MetaSet => FastpqOperationKind::MetaSet,
     }
 }
 fn operation_from_model(operation: &FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
+        FastpqOperationKind::Mint => OperationKind::Mint,
+        FastpqOperationKind::Burn => OperationKind::Burn,
+        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
+        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
 fn operation_from_model_owned(operation: FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
+        FastpqOperationKind::Mint => OperationKind::Mint,
+        FastpqOperationKind::Burn => OperationKind::Burn,
+        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
+        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
@@ -1917,6 +1961,49 @@ mod tests {
             OperationKind::Transfer,
         ));
         batch.push(StateTransition::new(
+            b"asset/xor/mint".to_vec(),
+            3_u64.to_le_bytes().to_vec(),
+            5_u64.to_le_bytes().to_vec(),
+            OperationKind::Mint,
+        ));
+        batch.push(StateTransition::new(
+            b"asset/xor/burn".to_vec(),
+            5_u64.to_le_bytes().to_vec(),
+            4_u64.to_le_bytes().to_vec(),
+            OperationKind::Burn,
+        ));
+        let grant_role = [0x11; 32];
+        let grant_permission = [0x22; 32];
+        let grant_epoch = 7;
+        let grant_leaf = crate::trace::permission_hash(&grant_role, &grant_permission, grant_epoch)
+            .expect("canonical grant permission leaf");
+        batch.push(StateTransition::new(
+            crate::trace::permission_transition_key(&grant_role, &grant_permission),
+            Vec::new(),
+            grant_leaf.to_le_bytes().to_vec(),
+            OperationKind::RoleGrant {
+                role_id: grant_role,
+                permission_id: grant_permission,
+                epoch: grant_epoch,
+            },
+        ));
+        let revoke_role = [0x33; 32];
+        let revoke_permission = [0x44; 32];
+        let revoke_epoch = 8;
+        let revoke_leaf =
+            crate::trace::permission_hash(&revoke_role, &revoke_permission, revoke_epoch)
+                .expect("canonical revoke permission leaf");
+        batch.push(StateTransition::new(
+            crate::trace::permission_transition_key(&revoke_role, &revoke_permission),
+            revoke_leaf.to_le_bytes().to_vec(),
+            Vec::new(),
+            OperationKind::RoleRevoke {
+                role_id: revoke_role,
+                permission_id: revoke_permission,
+                epoch: revoke_epoch,
+            },
+        ));
+        batch.push(StateTransition::new(
             b"account/meta".to_vec(),
             b"old".to_vec(),
             b"new".to_vec(),
@@ -2117,7 +2204,7 @@ mod tests {
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
-                profile: "transfer_state_transition",
+                profile: "state_transition",
                 ..
             }
         ));
@@ -2130,7 +2217,7 @@ mod tests {
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
-                profile: "transfer_state_transition",
+                profile: "state_transition",
                 ..
             }
         ));
@@ -2535,7 +2622,7 @@ mod tests {
                 batch
                     .transitions
                     .iter()
-                    .any(|transition| matches!(transition.operation, OperationKind::Transfer)),
+                    .any(|transition| matches!(&transition.operation, OperationKind::Transfer)),
                 "transfer claim fixture must carry transfer rows"
             );
             let proof = Prover::canonical(DEFAULT_PARAMETER)

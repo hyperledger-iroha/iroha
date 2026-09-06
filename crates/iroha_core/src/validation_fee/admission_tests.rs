@@ -28,6 +28,50 @@ fn newly_dispatchable_native_instruction_fails_until_explicitly_classified() {
     );
 }
 #[test]
+fn moderation_challenge_custody_paths_are_classified_as_state_derived_ds_effects() {
+    use iroha_data_model::{
+        isi::sorafs::{
+            ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+            RaiseSorafsModerationChallenge, ResolveSorafsModerationChallenge,
+        },
+        sorafs::moderation_ledger::{ModerationChallengeDecisionV1, ModerationChallengeKindV1},
+    };
+
+    let policy = policy(&account(3));
+    let instructions: Vec<InstructionBox> = vec![
+        RaiseSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeKindV1::Other,
+            None,
+            [0x41; 32],
+            "evidence".to_owned(),
+        )
+        .into(),
+        ResolveSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeDecisionV1::Rejected,
+        )
+        .into(),
+        ExpireSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+        )
+        .into(),
+        FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned()).into(),
+    ];
+    for instruction in instructions {
+        assert!(matches!(
+            native_instruction_ds_effect_disposition(&instruction, &policy_fee_asset(&policy),),
+            NativeInstructionDsEffectDisposition::RejectKnownDsCapable(_)
+        ));
+    }
+}
+#[test]
 fn threshold_key_lifecycle_certificate_is_balance_neutral() {
     use iroha_data_model::isi::consensus_keys::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
@@ -357,6 +401,7 @@ fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps
         .into(),
         ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         }
         .into(),
@@ -396,6 +441,7 @@ fn active_policy_rejects_contract_rebinding_and_artifact_removal_steps() {
     let instructions: Vec<InstructionBox> = vec![
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             reason: Some("attempted policy-era rebind".to_owned()),
         }
         .into(),
@@ -585,122 +631,6 @@ fn kaigi_instruction_surface_is_audited_as_no_ds_effect() {
     }
     enforce_policy(&tx(1, instructions, Metadata::default()), &policy)
         .expect("Kaigi instructions must remain usable while validation fees are active");
-}
-#[test]
-fn active_policy_admits_publicly_bound_kagemusha_fee_asset_conversions() {
-    let treasury = account(3);
-    let policy = policy(&treasury);
-    let fee_asset = policy_fee_asset(&policy);
-    let top_up: InstructionBox =
-        TopUpKagemushaRecursiveV4::new(kagemusha_top_up_request(&fee_asset)).into();
-    let redeem: InstructionBox =
-        RedeemKagemushaRecursiveV4::new(kagemusha_redeem_request(&fee_asset)).into();
-    for instruction in [top_up, redeem] {
-        assert_eq!(
-            native_instruction_ds_effect_disposition(&instruction, &fee_asset),
-            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion,
-        );
-        let collection = collect_asset_transfers(
-            &Executable::Instructions(vec![instruction.clone()].into()),
-            &account(1),
-            &fee_asset,
-        )
-        .expect("a publicly bound Kagemusha conversion must be classifiable");
-        assert!(
-            collection.transfers.is_empty(),
-            "closed transparent/escrow conversion is not an account-to-account Transfer ISI",
-        );
-        enforce_policy(&tx(1, vec![instruction], Metadata::default()), &policy)
-            .expect("Kagemusha conversion must remain usable for the policy fee asset");
-    }
-}
-#[test]
-fn kagemusha_conversion_admission_rejects_redirected_public_bindings() {
-    let treasury = account(3);
-    let policy = policy(&treasury);
-    let fee_asset = policy_fee_asset(&policy);
-    let mut top_up = kagemusha_top_up_request(&fee_asset);
-    top_up.authorization.authority = account(2);
-    assert_eq!(
-        enforce_policy(
-            &tx(
-                1,
-                vec![TopUpKagemushaRecursiveV4::new(top_up).into()],
-                Metadata::default(),
-            ),
-            &policy,
-        ),
-        Err(
-            ValidationFeeAdmissionError::InvalidKagemushaOfflineConversion {
-                context_index: 0,
-                instruction_index: 0,
-                instruction_wire_id: core::any::type_name::<TopUpKagemushaRecursiveV4>(),
-            },
-        ),
-    );
-    let mut redeem = kagemusha_redeem_request(&fee_asset);
-    redeem.recipient = account(2);
-    assert_eq!(
-        enforce_policy(
-            &tx(
-                1,
-                vec![RedeemKagemushaRecursiveV4::new(redeem).into()],
-                Metadata::default(),
-            ),
-            &policy,
-        ),
-        Err(
-            ValidationFeeAdmissionError::InvalidKagemushaOfflineConversion {
-                context_index: 0,
-                instruction_index: 0,
-                instruction_wire_id: core::any::type_name::<RedeemKagemushaRecursiveV4>(),
-            },
-        ),
-    );
-}
-#[test]
-fn kagemusha_conversion_does_not_exempt_adjacent_fee_asset_transfers() {
-    let user = account(1);
-    let recipient = account(2);
-    let treasury = account(3);
-    let policy = policy(&treasury);
-    let fee_asset = policy_fee_asset(&policy);
-    let top_up: InstructionBox =
-        TopUpKagemushaRecursiveV4::new(kagemusha_top_up_request(&fee_asset)).into();
-    let redeem: InstructionBox =
-        RedeemKagemushaRecursiveV4::new(kagemusha_redeem_request(&fee_asset)).into();
-    let principal = transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient);
-    for conversion in [top_up, redeem] {
-        assert_eq!(
-            enforce_policy(
-                &tx(
-                    1,
-                    vec![conversion.clone(), principal.clone()],
-                    Metadata::default(),
-                ),
-                &policy,
-            ),
-            Err(ValidationFeeAdmissionError::MissingFee {
-                required_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
-            }),
-            "an adjacent ordinary DS transfer must still pay the exact validation fee",
-        );
-        let fee = transfer(
-            &user,
-            &fee_asset,
-            minor_units(TEST_VALIDATION_FEE_MINOR_UNITS),
-            &treasury,
-        );
-        enforce_policy(
-            &tx(
-                1,
-                vec![conversion, principal.clone(), fee],
-                metadata_for_fee_instruction(&policy, 2),
-            ),
-            &policy,
-        )
-        .expect("the ordinary transfer remains admissible with its exact signed fee");
-    }
 }
 #[test]
 fn transfer_to_unregistered_account_is_rejected_as_hidden_fee_candidate() {

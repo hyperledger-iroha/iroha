@@ -131,8 +131,8 @@ _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
     "PendingExactOutput::handoff_applied_height_to_durable_reconstruction": (
         "e78d702c927524d363d59d1a098bfd6649d6d399e3f0252faac9d500c77b5a80"
     ),
-    "PendingExactOutput::drive_with_budget_ack": (
-        "04239df36b41b04bc4f3ffcca56e4b3ea0d6ebf9f42fce7739d70f85ba65ba79"
+    "PendingExactOutput::drive_with_budget_ack_and_durable_history": (
+        "334da253eab1b11913ae2f909d162c31f8e2022c4f11fa3aec141b3644a44d52"
     ),
     "PendingExactOutput::poll_reply_flushes": (
         "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749"
@@ -1362,8 +1362,8 @@ reply_flush_ack,
             "finality handoff timeout-attempt revalidation",
         ),
         (
-            "PendingExactOutput::drive_with_budget_ack",
-            "drive_with_budget_ack",
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history",
+            "drive_with_budget_ack_and_durable_history",
             worker_context,
             "timeout-attempt-bound exact reply admission",
         ),
@@ -1415,7 +1415,9 @@ struct PendingExactReplyFlush {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_items["PendingExactOutput::drive_with_budget_ack"],
+        worker_items[
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ],
         """
 if !flush_ack
     .identity()
@@ -1435,7 +1437,9 @@ if !flush_ack
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_items["PendingExactOutput::drive_with_budget_ack"],
+        worker_items[
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ],
         """
 if flush_ack.identity().reply_writer_timeout_attempt()
     != reply_writer_timeout_attempt
@@ -1451,7 +1455,9 @@ if flush_ack.identity().reply_writer_timeout_attempt()
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_items["PendingExactOutput::drive_with_budget_ack"],
+        worker_items[
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ],
         """
 PendingExactReplyFlush {
     flush_ack,
@@ -1464,7 +1470,9 @@ PendingExactReplyFlush {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_items["PendingExactOutput::drive_with_budget_ack"],
+        worker_items[
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ],
         """
 PendingExactReplyFlush {
     flush_ack,

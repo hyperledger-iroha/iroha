@@ -1145,8 +1145,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
                 iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable => {
                     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable
                 }
-                iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unsupported
-                | iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::NotOwned
+                iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::NotOwned
                 | iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::InvalidRequest => {
                     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected
                 }
@@ -1526,7 +1525,7 @@ pub(crate) mod tests {
             genesis
                 .insert(
                     "expected_hash".to_owned(),
-                    toml::Value::String(Hash::prehashed([0xC1; 32]).to_string()),
+                    toml::Value::String(network_id_v1(0xC1).to_string()),
                 )
                 .is_none()
         );

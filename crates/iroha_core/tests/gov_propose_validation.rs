@@ -110,6 +110,7 @@ fn proposal_record_exposes_deploy_payload() {
     let record = iroha_core::state::GovernanceProposalRecord {
         proposer: authority.clone(),
         kind: ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: authority.clone(),
             contract_address: contract_address.clone(),
             code_hash: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
             abi_hash: ContractAbiHash::from_hex_str(&canonical_abi_hex()).expect("abi hash"),

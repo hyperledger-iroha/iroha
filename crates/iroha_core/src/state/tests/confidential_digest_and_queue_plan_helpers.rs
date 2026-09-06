@@ -204,6 +204,26 @@ fn merge_candidate_with_lanes(epoch: u64, count: usize) -> crate::merge::MergeLe
     let_row! { lifecycle_incarnations = active_lanes .iter() .map( |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry { lane_id: binding.lane_id, incarnation: binding.incarnation, }, ) .collect::<Vec<_>>() };
     let_row! { merge_hint_roots: Vec<Hash> = lane_snapshots .iter() .map(|snapshot| snapshot.merge_hint_root) .collect() };
     let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
+    let mut validators = (1..=4)
+        .map(|seed| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic lane fixture validator")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    validators.sort();
+    let lane_authority_catalog = if count == 0 {
+        iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default()
+    } else {
+        iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&vec![
+            validators;
+            count
+        ])
+        .expect("canonical lane fixture authority")
+    };
     crate::merge::MergeLedgerCandidate {
         version: crate::merge::MergeLedgerCandidate::VERSION,
         epoch_id: epoch,
@@ -216,6 +236,7 @@ fn merge_candidate_with_lanes(epoch: u64, count: usize) -> crate::merge::MergeLe
         ),
         activation_root: crate::merge::merge_activation_root(&active_lanes),
         active_lanes,
+        lane_authority_catalog,
         lane_snapshots,
         execution_batch: None,
         lane_drain_certificates: Vec::new(),
@@ -252,6 +273,14 @@ fn merge_candidate_from_relay(
         carrier_parent_hash: state
             .latest_block_hash_fast()
             .expect("test merge carrier parent was seeded"),
+        lane_authority_catalog: state
+            .merge_active_lane_authority_snapshot(
+                u64::try_from(state.committed_height())
+                    .expect("fixture height fits")
+                    .saturating_add(1),
+            )
+            .expect("fixture exact lane authority")
+            .2,
         lane_catalog_hash: merge_lane_catalog_hash(&nexus.lane_catalog),
         incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
             &lifecycle_incarnations,
@@ -304,7 +333,11 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
         assert_eq!(state.committed_height(), durable_count);
         return;
     }
-    let_row! { parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
+    let_row! { mut parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
+    parent
+        .as_mut()
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("attach canonical empty execution results to merge-carrier parent");
     let parent_hash = parent.as_ref().hash();
     state
         .kura
@@ -459,15 +492,22 @@ fn merge_carrier_finality_artifact_with_network(
     parent: Option<&V2FinalityArtifact>,
     network_id: iroha_data_model::NetworkId,
 ) -> V2FinalityArtifact {
-    let keypair = merge_carrier_finality_fixture_keypair();
-    let_row! { roster = vec![ValidatorPower { validator: PeerId::new(keypair.public_key().clone()), power: 1, }] };
+    let mut keypairs = vec![merge_carrier_finality_fixture_keypair()];
+    keypairs.extend((0xD4_u8..=0xD6).map(|seed| {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic merge-carrier finality fixture key")
+    }));
+    keypairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let_row! { roster = keypairs.iter().map(|keypair| ValidatorPower { validator: PeerId::new(keypair.public_key().clone()), power: 1, }).collect::<Vec<_>>() };
     let height = block.header().height().get();
     assert_eq!(
         parent.map_or(1, |artifact| artifact.height.saturating_add(1)),
         height,
         "merge-carrier finality fixtures must form a contiguous chain"
     );
-    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid one-validator fixture quorum"), roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout: DataAvailabilityLayout { encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 1024, data_shards: 1, parity_shards: 1, max_payload_size_bytes: 4096, max_chunk_count: 8, }, leader_seed: [0xD3; 32], } };
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout: DataAvailabilityLayout { encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 1024, data_shards: 1, parity_shards: 1, max_payload_size_bytes: 4096, max_chunk_count: 8, }, leader_seed: [0xD3; 32], } };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
     let_row! { mut execution_commitment = ExecutionCommitment::new_without_merge_carrier( Hash::new(b"state merge finality parent state"), Hash::new(b"state merge finality post state"), Hash::new(b"state merge finality ordinary writes"), None, 0, 1, Hash::new(&executed_block_wire), ) .expect("canonical merge-carrier finality execution commitment") };
     execution_commitment.executed_block_wire_len =
@@ -482,13 +522,13 @@ fn merge_carrier_finality_artifact_with_network(
         });
     let_row! { subject = BlockSubject { parent_block_hash: block.header().prev_block_hash(), block_hash: block.hash(), payload_hash: block .canonical_proposal_wire_hash() .expect("canonical proposal block wire"), } };
     let_row! { round = ConsensusRound { context_id: context.id(), height, view: block.header().view_change_index(), } };
-    let_row! { mut commit_qc = QuorumCertificate { round, proposal_round: round, phase: GlobalPhase::Commit, subject, execution_commitment, signers: vec![0], aggregate_signature: vec![1], } };
+    let_row! { mut commit_qc = QuorumCertificate { round, proposal_round: round, phase: GlobalPhase::Commit, subject, execution_commitment, signers: vec![0, 1, 2], aggregate_signature: vec![1], } };
     let_row! { preimage = commit_qc .signer_preimage(&context, 0) .expect("valid merge-carrier finality fixture signer") };
-    let_row! { signature = Signature::try_new(keypair.private_key(), &preimage) .expect("sign merge-carrier finality fixture vote") .payload() .to_vec() };
-    commit_qc.aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&[signature.as_slice()])
-            .expect("aggregate merge-carrier finality fixture vote");
-    let_row! { validator_set_pops = vec![ bls_normal_pop_prove(keypair.private_key()) .expect("derive merge-carrier finality fixture PoP"), ] };
+    let_row! { signatures = keypairs.iter().take(3).map(|keypair| Signature::try_new(keypair.private_key(), &preimage).expect("sign merge-carrier finality fixture vote").payload().to_vec()).collect::<Vec<_>>() };
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .expect("aggregate merge-carrier finality fixture vote");
+    let_row! { validator_set_pops = keypairs.iter().map(|keypair| bls_normal_pop_prove(keypair.private_key()).expect("derive merge-carrier finality fixture PoP")).collect() };
     let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
     artifact
         .verify()
@@ -612,7 +652,12 @@ fn advance_queue_plan_fixture_to_beacon_parent(
             .global_beacon_pulses
             .insert(beacon_pulse.pulse_id, beacon_pulse);
         world.global_beacon_pulse_slots.insert(
-            (beacon_pulse.network_id, beacon_pulse.height),
+            (
+                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                    &beacon_pulse.network_id,
+                ),
+                beacon_pulse.height,
+            ),
             beacon_pulse.pulse_id,
         );
         world.global_beacon_latest_pulse.insert(
@@ -687,9 +732,22 @@ fn queue_plan_admission_certificate_bytes_for_state_test(
     binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     validator_keypairs: &[KeyPair],
 ) -> Vec<u8> {
+    let coordinator = &binding.admission_context.route_incarnations[0];
+    let validator_indices = (0..coordinator.durability_threshold).collect::<Vec<_>>();
+    queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        binding,
+        validator_keypairs,
+        &validator_indices,
+    )
+}
+fn queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    validator_keypairs: &[KeyPair],
+    validator_indices: &[u16],
+) -> Vec<u8> {
     let binding_hash = binding.canonical_hash();
     let coordinator = &binding.admission_context.route_incarnations[0];
-    let_row! { attestations = coordinator .validator_set .iter() .take(usize::from(coordinator.durability_threshold)) .enumerate() .map(|(index, validator)| { let keypair = validator_keypairs .iter() .find(|keypair| keypair.public_key() == validator.public_key()) .expect("fixture retains every authoritative validator key"); let validator_index = u16::try_from(index).expect("fixture validator index fits u16"); let signing_bytes = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1( binding_hash, validator_index, ) .expect("QueuePlan attestation preimage"); crate::torii_proxy::QueuePlanAdmissionAttestationV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, validator_index, signature: Signature::try_new(keypair.private_key(), &signing_bytes) .expect("QueuePlan attestation signature"), } }) .collect() };
+    let_row! { attestations = validator_indices .iter() .map(|&validator_index| { let validator = coordinator .validator_set .get(usize::from(validator_index)) .expect("fixture validator index is in bounds"); let keypair = validator_keypairs .iter() .find(|keypair| keypair.public_key() == validator.public_key()) .expect("fixture retains every authoritative validator key"); let signing_bytes = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1( binding_hash, validator_index, ) .expect("QueuePlan attestation preimage"); crate::torii_proxy::QueuePlanAdmissionAttestationV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, validator_index, signature: Signature::try_new(keypair.private_key(), &signing_bytes) .expect("QueuePlan attestation signature"), } }) .collect() };
     let_row! { certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1, binding: binding.clone(), attestations, } };
     norito::to_bytes(&certificate).expect("canonical QueuePlan admission certificate")
 }

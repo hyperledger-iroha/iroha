@@ -48,12 +48,7 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    for backend in [
-        crate::zk::ZK_BACKEND_STARK_FRI_V1,
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1",
-    ] {
+    for backend in [crate::zk::ZK_BACKEND_STARK_FRI_V1] {
         let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
         let vk_commitment = crate::zk::hash_vk(&vk);
         let raw = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);

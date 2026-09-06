@@ -140,4 +140,57 @@ mod scheduler_variant_tests {
                 .expect("component-local chains must schedule");
         assert_eq!(layers, vec![vec![3, 0], vec![4, 1], vec![2]]);
     }
+
+    #[test]
+    fn sccp_verifier_quota_fence_keeps_sequential_and_parallel_order_identical() {
+        use crate::pipeline::access::{AccessSet, SCCP_VERIFIER_QUOTA_KEY};
+
+        let access = |writes: &[&str]| {
+            let mut set = AccessSet::new();
+            for key in writes {
+                set.add_write((*key).to_owned());
+            }
+            set
+        };
+        // Transaction 0 precedes proof A through an authority-local key. Proofs
+        // A and B otherwise target distinct exact SCCP records. The quota fence
+        // must join both proof attempts into that component, preventing the
+        // parallel layer scheduler from advancing proof B ahead of proof A.
+        let sets = vec![
+            access(&["tx.sequence:a"]),
+            access(&[
+                "tx.sequence:a",
+                SCCP_VERIFIER_QUOTA_KEY,
+                "sccp.proof:route-a",
+            ]),
+            access(&[SCCP_VERIFIER_QUOTA_KEY, "sccp.proof:route-b"]),
+        ];
+        let (adjacency, indegree) = super::build_conflict_graph(&sets);
+        assert_eq!(indegree, vec![0, 1, 1]);
+        assert_eq!(&adjacency[0][..], &[1]);
+        assert_eq!(&adjacency[1][..], &[2]);
+        assert!(adjacency[2].is_empty());
+
+        let mut row_offsets = Vec::with_capacity(adjacency.len() + 1);
+        let mut cols = Vec::new();
+        row_offsets.push(0);
+        for children in &adjacency {
+            cols.extend(children.iter().copied());
+            row_offsets.push(cols.len());
+        }
+        // These hashes would place proof B between transaction 0 and proof A
+        // if the two exact proof keys formed independent components.
+        let call_hashes = vec![make_hash(10), make_hash(30), make_hash(20)];
+        let components = vec![vec![0, 1, 2]];
+        let sequential =
+            super::schedule_components_wave(&components, &row_offsets, &cols, &call_hashes)
+                .expect("quota-conflicting component must schedule");
+        let parallel_layers =
+            super::conflict_free_component_layers(&components, &row_offsets, &cols, &call_hashes)
+                .expect("quota-conflicting component must form layers");
+        let parallel = parallel_layers.into_iter().flatten().collect::<Vec<_>>();
+
+        assert_eq!(sequential, vec![0, 1, 2]);
+        assert_eq!(parallel, sequential);
+    }
 }

@@ -154,7 +154,7 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
     let root = secure_temp_dir();
     let source_dir = root.path().join("source");
     let publisher_peer_id = TEST_PRODUCER_PEER_ID.as_bytes().to_vec();
-    let producer_signer_handle = "pkcs11:governance-dag:source-primary";
+    let producer_signer_handle = "provider:governance-dag:source-primary";
     let signer = Arc::new(PublisherTestSigner {
         handle: producer_signer_handle.to_owned(),
         peer_id: publisher_peer_id.clone(),
@@ -245,7 +245,7 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
         ("source", JsonValue::from("substituted")),
         ("root", JsonValue::from("runtime-dag")),
         ("generated_at", JsonValue::from(timestamp.saturating_add(1))),
-        ("signer_handle", JsonValue::from("hsm:attacker")),
+        ("signer_handle", JsonValue::from("provider:attacker")),
         ("signer_revision", JsonValue::from(2_u64)),
         (
             "signer_policy_digest_hex",
@@ -1036,7 +1036,7 @@ fn producer_and_public_service_sealed_slots_coexist_without_cross_mutation() {
         .expect("seed service intent slot");
     let publisher_peer_id = b"12D3KooWGovernanceSharedStore".to_vec();
     let signer = Arc::new(PublisherTestSigner {
-        handle: "pkcs11:governance-dag:shared-store-primary".to_owned(),
+        handle: "provider:governance-dag:shared-store-primary".to_owned(),
         peer_id: publisher_peer_id.clone(),
         signer: TestSigner::new(0x77),
     });
@@ -1879,7 +1879,7 @@ fn signed_block_prefix_archive_rejects_corruption_rollback_and_equivocation() {
             &second_head,
         )
         .is_err(),
-        "an archive cannot substitute its qualified HSM provider"
+        "an archive cannot substitute its qualified runtime provider"
     );
     let mut substituted_mapping = second.clone();
     substituted_mapping.blocks[0].published.ipfs_cid =
@@ -1909,7 +1909,7 @@ fn archive_publication_attestation_survives_endpoint_and_provider_rotation() {
     let mut secondary = block_prefix_archive_test_endpoint();
     secondary.url = Url::parse("http://127.0.0.1:2/").expect("parse secondary archive endpoint");
     secondary.authenticator = test_authenticator(
-        "pkcs11:governance-dag:archive-failover-hsm",
+        "provider:governance-dag:archive-failover-secondary",
         GovernanceDagAuthenticationScope::Ipfs,
     );
     assert_ne!(

@@ -252,7 +252,6 @@ fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
             pop: Some(pop),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
         };

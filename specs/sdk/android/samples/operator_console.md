@@ -10,10 +10,15 @@
 
 ## 1. Purpose & Audience
 
-The operator console sample targets validator operators who need a deterministic way to prepare governance transactions, inspect Torii pipeline queues, and prove that StrongBox or other secure elements signed each envelope. The demo must:
+The operator console sample targets validator operators who need a deterministic
+way to prepare governance transactions and inspect Torii pipeline queues. Its
+default software signing path works on every supported device; optional
+StrongBox posture and attestation diagnostics let operators qualify a hardware
+route when their own policy selects one. The demo must:
 
 - showcase how the Android SDK stitches together key management (AND2), Norito RPC networking (AND4), and telemetry hooks (AND7);
-- prove provenance by attaching attestation bundles, SBOM hashes, and `sample_manifest.json` metadata to every build;
+- prove build provenance with SBOM hashes and `sample_manifest.json` metadata,
+  and attach a device-attestation bundle only for an optional hardware drill;
 - expose troubleshooting guidance for operations teams so the sample doubles as a living runbook.
 
 ## 2. Functional Scope
@@ -21,7 +26,7 @@ The operator console sample targets validator operators who need a deterministic
 | Flow | Details | Acceptance Criteria |
 |------|---------|---------------------|
 | Governance transaction builder | Guided composer for role/permission, staking, and treasury instructions with manifest preview | Emits Norito JSON + `.to` artefacts, validates against `iroha_cli schema check`, stores drafts locally with encrypted backups |
-| StrongBox signing | Enforce StrongBox-backed keys with fallback warnings, surface attestation bundle upload to Torii | Shows alias lifecycle, supports re-key, and blocks submission if attestation verification fails |
+| Provider-neutral signing | Use the software provider by default and surface optional StrongBox posture/attestation diagnostics | Shows alias lifecycle and supports re-key without making hardware custody a submission prerequisite |
 | Pipeline inspector | List `/v1/pipeline` pending transactions, retries with exponential backoff, and surfaces `iroha_config.client.pipeline.*` overrides | Metrics feed into `android.telemetry.pipeline.*` counters; UI flags stalled queues |
 | Telemetry & dashboards | Push counters to OTEL collector, link to Grafana dashboards referenced in `specs/sdk/android/readiness/dashboard_parity/` | Sample ships default `otel-config.yaml` plus instructions to override endpoints |
 
@@ -54,7 +59,8 @@ CI (`ci/check_android_samples.sh`) must call each stage, verify deterministic ar
 Publish `specs/sdk/android/samples/operator_console.md` (this file) plus a walkthrough page that covers:
 
 - prerequisite tooling (Torii mock, SoraFS cache, OTEL collector);
-- step-by-step governance transaction creation, StrongBox enrolment, attestation upload, and queue inspection;
+- step-by-step governance transaction creation and queue inspection, plus an
+  optional StrongBox enrolment and attestation drill;
 - troubleshooting matrix (attestation mismatch, queue stuck, proxy failure) with references back to `android_support_playbook.md`.
 
 Public walkthroughs and translations are maintained in the sibling
@@ -66,7 +72,10 @@ The outstanding TODOs from the outline are now closed:
 
 1. **Governance instruction subset.** Beta targets three flows: `GrantRole`, `SetParameter`, and staking (`Stake`/`Unstake`). These cover the council/UHV actions requested by operators without forcing bespoke UI per instruction. Additional opcodes can land post-beta behind a feature flag.
 2. **Managed Device tests.** All managed-device runs talk to the shared Torii mock spun up by `scripts/android_sample_env.sh`. The instrumentation target reads the mock base URL from `ANDROID_OPERATOR_CONSOLE_API_BASE`, so CI and local developers can point at the same fixture without patching the APK.
-3. **StrongBox reminders.** When StrongBox is unavailable, the console shows a persistent inline banner above the action buttons with remediation links. Attempting to send a transaction still triggers a modal explaining why the action is blocked, but the banner keeps the status visible during normal navigation.
+3. **Provider posture.** The console reports whether StrongBox is available,
+   but ordinary governance signing remains valid through the software provider.
+   A deployment that explicitly selects a hardware-only policy can use the
+   posture indicator and separate attestation drill before submitting.
 
 ### 7.1 Build/Test KPIs
 
@@ -85,9 +94,11 @@ Document updates here whenever scope changes or new dependencies emerge.
 ## 8. Environment Preparation & Configuration
 
 This section turns the design brief into a reproducible demo script. It assumes
-you can run the shared sandbox bundled with the repository and that you have at
-least one StrongBox-capable Pixel (see the
-[device matrix](../readiness/android_strongbox_device_matrix.md)).
+you can run the shared sandbox bundled with the repository. An emulator or a
+device without StrongBox is sufficient for the normal walkthrough. A
+StrongBox-capable Pixel from the
+[device matrix](../readiness/android_strongbox_device_matrix.md) is needed only
+for the optional attestation drill.
 
 ### 8.1 Prerequisites
 
@@ -96,8 +107,9 @@ least one StrongBox-capable Pixel (see the
 - `cargo`, `python3`, and the helper scripts under `scripts/`.
 - Access to the `iroha_test_network` dependencies so the sandbox can build and
   run Torii and the SoraFS fixtures.
-- A StrongBox alias enrolled per the [key management guide](../key_management.md)
-  so the console can exercise hardware-backed flows.
+- Optional: a StrongBox alias enrolled per the
+  [key management guide](../key_management.md) for the hardware-attestation
+  drill.
 
 ### 8.2 Bootstrap the sandbox
 
@@ -163,16 +175,15 @@ packets can cite the exact digest emitted by the SF-6c gate.
 
 Follow these phases whenever you demo the console for operators or auditors.
 
-### Step 1 — Onboard StrongBox keys & attestation
+### Step 1 — Confirm software signing; optionally capture StrongBox attestation
 
-1. Launch the sample, open **Settings → Keys & Attestation**, and pick the alias
-   that maps to your validator identity.
-2. When prompted, the app calls `IrohaKeyManager.generateOrLoad` with
-   `KeySecurityPreference.STRONGBOX_REQUIRED`. If the UI displays a downgrade
-   banner, stop the walkthrough and remediate the device per
-   [key_management.md](../key_management.md#3-alias-lifecycle).
-3. Tap **Capture Attestation** to mint a challenge-bound bundle. Export the ZIP
-   the sample produces and verify it locally:
+1. Launch the sample and confirm that the provider count is non-zero. The
+   current walkthrough creates its demonstration envelope with
+   `KeySecurityPreference.SOFTWARE_ONLY`, so StrongBox availability is
+   informational and never blocks the normal flow.
+2. If you are running the separate hardware-attestation drill, open
+   **Settings → Keys & Attestation**, select the enrolled StrongBox alias, and
+   capture a challenge-bound bundle. Export the ZIP and verify it locally:
 
    ```bash
    scripts/android_keystore_attestation.sh \
@@ -185,9 +196,9 @@ Follow these phases whenever you demo the console for operators or auditors.
      --output artifacts/android/attestation/pixel8-strongbox-a/20260324/result.json
    ```
 
-4. Archive the attestation digest under
-   `specs/sdk/android/strongbox_attestation_harness_plan.md`
-   as required by AND2/AND6.
+3. For that optional drill, archive the attestation digest under
+   `specs/sdk/android/strongbox_attestation_harness_plan.md`. It is not required
+   for ordinary sample build, signing, submission, or release.
 
 ### Step 2 — Compose & review a governance transaction
 
@@ -237,7 +248,8 @@ Follow these phases whenever you demo the console for operators or auditors.
      the `.env` export) so telemetry/adoption reviewers can match the evidence
      against the captured scoreboard/summary.
    - `ANDROID_SAMPLE_TELEMETRY_LOG` plus the parity diff.
-   - StrongBox attestation bundle + validation JSON.
+   - Optional StrongBox attestation bundle + validation JSON, when the hardware
+     drill was run.
    - Torii log/metrics exported by the sandbox helper.
 3. Update the release or readiness ticket with links to the evidence bundle and
    note the commit hash of the sample plus the `iroha_config` snapshot you used.
@@ -246,11 +258,11 @@ Follow these phases whenever you demo the console for operators or auditors.
 
 | Symptom | Resolution |
 |---------|------------|
-| **Attestation capture fails** | Confirm the device appears as 🈴 in the [StrongBox matrix](../readiness/android_strongbox_device_matrix.md), re-run `scripts/android_keystore_attestation.sh --require-strongbox`, and document the remediation in `android_strongbox_attestation_run_log.md`. |
+| **Optional attestation capture fails** | Continue the provider-neutral software-signing walkthrough. For a separately requested hardware drill, confirm the device appears as 🈴 in the [StrongBox matrix](../readiness/android_strongbox_device_matrix.md), re-run `scripts/android_keystore_attestation.sh --require-strongbox`, and document the remediation in `android_strongbox_attestation_run_log.md`. |
 | **Pipeline panel never clears** | Tail the Torii log referenced by `ANDROID_SAMPLE_TORII_LOG` and cross-check the pending queue with `iroha_cli pipeline inspect`. If retries climb above the thresholds in Section 6, roll back to the last known-good sample config and file an AND4 bug. |
 | **Dashboard parity diff fails** | Review the JSON written by `ci/check_android_dashboard_parity.sh`, compare it against the allowance file, and follow the public operator guidance at [docs.iroha.tech](https://docs.iroha.tech/). |
 | **Telemetry export refuses to run** | Ensure `scripts/android_sample_env.sh` was invoked without `--no-telemetry` and that the dry-run file `ANDROID_SAMPLE_TELEMETRY_LOG` exists. For live tests, pass `--telemetry-live --telemetry-cluster <cluster>` and capture the HTTP 202 receipts in the evidence bundle. |
-| **StrongBox downgrade banner** | Device lacks StrongBox or its keystore service failed. Reboot into the latest Android 14 QPR2 build, clear the alias, and regenerate keys following the [alias lifecycle guidance](../key_management.md#3-alias-lifecycle). Do not continue until the banner clears. |
+| **StrongBox unavailable** | This is informational for ordinary software-backed signing. If an operator explicitly selected the optional hardware drill, reboot the device, clear the alias, and regenerate keys following the [alias lifecycle guidance](../key_management.md#3-alias-lifecycle) before collecting that drill's evidence. |
 
 Escalate recurring issues through the AND5 tracker and keep `status.md` in sync,
 as the roadmap requires weekly doc/readiness updates for the Android DX

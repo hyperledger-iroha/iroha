@@ -7,6 +7,7 @@ import {
   ToriiClient,
 } from "../src/toriiClient.js";
 import { NetworkId } from "../src/networkId.js";
+import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
 
 const BASE_URL = "https://torii.example";
 const SIGNER = "ed0120ABCDEF";
@@ -91,7 +92,7 @@ function client(fetchImpl, native = nativeBinding(), options = {}) {
   const { validation = async () => {}, ...clientOptions } = options;
   const sdk = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: native,
+    [TORII_TEST_NATIVE_BINDING]: native,
     localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
     ...clientOptions,
   });
@@ -141,18 +142,28 @@ test("orderbook submit snapshots bytes and sends one exact authenticated Norito 
 
 test("orderbook submit binds snapshotted native callables to their native receiver", async () => {
   const native = nativeBinding();
+  native.state = "first";
   const inspect = native.inspectSorafsOrderbookSubmissionForDiscriminantV1;
   const verify = native.verifySorafsOrderbookSubmissionReceiptV1;
   native.inspectSorafsOrderbookSubmissionForDiscriminantV1 = function (...args) {
-    assert.equal(this, native);
+    assert.notEqual(this, native);
+    assert.equal(Object.isFrozen(this), true);
+    assert.equal(Object.getPrototypeOf(this), null);
+    assert.equal(this.state, "first");
     return Reflect.apply(inspect, this, args);
   };
   native.verifySorafsOrderbookSubmissionReceiptV1 = function (...args) {
-    assert.equal(this, native);
+    assert.notEqual(this, native);
+    assert.equal(Object.isFrozen(this), true);
+    assert.equal(this.state, "first");
     return Reflect.apply(verify, this, args);
   };
-  const receipt = await client(async () => acceptedResponse(), native)
-    .submitSorafsOrderbookOrder(Buffer.of(1), { expectedReceiptSigner: SIGNER });
+  const sdk = client(async () => acceptedResponse(), native);
+  native.state = "mutated";
+  const receipt = await sdk.submitSorafsOrderbookOrder(
+    Buffer.of(1),
+    { expectedReceiptSigner: SIGNER },
+  );
   assert.equal(receipt.payload.signer, SIGNER);
 });
 
@@ -181,7 +192,7 @@ test("orderbook submit requires https unless insecure transport is explicit and 
   let fetches = 0;
   const insecure = new ToriiClient("http://torii.example", {
     fetchImpl: async () => { fetches += 1; return acceptedResponse(); },
-    __nativeBinding: nativeBinding(),
+    [TORII_TEST_NATIVE_BINDING]: nativeBinding(),
     localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
   });
   insecure._ensureDataModelValidation = async () => {};
@@ -195,7 +206,7 @@ test("orderbook submit requires https unless insecure transport is explicit and 
     allowInsecure: true,
     insecureTransportTelemetryHook: (event) => events.push(event),
     fetchImpl: async () => { fetches += 1; return acceptedResponse(); },
-    __nativeBinding: nativeBinding(),
+    [TORII_TEST_NATIVE_BINDING]: nativeBinding(),
     localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
   });
   optedIn._ensureDataModelValidation = async () => {};
@@ -209,7 +220,7 @@ test("orderbook submit requires https unless insecure transport is explicit and 
   ]) {
     const sdk = new ToriiClient(baseUrl, {
       allowInsecure: true, fetchImpl: async () => { fetches += 1; },
-      __nativeBinding: nativeBinding(), localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
+      [TORII_TEST_NATIVE_BINDING]: nativeBinding(), localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
     });
     sdk._ensureDataModelValidation = async () => {};
     await assert.rejects(
@@ -258,6 +269,47 @@ test("orderbook deadline races a custom fetch that ignores AbortSignal", async (
   assert.equal(fetches, 1);
 });
 
+test("orderbook submission preserves caller abort reasons before dispatch", async () => {
+  let fetches = 0;
+  const reason = new Error("caller cancelled preflight");
+  const controller = new AbortController();
+  controller.abort(reason);
+
+  await assert.rejects(
+    client(async () => { fetches += 1; }, nativeBinding())
+      .submitSorafsOrderbookOrder(Buffer.of(1), {
+        expectedReceiptSigner: SIGNER,
+        signal: controller.signal,
+      }),
+    (error) => error === reason,
+  );
+  assert.equal(fetches, 0);
+});
+
+test("orderbook submission preserves caller abort reasons after dispatch", async () => {
+  let markDispatched;
+  const dispatched = new Promise((resolve) => { markDispatched = resolve; });
+  const controller = new AbortController();
+  const reason = new Error("caller cancelled dispatched request");
+  const pending = client(() => {
+    markDispatched();
+    return new Promise(() => {});
+  }, nativeBinding()).submitSorafsOrderbookOrder(Buffer.of(1), {
+    expectedReceiptSigner: SIGNER,
+    signal: controller.signal,
+  });
+
+  await dispatched;
+  controller.abort(reason);
+  await assert.rejects(
+    pending,
+    (error) => (
+      error instanceof SorafsOrderbookSubmissionAmbiguousError &&
+      error.cause === reason
+    ),
+  );
+});
+
 test("orderbook deadline cancels a response that arrives after ambiguity", async () => {
   let resolveFetch;
   let cancelled = false;
@@ -302,40 +354,67 @@ test("orderbook deadline uses captured AbortSignal intrinsics and nonthrowing cl
   }
 });
 
-test("orderbook submit rechecks mutable effective headers immediately before dispatch", async () => {
+test("orderbook submit snapshots caller-owned fixed headers before validation", async () => {
   let releaseCapabilities;
-  let fetches = 0;
-  const sdk = client(async () => { fetches += 1; }, nativeBinding(), {
+  const dispatched = [];
+  const defaultHeaders = {};
+  const sdk = client(async (_url, init) => {
+    dispatched.push(init);
+    return acceptedResponse();
+  }, nativeBinding(), {
     validation: () => new Promise((resolve) => { releaseCapabilities = resolve; }),
+    defaultHeaders,
   });
   const pending = sdk.submitSorafsOrderbookOrder(Buffer.of(1), {
     expectedReceiptSigner: SIGNER,
   });
-  sdk._config.defaultHeaders.Prefer = "return=minimal";
+  defaultHeaders.Prefer = "return=minimal";
   releaseCapabilities();
-  await assert.rejects(pending, /forbids overriding Prefer/u);
-  assert.equal(fetches, 0);
+  await pending;
+  assert.equal(dispatched.length, 1);
+  assert.equal("Prefer" in dispatched[0].headers, false);
 });
 
-test("orderbook submit freezes all effective credentials and benign headers before validation", async () => {
-  for (const mutate of [
-    (sdk) => { sdk._config.defaultHeaders.Authorization = "Bearer replacement"; },
-    (sdk) => { sdk._config.apiToken = "replacement"; },
-    (sdk) => { sdk._config.defaultHeaders["X-Tenant"] = "replacement"; },
+test("orderbook submit snapshots caller-owned credentials and benign headers", async () => {
+  for (const { field, expected, mutate } of [
+    {
+      field: "Authorization",
+      expected: "Bearer original",
+      mutate: (options) => { options.defaultHeaders.Authorization = "Bearer replacement"; },
+    },
+    {
+      field: "X-API-Token",
+      expected: "original",
+      mutate: (options) => { options.apiToken = "replacement"; },
+    },
+    {
+      field: "X-Tenant",
+      expected: "original",
+      mutate: (options) => { options.defaultHeaders["X-Tenant"] = "replacement"; },
+    },
   ]) {
     let releaseCapabilities;
-    let fetches = 0;
-    const sdk = client(async () => { fetches += 1; }, nativeBinding(), {
+    const dispatched = [];
+    const callerOptions = {
       validation: () => new Promise((resolve) => { releaseCapabilities = resolve; }),
-      defaultHeaders: { "X-Tenant": "original" }, apiToken: "original",
-    });
+      defaultHeaders: {
+        Authorization: "Bearer original",
+        "X-Tenant": "original",
+      },
+      apiToken: "original",
+    };
+    const sdk = client(async (_url, init) => {
+      dispatched.push(init);
+      return acceptedResponse();
+    }, nativeBinding(), callerOptions);
     const pending = sdk.submitSorafsOrderbookOrder(Buffer.of(1), {
       expectedReceiptSigner: SIGNER,
     });
-    mutate(sdk);
+    mutate(callerOptions);
     releaseCapabilities();
-    await assert.rejects(pending, /effective request headers changed/u);
-    assert.equal(fetches, 0);
+    await pending;
+    assert.equal(dispatched.length, 1);
+    assert.equal(dispatched[0].headers[field], expected);
   }
 });
 
@@ -410,6 +489,7 @@ test("orderbook submit marks every failure after dispatch as non-resubmittable a
         assert.equal(error.route, "order");
         assert.deepEqual(error.expectedIdentity, IDENTITY);
         assert.equal(Object.isFrozen(error.expectedIdentity), true);
+        assert.ok(error.cause instanceof Error, label);
         assert.equal("body" in error, false);
         return true;
       },

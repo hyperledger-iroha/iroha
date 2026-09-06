@@ -143,7 +143,6 @@ RUN set -eu; \
     case "${CONFIG_PROFILE}" in \
         single) \
             test -x "${BIN_PATH}/iroha3d"; \
-            cp /tmp/defaults/genesis.json "${CONFIG_DIR}/genesis.json"; \
             cp /tmp/defaults/client.toml "${CONFIG_DIR}/client.toml"; \
             if [ -d /tmp/defaults/config.d ]; then \
                 mkdir -p "${CONFIG_DIR}/config.d"; \
@@ -152,7 +151,6 @@ RUN set -eu; \
             ;; \
         nexus) \
             test -x "${BIN_PATH}/iroha3d"; \
-            cp /tmp/defaults/nexus/genesis.json "${CONFIG_DIR}/genesis.json"; \
             cp /tmp/defaults/nexus/client.toml "${CONFIG_DIR}/client.toml"; \
             cp /tmp/defaults/nexus/config.toml "${CONFIG_DIR}/config.toml" \
             ;; \

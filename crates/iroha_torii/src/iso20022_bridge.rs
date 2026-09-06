@@ -1,4 +1,7 @@
-use crate::routing::{self, MaybeTelemetry};
+use crate::{
+    routing::{self, MaybeTelemetry},
+    secure_file_metadata::{self, SecureMetadata},
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::DashMap;
 use eyre::WrapErr as _;
@@ -11,7 +14,7 @@ use iroha_core::iso_bridge::{
     reference_data::{ReferenceDataError, ReferenceDataSnapshots},
 };
 use iroha_core::state::WorldReadOnly;
-use iroha_crypto::PrivateKey;
+use iroha_crypto::{KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
     account::address::AccountAddress,
@@ -32,7 +35,7 @@ use norito::json::Value as JsonValue;
 use p256::ecdsa::{
     Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
 };
-use parking_lot::ReentrantMutex;
+use parking_lot::{Mutex, ReentrantMutex};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::{
@@ -44,7 +47,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -66,6 +69,10 @@ struct IsoCurrencyBinding {
 pub struct Iso20022BridgeRuntime {
     signer_account: AccountId,
     signer_private_key: PrivateKey,
+    signer_public_key: PublicKey,
+    participants_by_key: Arc<BTreeMap<PublicKey, IsoBridgeParticipant>>,
+    participants_by_financial_id: Arc<HashMap<String, String>>,
+    audit_admin_keys: Arc<BTreeSet<PublicKey>>,
     account_aliases: Arc<HashMap<String, AccountId>>,
     alias_indices: Arc<HashMap<String, AliasIndex>>,
     index_aliases: Arc<BTreeMap<AliasIndex, (String, AccountId)>>,
@@ -79,11 +86,123 @@ pub struct Iso20022BridgeRuntime {
     audit_export_dir: Option<PathBuf>,
     dedupe_ttl: Duration,
     state_lock: Arc<ReentrantMutex<()>>,
-    records: DashMap<String, IsoMessageRecord>,
+    records: DashMap<String, IsoMessageRecordV2>,
     tx_hash_index: DashMap<String, String>,
     payload_hash_index: DashMap<String, String>,
     business_message_id_index: DashMap<String, String>,
     uetr_index: DashMap<String, String>,
+    replay_tombstones: DashMap<String, IsoReplayTombstone>,
+    durable_store_usage: Arc<Mutex<IsoDurableStoreUsage>>,
+    lifecycle_persistence_healthy: Arc<AtomicBool>,
+    audit_persistence_healthy: Arc<AtomicBool>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum IsoParticipantRole {
+    Originator,
+    Counterparty,
+}
+#[derive(Clone, Debug)]
+struct IsoBridgeParticipant {
+    id: String,
+    financial_identifiers: BTreeSet<String>,
+    allowed_profiles: BTreeSet<String>,
+    roles: BTreeSet<IsoParticipantRole>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct IsoRecordParties {
+    originator_participant_id: String,
+    counterparty_participant_id: String,
+    admitting_participant_id: String,
+    admitting_operator_key: String,
+    originator_financial_id: String,
+    counterparty_financial_id: String,
+    pinned_profile_id: String,
+    pinned_signature_policy: String,
+    pinned_profile_policy_sha256: String,
+}
+// Runtime-only allocation identity: record clones retain it, while every admission or reload
+// receives a fresh token. It is deliberately absent from the persisted wire schema.
+#[derive(Clone, Debug)]
+struct IsoRecordIncarnation(Arc<()>);
+impl PartialEq for IsoRecordIncarnation {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for IsoRecordIncarnation {}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IsoLifecycleOriginalBinding {
+    message_id: String,
+    incarnation: IsoRecordIncarnation,
+    transaction_hash: Option<String>,
+}
+/// Opaque authorization tying one lifecycle admission to the exact original record observed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IsoLifecycleAuthorization {
+    parties: IsoRecordParties,
+    original: Option<IsoLifecycleOriginalBinding>,
+}
+impl IsoLifecycleAuthorization {
+    fn initial(parties: IsoRecordParties) -> Self {
+        Self {
+            parties,
+            original: None,
+        }
+    }
+
+    /// Return the participant snapshot to persist with the lifecycle admission.
+    pub(crate) fn parties(&self) -> &IsoRecordParties {
+        &self.parties
+    }
+
+    /// Return the exact original transaction hash whose commitment may authorize settlement.
+    pub(crate) fn settlement_transaction_hash(
+        &self,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<Option<&str>, MsgError> {
+        if message_type != "pacs.002"
+            || !lifecycle_status_code(message_type, parsed).is_some_and(is_settlement_status_code)
+        {
+            return Ok(None);
+        }
+        let referenced_id = canonical_lifecycle_referenced_message_id(message_type, parsed)?
+            .ok_or(MsgError::MissingField("OrgnlMsgId"))?;
+        let original = self
+            .original
+            .as_ref()
+            .filter(|binding| binding.message_id == referenced_id)
+            .ok_or(MsgError::ValidationFailed)?;
+        Ok(original.transaction_hash.as_deref())
+    }
+}
+#[derive(Clone, Debug)]
+struct IsoReplayTombstone {
+    expires_at: SystemTime,
+    payload_hash: Option<String>,
+    business_message_id: Option<String>,
+    uetr: Option<String>,
+}
+/// Reason an inbound ISO message could not be durably admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IsoAdmissionError {
+    /// The message or one of its immutable replay identities already exists.
+    Duplicate,
+    /// Every bounded replay slot is still protected by the configured TTL.
+    ProtectedCapacity,
+    /// Admission could not be persisted before further processing.
+    PersistenceUnavailable,
+    /// The authenticated operator is not authorized for this participant operation.
+    NotAuthorized,
+}
+/// Detached signature covering one exact outbound ISO XML document.
+pub(crate) struct SignedIsoDocument {
+    /// XML bytes that were signed.
+    pub(crate) xml: String,
+    /// Canonical public key identifying the bridge signer.
+    pub(crate) public_key: String,
+    /// Base64-encoded signature over the domain-separated XML bytes.
+    pub(crate) signature: String,
 }
 #[derive(Clone, Debug, Default)]
 /// Metadata captured while parsing an ISO 20022 payment message.
@@ -303,7 +422,7 @@ pub struct IsoStatusHistoryEntry {
     reason_code: Option<String>,
 }
 impl IsoStatusHistoryEntry {
-    fn new(record: &IsoMessageRecord) -> Self {
+    fn new(record: &IsoMessageRecordV2) -> Self {
         Self {
             status: record.state,
             pacs002_code: record.derived_status(),
@@ -365,6 +484,7 @@ pub struct IsoMessageStatus {
     change_reason_codes: Vec<String>,
     rejection_reason_code: Option<String>,
     status_history: Vec<IsoStatusHistoryEntry>,
+    parties: IsoRecordParties,
 }
 impl IsoMessageStatus {
     pub fn message_id(&self) -> &str {
@@ -489,6 +609,34 @@ impl IsoMessageStatus {
     pub fn status_history(&self) -> &[IsoStatusHistoryEntry] {
         &self.status_history
     }
+    /// Stable participant that originated the initial ISO message.
+    pub fn originator_participant_id(&self) -> &str {
+        &self.parties.originator_participant_id
+    }
+    /// Stable participant expected to submit counterparty lifecycle messages.
+    pub fn counterparty_participant_id(&self) -> &str {
+        &self.parties.counterparty_participant_id
+    }
+    /// Participant whose authenticated operator admitted this exact message.
+    pub fn admitting_participant_id(&self) -> &str {
+        &self.parties.admitting_participant_id
+    }
+    /// Canonical public key of the authenticated admitting operator.
+    pub fn admitting_operator_key(&self) -> &str {
+        &self.parties.admitting_operator_key
+    }
+    /// Immutable rail/profile selected by the initial message.
+    pub fn pinned_profile_id(&self) -> &str {
+        &self.parties.pinned_profile_id
+    }
+    /// Immutable signature policy selected by the initial message.
+    pub fn pinned_signature_policy(&self) -> &str {
+        &self.parties.pinned_signature_policy
+    }
+    /// SHA-256 digest of the complete immutable rail-profile policy snapshot.
+    pub fn pinned_profile_policy_sha256(&self) -> &str {
+        &self.parties.pinned_profile_policy_sha256
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IsoLifecycleOutcome {
@@ -552,7 +700,8 @@ impl Pacs002Status {
     }
 }
 #[derive(Clone, Debug)]
-struct IsoMessageRecord {
+struct IsoMessageRecordV2 {
+    incarnation: IsoRecordIncarnation,
     last_seen: Instant,
     updated_at: SystemTime,
     state: IsoMessageState,
@@ -566,10 +715,13 @@ struct IsoMessageRecord {
     change_reason_codes: Vec<String>,
     rejection_reason_code: Option<String>,
     status_history: Vec<IsoStatusHistoryEntry>,
+    parties: IsoRecordParties,
+    replay_expires_at: SystemTime,
 }
-impl IsoMessageRecord {
+impl IsoMessageRecordV2 {
     fn pending(now: Instant) -> Self {
         let mut record = Self {
+            incarnation: new_iso_record_incarnation(),
             last_seen: now,
             updated_at: SystemTime::now(),
             state: IsoMessageState::Pending,
@@ -583,6 +735,8 @@ impl IsoMessageRecord {
             change_reason_codes: Vec::new(),
             rejection_reason_code: None,
             status_history: Vec::new(),
+            parties: IsoRecordParties::default(),
+            replay_expires_at: SystemTime::now(),
         };
         record
             .try_push_history()
@@ -591,6 +745,7 @@ impl IsoMessageRecord {
     }
     fn accepted(now: Instant, tx_hash: String) -> Self {
         let mut record = Self {
+            incarnation: new_iso_record_incarnation(),
             last_seen: now,
             updated_at: SystemTime::now(),
             state: IsoMessageState::Accepted,
@@ -604,6 +759,8 @@ impl IsoMessageRecord {
             change_reason_codes: Vec::new(),
             rejection_reason_code: None,
             status_history: Vec::new(),
+            parties: IsoRecordParties::default(),
+            replay_expires_at: SystemTime::now(),
         };
         record
             .try_push_history()
@@ -616,6 +773,7 @@ impl IsoMessageRecord {
         reason_code: Option<String>,
     ) -> Result<Self, IsoStatusHistoryLimitError> {
         let mut record = Self {
+            incarnation: new_iso_record_incarnation(),
             last_seen: now,
             updated_at: SystemTime::now(),
             state: IsoMessageState::Rejected,
@@ -629,6 +787,8 @@ impl IsoMessageRecord {
             change_reason_codes: Vec::new(),
             rejection_reason_code: reason_code,
             status_history: Vec::new(),
+            parties: IsoRecordParties::default(),
+            replay_expires_at: SystemTime::now(),
         };
         record.try_push_history()?;
         Ok(record)
@@ -765,25 +925,49 @@ impl IsoMessageRecord {
 }
 const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
 const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
-const ISO_PERSISTED_RECORD_VERSION: u64 = 1;
+const ISO_PERSISTED_RECORD_VERSION: u64 = 3;
 const ISO_PERSISTED_RECORD_DIGEST_FIELD: &str = "record_sha256";
 const ISO_PERSISTED_RECORD_MAX_BYTES: u64 = 1024 * 1024;
 // The independent runtime ceiling keeps hand-built `actual` configs fail-closed too.
 const ISO_PERSISTED_RECORD_MAX_COUNT_V1: u64 = 1_024;
+// Recovery is a single bounded operation across both durable identity directories.
+// The aggregate byte ceiling is intentionally independent of the per-record cap:
+// a directory full of individually valid maximum-size records must not starve node startup.
+const ISO_PERSISTED_STARTUP_MAX_ENTRIES_V1: u64 = ISO_PERSISTED_RECORD_MAX_COUNT_V1 * 2;
+const ISO_PERSISTED_STARTUP_MAX_BYTES_V1: u64 = 256 * 1024 * 1024;
 // V1 retains exact lifecycle evidence; it never rolls this append-only history forward.
 const ISO_STATUS_HISTORY_MAX_ENTRIES_V1: usize = 256;
 const ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1: usize = 256 * 1024;
 static ISO_RECORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const ISO_CHANGE_REASON_MAX_ENTRIES_V1: usize = 64;
 const ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1: usize = 16 * 1024;
-const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 1;
+const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 3;
+const ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const ISO_PERSISTED_AUDIT_DIR: &str = "audit";
+const ISO_PERSISTED_REPLAY_TOMBSTONE_DIR: &str = "replay_tombstones";
+const ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION: u64 = 2;
+const ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD: &str = "tombstone_sha256";
+const ISO_PERSISTED_LIFECYCLE_OPERATION_DIR: &str = "lifecycle_operations";
+const ISO_PERSISTED_LIFECYCLE_OPERATION_ID: &str = "pending-lifecycle-operation-v1";
+const ISO_PERSISTED_LIFECYCLE_OPERATION_VERSION: u64 = 1;
+const ISO_PERSISTED_LIFECYCLE_OPERATION_DIGEST_FIELD: &str = "operation_sha256";
+const ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_BYTES: u64 =
+    ISO_PERSISTED_RECORD_MAX_BYTES * 2 + 256 * 1024;
+const ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_ENTRIES: u64 = 4;
 const ISO_PERSISTED_AUDIT_INDEX_FILE: &str = "messages.index.json";
 const ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD: &str = "index_sha256";
 const ISO_AUDIT_EXPORT_ANCHOR_VERSION: u64 = 1;
 const ISO_AUDIT_EXPORT_ANCHOR_DIR: &str = "anchors";
 const ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE: &str = "latest.notary.json";
 const ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD: &str = "anchor_sha256";
+#[cfg(not(test))]
+const ISO_AUDIT_PERSISTENCE_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const ISO_AUDIT_PERSISTENCE_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+
+fn new_iso_record_incarnation() -> IsoRecordIncarnation {
+    IsoRecordIncarnation(Arc::new(()))
+}
 const ISO4217_MAX_MINOR_UNITS: u8 = 4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IsoStatusHistoryLimitError {
@@ -792,10 +976,441 @@ enum IsoStatusHistoryLimitError {
     ChangeReasonCount,
     ChangeReasonEncodedBytes,
     Allocation,
+    MissingReservation,
+    Persistence,
+}
+/// Failure while applying an admitted ISO lifecycle message.
+#[derive(Debug)]
+pub(crate) enum IsoLifecycleApplyError {
+    /// The message cannot be applied to the currently authorized record.
+    Validation(MsgError),
+    /// Durable commit state is unavailable or indeterminate and may be retried.
+    PersistenceUnavailable,
+}
+impl From<MsgError> for IsoLifecycleApplyError {
+    fn from(error: MsgError) -> Self {
+        Self::Validation(error)
+    }
+}
+impl core::fmt::Display for IsoLifecycleApplyError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Validation(error) => core::fmt::Display::fmt(error, formatter),
+            Self::PersistenceUnavailable => {
+                formatter.write_str("ISO lifecycle persistence is temporarily unavailable")
+            }
+        }
+    }
+}
+#[derive(Clone, Debug)]
+struct IsoPreparedRecordMutation {
+    message_id: String,
+    previous: IsoMessageRecordV2,
+    candidate: IsoMessageRecordV2,
+}
+#[derive(Clone, Debug)]
+struct IsoLifecycleJournalMutation {
+    message_id: String,
+    previous_record_sha256: String,
+    after_record: JsonValue,
+}
+#[derive(Clone, Debug)]
+struct IsoLifecycleJournal {
+    original: Option<IsoLifecycleJournalMutation>,
+    lifecycle: IsoLifecycleJournalMutation,
+}
+#[derive(Clone, Copy, Debug)]
+struct IsoStartupScanBudget {
+    entries: u64,
+    bytes: u64,
+    max_entries: u64,
+    max_bytes: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IsoDurableRecordKind {
+    Message,
+    ReplayTombstone,
+}
+impl IsoDurableRecordKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Message => "message",
+            Self::ReplayTombstone => "replay tombstone",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IsoDurableStoreUsageError {
+    DuplicateEntry,
+    EntryBytes,
+    DirectoryEntries,
+    AggregateEntries,
+    AggregateBytes,
+    Accounting,
+}
+#[derive(Clone, Debug)]
+struct IsoDurableStoreUsage {
+    message_bytes: HashMap<String, u64>,
+    tombstone_bytes: HashMap<String, u64>,
+    bytes: u64,
+    max_directory_entries: u64,
+    max_entries: u64,
+    max_bytes: u64,
+}
+impl IsoDurableStoreUsage {
+    fn v1() -> Self {
+        Self {
+            message_bytes: HashMap::new(),
+            tombstone_bytes: HashMap::new(),
+            bytes: 0,
+            max_directory_entries: ISO_PERSISTED_RECORD_MAX_COUNT_V1,
+            max_entries: ISO_PERSISTED_STARTUP_MAX_ENTRIES_V1,
+            max_bytes: ISO_PERSISTED_STARTUP_MAX_BYTES_V1,
+        }
+    }
+    fn entries(&self, kind: IsoDurableRecordKind) -> &HashMap<String, u64> {
+        match kind {
+            IsoDurableRecordKind::Message => &self.message_bytes,
+            IsoDurableRecordKind::ReplayTombstone => &self.tombstone_bytes,
+        }
+    }
+    fn entries_mut(&mut self, kind: IsoDurableRecordKind) -> &mut HashMap<String, u64> {
+        match kind {
+            IsoDurableRecordKind::Message => &mut self.message_bytes,
+            IsoDurableRecordKind::ReplayTombstone => &mut self.tombstone_bytes,
+        }
+    }
+    fn replacement_total_bytes(
+        &self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        bytes: u64,
+    ) -> Result<u64, IsoDurableStoreUsageError> {
+        if bytes > ISO_PERSISTED_RECORD_MAX_BYTES {
+            return Err(IsoDurableStoreUsageError::EntryBytes);
+        }
+        let entries = self.entries(kind);
+        let previous_bytes = entries.get(message_id).copied().unwrap_or(0);
+        let is_new = !entries.contains_key(message_id);
+        let new_entries = if is_new { 1 } else { 0 };
+        let directory_entries = u64::try_from(entries.len())
+            .map_err(|_| IsoDurableStoreUsageError::Accounting)?
+            .checked_add(new_entries)
+            .ok_or(IsoDurableStoreUsageError::Accounting)?;
+        if directory_entries > self.max_directory_entries {
+            return Err(IsoDurableStoreUsageError::DirectoryEntries);
+        }
+        let aggregate_entries = u64::try_from(self.message_bytes.len())
+            .ok()
+            .and_then(|messages| {
+                u64::try_from(self.tombstone_bytes.len())
+                    .ok()
+                    .and_then(|tombstones| messages.checked_add(tombstones))
+            })
+            .and_then(|entries| entries.checked_add(new_entries))
+            .ok_or(IsoDurableStoreUsageError::Accounting)?;
+        if aggregate_entries > self.max_entries {
+            return Err(IsoDurableStoreUsageError::AggregateEntries);
+        }
+        let next_bytes = self
+            .bytes
+            .checked_sub(previous_bytes)
+            .and_then(|retained| retained.checked_add(bytes))
+            .ok_or(IsoDurableStoreUsageError::Accounting)?;
+        if next_bytes > self.max_bytes {
+            return Err(IsoDurableStoreUsageError::AggregateBytes);
+        }
+        Ok(next_bytes)
+    }
+    fn record_replacement(
+        &mut self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        bytes: u64,
+    ) -> Result<(), IsoDurableStoreUsageError> {
+        let next_bytes = self.replacement_total_bytes(kind, message_id, bytes)?;
+        self.commit_replacement(kind, message_id, bytes, next_bytes);
+        Ok(())
+    }
+    fn replacements_fit(
+        &self,
+        replacements: &[(IsoDurableRecordKind, &str, u64)],
+    ) -> Result<(), IsoDurableStoreUsageError> {
+        let mut planned = self.clone();
+        for (kind, message_id, bytes) in replacements {
+            planned.record_replacement(*kind, message_id, *bytes)?;
+        }
+        Ok(())
+    }
+    fn commit_replacement(
+        &mut self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        bytes: u64,
+        next_bytes: u64,
+    ) {
+        self.entries_mut(kind).insert(message_id.to_owned(), bytes);
+        self.bytes = next_bytes;
+    }
+    fn record_existing(
+        &mut self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        bytes: u64,
+    ) -> Result<(), IsoDurableStoreUsageError> {
+        if self.entries(kind).contains_key(message_id) {
+            return Err(IsoDurableStoreUsageError::DuplicateEntry);
+        }
+        self.record_replacement(kind, message_id, bytes)
+    }
+    fn remove(
+        &mut self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+    ) -> Result<(), IsoDurableStoreUsageError> {
+        let Some(bytes) = self.entries(kind).get(message_id).copied() else {
+            return Ok(());
+        };
+        let next_bytes = self
+            .bytes
+            .checked_sub(bytes)
+            .ok_or(IsoDurableStoreUsageError::Accounting)?;
+        self.entries_mut(kind).remove(message_id);
+        self.bytes = next_bytes;
+        Ok(())
+    }
+}
+impl IsoStartupScanBudget {
+    fn v1() -> Self {
+        Self {
+            entries: 0,
+            bytes: 0,
+            max_entries: ISO_PERSISTED_STARTUP_MAX_ENTRIES_V1,
+            max_bytes: ISO_PERSISTED_STARTUP_MAX_BYTES_V1,
+        }
+    }
+    fn charge_entry(&mut self, path: &Path, bytes: u64) -> eyre::Result<()> {
+        self.entries = self.entries.checked_add(1).ok_or_else(|| {
+            eyre::eyre!(
+                "ISO bridge startup entry counter overflowed at `{}`",
+                path.display()
+            )
+        })?;
+        if self.entries > self.max_entries {
+            eyre::bail!(
+                "ISO bridge durable store exceeds the V1 startup work limit of {} entries; regenerate the first-release ISO store",
+                self.max_entries
+            );
+        }
+        if bytes > ISO_PERSISTED_RECORD_MAX_BYTES {
+            eyre::bail!(
+                "ISO bridge durable record `{}` exceeds the V1 per-entry byte limit of {ISO_PERSISTED_RECORD_MAX_BYTES}; regenerate the first-release ISO store",
+                path.display()
+            );
+        }
+        self.charge_bytes(path, bytes)
+    }
+    fn charge_bytes(&mut self, path: &Path, bytes: u64) -> eyre::Result<()> {
+        self.bytes = self.bytes.checked_add(bytes).ok_or_else(|| {
+            eyre::eyre!(
+                "ISO bridge startup byte counter overflowed at `{}`",
+                path.display()
+            )
+        })?;
+        if self.bytes > self.max_bytes {
+            eyre::bail!(
+                "ISO bridge durable store exceeds the V1 aggregate startup byte limit of {}; regenerate the first-release ISO store",
+                self.max_bytes
+            );
+        }
+        Ok(())
+    }
 }
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
     AccountId::parse_encoded(literal)
         .wrap_err_with(|| format!("{field} must parse as an account identifier"))
+}
+fn parse_participant_role(value: &str) -> eyre::Result<IsoParticipantRole> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "originator" => Ok(IsoParticipantRole::Originator),
+        "counterparty" => Ok(IsoParticipantRole::Counterparty),
+        other => eyre::bail!(
+            "iso_bridge participant role `{other}` is invalid; expected `originator` or `counterparty`"
+        ),
+    }
+}
+fn normalise_financial_identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || value.chars().any(char::is_control)
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return None;
+    }
+    Some(value.to_ascii_uppercase())
+}
+fn validate_participant_id(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed != value
+        || value.is_empty()
+        || value.len() > 128
+        || value
+            .chars()
+            .any(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_')))
+        || !value
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(value)
+}
+fn load_participant_catalog(
+    config: &actual::IsoBridge,
+    profiles: &HashMap<String, TradfiRailProfile>,
+) -> eyre::Result<(
+    BTreeMap<PublicKey, IsoBridgeParticipant>,
+    HashMap<String, String>,
+    BTreeSet<PublicKey>,
+)> {
+    if config.participants.is_empty() {
+        eyre::bail!(
+            "iso_bridge participants must be configured when enabled; legacy unscoped bridge configuration is incompatible with ISO record schema V3"
+        );
+    }
+    let mut participant_ids = BTreeSet::new();
+    let mut participants_by_key = BTreeMap::new();
+    let mut participants_by_financial_id = HashMap::new();
+    for configured in &config.participants {
+        let id = validate_participant_id(&configured.id).ok_or_else(|| {
+            eyre::eyre!(
+                "iso_bridge participant id `{}` must be a canonical lowercase ASCII identifier of at most 128 bytes",
+                configured.id
+            )
+        })?;
+        if !participant_ids.insert(id.to_owned()) {
+            eyre::bail!("iso_bridge participant id `{id}` is duplicated");
+        }
+        if configured.operator_keys.is_empty() {
+            eyre::bail!("iso_bridge participant `{id}` must define at least one operator key");
+        }
+        if configured.financial_identifiers.is_empty() {
+            eyre::bail!(
+                "iso_bridge participant `{id}` must define at least one financial identifier"
+            );
+        }
+        if configured.allowed_profiles.is_empty() {
+            eyre::bail!("iso_bridge participant `{id}` must allow at least one profile");
+        }
+        if configured.roles.is_empty() {
+            eyre::bail!("iso_bridge participant `{id}` must define at least one role");
+        }
+        let financial_identifiers = configured
+            .financial_identifiers
+            .iter()
+            .map(|value| {
+                normalise_financial_identifier(value).ok_or_else(|| {
+                    eyre::eyre!(
+                        "iso_bridge participant `{id}` has invalid financial identifier `{value}`"
+                    )
+                })
+            })
+            .collect::<eyre::Result<BTreeSet<_>>>()?;
+        if financial_identifiers.len() != configured.financial_identifiers.len() {
+            eyre::bail!(
+                "iso_bridge participant `{id}` financial identifiers must be duplicate-free"
+            );
+        }
+        let allowed_profiles = configured
+            .allowed_profiles
+            .iter()
+            .map(|profile| {
+                let profile = require_trimmed_non_empty(
+                    &format!("iso_bridge participant `{id}` allowed profile"),
+                    profile,
+                )?;
+                if !profiles.contains_key(profile) {
+                    eyre::bail!(
+                        "iso_bridge participant `{id}` references unknown profile `{profile}`"
+                    );
+                }
+                Ok(profile.to_owned())
+            })
+            .collect::<eyre::Result<BTreeSet<_>>>()?;
+        if allowed_profiles.len() != configured.allowed_profiles.len() {
+            eyre::bail!("iso_bridge participant `{id}` allowed profiles must be duplicate-free");
+        }
+        let roles = configured
+            .roles
+            .iter()
+            .map(|role| parse_participant_role(role))
+            .collect::<eyre::Result<BTreeSet<_>>>()?;
+        if roles.len() != configured.roles.len() {
+            eyre::bail!("iso_bridge participant `{id}` roles must be duplicate-free");
+        }
+        let participant = IsoBridgeParticipant {
+            id: id.to_owned(),
+            financial_identifiers: financial_identifiers.clone(),
+            allowed_profiles,
+            roles,
+        };
+        for key in &configured.operator_keys {
+            if participants_by_key
+                .insert(key.clone(), participant.clone())
+                .is_some()
+            {
+                eyre::bail!("iso_bridge operator keys must be unique across participants");
+            }
+        }
+        for identifier in financial_identifiers {
+            if participants_by_financial_id
+                .insert(identifier.clone(), id.to_owned())
+                .is_some()
+            {
+                eyre::bail!(
+                    "iso_bridge financial identifier `{identifier}` is owned by more than one participant"
+                );
+            }
+        }
+    }
+    if !participants_by_key
+        .values()
+        .any(|participant| participant.roles.contains(&IsoParticipantRole::Originator))
+    {
+        eyre::bail!("iso_bridge must configure at least one originator participant");
+    }
+    if !participants_by_key.values().any(|participant| {
+        participant
+            .roles
+            .contains(&IsoParticipantRole::Counterparty)
+    }) {
+        eyre::bail!("iso_bridge must configure at least one counterparty participant");
+    }
+    let audit_admin_keys = config
+        .audit_admin_keys
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if audit_admin_keys.len() != config.audit_admin_keys.len() {
+        eyre::bail!("iso_bridge audit_admin_keys must be duplicate-free");
+    }
+    if let Some(key) = audit_admin_keys
+        .iter()
+        .find(|key| participants_by_key.contains_key(*key))
+    {
+        eyre::bail!(
+            "iso_bridge audit-admin key `{key}` must not also be a participant mutation key"
+        );
+    }
+    Ok((
+        participants_by_key,
+        participants_by_financial_id,
+        audit_admin_keys,
+    ))
 }
 fn load_profile_catalog(
     config: &actual::IsoBridge,
@@ -1325,6 +1940,10 @@ impl Iso20022BridgeRuntime {
         let signer_account =
             parse_config_account_id(&signer.account_id, "iso_bridge signer account_id")?;
         let signer_private_key = signer.private_key.clone();
+        let signer_public_key = KeyPair::from_private_key(signer_private_key.clone())
+            .wrap_err("iso_bridge signer private_key is invalid")?
+            .public_key()
+            .clone();
         let mut aliases = HashMap::new();
         let mut alias_indices = HashMap::new();
         let mut index_aliases = BTreeMap::new();
@@ -1376,9 +1995,24 @@ impl Iso20022BridgeRuntime {
         }
         let reference_data = Arc::new(ReferenceDataSnapshots::from_config(&config.reference_data));
         let profiles = load_profile_catalog(config)?;
+        let (participants_by_key, participants_by_financial_id, audit_admin_keys) =
+            load_participant_catalog(config, &profiles)?;
+        let (store_dir, audit_export_dir) = prepare_iso_persistence_layout(
+            config.store_dir.as_deref(),
+            config.audit_export_dir.as_deref(),
+        )
+        .map_err(|error| {
+            eyre::eyre!(
+                "failed to initialize the configured ISO bridge audit persistence targets: {error}"
+            )
+        })?;
         let runtime = Iso20022BridgeRuntime {
             signer_account,
             signer_private_key,
+            signer_public_key,
+            participants_by_key: Arc::new(participants_by_key),
+            participants_by_financial_id: Arc::new(participants_by_financial_id),
+            audit_admin_keys: Arc::new(audit_admin_keys),
             account_aliases: Arc::new(aliases),
             alias_indices: Arc::new(alias_indices),
             index_aliases: Arc::new(index_aliases),
@@ -1386,10 +2020,10 @@ impl Iso20022BridgeRuntime {
             reference_data,
             default_profile_id: config.default_profile.trim().to_owned(),
             profiles: Arc::new(profiles),
-            store_dir: config.store_dir.clone(),
+            store_dir,
             store_retention: Duration::from_secs(config.store_retention_secs),
             store_max_records,
-            audit_export_dir: config.audit_export_dir.clone(),
+            audit_export_dir,
             dedupe_ttl: Duration::from_secs(config.dedupe_ttl_secs),
             state_lock: Arc::new(ReentrantMutex::new(())),
             records: DashMap::new(),
@@ -1397,8 +2031,15 @@ impl Iso20022BridgeRuntime {
             payload_hash_index: DashMap::new(),
             business_message_id_index: DashMap::new(),
             uetr_index: DashMap::new(),
+            replay_tombstones: DashMap::new(),
+            durable_store_usage: Arc::new(Mutex::new(IsoDurableStoreUsage::v1())),
+            lifecycle_persistence_healthy: Arc::new(AtomicBool::new(true)),
+            audit_persistence_healthy: Arc::new(AtomicBool::new(true)),
         };
-        runtime.load_persisted_records();
+        runtime.load_persisted_records()?;
+        if !runtime.persist_audit_index() {
+            eyre::bail!("failed to initialize the configured ISO bridge audit persistence targets");
+        }
         Ok(Some(runtime))
     }
     /// Resolve an IBAN into an on-ledger account identifier.
@@ -1512,6 +2153,65 @@ impl Iso20022BridgeRuntime {
         }
         persisted_audit_index_value(records.into_values().collect())
     }
+    /// Return whether the latest audit persistence attempt reached every configured target.
+    pub(crate) fn audit_persistence_is_healthy(&self) -> bool {
+        self.audit_persistence_healthy.load(Ordering::Acquire)
+    }
+    /// Return whether lifecycle commits may safely accept another mutation.
+    ///
+    /// A false value means a committed or indeterminate journal must be recovered before
+    /// ordinary message transitions can resume.
+    pub(crate) fn lifecycle_persistence_is_healthy(&self) -> bool {
+        self.lifecycle_mutations_available()
+    }
+    /// Start a supervised retry loop for an unavailable audit persistence target.
+    pub(crate) fn start_audit_persistence_worker(
+        self: &Arc<Self>,
+        shutdown_signal: iroha_futures::supervisor::ShutdownSignal,
+    ) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
+        let runtime = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(ISO_AUDIT_PERSISTENCE_RETRY_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // Construction already performed the synchronous initial preflight.
+            ticker.tick().await;
+            loop {
+                tokio::select! {
+                    () = shutdown_signal.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
+                    _ = ticker.tick() => {
+                        if runtime.audit_persistence_is_healthy() {
+                            continue;
+                        }
+                        let retry_runtime = Arc::clone(&runtime);
+                        let result = tokio::task::spawn_blocking(move || {
+                            let _state_guard = retry_runtime.state_lock.lock();
+                            retry_runtime.persist_audit_index()
+                        })
+                        .await;
+                        match result {
+                            Ok(true) => {
+                                iroha_logger::info!("ISO bridge audit persistence recovered");
+                            }
+                            Ok(false) => {
+                                iroha_logger::warn!(
+                                    "ISO bridge audit persistence remains unavailable"
+                                );
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    ?error,
+                                    "ISO bridge audit persistence retry task failed"
+                                );
+                                return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
     /// Return the configured default rail profile.
     pub fn default_profile(&self) -> &TradfiRailProfile {
         self.profiles
@@ -1525,6 +2225,206 @@ impl Iso20022BridgeRuntime {
             .filter(|id| !id.is_empty())
             .unwrap_or(&self.default_profile_id);
         self.profiles.get(selected)
+    }
+    /// Bind an initial ISO message to the authenticated participant and its exact `AppHdr/Fr`.
+    pub(crate) fn authorize_initial_submission(
+        &self,
+        operator_key: &PublicKey,
+        profile: &TradfiRailProfile,
+        parsed: &ParsedMessage,
+    ) -> Result<IsoRecordParties, IsoAdmissionError> {
+        if self.audit_admin_keys.contains(operator_key) {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        let participant = self
+            .participants_by_key
+            .get(operator_key)
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        if !participant.roles.contains(&IsoParticipantRole::Originator)
+            || !participant.allowed_profiles.contains(&profile.id)
+        {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        let originator_financial_id =
+            app_header_financial_identifier(parsed, AppHeaderParty::From)?
+                .ok_or(IsoAdmissionError::NotAuthorized)?;
+        if !participant
+            .financial_identifiers
+            .contains(&originator_financial_id)
+        {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        let counterparty_financial_id =
+            app_header_financial_identifier(parsed, AppHeaderParty::To)?
+                .ok_or(IsoAdmissionError::NotAuthorized)?;
+        let counterparty_id = self
+            .participants_by_financial_id
+            .get(&counterparty_financial_id)
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        let counterparty = self
+            .participants_by_key
+            .values()
+            .find(|candidate| &candidate.id == counterparty_id)
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        if !counterparty
+            .roles
+            .contains(&IsoParticipantRole::Counterparty)
+            || !counterparty.allowed_profiles.contains(&profile.id)
+        {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        Ok(IsoRecordParties {
+            originator_participant_id: participant.id.clone(),
+            counterparty_participant_id: counterparty_id.clone(),
+            admitting_participant_id: participant.id.clone(),
+            admitting_operator_key: operator_key.to_string(),
+            originator_financial_id,
+            counterparty_financial_id,
+            pinned_profile_id: profile.id.clone(),
+            pinned_signature_policy: signature_policy_label(profile.embedded_signature_policy)
+                .to_owned(),
+            pinned_profile_policy_sha256: profile_policy_sha256(profile),
+        })
+    }
+    /// Authorize a lifecycle message against the immutable parties and policy of its original.
+    pub(crate) fn authorize_lifecycle_submission(
+        &self,
+        operator_key: &PublicKey,
+        profile: &TradfiRailProfile,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<IsoLifecycleAuthorization, IsoAdmissionError> {
+        if matches!(message_type, "sese.023" | "colr.012") {
+            return self
+                .authorize_initial_submission(operator_key, profile, parsed)
+                .map(IsoLifecycleAuthorization::initial);
+        }
+        if self.audit_admin_keys.contains(operator_key) {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        let actor = self
+            .participants_by_key
+            .get(operator_key)
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        let referenced_id = canonical_lifecycle_referenced_message_id(message_type, parsed)
+            .map_err(|_| IsoAdmissionError::NotAuthorized)?
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        let _state_guard = self.state_lock.lock();
+        let original = self
+            .records
+            .get(&referenced_id)
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        if !self.record_is_live_at(&original, SystemTime::now()) {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        if original.parties.pinned_profile_id != profile.id
+            || original.parties.pinned_signature_policy
+                != signature_policy_label(profile.embedded_signature_policy)
+            || original.parties.pinned_profile_policy_sha256 != profile_policy_sha256(profile)
+        {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        let (expected_participant, required_role, expected_from, expected_to) = match message_type {
+            "pacs.002" | "pacs.004" | "sese.024" | "sese.025" => (
+                original.parties.counterparty_participant_id.as_str(),
+                IsoParticipantRole::Counterparty,
+                original.parties.counterparty_financial_id.as_str(),
+                original.parties.originator_financial_id.as_str(),
+            ),
+            "camt.056" => (
+                original.parties.originator_participant_id.as_str(),
+                IsoParticipantRole::Originator,
+                original.parties.originator_financial_id.as_str(),
+                original.parties.counterparty_financial_id.as_str(),
+            ),
+            _ => return Err(IsoAdmissionError::NotAuthorized),
+        };
+        if actor.id != expected_participant
+            || !actor.roles.contains(&required_role)
+            || !actor.allowed_profiles.contains(&profile.id)
+        {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        let from = app_header_financial_identifier(parsed, AppHeaderParty::From)?
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        let to = app_header_financial_identifier(parsed, AppHeaderParty::To)?
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        if from != expected_from || to != expected_to {
+            return Err(IsoAdmissionError::NotAuthorized);
+        }
+        let mut parties = original.parties.clone();
+        let original_binding = IsoLifecycleOriginalBinding {
+            message_id: referenced_id,
+            incarnation: original.incarnation.clone(),
+            transaction_hash: original.transaction_hash.clone(),
+        };
+        drop(original);
+        parties.admitting_participant_id = actor.id.clone();
+        parties.admitting_operator_key = operator_key.to_string();
+        Ok(IsoLifecycleAuthorization {
+            parties,
+            original: Some(original_binding),
+        })
+    }
+    /// Authorize and snapshot one rich ISO record while holding the runtime state lock.
+    pub(crate) fn authorized_message_status(
+        &self,
+        operator_key: &PublicKey,
+        message_id: &str,
+    ) -> Option<IsoMessageStatus> {
+        let _state_guard = self.state_lock.lock();
+        let record = self.records.get(message_id)?;
+        let authorized = self.audit_admin_keys.contains(operator_key)
+            || self
+                .participants_by_key
+                .get(operator_key)
+                .is_some_and(|participant| {
+                    record.parties.originator_participant_id == participant.id
+                        || record.parties.counterparty_participant_id == participant.id
+                });
+        authorized.then(|| Self::status_snapshot(message_id, &record))
+    }
+    /// Return a party-scoped audit manifest, or the complete manifest for an audit admin.
+    pub(crate) fn audit_index_for(&self, operator_key: &PublicKey) -> Option<JsonValue> {
+        let audit_admin = self.audit_admin_keys.contains(operator_key);
+        let participant_id = self
+            .participants_by_key
+            .get(operator_key)
+            .map(|participant| participant.id.clone());
+        if !audit_admin && participant_id.is_none() {
+            return None;
+        }
+        let mut records = BTreeMap::new();
+        for entry in &self.records {
+            let visible = audit_admin
+                || participant_id.as_ref().is_some_and(|participant_id| {
+                    &entry.parties.originator_participant_id == participant_id
+                        || &entry.parties.counterparty_participant_id == participant_id
+                });
+            if visible
+                && let Some(value) = persisted_audit_index_entry_value(entry.key(), entry.value())
+            {
+                records.insert(entry.key().clone(), value);
+            }
+        }
+        Some(persisted_audit_index_value(records.into_values().collect()))
+    }
+    /// Sign a domain-separated outbound ISO XML document with the bridge key.
+    pub(crate) fn sign_outbound_document(
+        &self,
+        xml: String,
+    ) -> Result<SignedIsoDocument, MsgError> {
+        const DOMAIN: &[u8] = b"iroha.iso20022.outbound.v2\0";
+        let mut signing_bytes = Vec::with_capacity(DOMAIN.len() + xml.len());
+        signing_bytes.extend_from_slice(DOMAIN);
+        signing_bytes.extend_from_slice(xml.as_bytes());
+        let signature = Signature::try_new(&self.signer_private_key, &signing_bytes)
+            .map_err(|_| MsgError::ValidationFailed)?;
+        Ok(SignedIsoDocument {
+            xml,
+            public_key: self.signer_public_key.to_string(),
+            signature: BASE64_STANDARD.encode(signature.payload()),
+        })
     }
     /// Validate profile policy for a parsed inbound message and produce audit metadata.
     pub fn validate_profile_submission(
@@ -1623,59 +2523,172 @@ impl Iso20022BridgeRuntime {
     }
     /// Perform a deduplication check for the provided message identifier. Returns `true` when the
     /// identifier is new (and records it), or `false` when a still-active entry already exists.
-    pub fn check_and_record_message(&self, message_id: &str) -> bool {
+    #[cfg(test)]
+    pub(crate) fn check_and_record_message(&self, message_id: &str) -> bool {
         self.check_and_record_inbound(message_id, IsoMessageMetadata::default())
     }
     /// Perform idempotency checks and record a new inbound message.
-    pub fn check_and_record_inbound(&self, message_id: &str, metadata: IsoMessageMetadata) -> bool {
+    #[cfg(test)]
+    pub(crate) fn check_and_record_inbound(
+        &self,
+        message_id: &str,
+        metadata: IsoMessageMetadata,
+    ) -> bool {
+        let parties = self.compatibility_test_parties(&metadata);
+        self.admit_inbound(message_id, metadata, parties, false)
+            .is_ok()
+    }
+    /// Durably admit an authenticated inbound message before signing or lifecycle processing.
+    pub(crate) fn admit_authenticated_inbound(
+        &self,
+        message_id: &str,
+        metadata: IsoMessageMetadata,
+        parties: IsoRecordParties,
+    ) -> Result<(), IsoAdmissionError> {
+        self.admit_inbound(message_id, metadata, parties, true)
+    }
+    fn admit_inbound(
+        &self,
+        message_id: &str,
+        metadata: IsoMessageMetadata,
+        parties: IsoRecordParties,
+        require_persistence: bool,
+    ) -> Result<(), IsoAdmissionError> {
         let _state_guard = self.state_lock.lock();
+        if !self.lifecycle_mutations_available() {
+            return Err(IsoAdmissionError::PersistenceUnavailable);
+        }
         let now = Instant::now();
-        self.prune_expired(now);
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.retention_protected() {
-                return false;
-            }
-            let expired = now.saturating_duration_since(existing.last_seen) > self.dedupe_ttl;
-            let retryable_rejection = existing.state == IsoMessageState::Rejected
-                && !existing.ledger_tx_queued
-                && existing.transaction_hash.is_none();
-            if expired || retryable_rejection {
-                if existing.metadata != metadata || self.metadata_conflicts(message_id, &metadata) {
-                    return false;
-                }
-                self.remove_record_indexes(message_id, &existing);
-                *existing = IsoMessageRecord::pending(now);
-                existing.metadata = metadata.clone();
-                drop(existing);
-                self.insert_metadata_indexes(message_id, &metadata);
-                self.persist_message(message_id);
-                true
-            } else {
-                false
-            }
-        } else if self.metadata_conflicts(message_id, &metadata) {
-            false
-        } else {
-            if self.store_dir.is_some()
-                && self.records.len() >= self.store_max_records
-                && self
-                    .records
+        self.prune_expired();
+        if self.records.contains_key(message_id)
+            || self.replay_tombstones.contains_key(message_id)
+            || self.metadata_conflicts(message_id, &metadata)
+        {
+            return Err(IsoAdmissionError::Duplicate);
+        }
+        if require_persistence && self.store_dir.is_none() {
+            return Err(IsoAdmissionError::PersistenceUnavailable);
+        }
+        let wall_now = SystemTime::now();
+        let protected_record_ids = self
+            .records
+            .iter()
+            .filter(|record| {
+                record.retention_protected()
+                    || wall_now.duration_since(record.replay_expires_at).is_err()
+            })
+            .map(|record| record.key().clone())
+            .collect::<BTreeSet<_>>();
+        let protected_identity_count = protected_record_ids.len().saturating_add(
+            self.replay_tombstones
+                .iter()
+                .filter(|tombstone| !protected_record_ids.contains(tombstone.key()))
+                .count(),
+        );
+        if protected_identity_count >= self.store_max_records {
+            return Err(IsoAdmissionError::ProtectedCapacity);
+        }
+        let mut record = IsoMessageRecordV2::pending(now);
+        record.metadata = metadata.clone();
+        record.parties = parties;
+        record.replay_expires_at = SystemTime::now()
+            .checked_add(self.dedupe_ttl)
+            .unwrap_or(SystemTime::UNIX_EPOCH + Duration::from_secs(u64::MAX));
+        let tombstone = IsoReplayTombstone {
+            expires_at: record.replay_expires_at,
+            payload_hash: metadata.payload_hash.clone(),
+            business_message_id: metadata.business_message_id.clone(),
+            uetr: metadata.uetr.clone(),
+        };
+        if self.store_dir.is_some() && !self.persist_replay_tombstone(message_id, &tombstone) {
+            return Err(IsoAdmissionError::PersistenceUnavailable);
+        }
+        self.insert_tombstone_indexes(message_id, &tombstone);
+        self.replay_tombstones
+            .insert(message_id.to_owned(), tombstone);
+        self.records.insert(message_id.to_owned(), record);
+        if !self.persist_message(message_id) {
+            // The durable replay tombstone intentionally remains. Once an external
+            // identity has reached admission, a detail-write failure must not reopen it.
+            self.records.remove(message_id);
+            return Err(IsoAdmissionError::PersistenceUnavailable);
+        }
+        Ok(())
+    }
+    #[cfg(test)]
+    fn compatibility_test_parties(&self, metadata: &IsoMessageMetadata) -> IsoRecordParties {
+        let mut configured = self
+            .participants_by_key
+            .iter()
+            .map(|(key, participant)| (participant.id.as_str(), key, participant))
+            .collect::<Vec<_>>();
+        configured.sort_by(|left, right| left.0.cmp(right.0).then_with(|| left.1.cmp(right.1)));
+        let (_, operator_key, participant) = configured
+            .iter()
+            .copied()
+            .find(|(_, _, participant)| participant.roles.contains(&IsoParticipantRole::Originator))
+            .expect("enabled ISO runtime validates an originator participant");
+        let counterparty = configured
+            .iter()
+            .map(|(_, _, candidate)| *candidate)
+            .find(|candidate| {
+                candidate.id != participant.id
+                    && candidate.roles.contains(&IsoParticipantRole::Counterparty)
+            })
+            .or_else(|| {
+                configured
                     .iter()
-                    .all(|record| record.retention_protected())
-            {
-                return false;
-            }
-            let mut record = IsoMessageRecord::pending(now);
-            record.metadata = metadata.clone();
-            self.records.insert(message_id.to_owned(), record);
-            self.insert_metadata_indexes(message_id, &metadata);
-            self.persist_message(message_id);
-            true
+                    .map(|(_, _, candidate)| *candidate)
+                    .find(|candidate| candidate.roles.contains(&IsoParticipantRole::Counterparty))
+            })
+            .unwrap_or(participant);
+        let originator_financial_id = participant
+            .financial_identifiers
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "TEST-ORIGINATOR".to_owned());
+        let counterparty_financial_id = counterparty
+            .financial_identifiers
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "TEST-COUNTERPARTY".to_owned());
+        let pinned_profile_id = metadata
+            .profile_id()
+            .unwrap_or(&self.default_profile_id)
+            .to_owned();
+        let pinned_signature_policy = self
+            .profiles
+            .get(&pinned_profile_id)
+            .map(|profile| signature_policy_label(profile.embedded_signature_policy))
+            .unwrap_or("record_only")
+            .to_owned();
+        let pinned_profile_policy_sha256 = self
+            .profiles
+            .get(&pinned_profile_id)
+            .map(profile_policy_sha256)
+            .unwrap_or_default();
+        IsoRecordParties {
+            originator_participant_id: participant.id.clone(),
+            counterparty_participant_id: counterparty.id.clone(),
+            admitting_participant_id: participant.id.clone(),
+            admitting_operator_key: operator_key.to_string(),
+            originator_financial_id,
+            counterparty_financial_id,
+            pinned_profile_id,
+            pinned_signature_policy,
+            pinned_profile_policy_sha256,
         }
     }
-    /// Remove a tracked message identifier from the dedupe cache (e.g. after a failed submission).
-    pub fn remove_message(&self, message_id: &str) {
-        let _state_guard = self.state_lock.lock();
+    /// Remove an identity only after its replay TTL elapsed.
+    fn remove_expired_message_locked(&self, message_id: &str, now: SystemTime) {
+        if let Some(record) = self.records.get(message_id)
+            && (record.retention_protected()
+                || now.duration_since(record.replay_expires_at).is_err())
+        {
+            return;
+        }
         if let Some((_, record)) = self.records.remove(message_id) {
             self.remove_record_indexes(message_id, &record);
         }
@@ -1688,15 +2701,17 @@ impl Iso20022BridgeRuntime {
     /// doing so would detach the message from its semantic idempotency indexes.
     pub fn update_message_context(&self, message_id: &str, context: IsoMessageContext) -> bool {
         let _state_guard = self.state_lock.lock();
-        let now = Instant::now();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.context = context;
-        } else {
+        self.update_message_context_locked(message_id, context)
+    }
+    fn update_message_context_locked(&self, message_id: &str, context: IsoMessageContext) -> bool {
+        let Some(previous) = self.records.get(message_id).map(|record| record.clone()) else {
             return false;
-        }
-        self.persist_message(message_id)
+        };
+        let mut candidate = previous.clone();
+        candidate.last_seen = Instant::now();
+        candidate.updated_at = SystemTime::now();
+        candidate.context = context;
+        self.commit_record_candidate(message_id, Some(&previous), candidate)
     }
     /// Mark the provided message as queued for ledger execution.
     ///
@@ -1705,27 +2720,21 @@ impl Iso20022BridgeRuntime {
     pub fn mark_queued(&self, message_id: &str) -> bool {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
-        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.is_terminal() {
-                return false;
-            }
-            let result = existing.try_transition(|record| {
+        let previous = self.records.get(message_id).map(|record| record.clone());
+        let mut candidate = previous
+            .clone()
+            .unwrap_or_else(|| IsoMessageRecordV2::pending(now));
+        if candidate.is_terminal() {
+            return false;
+        }
+        let transition = candidate
+            .try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
                 record.set_queued();
-            });
-            drop(existing);
-            result
-        } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record
-                .try_transition(|candidate| candidate.set_queued())
-                .map(|_| {
-                    self.records.insert(message_id.to_owned(), record);
-                    true
-                })
-        };
-        self.finish_status_transition(message_id, transition)
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, previous, transition)
     }
     /// Bind the exact signed transaction identity before queue admission begins.
     ///
@@ -1743,54 +2752,32 @@ impl Iso20022BridgeRuntime {
         {
             return false;
         }
-        let Some(mut existing) = self.records.get_mut(message_id) else {
+        let Some(previous) = self.records.get(message_id).map(|record| record.clone()) else {
             return false;
         };
-        if existing.state != IsoMessageState::Pending || existing.ledger_tx_queued {
+        if previous.state != IsoMessageState::Pending || previous.ledger_tx_queued {
             return false;
         }
-        if let Some(existing_hash) = existing.transaction_hash.as_deref() {
-            if existing_hash != transaction_hash {
-                return false;
-            }
-            drop(existing);
-            self.tx_hash_index
-                .insert(transaction_hash.to_owned(), message_id.to_owned());
-            return self.persist_message(message_id);
+        if previous
+            .transaction_hash
+            .as_deref()
+            .is_some_and(|existing_hash| existing_hash != transaction_hash)
+        {
+            return false;
         }
-        let previous = existing.clone();
+        let mut candidate = previous.clone();
         let tx_hash = transaction_hash.to_owned();
-        let old_hash = existing.transaction_hash.clone();
-        let transition = existing.try_transition(|record| {
-            record.transaction_hash = Some(tx_hash.clone());
-            record.last_seen = Instant::now();
-            record.updated_at = SystemTime::now();
-            record.detail = Some("signed transaction prepared for queue admission".to_owned());
-            record.hold_reason_code = None;
-            record.rejection_reason_code = None;
-        });
-        drop(existing);
-        let Err(error) = transition else {
-            if let Some(old_hash) = old_hash.filter(|old_hash| old_hash != &tx_hash) {
-                self.tx_hash_index
-                    .remove_if(&old_hash, |_, owner| owner == message_id);
-            }
-            self.tx_hash_index
-                .insert(tx_hash.clone(), message_id.to_owned());
-            if self.persist_message(message_id) {
-                return true;
-            }
-            self.tx_hash_index
-                .remove_if(&tx_hash, |_, owner| owner == message_id);
-            if let Some(previous_hash) = previous.transaction_hash.as_deref() {
-                self.tx_hash_index
-                    .insert(previous_hash.to_owned(), message_id.to_owned());
-            }
-            self.records.insert(message_id.to_owned(), previous);
-            return false;
-        };
-        self.report_status_history_limit(message_id, error);
-        false
+        let transition = candidate
+            .try_transition(|record| {
+                record.transaction_hash = Some(tx_hash);
+                record.last_seen = Instant::now();
+                record.updated_at = SystemTime::now();
+                record.detail = Some("signed transaction prepared for queue admission".to_owned());
+                record.hold_reason_code = None;
+                record.rejection_reason_code = None;
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, Some(previous), transition)
     }
     /// Preserve an indeterminate queue outcome for reconciliation by exact hash.
     pub fn mark_queue_outcome_unknown(
@@ -1800,29 +2787,27 @@ impl Iso20022BridgeRuntime {
         detail: String,
     ) -> bool {
         let _state_guard = self.state_lock.lock();
-        let Some(mut existing) = self.records.get_mut(message_id) else {
+        let Some(previous) = self.records.get(message_id).map(|record| record.clone()) else {
             return false;
         };
-        if existing.state != IsoMessageState::Pending
-            || existing.transaction_hash.as_deref() != Some(transaction_hash)
+        if previous.state != IsoMessageState::Pending
+            || previous.transaction_hash.as_deref() != Some(transaction_hash)
         {
             return false;
         }
-        let transition = existing.try_transition(|record| {
-            record.last_seen = Instant::now();
-            record.updated_at = SystemTime::now();
-            record.detail = Some(detail);
-            record.ledger_tx_queued = false;
-            record.settled_at = None;
-            record.set_hold_reason(Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()));
-            record.rejection_reason_code = None;
-        });
-        drop(existing);
-        if transition.is_ok() {
-            self.tx_hash_index
-                .insert(transaction_hash.to_owned(), message_id.to_owned());
-        }
-        self.finish_status_transition(message_id, transition)
+        let mut candidate = previous.clone();
+        let transition = candidate
+            .try_transition(|record| {
+                record.last_seen = Instant::now();
+                record.updated_at = SystemTime::now();
+                record.detail = Some(detail);
+                record.ledger_tx_queued = false;
+                record.settled_at = None;
+                record.set_hold_reason(Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()));
+                record.rejection_reason_code = None;
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, Some(previous), transition)
     }
     /// Flag a message as pending due to screening/manual hold with an optional ISO reason code.
     ///
@@ -1831,47 +2816,43 @@ impl Iso20022BridgeRuntime {
     pub fn mark_hold(&self, message_id: &str, reason_code: Option<&str>) -> bool {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
+        let previous = self.records.get(message_id).map(|record| record.clone());
+        let mut candidate = previous
+            .clone()
+            .unwrap_or_else(|| IsoMessageRecordV2::pending(now));
+        if candidate.is_terminal() {
+            return false;
+        }
         let reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
-        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.is_terminal() {
-                return false;
-            }
-            let result = existing.try_transition(|record| {
+        let transition = candidate
+            .try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
                 record.state = IsoMessageState::Pending;
                 record.settled_at = None;
                 record.rejection_reason_code = None;
                 record.set_hold_reason(reason_code);
-            });
-            drop(existing);
-            result
-        } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record
-                .try_transition(|candidate| candidate.set_hold_reason(reason_code))
-                .map(|_| {
-                    self.records.insert(message_id.to_owned(), record);
-                    true
-                })
-        };
-        self.finish_status_transition(message_id, transition)
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, previous, transition)
     }
     /// Clear any previously-set hold indicator for the message.
     ///
     /// Returns `false` when the message is unknown or its exact history is exhausted.
     pub fn clear_hold(&self, message_id: &str) -> bool {
         let _state_guard = self.state_lock.lock();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            let result = existing.try_transition(|record| {
+        let Some(previous) = self.records.get(message_id).map(|record| record.clone()) else {
+            return false;
+        };
+        let mut candidate = previous.clone();
+        let transition = candidate
+            .try_transition(|record| {
                 record.last_seen = Instant::now();
                 record.updated_at = SystemTime::now();
                 record.clear_hold();
-            });
-            drop(existing);
-            return self.finish_status_transition(message_id, result);
-        }
-        false
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, Some(previous), transition)
     }
     /// Replace the change-reason codes recorded for the message.
     ///
@@ -1890,24 +2871,18 @@ impl Iso20022BridgeRuntime {
                 return false;
             }
         };
-        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
-            let result = existing.try_transition(|record| {
+        let previous = self.records.get(message_id).map(|record| record.clone());
+        let mut candidate = previous
+            .clone()
+            .unwrap_or_else(|| IsoMessageRecordV2::pending(now));
+        let transition = candidate
+            .try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
                 record.replace_change_reason_codes(codes_vec);
-            });
-            drop(existing);
-            result
-        } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record
-                .try_transition(|candidate| candidate.replace_change_reason_codes(codes_vec))
-                .map(|_| {
-                    self.records.insert(message_id.to_owned(), record);
-                    true
-                })
-        };
-        self.finish_status_transition(message_id, transition)
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, previous, transition)
     }
     /// Append a change-reason code for the message (deduplicated).
     ///
@@ -1927,24 +2902,18 @@ impl Iso20022BridgeRuntime {
             return false;
         }
         let code = code.to_owned();
-        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
-            let result = existing.try_transition(|record| {
+        let previous = self.records.get(message_id).map(|record| record.clone());
+        let mut candidate = previous
+            .clone()
+            .unwrap_or_else(|| IsoMessageRecordV2::pending(now));
+        let transition = candidate
+            .try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
                 record.add_change_reason_code(code);
-            });
-            drop(existing);
-            result
-        } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record
-                .try_transition(|candidate| candidate.add_change_reason_code(code))
-                .map(|_| {
-                    self.records.insert(message_id.to_owned(), record);
-                    true
-                })
-        };
-        self.finish_status_transition(message_id, transition)
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, previous, transition)
     }
     /// Mark the message as fully settled on-ledger.
     ///
@@ -1952,16 +2921,23 @@ impl Iso20022BridgeRuntime {
     pub fn mark_settled(&self, message_id: &str, settled_at: SystemTime) -> bool {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
-        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.is_rejected()
-                && (!existing.ledger_tx_queued || existing.transaction_hash.is_none())
-            {
-                return false;
-            }
-            if existing.is_settled() {
-                return true;
-            }
-            let result = existing.try_transition(|record| {
+        let previous = self.records.get(message_id).map(|record| record.clone());
+        if previous.as_ref().is_some_and(|record| {
+            record.is_rejected() && (!record.ledger_tx_queued || record.transaction_hash.is_none())
+        }) {
+            return false;
+        }
+        if previous
+            .as_ref()
+            .is_some_and(IsoMessageRecordV2::is_settled)
+        {
+            return true;
+        }
+        let mut candidate = previous
+            .clone()
+            .unwrap_or_else(|| IsoMessageRecordV2::pending(now));
+        let transition = candidate
+            .try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
                 record.state = IsoMessageState::Accepted;
@@ -1969,25 +2945,9 @@ impl Iso20022BridgeRuntime {
                 record.mark_settled(settled_at);
                 record.clear_hold();
                 record.rejection_reason_code = None;
-            });
-            drop(existing);
-            result
-        } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record
-                .try_transition(|candidate| {
-                    candidate.state = IsoMessageState::Accepted;
-                    candidate.set_queued();
-                    candidate.mark_settled(settled_at);
-                    candidate.clear_hold();
-                    candidate.rejection_reason_code = None;
-                })
-                .map(|_| {
-                    self.records.insert(message_id.to_owned(), record);
-                    true
-                })
-        };
-        self.finish_status_transition(message_id, transition)
+            })
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, previous, transition)
     }
     /// Mark the transaction identified by `tx_hash` as applied and fully settled.
     ///
@@ -2050,6 +3010,36 @@ impl Iso20022BridgeRuntime {
             return expired;
         }
         false
+    }
+    /// Return canonical transaction hashes for durable, nonterminal records
+    /// that have completed queue admission.
+    pub(crate) fn queued_transaction_hashes(&self) -> Vec<String> {
+        let mut hashes = self
+            .records
+            .iter()
+            .filter_map(|entry| {
+                let record = entry.value();
+                if record.ledger_tx_queued && !record.is_terminal() {
+                    record.transaction_hash.clone()
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        hashes.sort_unstable();
+        hashes.dedup();
+        hashes
+    }
+    /// Return whether `tx_hash` still names a durable, nonterminal queued record.
+    pub(crate) fn has_queued_transaction_hash(&self, tx_hash: &str) -> bool {
+        let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) else {
+            return false;
+        };
+        self.records.get(&message_id).is_some_and(|record| {
+            record.ledger_tx_queued
+                && !record.is_terminal()
+                && record.transaction_hash.as_deref() == Some(tx_hash)
+        })
     }
     fn rejection_reason_metadata(reason: &TransactionRejectionReason) -> (String, String) {
         match reason {
@@ -2122,8 +3112,10 @@ impl Iso20022BridgeRuntime {
             Ok(status) => status,
             Err(error) => {
                 self.report_status_history_limit(message_id, error);
-                self.message_status(message_id)
-                    .expect("history exhaustion can only occur for an existing ISO record")
+                self.message_status(message_id).unwrap_or_else(|| {
+                    let pending = IsoMessageRecordV2::pending(Instant::now());
+                    Self::status_snapshot(message_id, &pending)
+                })
             }
         }
     }
@@ -2133,9 +3125,9 @@ impl Iso20022BridgeRuntime {
         transaction_hash: &str,
     ) -> Result<IsoMessageStatus, IsoStatusHistoryLimitError> {
         let now = Instant::now();
-        let tx_hash = transaction_hash.to_owned();
-        let status = if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.state != IsoMessageState::Pending
+        let previous = self.records.get(message_id).map(|record| record.clone());
+        if let Some(existing) = previous.as_ref()
+            && (existing.state != IsoMessageState::Pending
                 || existing
                     .transaction_hash
                     .as_deref()
@@ -2143,13 +3135,17 @@ impl Iso20022BridgeRuntime {
                 || self
                     .tx_hash_index
                     .get(transaction_hash)
-                    .is_some_and(|owner| owner.as_str() != message_id)
-            {
-                return Ok(Self::status_snapshot(message_id, &existing));
-            }
-            let old_hash = existing.transaction_hash.clone();
-            existing.try_transition(|record| {
-                record.transaction_hash = Some(tx_hash.clone());
+                    .is_some_and(|owner| owner.as_str() != message_id))
+        {
+            return Ok(Self::status_snapshot(message_id, existing));
+        }
+        let tx_hash = transaction_hash.to_owned();
+        let mut candidate = previous
+            .clone()
+            .unwrap_or_else(|| IsoMessageRecordV2::accepted(now, tx_hash.clone()));
+        if previous.is_some() {
+            candidate.try_transition(|record| {
+                record.transaction_hash = Some(tx_hash);
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
                 record.state = IsoMessageState::Accepted;
@@ -2160,64 +3156,47 @@ impl Iso20022BridgeRuntime {
                 record.change_reason_codes.clear();
                 record.rejection_reason_code = None;
             })?;
-            let status = Self::status_snapshot(message_id, &existing);
-            drop(existing);
-            if let Some(old_hash) = old_hash.filter(|old_hash| old_hash != &tx_hash) {
-                self.tx_hash_index
-                    .remove_if(&old_hash, |_, owner| owner == message_id);
-            }
-            status
-        } else {
-            let record = IsoMessageRecord::accepted(now, tx_hash.clone());
-            let status = Self::status_snapshot(message_id, &record);
-            self.records.insert(message_id.to_owned(), record);
-            status
-        };
-        self.tx_hash_index.insert(tx_hash, message_id.to_owned());
-        self.persist_message(message_id);
+        }
+        let status = Self::status_snapshot(message_id, &candidate);
+        if !self.commit_record_candidate(message_id, previous.as_ref(), candidate) {
+            return Err(IsoStatusHistoryLimitError::Persistence);
+        }
         Ok(status)
     }
-    /// Mark an inbound lifecycle message as durably accepted without creating a ledger transfer.
-    fn mark_lifecycle_accepted(
+    /// Prepare an accepted lifecycle after-image without publishing either side of the update.
+    fn prepare_lifecycle_accepted(
         &self,
         message_id: &str,
+        context: Option<IsoMessageContext>,
         detail: Option<String>,
-    ) -> Result<IsoMessageStatus, IsoStatusHistoryLimitError> {
+    ) -> Result<IsoPreparedRecordMutation, IsoStatusHistoryLimitError> {
         let now = Instant::now();
-        let status = if let Some(mut existing) = self.records.get_mut(message_id) {
-            let old_hash = existing.transaction_hash.clone();
-            existing.try_transition(|record| {
-                record.transaction_hash = None;
-                record.last_seen = now;
-                record.updated_at = SystemTime::now();
-                record.state = IsoMessageState::Accepted;
-                record.detail = detail;
-                record.ledger_tx_queued = false;
-                record.settled_at = None;
-                record.hold_reason_code = None;
-                record.change_reason_codes.clear();
-                record.rejection_reason_code = None;
-            })?;
-            let status = Self::status_snapshot(message_id, &existing);
-            drop(existing);
-            if let Some(old_hash) = old_hash {
-                self.tx_hash_index
-                    .remove_if(&old_hash, |_, owner| owner == message_id);
-            }
-            status
-        } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record.try_transition(|candidate| {
-                candidate.state = IsoMessageState::Accepted;
-                candidate.detail = detail;
-                candidate.status_history.clear();
-            })?;
-            let status = Self::status_snapshot(message_id, &record);
-            self.records.insert(message_id.to_owned(), record);
-            status
-        };
-        self.persist_message(message_id);
-        Ok(status)
+        let previous = self
+            .records
+            .get(message_id)
+            .map(|record| record.clone())
+            .ok_or(IsoStatusHistoryLimitError::MissingReservation)?;
+        let mut candidate = previous.clone();
+        if let Some(context) = context {
+            candidate.context = context;
+        }
+        candidate.try_transition(|record| {
+            record.transaction_hash = None;
+            record.last_seen = now;
+            record.updated_at = SystemTime::now();
+            record.state = IsoMessageState::Accepted;
+            record.detail = detail;
+            record.ledger_tx_queued = false;
+            record.settled_at = None;
+            record.hold_reason_code = None;
+            record.change_reason_codes.clear();
+            record.rejection_reason_code = None;
+        })?;
+        Ok(IsoPreparedRecordMutation {
+            message_id: message_id.to_owned(),
+            previous,
+            candidate,
+        })
     }
     /// Mark the provided message as rejected and record the reason.
     ///
@@ -2232,18 +3211,32 @@ impl Iso20022BridgeRuntime {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
-        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.is_settled() {
-                return false;
-            }
-            if existing.is_rejected()
-                && !existing.ledger_tx_queued
-                && existing.transaction_hash.is_none()
-            {
-                return true;
-            }
-            let old_hash = existing.transaction_hash.clone();
-            let result = existing.try_transition(|record| {
+        let previous = self.records.get(message_id).map(|record| record.clone());
+        if previous
+            .as_ref()
+            .is_some_and(IsoMessageRecordV2::is_settled)
+        {
+            return false;
+        }
+        if previous.as_ref().is_some_and(|record| {
+            record.is_rejected() && !record.ledger_tx_queued && record.transaction_hash.is_none()
+        }) {
+            return true;
+        }
+        let mut candidate = match previous.clone() {
+            Some(record) => record,
+            None => match IsoMessageRecordV2::rejected(now, reason, reason_code) {
+                Ok(record) => {
+                    return self.commit_record_candidate(message_id, None, record);
+                }
+                Err(error) => {
+                    self.report_status_history_limit(message_id, error);
+                    return false;
+                }
+            },
+        };
+        let transition = candidate
+            .try_transition(|record| {
                 record.transaction_hash = None;
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
@@ -2254,22 +3247,9 @@ impl Iso20022BridgeRuntime {
                 record.hold_reason_code = None;
                 record.change_reason_codes.clear();
                 record.rejection_reason_code = reason_code;
-            });
-            drop(existing);
-            if result.is_ok()
-                && let Some(old_hash) = old_hash
-            {
-                self.tx_hash_index
-                    .remove_if(&old_hash, |_, owner| owner == message_id);
-            }
-            result
-        } else {
-            IsoMessageRecord::rejected(now, reason, reason_code).map(|record| {
-                self.records.insert(message_id.to_owned(), record);
-                true
             })
-        };
-        self.finish_status_transition(message_id, transition)
+            .map(|_| candidate);
+        self.finish_status_transition(message_id, previous, transition)
     }
     /// Retrieve the current status of a processed ISO 20022 message.
     pub fn message_status(&self, message_id: &str) -> Option<IsoMessageStatus> {
@@ -2280,13 +3260,11 @@ impl Iso20022BridgeRuntime {
     fn finish_status_transition(
         &self,
         message_id: &str,
-        transition: Result<bool, IsoStatusHistoryLimitError>,
+        previous: Option<IsoMessageRecordV2>,
+        transition: Result<IsoMessageRecordV2, IsoStatusHistoryLimitError>,
     ) -> bool {
         match transition {
-            Ok(_) => {
-                self.persist_message(message_id);
-                true
-            }
+            Ok(candidate) => self.commit_record_candidate(message_id, previous.as_ref(), candidate),
             Err(error) => {
                 self.report_status_history_limit(message_id, error);
                 false
@@ -2294,6 +3272,13 @@ impl Iso20022BridgeRuntime {
         }
     }
     fn report_status_history_limit(&self, message_id: &str, error: IsoStatusHistoryLimitError) {
+        if error == IsoStatusHistoryLimitError::Persistence {
+            iroha_logger::error!(
+                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                "ISO status transition rejected because its candidate record was not durable"
+            );
+            return;
+        }
         iroha_logger::error!(
             ?error,
             message_id_sha256 = %sha256_hex(message_id.as_bytes()),
@@ -2304,7 +3289,7 @@ impl Iso20022BridgeRuntime {
             "ISO status transition rejected before record or persistence mutation"
         );
     }
-    fn status_snapshot(message_id: &str, record: &IsoMessageRecord) -> IsoMessageStatus {
+    fn status_snapshot(message_id: &str, record: &IsoMessageRecordV2) -> IsoMessageStatus {
         IsoMessageStatus {
             message_id: message_id.to_owned(),
             state: record.state,
@@ -2319,6 +3304,7 @@ impl Iso20022BridgeRuntime {
             change_reason_codes: record.change_reason_codes.clone(),
             rejection_reason_code: record.rejection_reason_code.clone(),
             status_history: record.status_history.clone(),
+            parties: record.parties.clone(),
         }
     }
     /// Return the stable group-header identity for an inbound payment message.
@@ -2382,7 +3368,13 @@ impl Iso20022BridgeRuntime {
             Ok(id.to_owned())
         }
     }
-    /// Apply an inbound lifecycle message to the referenced durable record when present.
+    /// Apply an inbound lifecycle message to its referenced durable record.
+    ///
+    /// Reference-bearing lifecycle messages fail closed if their original was
+    /// removed, replaced, or crossed its retention boundary after participant authorization.
+    /// Incarnation, liveness, exact settlement evidence, and update checks share the runtime
+    /// state lock, so compaction cannot retarget an authorized update to a replacement record.
+    #[cfg(test)]
     pub(crate) fn apply_inbound_lifecycle_message(
         &self,
         message_id: &str,
@@ -2396,62 +3388,110 @@ impl Iso20022BridgeRuntime {
     ///
     /// The returned snapshot remains valid even if bounded durable compaction
     /// evicts the rich lifecycle record immediately after this critical section.
+    #[cfg(test)]
     pub(crate) fn apply_inbound_lifecycle_message_with_status(
         &self,
         message_id: &str,
         message_type: &str,
         parsed: &ParsedMessage,
     ) -> Result<(IsoLifecycleOutcome, IsoMessageStatus), MsgError> {
+        let authorization = self.compatibility_lifecycle_authorization(message_type, parsed)?;
+        let settlement_evidence = authorization
+            .settlement_transaction_hash(message_type, parsed)?
+            .map(ToOwned::to_owned);
+        self.apply_inbound_lifecycle_message_with_evidence(
+            message_id,
+            message_type,
+            parsed,
+            &authorization,
+            settlement_evidence.as_deref(),
+        )
+        .map_err(|error| match error {
+            IsoLifecycleApplyError::Validation(error) => error,
+            IsoLifecycleApplyError::PersistenceUnavailable => MsgError::ValidationFailed,
+        })
+    }
+    /// Apply a lifecycle message while requiring exact committed-transaction evidence.
+    pub(crate) fn apply_inbound_lifecycle_message_with_evidence(
+        &self,
+        message_id: &str,
+        message_type: &str,
+        parsed: &ParsedMessage,
+        authorization: &IsoLifecycleAuthorization,
+        committed_transaction_hash: Option<&str>,
+    ) -> Result<(IsoLifecycleOutcome, IsoMessageStatus), IsoLifecycleApplyError> {
         let _state_guard = self.state_lock.lock();
-        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?
-            .map(ToOwned::to_owned)
-            .map(|id| {
-                if matches!(message_type, "sese.024" | "sese.025") {
-                    format!("sese.023:{id}")
-                } else {
-                    id
-                }
-            });
+        let referenced_message_id =
+            canonical_lifecycle_referenced_message_id(message_type, parsed)?;
         let status_code = lifecycle_status_code(message_type, parsed).map(ToOwned::to_owned);
         let reason_code = lifecycle_reason_code(parsed).map(ToOwned::to_owned);
         let detail = lifecycle_detail(message_type, parsed, status_code.as_deref());
-        let referenced_message_known = referenced_message_id
-            .as_deref()
-            .is_some_and(|id| self.records.contains_key(id));
-        let mut action = "recorded";
-        if let Some(original_id) = referenced_message_id.as_deref()
-            && referenced_message_known
-        {
-            action = self
-                .apply_lifecycle_update(
-                    message_id,
-                    original_id,
-                    message_type,
-                    status_code.as_deref(),
-                    reason_code.as_deref(),
-                    detail,
-                )
-                .map_err(|error| {
-                    self.report_status_history_limit(original_id, error);
-                    MsgError::ValidationFailed
-                })?;
-        }
-        if let Some(context) = lifecycle_context(message_type, parsed) {
-            if !self.update_message_context(message_id, context) {
-                return Err(MsgError::ValidationFailed);
+        let reference_time = SystemTime::now();
+        let referenced_message_known = if let Some(original_id) = referenced_message_id.as_deref() {
+            let binding = authorization
+                .original
+                .as_ref()
+                .filter(|binding| binding.message_id == original_id)
+                .ok_or(MsgError::ValidationFailed)?;
+            let original = self
+                .records
+                .get(original_id)
+                .ok_or(MsgError::ValidationFailed)?;
+            if original.incarnation != binding.incarnation
+                || !self.record_is_live_at(&original, reference_time)
+            {
+                return Err(MsgError::ValidationFailed.into());
             }
-        }
-        let status = self
-            .mark_lifecycle_accepted(
+            if message_type == "pacs.002"
+                && status_code
+                    .as_deref()
+                    .is_some_and(is_settlement_status_code)
+            {
+                let expected_hash = binding
+                    .transaction_hash
+                    .as_deref()
+                    .ok_or(MsgError::ValidationFailed)?;
+                if committed_transaction_hash != Some(expected_hash)
+                    || original.transaction_hash.as_deref() != Some(expected_hash)
+                {
+                    return Err(MsgError::ValidationFailed.into());
+                }
+            }
+            true
+        } else {
+            if authorization.original.is_some() {
+                return Err(MsgError::ValidationFailed.into());
+            }
+            false
+        };
+        let (action, original_mutation) = if let Some(original_id) = referenced_message_id
+            .as_deref()
+            .filter(|_| referenced_message_known)
+        {
+            self.prepare_lifecycle_update(
                 message_id,
+                original_id,
+                message_type,
+                status_code.as_deref(),
+                reason_code.as_deref(),
+                detail,
+            )
+            .map_err(|error| self.lifecycle_apply_error(original_id, error))?
+        } else {
+            ("recorded", None)
+        };
+        let lifecycle_mutation = self
+            .prepare_lifecycle_accepted(
+                message_id,
+                lifecycle_context(message_type, parsed),
                 Some(format!(
                     "recorded inbound ISO 20022 {message_type} lifecycle message"
                 )),
             )
-            .map_err(|error| {
-                self.report_status_history_limit(message_id, error);
-                MsgError::ValidationFailed
-            })?;
+            .map_err(|error| self.lifecycle_apply_error(message_id, error))?;
+        let status = Self::status_snapshot(message_id, &lifecycle_mutation.candidate);
+        self.commit_lifecycle_operation(original_mutation, lifecycle_mutation)
+            .map_err(|error| self.lifecycle_apply_error(message_id, error))?;
         Ok((
             IsoLifecycleOutcome {
                 referenced_message_id,
@@ -2462,6 +3502,67 @@ impl Iso20022BridgeRuntime {
             },
             status,
         ))
+    }
+    fn lifecycle_apply_error(
+        &self,
+        message_id: &str,
+        error: IsoStatusHistoryLimitError,
+    ) -> IsoLifecycleApplyError {
+        self.report_status_history_limit(message_id, error);
+        if error == IsoStatusHistoryLimitError::Persistence {
+            IsoLifecycleApplyError::PersistenceUnavailable
+        } else {
+            IsoLifecycleApplyError::Validation(MsgError::ValidationFailed)
+        }
+    }
+    #[cfg(test)]
+    fn compatibility_lifecycle_authorization(
+        &self,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<IsoLifecycleAuthorization, MsgError> {
+        let _state_guard = self.state_lock.lock();
+        let Some(message_id) = canonical_lifecycle_referenced_message_id(message_type, parsed)?
+        else {
+            return Ok(IsoLifecycleAuthorization::initial(
+                IsoRecordParties::default(),
+            ));
+        };
+        let original = self
+            .records
+            .get(&message_id)
+            .ok_or(MsgError::ValidationFailed)?;
+        if !self.record_is_live_at(&original, SystemTime::now()) {
+            return Err(MsgError::ValidationFailed);
+        }
+        Ok(IsoLifecycleAuthorization {
+            parties: original.parties.clone(),
+            original: Some(IsoLifecycleOriginalBinding {
+                message_id,
+                incarnation: original.incarnation.clone(),
+                transaction_hash: original.transaction_hash.clone(),
+            }),
+        })
+    }
+    #[cfg(test)]
+    fn lifecycle_reference_is_live_at(&self, message_id: &str, now: SystemTime) -> bool {
+        self.records
+            .get(message_id)
+            .is_some_and(|record| self.record_is_live_at(&record, now))
+    }
+    fn record_is_live_at(&self, record: &IsoMessageRecordV2, now: SystemTime) -> bool {
+        if record.retention_protected() {
+            return true;
+        }
+        if self.store_dir.is_some() {
+            self.store_retention.is_zero()
+                || match now.duration_since(record.updated_at) {
+                    Ok(age) => age <= self.store_retention,
+                    Err(_) => true,
+                }
+        } else {
+            now.duration_since(record.replay_expires_at).is_err()
+        }
     }
     /// Create the exact unsigned transfer payload for a validated pacs.008 message.
     pub fn build_pacs008_payload(
@@ -2787,7 +3888,7 @@ impl Iso20022BridgeRuntime {
     }
 }
 impl Iso20022BridgeRuntime {
-    fn apply_lifecycle_update(
+    fn prepare_lifecycle_update(
         &self,
         lifecycle_message_id: &str,
         original_id: &str,
@@ -2795,13 +3896,13 @@ impl Iso20022BridgeRuntime {
         status_code: Option<&str>,
         reason_code: Option<&str>,
         detail: Option<String>,
-    ) -> Result<&'static str, IsoStatusHistoryLimitError> {
+    ) -> Result<(&'static str, Option<IsoPreparedRecordMutation>), IsoStatusHistoryLimitError> {
         let Some(lifecycle_metadata) = self
             .records
             .get(lifecycle_message_id)
             .map(|record| record.metadata.clone())
         else {
-            return Ok("ignored_profile_mismatch");
+            return Ok(("ignored_profile_mismatch", None));
         };
         let Some((
             original_message_type,
@@ -2819,35 +3920,35 @@ impl Iso20022BridgeRuntime {
             )
         })
         else {
-            return Ok("recorded");
+            return Ok(("recorded", None));
         };
         if lifecycle_metadata.profile_id().is_none()
             || lifecycle_metadata.profile_id() != original_metadata.profile_id()
         {
-            return Ok("ignored_profile_mismatch");
+            return Ok(("ignored_profile_mismatch", None));
         }
         if lifecycle_metadata.business_service() != original_metadata.business_service() {
-            return Ok("ignored_business_service_mismatch");
+            return Ok(("ignored_business_service_mismatch", None));
         }
         if !lifecycle_update_matches_original(message_type, original_message_type.as_deref()) {
-            return Ok("ignored_message_family_mismatch");
+            return Ok(("ignored_message_family_mismatch", None));
         }
         if original_state == IsoMessageState::Rejected || (settled && message_type != "pacs.004") {
-            return Ok("ignored_stale_transition");
+            return Ok(("ignored_stale_transition", None));
         }
         if original_state == IsoMessageState::Pending && !original_queued {
-            return Ok("ignored_in_flight");
+            return Ok(("ignored_in_flight", None));
         }
         if message_type == "pacs.004" {
             if !settled {
-                return Ok("ignored_unsettled_return");
+                return Ok(("ignored_unsettled_return", None));
             }
             let detail =
                 Some(detail.unwrap_or_else(|| "payment returned by inbound pacs.004".to_owned()));
             let reason_code = reason_code
                 .or(Some("PRTRY:PAYMENT_RETURN"))
                 .map(ToOwned::to_owned);
-            self.try_transition_existing(original_id, |record| {
+            let mutation = self.prepare_transition_existing(original_id, |record| {
                 record.last_seen = Instant::now();
                 record.updated_at = SystemTime::now();
                 record.state = IsoMessageState::Rejected;
@@ -2856,18 +3957,18 @@ impl Iso20022BridgeRuntime {
                 record.change_reason_codes.clear();
                 record.rejection_reason_code = reason_code;
             })?;
-            return Ok("marked_returned");
+            return Ok(("marked_returned", Some(mutation)));
         }
         if message_type == "camt.056" {
             let reason_code = reason_code.or(Some("CANC")).map(ToOwned::to_owned);
-            self.try_transition_existing(original_id, |record| {
+            let mutation = self.prepare_transition_existing(original_id, |record| {
                 record.last_seen = Instant::now();
                 record.updated_at = SystemTime::now();
                 record.rejection_reason_code = None;
                 record.set_hold_reason(reason_code);
                 record.add_change_reason_code("CANCELLATION_REQUESTED".to_owned());
             })?;
-            return Ok("marked_cancellation_requested");
+            return Ok(("marked_cancellation_requested", Some(mutation)));
         }
         if status_code.is_some_and(|code| {
             json_string_encoded_len(code)
@@ -2883,7 +3984,7 @@ impl Iso20022BridgeRuntime {
             .as_deref()
         {
             Some("ACSC" | "ACCP" | "SETT" | "SETTLED") => {
-                self.try_transition_existing(original_id, |record| {
+                let mutation = self.prepare_transition_existing(original_id, |record| {
                     let now = SystemTime::now();
                     record.last_seen = Instant::now();
                     record.updated_at = now;
@@ -2893,13 +3994,13 @@ impl Iso20022BridgeRuntime {
                     record.clear_hold();
                     record.rejection_reason_code = None;
                 })?;
-                Ok("marked_settled")
+                Ok(("marked_settled", Some(mutation)))
             }
             Some("RJCT" | "REJT" | "CANC" | "CAND") => {
                 let detail =
                     Some(detail.unwrap_or_else(|| "ISO 20022 lifecycle rejection".to_owned()));
                 let reason_code = reason_code.or(Some("RJCT")).map(ToOwned::to_owned);
-                self.try_transition_existing(original_id, |record| {
+                let mutation = self.prepare_transition_existing(original_id, |record| {
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.state = IsoMessageState::Rejected;
@@ -2909,11 +4010,11 @@ impl Iso20022BridgeRuntime {
                     record.change_reason_codes.clear();
                     record.rejection_reason_code = reason_code;
                 })?;
-                Ok("marked_rejected")
+                Ok(("marked_rejected", Some(mutation)))
             }
             Some("PDNG" | "PEND" | "PENF") => {
                 let reason_code = reason_code.or(status_code).map(ToOwned::to_owned);
-                self.try_transition_existing(original_id, |record| {
+                let mutation = self.prepare_transition_existing(original_id, |record| {
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.state = IsoMessageState::Pending;
@@ -2921,82 +4022,124 @@ impl Iso20022BridgeRuntime {
                     record.rejection_reason_code = None;
                     record.set_hold_reason(reason_code);
                 })?;
-                Ok("marked_pending")
+                Ok(("marked_pending", Some(mutation)))
             }
             Some("PART") => {
-                self.try_transition_existing(original_id, |record| {
+                let mutation = self.prepare_transition_existing(original_id, |record| {
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.add_change_reason_code("PARTIAL_SETTLEMENT".to_owned());
                 })?;
-                Ok("marked_partial")
+                Ok(("marked_partial", Some(mutation)))
             }
             Some("ACSP" | "ACTC") => {
-                self.try_transition_existing(original_id, |record| {
+                let mutation = self.prepare_transition_existing(original_id, |record| {
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.set_queued();
                 })?;
-                Ok("marked_processing")
+                Ok(("marked_processing", Some(mutation)))
             }
             Some(other) => {
                 let other = other.to_owned();
-                self.try_transition_existing(original_id, |record| {
+                let mutation = self.prepare_transition_existing(original_id, |record| {
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.add_change_reason_code(other);
                 })?;
-                Ok("recorded_status_code")
+                Ok(("recorded_status_code", Some(mutation)))
             }
             None => {
                 let message_type = message_type.to_owned();
-                self.try_transition_existing(original_id, |record| {
+                let mutation = self.prepare_transition_existing(original_id, |record| {
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.add_change_reason_code(message_type);
                 })?;
-                Ok("recorded_lifecycle_reference")
+                Ok(("recorded_lifecycle_reference", Some(mutation)))
             }
         }
+    }
+    #[cfg(test)]
+    fn apply_lifecycle_update(
+        &self,
+        lifecycle_message_id: &str,
+        original_id: &str,
+        message_type: &str,
+        status_code: Option<&str>,
+        reason_code: Option<&str>,
+        detail: Option<String>,
+    ) -> Result<&'static str, IsoStatusHistoryLimitError> {
+        let (action, mutation) = self.prepare_lifecycle_update(
+            lifecycle_message_id,
+            original_id,
+            message_type,
+            status_code,
+            reason_code,
+            detail,
+        )?;
+        if let Some(mutation) = mutation
+            && !self.commit_record_candidate(
+                &mutation.message_id,
+                Some(&mutation.previous),
+                mutation.candidate,
+            )
+        {
+            return Err(IsoStatusHistoryLimitError::Persistence);
+        }
+        Ok(action)
+    }
+    fn prepare_transition_existing(
+        &self,
+        message_id: &str,
+        update: impl FnOnce(&mut IsoMessageRecordV2),
+    ) -> Result<IsoPreparedRecordMutation, IsoStatusHistoryLimitError> {
+        let previous = self
+            .records
+            .get(message_id)
+            .map(|record| record.clone())
+            .ok_or(IsoStatusHistoryLimitError::MissingReservation)?;
+        let mut candidate = previous.clone();
+        candidate.try_transition(update)?;
+        Ok(IsoPreparedRecordMutation {
+            message_id: message_id.to_owned(),
+            previous,
+            candidate,
+        })
     }
     fn try_transition_existing(
         &self,
         message_id: &str,
-        update: impl FnOnce(&mut IsoMessageRecord),
+        update: impl FnOnce(&mut IsoMessageRecordV2),
     ) -> Result<bool, IsoStatusHistoryLimitError> {
-        let Some(mut record) = self.records.get_mut(message_id) else {
-            return Ok(false);
+        let mutation = match self.prepare_transition_existing(message_id, update) {
+            Ok(mutation) => mutation,
+            Err(IsoStatusHistoryLimitError::MissingReservation) => return Ok(false),
+            Err(error) => return Err(error),
         };
-        let old_hash = record.transaction_hash.clone();
-        record.try_transition(update)?;
-        let new_hash = record.transaction_hash.clone();
-        drop(record);
-        if old_hash != new_hash
-            && let Some(old_hash) = old_hash
-        {
-            self.tx_hash_index
-                .remove_if(&old_hash, |_, owner| owner == message_id);
+        if !self.commit_record_candidate(message_id, Some(&mutation.previous), mutation.candidate) {
+            return Err(IsoStatusHistoryLimitError::Persistence);
         }
-        self.persist_message(message_id);
         Ok(true)
     }
-    fn prune_expired(&self, now: Instant) {
+    fn prune_expired(&self) {
+        let wall_now = SystemTime::now();
+        self.prune_expired_tombstones(wall_now);
         if self.store_dir.is_some() {
             self.compact_persisted_records();
             return;
         }
-        let ttl = self.dedupe_ttl;
         let expired = self
             .records
             .iter()
             .filter_map(|entry| {
                 (!entry.retention_protected()
-                    && now.saturating_duration_since(entry.last_seen) > ttl)
-                    .then(|| entry.key().clone())
+                    && wall_now.duration_since(entry.replay_expires_at).is_ok())
+                .then(|| entry.key().clone())
             })
             .collect::<Vec<_>>();
         for message_id in expired {
-            self.remove_message(&message_id);
+            self.remove_expired_message_locked(&message_id, wall_now);
         }
     }
     fn metadata_conflicts(&self, message_id: &str, metadata: &IsoMessageMetadata) -> bool {
@@ -3035,7 +4178,43 @@ impl Iso20022BridgeRuntime {
                 .insert(normalise_uetr(uetr), message_id.to_owned());
         }
     }
-    fn remove_record_indexes(&self, message_id: &str, record: &IsoMessageRecord) {
+    fn insert_tombstone_indexes(&self, message_id: &str, tombstone: &IsoReplayTombstone) {
+        if let Some(payload_hash) = tombstone.payload_hash.as_deref() {
+            self.payload_hash_index
+                .insert(payload_hash.to_owned(), message_id.to_owned());
+        }
+        if let Some(business_message_id) = tombstone
+            .business_message_id
+            .as_deref()
+            .and_then(normalise_business_message_id)
+        {
+            self.business_message_id_index
+                .insert(business_message_id, message_id.to_owned());
+        }
+        if let Some(uetr) = tombstone.uetr.as_deref() {
+            self.uetr_index
+                .insert(normalise_uetr(uetr), message_id.to_owned());
+        }
+    }
+    fn remove_tombstone_indexes(&self, message_id: &str, tombstone: &IsoReplayTombstone) {
+        if let Some(payload_hash) = tombstone.payload_hash.as_deref() {
+            self.payload_hash_index
+                .remove_if(payload_hash, |_, owner| owner == message_id);
+        }
+        if let Some(business_message_id) = tombstone
+            .business_message_id
+            .as_deref()
+            .and_then(normalise_business_message_id)
+        {
+            self.business_message_id_index
+                .remove_if(&business_message_id, |_, owner| owner == message_id);
+        }
+        if let Some(uetr) = tombstone.uetr.as_deref() {
+            self.uetr_index
+                .remove_if(&normalise_uetr(uetr), |_, owner| owner == message_id);
+        }
+    }
+    fn remove_record_indexes(&self, message_id: &str, record: &IsoMessageRecordV2) {
         if let Some(hash) = record.transaction_hash.as_deref() {
             self.tx_hash_index
                 .remove_if(hash, |_, owner| owner == message_id);
@@ -3063,118 +4242,961 @@ impl Iso20022BridgeRuntime {
         self.uetr_index
             .retain(|_, existing_message| existing_message != message_id);
     }
-    fn load_persisted_records(&self) {
-        let Some(store_dir) = self.store_dir.as_deref() else {
-            return;
+    fn recover_pending_lifecycle_operation(&self, store_dir: &Path) -> eyre::Result<()> {
+        let operations_dir = store_dir.join(ISO_PERSISTED_LIFECYCLE_OPERATION_DIR);
+        if !is_real_directory(&operations_dir) {
+            eyre::bail!(
+                "ISO lifecycle operation store `{}` is not a real directory; regenerate the first-release ISO store",
+                operations_dir.display()
+            );
+        }
+        let expected_filename = lifecycle_journal_filename();
+        let mut pending = None;
+        let mut entry_count = 0_u64;
+        for entry in fs::read_dir(&operations_dir)
+            .wrap_err("failed to enumerate ISO lifecycle operation records")?
+        {
+            let entry = entry.wrap_err("failed to read an ISO lifecycle operation entry")?;
+            entry_count = entry_count
+                .checked_add(1)
+                .ok_or_else(|| eyre::eyre!("ISO lifecycle operation entry counter overflowed"))?;
+            if entry_count > ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_ENTRIES {
+                eyre::bail!(
+                    "ISO lifecycle operation store exceeds its bounded recovery limit of {ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_ENTRIES} entries; regenerate the first-release ISO store"
+                );
+            }
+            let path = entry.path();
+            let file_name = path.file_name().and_then(|name| name.to_str());
+            let is_expected_temp = file_name
+                .and_then(iso_record_temp_target_filename)
+                .is_some_and(|target| target == expected_filename.as_str());
+            let metadata = secure_file_metadata::from_path(&path).wrap_err_with(|| {
+                format!(
+                    "failed to inspect ISO lifecycle operation entry `{}`",
+                    path.display()
+                )
+            })?;
+            if !persisted_metadata_is_direct_regular(&metadata)
+                || metadata.len() > ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_BYTES
+            {
+                eyre::bail!(
+                    "ISO lifecycle operation entry `{}` is unsafe or exceeds its bounded recovery byte limit; regenerate the first-release ISO store",
+                    path.display()
+                );
+            }
+            if is_expected_temp {
+                remove_stable_startup_writer_temp(&path, &metadata, "lifecycle operation")?;
+                continue;
+            }
+            if file_name != Some(expected_filename.as_str()) || pending.is_some() {
+                eyre::bail!(
+                    "ISO lifecycle operation store contains unexpected entry `{}`; regenerate the first-release ISO store",
+                    path.display()
+                );
+            }
+            let (text, _) = read_persisted_json_bounded_with_metadata(
+                &path,
+                &metadata,
+                ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_BYTES,
+            )
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "ISO lifecycle operation record `{}` is unstable or unreadable; regenerate the first-release ISO store",
+                    path.display()
+                )
+            })?;
+            let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
+                format!(
+                    "ISO lifecycle operation record `{}` is not valid JSON; regenerate the first-release ISO store",
+                    path.display()
+                )
+            })?;
+            let journal = lifecycle_journal_from_value(&value).ok_or_else(|| {
+                eyre::eyre!(
+                    "ISO lifecycle operation record `{}` is invalid or corrupt; regenerate the first-release ISO store",
+                    path.display()
+                )
+            })?;
+            pending = Some((path, journal));
+        }
+        let Some((path, journal)) = pending else {
+            return Ok(());
         };
-        let messages_dir = store_dir.join("messages");
-        let load_messages_dir = is_real_directory(&messages_dir);
+        if let Some(original) = journal.original.as_ref() {
+            self.materialize_lifecycle_journal_mutation(original, false)
+                .map_err(|error| eyre::eyre!(error))?;
+        }
+        self.materialize_lifecycle_journal_mutation(&journal.lifecycle, false)
+            .map_err(|error| eyre::eyre!(error))?;
+        remove_lifecycle_journal_file(&path).wrap_err_with(|| {
+            format!(
+                "failed to durably retire recovered ISO lifecycle operation `{}`",
+                path.display()
+            )
+        })?;
+        Ok(())
+    }
+    fn load_persisted_tombstones(
+        &self,
+        store_dir: &Path,
+        scan_budget: &mut IsoStartupScanBudget,
+    ) -> eyre::Result<Vec<(PathBuf, String)>> {
+        let tombstones_dir = store_dir.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
+        match fs::symlink_metadata(&tombstones_dir) {
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                eyre::bail!(
+                    "ISO replay tombstone store `{}` is not a real directory; regenerate the first-release ISO store",
+                    tombstones_dir.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "failed to inspect ISO replay tombstone store `{}`",
+                        tombstones_dir.display()
+                    )
+                });
+            }
+        }
         let now = SystemTime::now();
-        let mut retained = BTreeMap::new();
-        if load_messages_dir && let Ok(entries) = fs::read_dir(&messages_dir) {
-            for entry in entries.flatten() {
-                let Ok(file_type) = entry.file_type() else {
+        let mut expired_paths = Vec::new();
+        let entries =
+            fs::read_dir(&tombstones_dir).wrap_err("failed to enumerate ISO replay tombstones")?;
+        let mut directory_entries = 0;
+        for entry in entries {
+            let entry = entry.wrap_err("failed to read an ISO replay tombstone directory entry")?;
+            let Some((path, text, bytes)) = read_startup_record_entry(
+                entry,
+                &mut directory_entries,
+                scan_budget,
+                "replay tombstone",
+            )?
+            else {
+                continue;
+            };
+            let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
+                format!(
+                    "ISO replay tombstone `{}` is not valid JSON; regenerate the first-release ISO store",
+                    path.display()
+                )
+            })?;
+            if let Some(version) = value
+                .as_object()
+                .and_then(|object| object.get("version"))
+                .and_then(JsonValue::as_u64)
+                && version != ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION
+            {
+                eyre::bail!(
+                    "incompatible ISO bridge replay tombstone schema version {version}; expected V{ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION}; regenerate the first-release ISO store"
+                );
+            }
+            let (message_id, tombstone) = replay_tombstone_from_value(&value).ok_or_else(|| {
+                eyre::eyre!(
+                    "ISO replay tombstone `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
+                    path.display(),
+                    ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION
+                )
+            })?;
+            if path.file_name().and_then(|name| name.to_str())
+                != Some(message_filename(&message_id).as_str())
+            {
+                eyre::bail!(
+                    "ISO replay tombstone `{}` does not match its embedded message identity; regenerate the first-release ISO store",
+                    path.display()
+                );
+            }
+            self.record_existing_durable_entry(
+                IsoDurableRecordKind::ReplayTombstone,
+                &message_id,
+                bytes,
+                &path,
+            )?;
+            if now.duration_since(tombstone.expires_at).is_ok() {
+                expired_paths.push((path, message_id));
+                continue;
+            }
+            let metadata = replay_tombstone_metadata(&tombstone);
+            if self.metadata_conflicts(&message_id, &metadata)
+                || self.replay_tombstones.contains_key(&message_id)
+            {
+                eyre::bail!(
+                    "ISO bridge replay tombstone store contains conflicting immutable identities; regenerate the first-release ISO store"
+                );
+            }
+            self.insert_tombstone_indexes(&message_id, &tombstone);
+            self.replay_tombstones.insert(message_id, tombstone);
+        }
+        Ok(expired_paths)
+    }
+    fn load_persisted_records(&self) -> eyre::Result<()> {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return Ok(());
+        };
+        self.recover_pending_lifecycle_operation(store_dir)?;
+        let mut scan_budget = IsoStartupScanBudget::v1();
+        let expired_tombstone_paths =
+            self.load_persisted_tombstones(store_dir, &mut scan_budget)?;
+        let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
+        match fs::symlink_metadata(&audit_dir) {
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                eyre::bail!(
+                    "ISO bridge audit store `{}` is not a real directory; regenerate the first-release ISO store",
+                    audit_dir.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "failed to inspect ISO bridge audit store `{}`",
+                        audit_dir.display()
+                    )
+                });
+            }
+        }
+        let audit_index_path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+        load_persisted_audit_index(&audit_index_path)?;
+        let messages_dir = store_dir.join("messages");
+        let load_messages_dir = match fs::symlink_metadata(&messages_dir) {
+            Ok(metadata) if metadata.file_type().is_dir() => true,
+            Ok(_) => {
+                eyre::bail!(
+                    "ISO bridge message store `{}` is not a real directory; regenerate the first-release ISO store",
+                    messages_dir.display()
+                );
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "failed to inspect ISO bridge message store `{}`",
+                        messages_dir.display()
+                    )
+                });
+            }
+        };
+        let now = SystemTime::now();
+        let mut persisted_records = BTreeMap::new();
+        if load_messages_dir {
+            let entries = fs::read_dir(&messages_dir)
+                .wrap_err("failed to enumerate ISO bridge V3 message records")?;
+            let mut directory_entries = 0;
+            for entry in entries {
+                let entry =
+                    entry.wrap_err("failed to read an ISO bridge message directory entry")?;
+                let Some((path, text, bytes)) = read_startup_record_entry(
+                    entry,
+                    &mut directory_entries,
+                    &mut scan_budget,
+                    "message",
+                )?
+                else {
                     continue;
                 };
-                if !file_type.is_file() {
-                    continue;
+                let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
+                    format!(
+                        "ISO bridge message record `{}` is not valid JSON; regenerate the first-release ISO store",
+                        path.display()
+                    )
+                })?;
+                let version = value
+                    .as_object()
+                    .and_then(|object| object.get("version"))
+                    .and_then(JsonValue::as_u64)
+                    .ok_or_else(|| {
+                        eyre::eyre!(
+                            "ISO bridge message record `{}` does not advertise numeric schema version V{}; regenerate the first-release ISO store",
+                            path.display(),
+                            ISO_PERSISTED_RECORD_VERSION
+                        )
+                    })?;
+                if version != ISO_PERSISTED_RECORD_VERSION {
+                    eyre::bail!(
+                        "incompatible ISO bridge store record schema version {version}; expected V{ISO_PERSISTED_RECORD_VERSION}; regenerate the first-release ISO store"
+                    );
                 }
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                    continue;
+                let (message_id, record) = persisted_record_from_value(&value).ok_or_else(|| {
+                    eyre::eyre!(
+                        "ISO bridge message record `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
+                        path.display(),
+                        ISO_PERSISTED_RECORD_VERSION
+                    )
+                })?;
+                let expected_filename = message_filename(&message_id);
+                if path.file_name().and_then(|name| name.to_str())
+                    != Some(expected_filename.as_str())
+                {
+                    eyre::bail!(
+                        "ISO bridge message record `{}` does not match its embedded message identity; regenerate the first-release ISO store",
+                        path.display()
+                    );
                 }
-                let Some(text) = read_persisted_record_bounded(&path) else {
-                    continue;
-                };
-                let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
-                    continue;
-                };
-                if let Some((message_id, record)) = persisted_record_from_value(&value) {
-                    let expected_filename = message_filename(&message_id);
-                    if path.file_name().and_then(|name| name.to_str())
-                        != Some(expected_filename.as_str())
-                    {
-                        continue;
-                    }
-                    if !record.retention_protected()
-                        && !self.store_retention.is_zero()
-                        && now
-                            .duration_since(record.updated_at)
-                            .is_ok_and(|age| age > self.store_retention)
-                    {
-                        let _ = fs::remove_file(path);
-                        continue;
-                    }
-                    // This is the same stable order used by live compaction: retain the
-                    // greatest N `(updated_at_ms, message_id)` keys without ever holding N + 1.
-                    let retention_key = (system_time_to_ms(record.updated_at), message_id);
-                    if record.retention_protected() {
-                        retained.insert(retention_key, (path, record));
-                        while retained.len() > self.store_max_records {
-                            let evictable = retained.iter().find_map(|(key, (_, candidate))| {
-                                (!candidate.retention_protected()).then(|| key.clone())
-                            });
-                            let Some(evictable) = evictable else {
-                                break;
-                            };
-                            if let Some((evicted_path, _)) = retained.remove(&evictable) {
-                                let _ = fs::remove_file(evicted_path);
-                            }
-                        }
-                    } else if retained.contains_key(&retention_key) {
-                        retained.insert(retention_key, (path, record));
-                    } else if retained.len() < self.store_max_records {
-                        retained.insert(retention_key, (path, record));
-                    } else if let Some(oldest) =
-                        retained.iter().find_map(|(key, (_, candidate))| {
-                            (!candidate.retention_protected()).then(|| key.clone())
-                        })
-                        && retention_key > oldest
-                    {
-                        if let Some((evicted_path, _)) = retained.remove(&oldest) {
-                            let _ = fs::remove_file(evicted_path);
-                        }
-                        retained.insert(retention_key, (path, record));
-                    } else {
-                        let _ = fs::remove_file(path);
-                    }
+                self.record_existing_durable_entry(
+                    IsoDurableRecordKind::Message,
+                    &message_id,
+                    bytes,
+                    &path,
+                )?;
+                if persisted_records
+                    .insert(message_id.clone(), (path, record))
+                    .is_some()
+                {
+                    eyre::bail!(
+                        "ISO bridge V3 store contains duplicate embedded message identity `{message_id}`; regenerate the first-release ISO store"
+                    );
                 }
             }
         }
-        // Secondary indexes are populated only after retention selection, so none can
-        // grow with the number of files present on disk.
-        for ((_, message_id), (_, record)) in retained {
-            if self.metadata_conflicts(&message_id, &record.metadata)
-                || record.transaction_hash.as_deref().is_some_and(|tx_hash| {
-                    self.tx_hash_index
-                        .get(tx_hash)
-                        .is_some_and(|owner| owner.as_str() != message_id)
-                })
-            {
-                iroha_logger::error!(
-                    message_id_sha256 = %sha256_hex(message_id.as_bytes()),
-                    "ignored persisted ISO record with conflicting replay identity"
+        let mut payload_hash_owners = BTreeMap::new();
+        let mut business_message_id_owners = BTreeMap::new();
+        let mut uetr_owners = BTreeMap::new();
+        let mut transaction_hash_owners = BTreeMap::new();
+        for (message_id, (_, record)) in &persisted_records {
+            if !self.record_parties_are_configured(record) {
+                eyre::bail!(
+                    "ISO bridge V3 store record references participants or a full profile policy absent from the current configuration"
                 );
+            }
+            let replay_live = now.duration_since(record.replay_expires_at).is_err();
+            if replay_live {
+                let Some(tombstone) = self.replay_tombstones.get(message_id) else {
+                    eyre::bail!(
+                        "ISO bridge V3 store record `{message_id}` is missing its durable replay tombstone"
+                    );
+                };
+                if !record_matches_replay_tombstone(record, tombstone.value()) {
+                    eyre::bail!(
+                        "ISO bridge V3 store record `{message_id}` conflicts with its durable replay tombstone"
+                    );
+                }
+                if self.metadata_conflicts(message_id, &record.metadata)
+                    || insert_unique_persisted_identity(
+                        &mut payload_hash_owners,
+                        record.metadata.payload_hash().map(str::to_owned),
+                        message_id,
+                    )
+                    || insert_unique_persisted_identity(
+                        &mut business_message_id_owners,
+                        record
+                            .metadata
+                            .business_message_id()
+                            .and_then(normalise_business_message_id),
+                        message_id,
+                    )
+                    || insert_unique_persisted_identity(
+                        &mut uetr_owners,
+                        record.metadata.uetr().map(normalise_uetr),
+                        message_id,
+                    )
+                {
+                    eyre::bail!(
+                        "ISO bridge V3 store contains conflicting immutable replay identities for record `{message_id}`; regenerate the first-release ISO store"
+                    );
+                }
+            }
+            if insert_unique_persisted_identity(
+                &mut transaction_hash_owners,
+                record.transaction_hash.clone(),
+                message_id,
+            ) {
+                eyre::bail!(
+                    "ISO bridge V3 store contains conflicting transaction identities for record `{message_id}`; regenerate the first-release ISO store"
+                );
+            }
+        }
+        let mut retained = BTreeMap::new();
+        for (message_id, (path, record)) in persisted_records {
+            if !record.retention_protected()
+                && !self.store_retention.is_zero()
+                && now
+                    .duration_since(record.updated_at)
+                    .is_ok_and(|age| age > self.store_retention)
+            {
+                if now.duration_since(record.replay_expires_at).is_err() {
+                    let tombstone = IsoReplayTombstone {
+                        expires_at: record.replay_expires_at,
+                        payload_hash: record.metadata.payload_hash.clone(),
+                        business_message_id: record.metadata.business_message_id.clone(),
+                        uetr: record.metadata.uetr.clone(),
+                    };
+                    if let Some(existing) = self.replay_tombstones.get(&message_id) {
+                        if !record_matches_replay_tombstone(&record, existing.value()) {
+                            eyre::bail!(
+                                "ISO bridge V3 store record `{message_id}` conflicts with its durable replay tombstone"
+                            );
+                        }
+                    } else {
+                        if !self.persist_replay_tombstone(&message_id, &tombstone) {
+                            retained.insert(
+                                (system_time_to_ms(record.updated_at), message_id),
+                                (path, record),
+                            );
+                            continue;
+                        }
+                        self.insert_tombstone_indexes(&message_id, &tombstone);
+                        self.replay_tombstones.insert(message_id.clone(), tombstone);
+                    }
+                }
+                if !self.remove_durable_identity_file(
+                    IsoDurableRecordKind::Message,
+                    &message_id,
+                    &path,
+                ) {
+                    eyre::bail!(
+                        "failed to durably remove expired ISO bridge V3 message record `{}`",
+                        path.display()
+                    );
+                }
                 continue;
             }
-            self.insert_metadata_indexes(&message_id, &record.metadata);
+            retained.insert(
+                (system_time_to_ms(record.updated_at), message_id),
+                (path, record),
+            );
+        }
+        // Rich details and replay tombstones are independent. The configured identity
+        // capacity may be temporarily exceeded after an operator lowers the limit; in
+        // that case all existing unexpired identities remain protected and new ingress
+        // receives a retryable capacity rejection.
+        for ((_, message_id), (_, record)) in retained {
+            let replay_live = now.duration_since(record.replay_expires_at).is_err();
+            if replay_live {
+                self.insert_metadata_indexes(&message_id, &record.metadata);
+            }
             if let Some(tx_hash) = record.transaction_hash.as_deref() {
                 self.tx_hash_index
                     .insert(tx_hash.to_owned(), message_id.clone());
             }
             self.records.insert(message_id, record);
         }
+        for (path, message_id) in expired_tombstone_paths {
+            if !self.remove_durable_identity_file(
+                IsoDurableRecordKind::ReplayTombstone,
+                &message_id,
+                &path,
+            ) {
+                eyre::bail!(
+                    "failed to durably remove expired ISO replay tombstone `{}`",
+                    path.display()
+                );
+            }
+        }
         self.persist_audit_index();
+        Ok(())
     }
-    fn persist_message(&self, message_id: &str) -> bool {
+    fn record_parties_are_configured(&self, record: &IsoMessageRecordV2) -> bool {
+        let originator_exists = self
+            .participants_by_key
+            .values()
+            .any(|participant| participant.id == record.parties.originator_participant_id);
+        let counterparty_exists = self
+            .participants_by_key
+            .values()
+            .any(|participant| participant.id == record.parties.counterparty_participant_id);
+        let profile_matches = self
+            .profiles
+            .get(&record.parties.pinned_profile_id)
+            .is_some_and(|profile| {
+                record
+                    .metadata
+                    .profile_id()
+                    .is_none_or(|profile_id| profile_id == profile.id.as_str())
+                    && record.parties.pinned_signature_policy
+                        == signature_policy_label(profile.embedded_signature_policy)
+                    && record.parties.pinned_profile_policy_sha256 == profile_policy_sha256(profile)
+            });
+        let admitting_operator_matches =
+            PublicKey::from_str(&record.parties.admitting_operator_key)
+                .ok()
+                .and_then(|key| self.participants_by_key.get(&key))
+                .is_some_and(|participant| {
+                    participant.id == record.parties.admitting_participant_id
+                });
+        let originator_identity_matches = self
+            .participants_by_financial_id
+            .get(&record.parties.originator_financial_id)
+            .is_some_and(|participant| participant == &record.parties.originator_participant_id);
+        let counterparty_identity_matches = self
+            .participants_by_financial_id
+            .get(&record.parties.counterparty_financial_id)
+            .is_some_and(|participant| participant == &record.parties.counterparty_participant_id);
+        originator_exists
+            && counterparty_exists
+            && profile_matches
+            && admitting_operator_matches
+            && originator_identity_matches
+            && counterparty_identity_matches
+    }
+    fn lifecycle_mutations_available(&self) -> bool {
+        if !self.lifecycle_persistence_healthy.load(Ordering::Acquire) {
+            return false;
+        }
         let Some(store_dir) = self.store_dir.as_deref() else {
             return true;
         };
-        let Some(record) = self.records.get(message_id).map(|entry| entry.clone()) else {
+        match secure_file_metadata::from_path(&lifecycle_journal_path(store_dir)) {
+            Ok(_) => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        }
+    }
+    fn preflight_lifecycle_journal(&self, journal: &IsoLifecycleJournal) -> bool {
+        let mut replacements = Vec::with_capacity(2);
+        for mutation in journal
+            .original
+            .iter()
+            .chain(core::iter::once(&journal.lifecycle))
+        {
+            let Ok(json) = norito::json::to_string_pretty(&mutation.after_record) else {
+                return false;
+            };
+            let Ok(bytes) = u64::try_from(json.len()) else {
+                return false;
+            };
+            if bytes > ISO_PERSISTED_RECORD_MAX_BYTES {
+                return false;
+            }
+            replacements.push((
+                IsoDurableRecordKind::Message,
+                mutation.message_id.as_str(),
+                bytes,
+            ));
+        }
+        self.durable_store_usage
+            .lock()
+            .replacements_fit(&replacements)
+            .is_ok()
+    }
+    fn persist_lifecycle_journal(&self, journal: &IsoLifecycleJournal) -> bool {
+        let Some(store_dir) = self.store_dir.as_deref() else {
             return false;
         };
+        let operations_dir = store_dir.join(ISO_PERSISTED_LIFECYCLE_OPERATION_DIR);
+        if !is_real_directory(&operations_dir) {
+            self.lifecycle_persistence_healthy
+                .store(false, Ordering::Release);
+            return false;
+        }
+        let Some(json) = lifecycle_journal_json(journal) else {
+            self.lifecycle_persistence_healthy
+                .store(false, Ordering::Release);
+            return false;
+        };
+        if !persisted_json_fits_cap(&json, ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_BYTES) {
+            self.lifecycle_persistence_healthy
+                .store(false, Ordering::Release);
+            return false;
+        }
+        let path = lifecycle_journal_path(store_dir);
+        match secure_file_metadata::from_path(&path) {
+            Ok(_) => {
+                self.lifecycle_persistence_healthy
+                    .store(false, Ordering::Release);
+                return false;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                self.lifecycle_persistence_healthy
+                    .store(false, Ordering::Release);
+                return false;
+            }
+        }
+        self.lifecycle_persistence_healthy
+            .store(false, Ordering::Release);
+        if let Err(error) = write_iso_record_atomically(&path, json.as_bytes()) {
+            let candidate_is_visible =
+                read_persisted_json_bounded(&path, ISO_PERSISTED_LIFECYCLE_OPERATION_MAX_BYTES)
+                    .is_some_and(|visible| visible.as_bytes() == json.as_bytes());
+            iroha_logger::error!(
+                ?error,
+                candidate_is_visible,
+                "failed to durably commit the ISO lifecycle operation journal"
+            );
+            return false;
+        }
+        true
+    }
+    fn materialize_lifecycle_journal_mutation(
+        &self,
+        mutation: &IsoLifecycleJournalMutation,
+        track_usage: bool,
+    ) -> Result<(), String> {
+        let store_dir = self
+            .store_dir
+            .as_deref()
+            .ok_or_else(|| "ISO lifecycle recovery requires a configured store".to_owned())?;
         let messages_dir = store_dir.join("messages");
-        if !ensure_real_directory(&messages_dir) {
+        if !is_real_directory(&messages_dir) {
+            return Err(format!(
+                "ISO lifecycle recovery message store `{}` is not a real directory",
+                messages_dir.display()
+            ));
+        }
+        let path = messages_dir.join(message_filename(&mutation.message_id));
+        let current_text = read_persisted_record_bounded(&path).ok_or_else(|| {
+            format!(
+                "ISO lifecycle recovery preimage `{}` is absent, unsafe, or unreadable",
+                path.display()
+            )
+        })?;
+        let current_value =
+            norito::json::from_json::<JsonValue>(&current_text).map_err(|error| {
+                format!(
+                    "ISO lifecycle recovery preimage `{}` is invalid JSON: {error}",
+                    path.display()
+                )
+            })?;
+        let (current_message_id, _) =
+            persisted_record_from_value(&current_value).ok_or_else(|| {
+                format!(
+                    "ISO lifecycle recovery preimage `{}` is invalid for record schema V{}",
+                    path.display(),
+                    ISO_PERSISTED_RECORD_VERSION
+                )
+            })?;
+        if current_message_id != mutation.message_id {
+            return Err(format!(
+                "ISO lifecycle recovery preimage `{}` has a conflicting embedded identity",
+                path.display()
+            ));
+        }
+        let current_digest = persisted_record_sha256(&current_value)
+            .ok_or_else(|| "ISO lifecycle recovery preimage has no canonical digest".to_owned())?;
+        let after_digest = persisted_record_sha256(&mutation.after_record).ok_or_else(|| {
+            "ISO lifecycle recovery after-image has no canonical digest".to_owned()
+        })?;
+        let after_json = norito::json::to_string_pretty(&mutation.after_record)
+            .map_err(|error| format!("failed to encode ISO lifecycle after-image: {error}"))?;
+        if !persisted_json_fits_record_cap(&after_json) {
+            return Err("ISO lifecycle recovery after-image exceeds the record cap".to_owned());
+        }
+        if current_digest == after_digest {
+            if track_usage {
+                let bytes = u64::try_from(after_json.len())
+                    .map_err(|_| "ISO lifecycle after-image length overflowed".to_owned())?;
+                self.durable_store_usage
+                    .lock()
+                    .record_replacement(
+                        IsoDurableRecordKind::Message,
+                        &mutation.message_id,
+                        bytes,
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "ISO lifecycle recovery accounting rejected an already materialized after-image: {error:?}"
+                        )
+                    })?;
+            }
+            return Ok(());
+        }
+        if current_digest != mutation.previous_record_sha256 {
+            return Err(format!(
+                "ISO lifecycle recovery preimage for `{}` conflicts with both the journal preimage and after-image",
+                sha256_hex(mutation.message_id.as_bytes())
+            ));
+        }
+        let persisted = if track_usage {
+            self.persist_durable_identity_json(
+                IsoDurableRecordKind::Message,
+                &mutation.message_id,
+                &path,
+                after_json.as_bytes(),
+            )
+        } else {
+            write_iso_record_atomically(&path, after_json.as_bytes()).is_ok()
+        };
+        if !persisted {
+            return Err(format!(
+                "failed to materialize committed ISO lifecycle after-image for `{}`",
+                sha256_hex(mutation.message_id.as_bytes())
+            ));
+        }
+        Ok(())
+    }
+    fn publish_record_candidate(
+        &self,
+        message_id: &str,
+        previous: Option<&IsoMessageRecordV2>,
+        candidate: IsoMessageRecordV2,
+    ) {
+        let previous_hash = previous.and_then(|record| record.transaction_hash.as_deref());
+        let candidate_hash = candidate.transaction_hash.as_deref();
+        if previous_hash != candidate_hash
+            && let Some(previous_hash) = previous_hash
+        {
+            self.tx_hash_index
+                .remove_if(previous_hash, |_, owner| owner == message_id);
+        }
+        if let Some(candidate_hash) = candidate_hash {
+            self.tx_hash_index
+                .insert(candidate_hash.to_owned(), message_id.to_owned());
+        }
+        self.records.insert(message_id.to_owned(), candidate);
+    }
+    fn commit_lifecycle_operation(
+        &self,
+        original: Option<IsoPreparedRecordMutation>,
+        lifecycle: IsoPreparedRecordMutation,
+    ) -> Result<(), IsoStatusHistoryLimitError> {
+        if self.store_dir.is_none() {
+            if let Some(original) = original {
+                self.publish_record_candidate(
+                    &original.message_id,
+                    Some(&original.previous),
+                    original.candidate,
+                );
+            }
+            self.publish_record_candidate(
+                &lifecycle.message_id,
+                Some(&lifecycle.previous),
+                lifecycle.candidate,
+            );
+            self.compact_persisted_records();
+            return Ok(());
+        }
+        if !self.lifecycle_mutations_available() {
+            return Err(IsoStatusHistoryLimitError::Persistence);
+        }
+        let journal = IsoLifecycleJournal {
+            original: original.as_ref().map(lifecycle_journal_mutation),
+            lifecycle: lifecycle_journal_mutation(&lifecycle),
+        };
+        if !self.preflight_lifecycle_journal(&journal) || !self.persist_lifecycle_journal(&journal)
+        {
+            return Err(IsoStatusHistoryLimitError::Persistence);
+        }
+
+        // The fsynced journal is the commit point. Publish both after-images together under
+        // `state_lock`; bounded recovery can now roll them forward after any crash.
+        if let Some(original) = original {
+            self.publish_record_candidate(
+                &original.message_id,
+                Some(&original.previous),
+                original.candidate,
+            );
+        }
+        self.publish_record_candidate(
+            &lifecycle.message_id,
+            Some(&lifecycle.previous),
+            lifecycle.candidate,
+        );
+
+        let materialized = journal
+            .original
+            .as_ref()
+            .map_or(Ok(()), |mutation| {
+                self.materialize_lifecycle_journal_mutation(mutation, true)
+            })
+            .and_then(|()| self.materialize_lifecycle_journal_mutation(&journal.lifecycle, true));
+        if let Err(error) = materialized {
+            iroha_logger::error!(
+                %error,
+                lifecycle_message_id_sha256 = %sha256_hex(journal.lifecycle.message_id.as_bytes()),
+                "committed ISO lifecycle operation remains journal-backed pending recovery"
+            );
+            self.persist_audit_index();
+            return Ok(());
+        }
+        let journal_path = lifecycle_journal_path(
+            self.store_dir
+                .as_deref()
+                .expect("configured store checked above"),
+        );
+        if let Err(error) = remove_lifecycle_journal_file(&journal_path) {
+            iroha_logger::error!(
+                ?error,
+                lifecycle_message_id_sha256 = %sha256_hex(journal.lifecycle.message_id.as_bytes()),
+                "materialized ISO lifecycle operation remains journaled until restart"
+            );
+            self.persist_audit_index();
+            return Ok(());
+        }
+        self.lifecycle_persistence_healthy
+            .store(true, Ordering::Release);
+        self.compact_persisted_records();
+        Ok(())
+    }
+    fn record_existing_durable_entry(
+        &self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        bytes: u64,
+        path: &Path,
+    ) -> eyre::Result<()> {
+        self.durable_store_usage
+            .lock()
+            .record_existing(kind, message_id, bytes)
+            .map_err(|error| {
+                eyre::eyre!(
+                    "ISO bridge {} record `{}` violates the V1 durable-store count or aggregate-byte invariant ({error:?}); regenerate the first-release ISO store",
+                    kind.label(),
+                    path.display()
+                )
+            })
+    }
+    fn persist_durable_identity_json(
+        &self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        path: &Path,
+        bytes: &[u8],
+    ) -> bool {
+        let Ok(byte_count) = u64::try_from(bytes.len()) else {
+            return false;
+        };
+        let mut usage = self.durable_store_usage.lock();
+        let next_bytes = match usage.replacement_total_bytes(kind, message_id, byte_count) {
+            Ok(next_bytes) => next_bytes,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    record_kind = kind.label(),
+                    message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                    max_entries = ISO_PERSISTED_STARTUP_MAX_ENTRIES_V1,
+                    max_bytes = ISO_PERSISTED_STARTUP_MAX_BYTES_V1,
+                    "refused an ISO durable write that would exceed the V1 restart budget"
+                );
+                return false;
+            }
+        };
+        if let Err(error) = write_iso_record_atomically(path, bytes) {
+            let candidate_is_visible =
+                read_persisted_json_bounded(path, ISO_PERSISTED_RECORD_MAX_BYTES)
+                    .is_some_and(|visible| visible.as_bytes() == bytes);
+            if candidate_is_visible {
+                // `rename` may have succeeded before a directory-sync error was reported.
+                // Keep the in-process budget conservative and coherent with the visible file
+                // even though the caller must still treat durability as unconfirmed.
+                usage.commit_replacement(kind, message_id, byte_count, next_bytes);
+            }
+            iroha_logger::error!(
+                ?error,
+                candidate_is_visible,
+                record_kind = kind.label(),
+                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                "failed to persist ISO record atomically"
+            );
+            return false;
+        }
+        usage.commit_replacement(kind, message_id, byte_count, next_bytes);
+        true
+    }
+    fn remove_durable_identity_file(
+        &self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        path: &Path,
+    ) -> bool {
+        self.remove_durable_identity_file_with_directory_sync(
+            kind,
+            message_id,
+            path,
+            sync_iso_directory,
+        )
+    }
+    fn remove_durable_identity_file_with_directory_sync(
+        &self,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+        path: &Path,
+        sync_directory: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> bool {
+        let mut usage = self.durable_store_usage.lock();
+        let unlink_succeeded = match fs::remove_file(path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    record_kind = kind.label(),
+                    message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                    "failed to remove an ISO durable identity record"
+                );
+                return false;
+            }
+        };
+        let Some(parent) = path.parent() else {
+            iroha_logger::error!(
+                record_kind = kind.label(),
+                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                "refused to release ISO durable-store accounting for a path without a containing directory"
+            );
+            return false;
+        };
+        if let Err(error) = sync_directory(parent) {
+            // The name may already be absent, but a crash can still resurrect it until
+            // the containing directory is durable. Keep both the in-memory identity and
+            // its capacity reservation so callers fail closed and can retry the sync.
+            iroha_logger::error!(
+                ?error,
+                unlink_succeeded,
+                record_kind = kind.label(),
+                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                "ISO durable identity unlink is visible but not durable; retained in-memory state and accounting"
+            );
+            return false;
+        }
+        Self::finish_durable_usage_removal(&mut usage, kind, message_id)
+    }
+    fn finish_durable_usage_removal(
+        usage: &mut IsoDurableStoreUsage,
+        kind: IsoDurableRecordKind,
+        message_id: &str,
+    ) -> bool {
+        if let Err(error) = usage.remove(kind, message_id) {
+            iroha_logger::error!(
+                ?error,
+                record_kind = kind.label(),
+                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                "ISO durable-store accounting failed after file removal"
+            );
+            return false;
+        }
+        true
+    }
+    fn commit_record_candidate(
+        &self,
+        message_id: &str,
+        previous: Option<&IsoMessageRecordV2>,
+        candidate: IsoMessageRecordV2,
+    ) -> bool {
+        if !self.lifecycle_mutations_available() {
+            return false;
+        }
+        if !self.persist_record_candidate(message_id, &candidate) {
+            return false;
+        }
+        self.publish_record_candidate(message_id, previous, candidate);
+        self.compact_persisted_records();
+        true
+    }
+    fn persist_record_candidate(&self, message_id: &str, record: &IsoMessageRecordV2) -> bool {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return true;
+        };
+        let messages_dir = store_dir.join("messages");
+        if !is_real_directory(&messages_dir) {
             return false;
         }
         let Some(json) = persisted_record_json(message_id, &record) else {
@@ -3182,16 +5204,25 @@ impl Iso20022BridgeRuntime {
         };
         let path = messages_dir.join(message_filename(message_id));
         if !persisted_json_fits_record_cap(&json) {
-            let _ = fs::remove_file(path);
-            self.persist_audit_index();
+            iroha_logger::error!(
+                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                max_bytes = ISO_PERSISTED_RECORD_MAX_BYTES,
+                "refused to replace an ISO record with an oversized candidate"
+            );
             return false;
         }
-        if let Err(error) = write_iso_record_atomically(&path, json.as_bytes()) {
-            iroha_logger::error!(
-                ?error,
-                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
-                "failed to persist ISO record atomically"
-            );
+        self.persist_durable_identity_json(
+            IsoDurableRecordKind::Message,
+            message_id,
+            &path,
+            json.as_bytes(),
+        )
+    }
+    fn persist_message(&self, message_id: &str) -> bool {
+        let Some(record) = self.records.get(message_id).map(|entry| entry.clone()) else {
+            return false;
+        };
+        if !self.persist_record_candidate(message_id, &record) {
             return false;
         }
         self.compact_persisted_records();
@@ -3207,68 +5238,158 @@ impl Iso20022BridgeRuntime {
             return;
         }
         let path = messages_dir.join(message_filename(message_id));
-        let _ = fs::remove_file(path);
+        self.remove_durable_identity_file(IsoDurableRecordKind::Message, message_id, &path);
         self.persist_audit_index();
     }
-    fn persist_audit_index(&self) {
-        let payload = self.audit_index();
-        let Ok(json) = norito::json::to_string_pretty(&payload) else {
-            return;
+    fn persist_replay_tombstone(&self, message_id: &str, tombstone: &IsoReplayTombstone) -> bool {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return false;
         };
+        let tombstones_dir = store_dir.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
+        if !is_real_directory(&tombstones_dir) {
+            return false;
+        }
+        let Ok(json) =
+            norito::json::to_string_pretty(&replay_tombstone_value(message_id, tombstone))
+        else {
+            return false;
+        };
+        if !persisted_json_fits_record_cap(&json) {
+            return false;
+        }
+        let path = tombstones_dir.join(message_filename(message_id));
+        self.persist_durable_identity_json(
+            IsoDurableRecordKind::ReplayTombstone,
+            message_id,
+            &path,
+            json.as_bytes(),
+        )
+    }
+    fn remove_persisted_replay_tombstone(&self, message_id: &str) -> bool {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return true;
+        };
+        let tombstones_dir = store_dir.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
+        if !is_real_directory(&tombstones_dir) {
+            return false;
+        }
+        self.remove_durable_identity_file(
+            IsoDurableRecordKind::ReplayTombstone,
+            message_id,
+            &tombstones_dir.join(message_filename(message_id)),
+        )
+    }
+    fn persist_audit_index(&self) -> bool {
+        let result = self.try_persist_audit_index();
+        let healthy = result.is_ok();
+        self.audit_persistence_healthy
+            .store(healthy, Ordering::Release);
+        if let Err(error) = result {
+            iroha_logger::error!(
+                %error,
+                "failed to persist the ISO V3 audit index to every configured target"
+            );
+        }
+        healthy
+    }
+    fn try_persist_audit_index(&self) -> Result<(), String> {
+        let payload = self.audit_index();
+        let json = norito::json::to_string_pretty(&payload)
+            .map_err(|error| format!("failed to encode the ISO V3 audit index: {error}"))?;
+        if !persisted_json_fits_cap(&json, ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES) {
+            return Err(format!(
+                "ISO V3 audit index exceeds the {ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES}-byte limit"
+            ));
+        }
         if let Some(store_dir) = self.store_dir.as_deref() {
             let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
-            if ensure_real_directory(&audit_dir) {
-                let path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
-                let _ = fs::write(path, &json);
+            if !is_real_directory(&audit_dir) {
+                return Err(format!(
+                    "ISO bridge audit directory is unavailable or unsafe: {}",
+                    audit_dir.display()
+                ));
             }
+            let path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+            write_iso_record_atomically(&path, json.as_bytes()).map_err(|error| {
+                format!(
+                    "failed to persist ISO V3 audit index `{}`: {error}",
+                    path.display()
+                )
+            })?;
         }
-        self.persist_external_audit_export(&payload, &json);
+        self.persist_external_audit_export(&payload, &json)
     }
-    fn persist_external_audit_export(&self, payload: &JsonValue, json: &str) {
+    fn persist_external_audit_export(&self, payload: &JsonValue, json: &str) -> Result<(), String> {
         let Some(export_dir) = self.audit_export_dir.as_deref() else {
-            return;
+            return Ok(());
         };
-        if !ensure_real_directory(export_dir) {
-            return;
+        if !is_real_directory(export_dir) {
+            return Err(format!(
+                "ISO audit export directory is unavailable or unsafe: {}",
+                export_dir.display()
+            ));
         }
-        let _ = fs::write(export_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE), json);
-        let Some(index_sha256) = audit_index_digest(payload) else {
-            return;
-        };
+        let index_sha256 = audit_index_digest(payload)
+            .ok_or_else(|| "failed to calculate the ISO audit index digest".to_owned())?;
         let anchor = audit_export_anchor_value(payload, self.store_dir.as_deref());
-        let Ok(anchor_json) = norito::json::to_string_pretty(&anchor) else {
-            return;
-        };
-        let _ = fs::write(
-            export_dir.join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE),
-            &anchor_json,
-        );
+        let anchor_json = norito::json::to_string_pretty(&anchor)
+            .map_err(|error| format!("failed to encode the ISO audit anchor: {error}"))?;
         let anchor_dir = export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR);
-        if !ensure_real_directory(&anchor_dir) {
-            return;
+        if !is_real_directory(&anchor_dir) {
+            return Err(format!(
+                "ISO audit anchor directory is unavailable or unsafe: {}",
+                anchor_dir.display()
+            ));
         }
-        let _ = fs::write(
-            anchor_dir.join(format!("{index_sha256}.notary.json")),
-            anchor_json,
-        );
+        let immutable_anchor_path = anchor_dir.join(format!("{index_sha256}.notary.json"));
+        write_iso_record_atomically(&immutable_anchor_path, anchor_json.as_bytes()).map_err(
+            |error| {
+                format!(
+                    "failed to persist digest-addressed ISO audit anchor `{}`: {error}",
+                    immutable_anchor_path.display()
+                )
+            },
+        )?;
+        let index_path = export_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+        write_iso_record_atomically(&index_path, json.as_bytes()).map_err(|error| {
+            format!(
+                "failed to persist external ISO audit index `{}`: {error}",
+                index_path.display()
+            )
+        })?;
+        let latest_anchor_path = export_dir.join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE);
+        write_iso_record_atomically(&latest_anchor_path, anchor_json.as_bytes()).map_err(
+            |error| {
+                format!(
+                    "failed to advance latest ISO audit anchor `{}`: {error}",
+                    latest_anchor_path.display()
+                )
+            },
+        )?;
+        Ok(())
     }
-    fn compact_persisted_records(&self) {
+    fn compact_persisted_records(&self) -> bool {
         let Some(store_dir) = self.store_dir.as_deref() else {
-            return;
+            return self.persist_audit_index();
         };
         let now = SystemTime::now();
+        self.prune_expired_tombstones(now);
         if !self.store_retention.is_zero() {
             while let Some(message_id) = self.oldest_expired_record_message_id(now) {
-                self.remove_record_for_retention(&message_id, store_dir);
+                if !self.remove_record_for_retention(&message_id, store_dir, now) {
+                    break;
+                }
             }
         }
         while self.records.len() > self.store_max_records {
-            let Some(message_id) = self.oldest_record_message_id() else {
+            let Some(message_id) = self.oldest_replay_expired_record_message_id(now) else {
                 break;
             };
-            self.remove_record_for_retention(&message_id, store_dir);
+            if !self.remove_record_for_retention(&message_id, store_dir, now) {
+                break;
+            }
         }
-        self.persist_audit_index();
+        self.persist_audit_index()
     }
     fn oldest_expired_record_message_id(&self, now: SystemTime) -> Option<String> {
         self.records
@@ -3286,10 +5407,13 @@ impl Iso20022BridgeRuntime {
             })
             .map(|entry| entry.key().clone())
     }
-    fn oldest_record_message_id(&self) -> Option<String> {
+    fn oldest_replay_expired_record_message_id(&self, now: SystemTime) -> Option<String> {
         self.records
             .iter()
-            .filter(|entry| !entry.value().retention_protected())
+            .filter(|entry| {
+                !entry.value().retention_protected()
+                    && now.duration_since(entry.value().replay_expires_at).is_ok()
+            })
             .min_by(|left, right| {
                 system_time_to_ms(left.value().updated_at)
                     .cmp(&system_time_to_ms(right.value().updated_at))
@@ -3297,16 +5421,73 @@ impl Iso20022BridgeRuntime {
             })
             .map(|entry| entry.key().clone())
     }
-    fn remove_record_for_retention(&self, message_id: &str, store_dir: &Path) {
-        if let Some((_, record)) = self.records.remove(message_id) {
-            self.remove_record_indexes(message_id, &record);
+    fn remove_record_for_retention(
+        &self,
+        message_id: &str,
+        store_dir: &Path,
+        now: SystemTime,
+    ) -> bool {
+        let Some(record) = self.records.get(message_id).map(|record| record.clone()) else {
+            return true;
+        };
+        let replay_live = now.duration_since(record.replay_expires_at).is_err();
+        if replay_live {
+            let tombstone = IsoReplayTombstone {
+                expires_at: record.replay_expires_at,
+                payload_hash: record.metadata.payload_hash.clone(),
+                business_message_id: record.metadata.business_message_id.clone(),
+                uetr: record.metadata.uetr.clone(),
+            };
+            if let Some(existing) = self.replay_tombstones.get(message_id) {
+                if !record_matches_replay_tombstone(&record, existing.value()) {
+                    return false;
+                }
+            } else {
+                if !self.persist_replay_tombstone(message_id, &tombstone) {
+                    return false;
+                }
+                self.insert_tombstone_indexes(message_id, &tombstone);
+                self.replay_tombstones
+                    .insert(message_id.to_owned(), tombstone);
+            }
         }
         let messages_dir = store_dir.join("messages");
-        if !is_real_directory(&messages_dir) {
-            return;
+        if is_real_directory(&messages_dir) {
+            let path = messages_dir.join(message_filename(message_id));
+            if !self.remove_durable_identity_file(IsoDurableRecordKind::Message, message_id, &path)
+            {
+                return false;
+            }
         }
-        let path = messages_dir.join(message_filename(message_id));
-        let _ = fs::remove_file(path);
+        if replay_live {
+            if let Some(hash) = record.transaction_hash.as_deref() {
+                self.tx_hash_index
+                    .remove_if(hash, |_, owner| owner == message_id);
+            }
+        } else {
+            self.remove_record_indexes(message_id, &record);
+        }
+        self.records.remove(message_id);
+        true
+    }
+    fn prune_expired_tombstones(&self, now: SystemTime) {
+        let expired = self
+            .replay_tombstones
+            .iter()
+            .filter_map(|entry| {
+                now.duration_since(entry.expires_at)
+                    .is_ok()
+                    .then(|| entry.key().clone())
+            })
+            .collect::<Vec<_>>();
+        for message_id in expired {
+            if !self.remove_persisted_replay_tombstone(&message_id) {
+                continue;
+            }
+            if let Some((_, tombstone)) = self.replay_tombstones.remove(&message_id) {
+                self.remove_tombstone_indexes(&message_id, &tombstone);
+            }
+        }
     }
     fn require_profile_reference_data(&self, profile: &TradfiRailProfile) -> Result<(), MsgError> {
         for requirement in &profile.required_reference_datasets {
@@ -3562,7 +5743,7 @@ impl Iso20022BridgeRuntime {
         }
     }
 }
-fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonValue {
+fn persisted_record_value(message_id: &str, record: &IsoMessageRecordV2) -> JsonValue {
     let mut root = persisted_record_body_value(message_id, record);
     let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
     root.insert(
@@ -3571,13 +5752,217 @@ fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonVa
     );
     JsonValue::Object(root)
 }
-fn persisted_record_json(message_id: &str, record: &IsoMessageRecord) -> Option<String> {
+fn persisted_record_json(message_id: &str, record: &IsoMessageRecordV2) -> Option<String> {
     norito::json::to_string_pretty(&persisted_record_value(message_id, record)).ok()
 }
-fn persisted_json_fits_record_cap(json: &str) -> bool {
-    u64::try_from(json.len()).is_ok_and(|len| len <= ISO_PERSISTED_RECORD_MAX_BYTES)
+fn persisted_record_sha256(value: &JsonValue) -> Option<&str> {
+    value
+        .as_object()
+        .and_then(|object| object.get(ISO_PERSISTED_RECORD_DIGEST_FIELD))
+        .and_then(JsonValue::as_str)
+        .filter(|digest| is_canonical_sha256_hex(digest))
 }
-fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecord) -> norito::json::Map {
+fn lifecycle_journal_mutation(mutation: &IsoPreparedRecordMutation) -> IsoLifecycleJournalMutation {
+    let previous = persisted_record_value(&mutation.message_id, &mutation.previous);
+    IsoLifecycleJournalMutation {
+        message_id: mutation.message_id.clone(),
+        previous_record_sha256: persisted_record_sha256(&previous)
+            .expect("persisted ISO record values always carry a canonical digest")
+            .to_owned(),
+        after_record: persisted_record_value(&mutation.message_id, &mutation.candidate),
+    }
+}
+fn lifecycle_journal_mutation_value(mutation: &IsoLifecycleJournalMutation) -> JsonValue {
+    let mut value = norito::json::Map::new();
+    value.insert(
+        "message_id".to_owned(),
+        JsonValue::from(mutation.message_id.as_str()),
+    );
+    value.insert(
+        "previous_record_sha256".to_owned(),
+        JsonValue::from(mutation.previous_record_sha256.as_str()),
+    );
+    value.insert("after_record".to_owned(), mutation.after_record.clone());
+    JsonValue::Object(value)
+}
+fn lifecycle_journal_value(journal: &IsoLifecycleJournal) -> JsonValue {
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_PERSISTED_LIFECYCLE_OPERATION_VERSION),
+    );
+    root.insert(
+        "record_version".to_owned(),
+        JsonValue::from(ISO_PERSISTED_RECORD_VERSION),
+    );
+    root.insert(
+        "original".to_owned(),
+        journal
+            .original
+            .as_ref()
+            .map_or(JsonValue::Null, |mutation| {
+                lifecycle_journal_mutation_value(mutation)
+            }),
+    );
+    root.insert(
+        "lifecycle".to_owned(),
+        lifecycle_journal_mutation_value(&journal.lifecycle),
+    );
+    let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
+    root.insert(
+        ISO_PERSISTED_LIFECYCLE_OPERATION_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest),
+    );
+    JsonValue::Object(root)
+}
+fn lifecycle_journal_json(journal: &IsoLifecycleJournal) -> Option<String> {
+    norito::json::to_string_pretty(&lifecycle_journal_value(journal)).ok()
+}
+const PERSISTED_LIFECYCLE_JOURNAL_REQUIRED_KEYS: &[&str] = &[
+    "version",
+    "record_version",
+    "original",
+    "lifecycle",
+    ISO_PERSISTED_LIFECYCLE_OPERATION_DIGEST_FIELD,
+];
+const PERSISTED_LIFECYCLE_JOURNAL_MUTATION_REQUIRED_KEYS: &[&str] =
+    &["message_id", "previous_record_sha256", "after_record"];
+fn lifecycle_journal_mutation_from_value(value: &JsonValue) -> Option<IsoLifecycleJournalMutation> {
+    let object = value.as_object()?;
+    if !json_object_has_exact_keys(object, PERSISTED_LIFECYCLE_JOURNAL_MUTATION_REQUIRED_KEYS) {
+        return None;
+    }
+    let message_id = required_clean_string(object, "message_id")?;
+    let previous_record_sha256 = required_clean_string(object, "previous_record_sha256")?;
+    if !is_canonical_sha256_hex(&previous_record_sha256) {
+        return None;
+    }
+    let after_record = object.get("after_record")?.clone();
+    let (after_message_id, _) = persisted_record_from_value(&after_record)?;
+    if after_message_id != message_id {
+        return None;
+    }
+    Some(IsoLifecycleJournalMutation {
+        message_id,
+        previous_record_sha256,
+        after_record,
+    })
+}
+fn lifecycle_journal_from_value(value: &JsonValue) -> Option<IsoLifecycleJournal> {
+    let object = value.as_object()?;
+    if !json_object_has_exact_keys(object, PERSISTED_LIFECYCLE_JOURNAL_REQUIRED_KEYS)
+        || object.get("version")?.as_u64()? != ISO_PERSISTED_LIFECYCLE_OPERATION_VERSION
+        || object.get("record_version")?.as_u64()? != ISO_PERSISTED_RECORD_VERSION
+        || !persisted_json_digest_matches(object, ISO_PERSISTED_LIFECYCLE_OPERATION_DIGEST_FIELD)
+    {
+        return None;
+    }
+    let original = match object.get("original")? {
+        JsonValue::Null => None,
+        value => Some(lifecycle_journal_mutation_from_value(value)?),
+    };
+    let lifecycle = lifecycle_journal_mutation_from_value(object.get("lifecycle")?)?;
+    if original
+        .as_ref()
+        .is_some_and(|mutation| mutation.message_id == lifecycle.message_id)
+    {
+        return None;
+    }
+    Some(IsoLifecycleJournal {
+        original,
+        lifecycle,
+    })
+}
+fn replay_tombstone_metadata(tombstone: &IsoReplayTombstone) -> IsoMessageMetadata {
+    IsoMessageMetadata {
+        payload_hash: tombstone.payload_hash.clone(),
+        business_message_id: tombstone.business_message_id.clone(),
+        uetr: tombstone.uetr.clone(),
+        ..IsoMessageMetadata::default()
+    }
+}
+fn replay_tombstone_value(message_id: &str, tombstone: &IsoReplayTombstone) -> JsonValue {
+    let mut map = norito::json::Map::new();
+    map.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION),
+    );
+    map.insert("message_id".to_owned(), JsonValue::from(message_id));
+    map.insert(
+        "expires_at_ms".to_owned(),
+        JsonValue::from(system_time_to_ms(tombstone.expires_at)),
+    );
+    map.insert(
+        "payload_hash".to_owned(),
+        string_or_null(tombstone.payload_hash.as_deref()),
+    );
+    map.insert(
+        "business_message_id".to_owned(),
+        string_or_null(tombstone.business_message_id.as_deref()),
+    );
+    map.insert("uetr".to_owned(), string_or_null(tombstone.uetr.as_deref()));
+    let digest = persisted_record_digest(&JsonValue::Object(map.clone()));
+    map.insert(
+        ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest),
+    );
+    JsonValue::Object(map)
+}
+const REPLAY_TOMBSTONE_REQUIRED_KEYS: &[&str] = &[
+    "version",
+    "message_id",
+    "expires_at_ms",
+    "payload_hash",
+    "business_message_id",
+    "uetr",
+    ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD,
+];
+fn replay_tombstone_from_value(value: &JsonValue) -> Option<(String, IsoReplayTombstone)> {
+    let object = value.as_object()?;
+    if !json_object_has_exact_keys(object, REPLAY_TOMBSTONE_REQUIRED_KEYS)
+        || object.get("version")?.as_u64()? != ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION
+        || !persisted_json_digest_matches(object, ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD)
+    {
+        return None;
+    }
+    Some((
+        required_clean_string(object, "message_id")?,
+        IsoReplayTombstone {
+            expires_at: system_time_from_ms(object.get("expires_at_ms")?.as_u64()?),
+            payload_hash: required_nullable_string(object, "payload_hash")?,
+            business_message_id: required_nullable_string(object, "business_message_id")?,
+            uetr: required_nullable_string(object, "uetr")?,
+        },
+    ))
+}
+fn record_matches_replay_tombstone(
+    record: &IsoMessageRecordV2,
+    tombstone: &IsoReplayTombstone,
+) -> bool {
+    record.replay_expires_at == tombstone.expires_at
+        && record.metadata.payload_hash == tombstone.payload_hash
+        && record.metadata.business_message_id == tombstone.business_message_id
+        && record.metadata.uetr == tombstone.uetr
+}
+fn insert_unique_persisted_identity(
+    owners: &mut BTreeMap<String, String>,
+    identity: Option<String>,
+    message_id: &str,
+) -> bool {
+    let Some(identity) = identity else {
+        return false;
+    };
+    owners
+        .insert(identity, message_id.to_owned())
+        .is_some_and(|owner| owner != message_id)
+}
+fn persisted_json_fits_record_cap(json: &str) -> bool {
+    persisted_json_fits_cap(json, ISO_PERSISTED_RECORD_MAX_BYTES)
+}
+fn persisted_json_fits_cap(json: &str, max_bytes: u64) -> bool {
+    u64::try_from(json.len()).is_ok_and(|len| len <= max_bytes)
+}
+fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecordV2) -> norito::json::Map {
     let mut root = norito::json::Map::new();
     root.insert(
         "version".to_owned(),
@@ -3628,6 +6013,11 @@ fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecord) -> n
     );
     root.insert("context".to_owned(), context_value(&record.context));
     root.insert("metadata".to_owned(), metadata_value(&record.metadata));
+    root.insert("parties".to_owned(), parties_value(&record.parties));
+    root.insert(
+        "replay_expires_at_ms".to_owned(),
+        JsonValue::from(system_time_to_ms(record.replay_expires_at)),
+    );
     root.insert(
         "status_history".to_owned(),
         JsonValue::Array(
@@ -3676,6 +6066,8 @@ const PERSISTED_RECORD_REQUIRED_KEYS: &[&str] = &[
     "rejection_reason_code",
     "context",
     "metadata",
+    "parties",
+    "replay_expires_at_ms",
     "status_history",
     ISO_PERSISTED_RECORD_DIGEST_FIELD,
 ];
@@ -3718,12 +6110,45 @@ const PERSISTED_METADATA_REQUIRED_KEYS: &[&str] = &[
     "reference_snapshot_id",
     "embedded_signature_detected",
 ];
+const PERSISTED_PARTIES_REQUIRED_KEYS: &[&str] = &[
+    "originator_participant_id",
+    "counterparty_participant_id",
+    "admitting_participant_id",
+    "admitting_operator_key",
+    "originator_financial_id",
+    "counterparty_financial_id",
+    "pinned_profile_id",
+    "pinned_signature_policy",
+    "pinned_profile_policy_sha256",
+];
 const PERSISTED_HISTORY_REQUIRED_KEYS: &[&str] = &[
     "status",
     "pacs002_code",
     "updated_at_ms",
     "detail",
     "reason_code",
+];
+const PERSISTED_AUDIT_INDEX_REQUIRED_KEYS: &[&str] = &[
+    "version",
+    "record_count",
+    "records",
+    ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD,
+];
+const PERSISTED_AUDIT_INDEX_ENTRY_REQUIRED_KEYS: &[&str] = &[
+    "message_id",
+    "filename",
+    ISO_PERSISTED_RECORD_DIGEST_FIELD,
+    "state",
+    "pacs002_code",
+    "updated_at_ms",
+    "settled_at_ms",
+    "transaction_hash",
+    "profile_id",
+    "message_type",
+    "business_message_id",
+    "uetr",
+    "payload_hash",
+    "reference_snapshot_id",
 ];
 fn json_object_has_exact_keys(obj: &norito::json::Map, required: &[&str]) -> bool {
     obj.len() == required.len() && required.iter().all(|key| obj.contains_key(*key))
@@ -3749,7 +6174,7 @@ fn required_nullable_time_ms(obj: &norito::json::Map, key: &str) -> Option<Optio
         value => value.as_u64().map(system_time_from_ms).map(Some),
     }
 }
-fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageRecord)> {
+fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageRecordV2)> {
     let obj = value.as_object()?;
     if !json_object_has_exact_keys(obj, PERSISTED_RECORD_REQUIRED_KEYS) {
         return None;
@@ -3787,6 +6212,11 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     let rejection_reason_code = required_nullable_string(obj, "rejection_reason_code")?;
     let context = context_from_value(obj.get("context")?)?;
     let metadata = metadata_from_value(obj.get("metadata")?)?;
+    let parties = parties_from_value(obj.get("parties")?)?;
+    let replay_expires_at = obj
+        .get("replay_expires_at_ms")
+        .and_then(JsonValue::as_u64)
+        .map(system_time_from_ms)?;
     let status_history_values = obj.get("status_history")?.as_array()?;
     if status_history_values.is_empty()
         || status_history_values.len() > ISO_STATUS_HISTORY_MAX_ENTRIES_V1
@@ -3800,7 +6230,8 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     if status_history_encoded_len(&status_history)? > ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1 {
         return None;
     }
-    let record = IsoMessageRecord {
+    let record = IsoMessageRecordV2 {
+        incarnation: new_iso_record_incarnation(),
         last_seen: Instant::now(),
         updated_at,
         state,
@@ -3814,6 +6245,8 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
         change_reason_codes,
         rejection_reason_code,
         status_history,
+        parties,
+        replay_expires_at,
     };
     Some((message_id, record))
 }
@@ -3837,7 +6270,7 @@ fn persisted_audit_index_value(records: Vec<JsonValue>) -> JsonValue {
 }
 fn persisted_audit_index_entry_value(
     message_id: &str,
-    record: &IsoMessageRecord,
+    record: &IsoMessageRecordV2,
 ) -> Option<JsonValue> {
     let persisted_record = persisted_record_value(message_id, record);
     let persisted_json = norito::json::to_string_pretty(&persisted_record).ok()?;
@@ -3905,6 +6338,148 @@ fn persisted_audit_index_entry_value(
 fn persisted_audit_index_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD)
 }
+fn persisted_audit_index_entry_is_valid(value: &JsonValue) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if !json_object_has_exact_keys(object, PERSISTED_AUDIT_INDEX_ENTRY_REQUIRED_KEYS) {
+        return false;
+    }
+    let Some(message_id) = required_clean_string(object, "message_id") else {
+        return false;
+    };
+    let expected_filename = message_filename(&message_id);
+    if required_clean_string(object, "filename").as_deref() != Some(expected_filename.as_str())
+        || object
+            .get(ISO_PERSISTED_RECORD_DIGEST_FIELD)
+            .and_then(JsonValue::as_str)
+            .is_none_or(|digest| {
+                digest.len() != 64 || !digest.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+            })
+        || object
+            .get("state")
+            .and_then(JsonValue::as_str)
+            .and_then(state_from_label)
+            .is_none()
+        || object
+            .get("pacs002_code")
+            .and_then(JsonValue::as_str)
+            .and_then(pacs002_from_code)
+            .is_none()
+        || object
+            .get("updated_at_ms")
+            .and_then(JsonValue::as_u64)
+            .is_none()
+        || required_nullable_time_ms(object, "settled_at_ms").is_none()
+    {
+        return false;
+    }
+    [
+        "transaction_hash",
+        "profile_id",
+        "message_type",
+        "business_message_id",
+        "uetr",
+        "payload_hash",
+        "reference_snapshot_id",
+    ]
+    .into_iter()
+    .all(|key| required_nullable_string(object, key).is_some())
+}
+fn load_persisted_audit_index(path: &Path) -> eyre::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "failed to inspect ISO bridge audit index `{}`",
+                    path.display()
+                )
+            });
+        }
+    };
+    if !metadata.file_type().is_file() {
+        eyre::bail!(
+            "ISO bridge audit index `{}` is not a regular file; regenerate the first-release ISO store",
+            path.display()
+        );
+    }
+    let Some(text) = read_persisted_json_bounded(path, ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES) else {
+        eyre::bail!(
+            "ISO bridge audit index `{}` is unreadable or exceeds the V3 byte limit; regenerate the first-release ISO store",
+            path.display()
+        );
+    };
+    let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
+        format!(
+            "ISO bridge audit index `{}` is not valid JSON; regenerate the first-release ISO store",
+            path.display()
+        )
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        eyre::eyre!(
+            "ISO bridge audit index `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
+            path.display(),
+            ISO_PERSISTED_AUDIT_INDEX_VERSION
+        )
+    })?;
+    let version = object
+        .get("version")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "ISO bridge audit index `{}` does not advertise numeric schema version V{}; regenerate the first-release ISO store",
+                path.display(),
+                ISO_PERSISTED_AUDIT_INDEX_VERSION
+            )
+        })?;
+    if version != ISO_PERSISTED_AUDIT_INDEX_VERSION {
+        eyre::bail!(
+            "incompatible ISO bridge audit index schema version {version}; expected V{ISO_PERSISTED_AUDIT_INDEX_VERSION}; regenerate the first-release ISO store"
+        );
+    }
+    let records = object.get("records").and_then(JsonValue::as_array);
+    let record_count = object.get("record_count").and_then(JsonValue::as_u64);
+    let records_are_current = records.is_some_and(|records| {
+        let mut previous_message_id = None;
+        records.iter().all(|record| {
+            if !persisted_audit_index_entry_is_valid(record) {
+                return false;
+            }
+            let message_id = record
+                .as_object()
+                .and_then(|object| object.get("message_id"))
+                .and_then(JsonValue::as_str)
+                .expect("validated audit entries carry a message id");
+            if previous_message_id.is_some_and(|previous| previous >= message_id) {
+                return false;
+            }
+            previous_message_id = Some(message_id);
+            true
+        })
+    });
+    if !json_object_has_exact_keys(object, PERSISTED_AUDIT_INDEX_REQUIRED_KEYS)
+        || !persisted_audit_index_digest_matches(object)
+        || records.is_none()
+        || record_count != records.and_then(|records| u64::try_from(records.len()).ok())
+        || !records_are_current
+    {
+        eyre::bail!(
+            "ISO bridge audit index `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
+            path.display(),
+            ISO_PERSISTED_AUDIT_INDEX_VERSION
+        );
+    }
+    Ok(())
+}
 fn audit_index_digest(index: &JsonValue) -> Option<&str> {
     index
         .as_object()
@@ -3947,15 +6522,197 @@ fn audit_export_anchor_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD)
 }
 fn read_persisted_record_bounded(path: &Path) -> Option<String> {
-    let file = fs::File::open(path).ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file() || metadata.len() > ISO_PERSISTED_RECORD_MAX_BYTES {
+    read_persisted_json_bounded(path, ISO_PERSISTED_RECORD_MAX_BYTES)
+}
+fn read_startup_record_entry(
+    entry: fs::DirEntry,
+    directory_entries: &mut u64,
+    budget: &mut IsoStartupScanBudget,
+    record_kind: &str,
+) -> eyre::Result<Option<(PathBuf, String, u64)>> {
+    *directory_entries = directory_entries.checked_add(1).ok_or_else(|| {
+        eyre::eyre!("ISO bridge {record_kind} directory entry counter overflowed")
+    })?;
+    if *directory_entries > ISO_PERSISTED_RECORD_MAX_COUNT_V1 {
+        eyre::bail!(
+            "ISO bridge {record_kind} store exceeds the V1 directory entry limit of {ISO_PERSISTED_RECORD_MAX_COUNT_V1}; regenerate the first-release ISO store"
+        );
+    }
+    let path = entry.path();
+    let is_known_writer_temp = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(iso_record_temp_target_filename)
+        .is_some_and(is_canonical_durable_identity_filename);
+    if is_known_writer_temp {
+        let file_type = entry.file_type().wrap_err_with(|| {
+            format!(
+                "failed to inspect ISO bridge {record_kind} writer temp `{}`",
+                path.display()
+            )
+        })?;
+        if !file_type.is_file() {
+            eyre::bail!(
+                "ISO bridge {record_kind} writer temp `{}` is not a direct regular file; regenerate the first-release ISO store",
+                path.display()
+            );
+        }
+        let metadata = secure_file_metadata::from_path(&path).wrap_err_with(|| {
+            format!(
+                "failed to inspect ISO bridge {record_kind} writer temp `{}`",
+                path.display()
+            )
+        })?;
+        if !persisted_metadata_is_direct_regular(&metadata) {
+            eyre::bail!(
+                "ISO bridge {record_kind} writer temp `{}` is not a direct regular file; regenerate the first-release ISO store",
+                path.display()
+            );
+        }
+        // Crash debris is still attacker-controlled startup work. Charge it before
+        // opening or unlinking so repeated temps cannot bypass either V1 bound.
+        budget.charge_entry(&path, metadata.len())?;
+        remove_stable_startup_writer_temp(&path, &metadata, record_kind)?;
+        return Ok(None);
+    }
+    if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        eyre::bail!(
+            "ISO bridge {record_kind} store contains unexpected entry `{}`; regenerate the first-release ISO store",
+            path.display()
+        );
+    }
+    let file_type = entry.file_type().wrap_err_with(|| {
+        format!(
+            "failed to inspect ISO bridge {record_kind} record `{}`",
+            path.display()
+        )
+    })?;
+    if !file_type.is_file() {
+        eyre::bail!(
+            "ISO bridge {record_kind} record `{}` is not a regular file; regenerate the first-release ISO store",
+            path.display()
+        );
+    }
+    let metadata = secure_file_metadata::from_path(&path).wrap_err_with(|| {
+        format!(
+            "failed to inspect ISO bridge {record_kind} record `{}`",
+            path.display()
+        )
+    })?;
+    let (text, actual_bytes) = read_persisted_json_bounded_with_metadata(
+        &path,
+        &metadata,
+        ISO_PERSISTED_RECORD_MAX_BYTES,
+    )
+    .ok_or_else(|| {
+        eyre::eyre!(
+            "ISO bridge {record_kind} record `{}` is unsafe, unstable, unreadable, or exceeds the V3 byte limit; regenerate the first-release ISO store",
+            path.display()
+        )
+    })?;
+    budget.charge_entry(&path, actual_bytes)?;
+    Ok(Some((path, text, actual_bytes)))
+}
+fn is_canonical_durable_identity_filename(file_name: &str) -> bool {
+    let Some(digest) = file_name.strip_suffix(".json") else {
+        return false;
+    };
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+fn iso_record_temp_filename(file_name: &str, process_id: u32, sequence: u64) -> String {
+    format!(".{file_name}.{process_id}.{sequence}.tmp")
+}
+fn iso_record_temp_target_filename(file_name: &str) -> Option<&str> {
+    let body = file_name.strip_prefix('.')?.strip_suffix(".tmp")?;
+    let (target_and_process, sequence) = body.rsplit_once('.')?;
+    let (target, process_id) = target_and_process.rsplit_once('.')?;
+    let parsed_process_id = process_id.parse::<u32>().ok()?;
+    let parsed_sequence = sequence.parse::<u64>().ok()?;
+    if parsed_process_id.to_string() != process_id || parsed_sequence.to_string() != sequence {
         return None;
     }
-    let initial_capacity = usize::try_from(metadata.len()).ok()?;
+    Some(target)
+}
+fn remove_stable_startup_writer_temp(
+    path: &Path,
+    expected_metadata: &SecureMetadata,
+    record_kind: &str,
+) -> eyre::Result<()> {
+    let file = open_persisted_file_no_follow(path).wrap_err_with(|| {
+        format!(
+            "failed to open ISO bridge {record_kind} writer temp `{}` without following links",
+            path.display()
+        )
+    })?;
+    let opened_metadata = secure_file_metadata::from_file(&file).wrap_err_with(|| {
+        format!(
+            "failed to inspect opened ISO bridge {record_kind} writer temp `{}`",
+            path.display()
+        )
+    })?;
+    let named_metadata = secure_file_metadata::from_path(path).wrap_err_with(|| {
+        format!(
+            "failed to re-inspect ISO bridge {record_kind} writer temp `{}`",
+            path.display()
+        )
+    })?;
+    if !persisted_metadata_is_direct_regular(&opened_metadata)
+        || !persisted_metadata_unchanged(expected_metadata, &opened_metadata)
+        || !persisted_metadata_unchanged(&opened_metadata, &named_metadata)
+    {
+        eyre::bail!(
+            "ISO bridge {record_kind} writer temp `{}` changed identity during startup; regenerate the first-release ISO store",
+            path.display()
+        );
+    }
+    drop(file);
+    fs::remove_file(path).wrap_err_with(|| {
+        format!(
+            "failed to remove stable ISO bridge {record_kind} writer temp `{}`",
+            path.display()
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        eyre::eyre!(
+            "ISO bridge {record_kind} writer temp `{}` has no containing directory",
+            path.display()
+        )
+    })?;
+    sync_iso_directory(parent).wrap_err_with(|| {
+        format!(
+            "failed to durably remove ISO bridge {record_kind} writer temp `{}`",
+            path.display()
+        )
+    })
+}
+fn read_persisted_json_bounded(path: &Path, max_bytes: u64) -> Option<String> {
+    let metadata = secure_file_metadata::from_path(path).ok()?;
+    read_persisted_json_bounded_with_metadata(path, &metadata, max_bytes).map(|(text, _)| text)
+}
+fn read_persisted_json_bounded_with_metadata(
+    path: &Path,
+    expected_metadata: &SecureMetadata,
+    max_bytes: u64,
+) -> Option<(String, u64)> {
+    if !persisted_metadata_is_direct_regular(expected_metadata)
+        || expected_metadata.len() > max_bytes
+    {
+        return None;
+    }
+    let mut file = open_persisted_file_no_follow(path).ok()?;
+    let opened_metadata = secure_file_metadata::from_file(&file).ok()?;
+    if !persisted_metadata_is_direct_regular(&opened_metadata)
+        || !persisted_metadata_unchanged(expected_metadata, &opened_metadata)
+    {
+        return None;
+    }
+    let initial_capacity = usize::try_from(opened_metadata.len()).ok()?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(initial_capacity).ok()?;
-    let mut reader = file.take(ISO_PERSISTED_RECORD_MAX_BYTES.saturating_add(1));
+    let mut reader = (&mut file).take(max_bytes.saturating_add(1));
     let mut chunk = [0_u8; 16 * 1024];
     loop {
         let read = reader.read(&mut chunk).ok()?;
@@ -3963,13 +6720,67 @@ fn read_persisted_record_bounded(path: &Path) -> Option<String> {
             break;
         }
         let next_len = bytes.len().checked_add(read)?;
-        if u64::try_from(next_len).ok()? > ISO_PERSISTED_RECORD_MAX_BYTES {
+        if u64::try_from(next_len).ok()? > max_bytes {
             return None;
         }
         bytes.try_reserve_exact(read).ok()?;
         bytes.extend_from_slice(&chunk[..read]);
     }
-    String::from_utf8(bytes).ok()
+    drop(reader);
+    let actual_bytes = u64::try_from(bytes.len()).ok()?;
+    if actual_bytes != opened_metadata.len() {
+        return None;
+    }
+    let after_metadata = secure_file_metadata::from_file(&file).ok()?;
+    let named_after_metadata = secure_file_metadata::from_path(path).ok()?;
+    if !persisted_metadata_unchanged(&opened_metadata, &after_metadata)
+        || !persisted_metadata_unchanged(&after_metadata, &named_after_metadata)
+    {
+        return None;
+    }
+    String::from_utf8(bytes)
+        .ok()
+        .map(|text| (text, actual_bytes))
+}
+#[cfg(unix)]
+fn open_persisted_file_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOCTTY);
+    options.open(path)
+}
+#[cfg(windows)]
+fn open_persisted_file_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    secure_file_metadata::open_direct_file(path)
+}
+#[cfg(not(any(unix, windows)))]
+fn open_persisted_file_no_follow(_path: &Path) -> std::io::Result<fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "stable direct-file opens are unavailable on this platform",
+    ))
+}
+fn persisted_metadata_is_direct_regular(metadata: &SecureMetadata) -> bool {
+    secure_file_metadata::is_direct_file(metadata)
+        && secure_file_metadata::number_of_links(metadata) == Some(1)
+}
+fn persisted_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
+    secure_file_metadata::unchanged(left, right)
+}
+fn sync_iso_directory(path: &Path) -> std::io::Result<()> {
+    crate::durable_fs::sync_direct_directory(path)
+}
+fn remove_lifecycle_journal_file(path: &Path) -> std::io::Result<()> {
+    fs::remove_file(path)?;
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ISO lifecycle journal has no containing directory",
+        )
+    })?;
+    sync_iso_directory(parent)
 }
 fn write_iso_record_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
@@ -3978,17 +6789,20 @@ fn write_iso_record_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
             "ISO record path has no parent directory",
         )
     })?;
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "ISO record path has no file name",
-        )
-    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "ISO record path has no UTF-8 file name",
+            )
+        })?;
     let sequence = ISO_RECORD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = parent.join(format!(
-        ".{}.{}.{sequence}.tmp",
-        file_name.to_string_lossy(),
-        std::process::id()
+    let temp_path = parent.join(iso_record_temp_filename(
+        file_name,
+        std::process::id(),
+        sequence,
     ));
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -3998,13 +6812,57 @@ fn write_iso_record_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
             use std::os::unix::fs::OpenOptionsExt as _;
             options.mode(0o600);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            const FILE_SHARE_READ_DELETE: u32 = 0x0000_0001 | 0x0000_0004;
+            options.share_mode(FILE_SHARE_READ_DELETE);
+        }
         let mut file = options.open(&temp_path)?;
+        let created = secure_file_metadata::from_file(&file)?;
+        let named_created = secure_file_metadata::from_path(&temp_path)?;
+        if !persisted_metadata_is_direct_regular(&created)
+            || !persisted_metadata_unchanged(&created, &named_created)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO writer temp is not the newly-created private filesystem object",
+            ));
+        }
         file.write_all(bytes)?;
         file.sync_all()?;
+        let written = secure_file_metadata::from_file(&file)?;
+        let named_written = secure_file_metadata::from_path(&temp_path)?;
+        if !persisted_metadata_is_direct_regular(&written)
+            || !secure_file_metadata::same_file(&created, &written)
+            || !persisted_metadata_unchanged(&written, &named_written)
+            || written.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO writer temp changed while it was being prepared",
+            ));
+        }
         drop(file);
         fs::rename(&temp_path, path)?;
-        #[cfg(unix)]
-        fs::File::open(parent)?.sync_all()?;
+        let published = secure_file_metadata::from_path(path)?;
+        if !persisted_metadata_is_direct_regular(&published)
+            || !secure_file_metadata::same_file(&written, &published)
+            || published.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO publication changed identity before durability was established",
+            ));
+        }
+        sync_iso_directory(parent)?;
+        let durable = secure_file_metadata::from_path(path)?;
+        if !persisted_metadata_unchanged(&published, &durable) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO publication changed while its directory was being synchronized",
+            ));
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -4013,10 +6871,135 @@ fn write_iso_record_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
     result
 }
 fn is_real_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+    secure_file_metadata::from_path(path)
+        .is_ok_and(|metadata| secure_file_metadata::is_direct_directory(&metadata))
 }
-fn ensure_real_directory(path: &Path) -> bool {
-    fs::create_dir_all(path).is_ok() && is_real_directory(path)
+fn prepare_iso_persistence_layout(
+    store_dir: Option<&Path>,
+    audit_export_dir: Option<&Path>,
+) -> std::io::Result<(Option<PathBuf>, Option<PathBuf>)> {
+    let store_dir = if let Some(store_dir) = store_dir {
+        prepare_real_directory(store_dir)?;
+        let store_dir = fs::canonicalize(store_dir)?;
+        prepare_real_directory(&store_dir.join("messages"))?;
+        prepare_real_directory(&store_dir.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR))?;
+        prepare_real_directory(&store_dir.join(ISO_PERSISTED_LIFECYCLE_OPERATION_DIR))?;
+        prepare_real_directory(&store_dir.join(ISO_PERSISTED_AUDIT_DIR))?;
+        Some(store_dir)
+    } else {
+        None
+    };
+    let audit_export_dir = if let Some(audit_export_dir) = audit_export_dir {
+        prepare_real_directory(audit_export_dir)?;
+        let audit_export_dir = fs::canonicalize(audit_export_dir)?;
+        prepare_real_directory(&audit_export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR))?;
+        Some(audit_export_dir)
+    } else {
+        None
+    };
+    Ok((store_dir, audit_export_dir))
+}
+fn prepare_real_directory(path: &Path) -> std::io::Result<()> {
+    prepare_real_directory_with_sync(path, sync_iso_directory)
+}
+fn prepare_real_directory_with_sync(
+    path: &Path,
+    mut sync_directory: impl FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ISO persistence directory must have a containing directory",
+        )
+    })?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let requested_parent = secure_file_metadata::from_path(parent)?;
+    if !secure_file_metadata::is_direct_directory(&requested_parent) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence parent is not a direct directory",
+        ));
+    }
+    let durable_parent = fs::canonicalize(parent)?;
+    let durable_parent_before = secure_file_metadata::from_path(&durable_parent)?;
+    if !secure_file_metadata::is_direct_directory(&durable_parent_before)
+        || !secure_file_metadata::same_file(&requested_parent, &durable_parent_before)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence parent is not a real directory",
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ISO persistence directory has no final path component",
+        )
+    })?;
+    let durable_path = durable_parent.join(file_name);
+    match secure_file_metadata::from_path(&durable_path) {
+        Ok(metadata) if secure_file_metadata::is_direct_directory(&metadata) => {}
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO persistence path is not a real directory",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&durable_path)?
+        }
+        Err(error) => return Err(error),
+    }
+    let prepared = secure_file_metadata::from_path(&durable_path)?;
+    let requested = secure_file_metadata::from_path(path)?;
+    let requested_parent_after_create = secure_file_metadata::from_path(parent)?;
+    let durable_parent_after_create = secure_file_metadata::from_path(&durable_parent)?;
+    if !secure_file_metadata::is_direct_directory(&prepared)
+        || !secure_file_metadata::is_direct_directory(&requested)
+        || !secure_file_metadata::same_file(&prepared, &requested)
+        || !secure_file_metadata::same_file(&requested_parent, &requested_parent_after_create)
+        || !secure_file_metadata::same_file(&durable_parent_before, &durable_parent_after_create)
+        || !secure_file_metadata::same_file(
+            &requested_parent_after_create,
+            &durable_parent_after_create,
+        )
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence path or parent changed while it was being prepared",
+        ));
+    }
+    // Sync the directory itself first, then the directory containing its name. Repeating both
+    // operations when the directory already exists repairs an interrupted first-use attempt.
+    sync_directory(&durable_path)?;
+    sync_directory(&durable_parent)?;
+    let durable_prepared = secure_file_metadata::from_path(&durable_path)?;
+    let durable_parent_after_sync = secure_file_metadata::from_path(&durable_parent)?;
+    let requested_parent_after_sync = secure_file_metadata::from_path(parent)?;
+    if !secure_file_metadata::unchanged(&prepared, &durable_prepared)
+        || !secure_file_metadata::unchanged(
+            &durable_parent_after_create,
+            &durable_parent_after_sync,
+        )
+        || !secure_file_metadata::unchanged(
+            &requested_parent_after_create,
+            &requested_parent_after_sync,
+        )
+        || !secure_file_metadata::same_file(
+            &requested_parent_after_sync,
+            &durable_parent_after_sync,
+        )
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence path changed while its namespace was being synchronized",
+        ));
+    }
+    Ok(())
 }
 fn context_value(context: &IsoMessageContext) -> JsonValue {
     let mut map = norito::json::Map::new();
@@ -4232,6 +7215,74 @@ fn metadata_from_value(value: &JsonValue) -> Option<IsoMessageMetadata> {
         embedded_signature_detected: obj.get("embedded_signature_detected")?.as_bool()?,
     })
 }
+fn parties_value(parties: &IsoRecordParties) -> JsonValue {
+    let mut map = norito::json::Map::new();
+    map.insert(
+        "originator_participant_id".to_owned(),
+        JsonValue::from(parties.originator_participant_id.as_str()),
+    );
+    map.insert(
+        "counterparty_participant_id".to_owned(),
+        JsonValue::from(parties.counterparty_participant_id.as_str()),
+    );
+    map.insert(
+        "admitting_participant_id".to_owned(),
+        JsonValue::from(parties.admitting_participant_id.as_str()),
+    );
+    map.insert(
+        "admitting_operator_key".to_owned(),
+        JsonValue::from(parties.admitting_operator_key.as_str()),
+    );
+    map.insert(
+        "originator_financial_id".to_owned(),
+        JsonValue::from(parties.originator_financial_id.as_str()),
+    );
+    map.insert(
+        "counterparty_financial_id".to_owned(),
+        JsonValue::from(parties.counterparty_financial_id.as_str()),
+    );
+    map.insert(
+        "pinned_profile_id".to_owned(),
+        JsonValue::from(parties.pinned_profile_id.as_str()),
+    );
+    map.insert(
+        "pinned_signature_policy".to_owned(),
+        JsonValue::from(parties.pinned_signature_policy.as_str()),
+    );
+    map.insert(
+        "pinned_profile_policy_sha256".to_owned(),
+        JsonValue::from(parties.pinned_profile_policy_sha256.as_str()),
+    );
+    JsonValue::Object(map)
+}
+fn parties_from_value(value: &JsonValue) -> Option<IsoRecordParties> {
+    let obj = value.as_object()?;
+    if !json_object_has_exact_keys(obj, PERSISTED_PARTIES_REQUIRED_KEYS) {
+        return None;
+    }
+    let pinned_signature_policy = required_clean_string(obj, "pinned_signature_policy")?;
+    if !matches!(
+        pinned_signature_policy.as_str(),
+        "record_only" | "reject_unsupported" | "require_verified"
+    ) {
+        return None;
+    }
+    let pinned_profile_policy_sha256 = required_clean_string(obj, "pinned_profile_policy_sha256")?;
+    if !is_canonical_sha256_hex(&pinned_profile_policy_sha256) {
+        return None;
+    }
+    Some(IsoRecordParties {
+        originator_participant_id: required_clean_string(obj, "originator_participant_id")?,
+        counterparty_participant_id: required_clean_string(obj, "counterparty_participant_id")?,
+        admitting_participant_id: required_clean_string(obj, "admitting_participant_id")?,
+        admitting_operator_key: required_clean_string(obj, "admitting_operator_key")?,
+        originator_financial_id: required_clean_string(obj, "originator_financial_id")?,
+        counterparty_financial_id: required_clean_string(obj, "counterparty_financial_id")?,
+        pinned_profile_id: required_clean_string(obj, "pinned_profile_id")?,
+        pinned_signature_policy,
+        pinned_profile_policy_sha256,
+    })
+}
 fn history_value(entry: &IsoStatusHistoryEntry) -> JsonValue {
     let mut map = norito::json::Map::new();
     map.insert("status".to_owned(), JsonValue::from(entry.status_label()));
@@ -4391,6 +7442,14 @@ fn string_or_null(value: Option<&str>) -> JsonValue {
 fn message_filename(message_id: &str) -> String {
     format!("{}.json", sha256_hex(message_id.as_bytes()))
 }
+fn lifecycle_journal_filename() -> String {
+    message_filename(ISO_PERSISTED_LIFECYCLE_OPERATION_ID)
+}
+fn lifecycle_journal_path(store_dir: &Path) -> PathBuf {
+    store_dir
+        .join(ISO_PERSISTED_LIFECYCLE_OPERATION_DIR)
+        .join(lifecycle_journal_filename())
+}
 fn system_time_to_ms(time: SystemTime) -> u64 {
     time.duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
@@ -4433,6 +7492,218 @@ fn app_header_creation_date(parsed: &ParsedMessage) -> Option<&str> {
         &["AppHdr/CreDt", "CreDt", "AppHdr/CreDtTm", "CreDtTm"],
     )
 }
+#[derive(Clone, Copy)]
+enum AppHeaderParty {
+    From,
+    To,
+}
+fn app_header_financial_identifier(
+    parsed: &ParsedMessage,
+    party: AppHeaderParty,
+) -> Result<Option<String>, IsoAdmissionError> {
+    let suffixes: &[&str] = match party {
+        AppHeaderParty::From => &[
+            "AppHdr/Fr/FIId/FinInstnId/BICFI",
+            "AppHdr/Fr/FIId/FinInstnId/LEI",
+            "AppHdr/Fr/FIId/FinInstnId/ClrSysMmbId/MmbId",
+            "AppHdr/Fr/OrgId/Id/OrgId/Othr/Id",
+        ],
+        AppHeaderParty::To => &[
+            "AppHdr/To/FIId/FinInstnId/BICFI",
+            "AppHdr/To/FIId/FinInstnId/LEI",
+            "AppHdr/To/FIId/FinInstnId/ClrSysMmbId/MmbId",
+            "AppHdr/To/OrgId/Id/OrgId/Othr/Id",
+        ],
+    };
+    let mut identifiers = BTreeSet::new();
+    for (field, value) in parsed.iter() {
+        if !suffixes
+            .iter()
+            .any(|suffix| field_matches_suffix(field, suffix))
+        {
+            continue;
+        }
+        let value = core::str::from_utf8(value)
+            .ok()
+            .and_then(normalise_financial_identifier)
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        identifiers.insert(value);
+    }
+    if identifiers.len() > 1 {
+        return Err(IsoAdmissionError::NotAuthorized);
+    }
+    Ok(identifiers.into_iter().next())
+}
+const fn signature_policy_label(policy: EmbeddedSignaturePolicy) -> &'static str {
+    match policy {
+        EmbeddedSignaturePolicy::RecordOnly => "record_only",
+        EmbeddedSignaturePolicy::RejectUnsupported => "reject_unsupported",
+        EmbeddedSignaturePolicy::RequireVerified => "require_verified",
+    }
+}
+fn profile_policy_sha256(profile: &TradfiRailProfile) -> String {
+    persisted_record_digest(&canonical_profile_policy_value(profile))
+}
+fn canonical_profile_policy_value(profile: &TradfiRailProfile) -> JsonValue {
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "schema".to_owned(),
+        JsonValue::from("iroha.iso20022.profile-policy.v1"),
+    );
+    root.insert("id".to_owned(), JsonValue::from(profile.id.as_str()));
+    root.insert("rail".to_owned(), JsonValue::from(profile.rail.as_str()));
+    root.insert(
+        "embedded_signature_policy".to_owned(),
+        JsonValue::from(profile.embedded_signature_policy.as_str()),
+    );
+    root.insert(
+        "signature_public_key_sha256_pins".to_owned(),
+        canonical_policy_string_array(&profile.signature_public_key_sha256_pins, false),
+    );
+    root.insert(
+        "x509_trust_anchor_sha256_pins".to_owned(),
+        canonical_policy_string_array(&profile.x509_trust_anchor_sha256_pins, false),
+    );
+    root.insert(
+        "x509_required_certificate_policy_oids".to_owned(),
+        canonical_policy_string_array(&profile.x509_required_certificate_policy_oids, false),
+    );
+    root.insert(
+        "x509_require_crl_revocation_check".to_owned(),
+        JsonValue::from(profile.x509_require_crl_revocation_check),
+    );
+    root.insert(
+        "x509_crl_der_base64".to_owned(),
+        canonical_policy_string_array(&profile.x509_crl_der_base64, false),
+    );
+    root.insert(
+        "x509_require_ocsp_revocation_check".to_owned(),
+        JsonValue::from(profile.x509_require_ocsp_revocation_check),
+    );
+    root.insert(
+        "x509_ocsp_response_der_base64".to_owned(),
+        canonical_policy_string_array(&profile.x509_ocsp_response_der_base64, false),
+    );
+    root.insert(
+        "revoked_certificate_sha256".to_owned(),
+        canonical_policy_string_array(&profile.revoked_certificate_sha256, false),
+    );
+    let mut required_reference_datasets = profile
+        .required_reference_datasets
+        .iter()
+        .map(|requirement| requirement.as_str())
+        .collect::<Vec<_>>();
+    required_reference_datasets.sort_unstable();
+    root.insert(
+        "required_reference_datasets".to_owned(),
+        JsonValue::Array(
+            required_reference_datasets
+                .into_iter()
+                .map(JsonValue::from)
+                .collect(),
+        ),
+    );
+    let mut message_profiles = profile
+        .message_profiles
+        .iter()
+        .map(|message_profile| {
+            (
+                format!(
+                    "{}\u{0}{}",
+                    message_profile.message_type.to_ascii_lowercase(),
+                    message_profile.direction.as_str()
+                ),
+                canonical_message_profile_policy_value(message_profile),
+            )
+        })
+        .collect::<Vec<_>>();
+    message_profiles.sort_by(|left, right| left.0.cmp(&right.0));
+    root.insert(
+        "message_profiles".to_owned(),
+        JsonValue::Array(
+            message_profiles
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect(),
+        ),
+    );
+    JsonValue::Object(root)
+}
+fn canonical_message_profile_policy_value(profile: &MessageProfile) -> JsonValue {
+    let mut value = norito::json::Map::new();
+    value.insert(
+        "message_type".to_owned(),
+        JsonValue::from(profile.message_type.to_ascii_lowercase()),
+    );
+    value.insert(
+        "direction".to_owned(),
+        JsonValue::from(profile.direction.as_str()),
+    );
+    value.insert(
+        "versions".to_owned(),
+        canonical_policy_string_array(&profile.versions, true),
+    );
+    value.insert(
+        "business_services".to_owned(),
+        canonical_policy_string_array(&profile.business_services, true),
+    );
+    value.insert(
+        "require_app_header".to_owned(),
+        JsonValue::from(profile.require_app_header),
+    );
+    value.insert(
+        "require_business_service".to_owned(),
+        JsonValue::from(profile.require_business_service),
+    );
+    value.insert(
+        "require_uetr".to_owned(),
+        JsonValue::from(profile.require_uetr),
+    );
+    value.insert(
+        "structured_address_mode".to_owned(),
+        JsonValue::from(profile.structured_address_mode.as_str()),
+    );
+    value.insert(
+        "supplementary_data_max_bytes".to_owned(),
+        JsonValue::from(u64::try_from(profile.supplementary_data_max_bytes).unwrap_or(u64::MAX)),
+    );
+    value.insert(
+        "amount_minor_units".to_owned(),
+        JsonValue::Array(
+            profile
+                .amount_minor_units
+                .iter()
+                .map(|(currency, minor_units)| {
+                    let mut entry = norito::json::Map::new();
+                    entry.insert("currency".to_owned(), JsonValue::from(currency.as_str()));
+                    entry.insert(
+                        "minor_units".to_owned(),
+                        JsonValue::from(u64::from(*minor_units)),
+                    );
+                    JsonValue::Object(entry)
+                })
+                .collect(),
+        ),
+    );
+    JsonValue::Object(value)
+}
+fn canonical_policy_string_array(values: &[String], lowercase: bool) -> JsonValue {
+    let mut values = values
+        .iter()
+        .map(|value| {
+            if lowercase {
+                value.to_ascii_lowercase()
+            } else {
+                value.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    values.sort();
+    JsonValue::Array(values.into_iter().map(JsonValue::from).collect())
+}
+fn is_canonical_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+}
 fn business_service(parsed: &ParsedMessage) -> Option<&str> {
     field_text_by_suffix(parsed, &["AppHdr/BizSvc", "BizSvc"])
 }
@@ -4458,6 +7729,20 @@ fn lifecycle_referenced_message_id<'a>(
         _ => Ok(None),
     }
 }
+fn canonical_lifecycle_referenced_message_id(
+    message_type: &str,
+    parsed: &ParsedMessage,
+) -> Result<Option<String>, MsgError> {
+    Ok(
+        lifecycle_referenced_message_id(message_type, parsed)?.map(|id| {
+            if matches!(message_type, "sese.024" | "sese.025") {
+                format!("sese.023:{id}")
+            } else {
+                id.to_owned()
+            }
+        }),
+    )
+}
 fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> Option<&'a str> {
     match message_type {
         "pacs.002" => parsed.field_text("TxSts"),
@@ -4478,6 +7763,12 @@ fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> O
         _ => None,
     }
     .filter(|value| !value.trim().is_empty())
+}
+fn is_settlement_status_code(code: &str) -> bool {
+    matches!(
+        code.trim().to_ascii_uppercase().as_str(),
+        "ACSC" | "ACCP" | "SETT" | "SETTLED"
+    )
 }
 fn lifecycle_reason_code(parsed: &ParsedMessage) -> Option<&str> {
     field_text_by_suffix(

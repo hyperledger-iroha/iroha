@@ -1878,6 +1878,16 @@ impl TieredStateBackend {
             world.sccp_route_liabilities
         );
         collect_map!(
+            TieredSegment::SccpTonBreakerObservations,
+            SccpTonBreakerObservation,
+            world.sccp_ton_breaker_observations
+        );
+        collect_map!(
+            TieredSegment::SccpReplayForests,
+            SccpReplayForest,
+            world.sccp_replay_forests
+        );
+        collect_map!(
             TieredSegment::SccpOutboundPendingMessages,
             SccpOutboundMessage,
             world.sccp_outbound_pending_messages
@@ -1891,16 +1901,6 @@ impl TieredStateBackend {
             TieredSegment::SccpOutboundMessageIndex,
             SccpOutboundMessageIndex,
             world.sccp_outbound_message_index
-        );
-        collect_map!(
-            TieredSegment::SccpOutboundProofs,
-            SccpOutboundProof,
-            world.sccp_outbound_proofs
-        );
-        collect_map!(
-            TieredSegment::SccpInboundMessages,
-            SccpInboundMessage,
-            world.sccp_inbound_messages
         );
         collect_map!(
             TieredSegment::SccpInboundAnchorHighWater,
@@ -1977,6 +1977,11 @@ impl TieredStateBackend {
             TieredSegment::PrivateSettlementOutputs,
             PrivateSettlementOutput,
             world.private_settlement_outputs
+        );
+        collect_map!(
+            TieredSegment::PrivateSettlementStagedLocks,
+            PrivateSettlementStagedLock,
+            world.private_settlement_staged_locks
         );
         collect_map!(
             TieredSegment::PrivateSettlementReceipts,
@@ -2076,12 +2081,6 @@ impl TieredStateBackend {
             GovernanceSlash,
             world.governance_slashes
         );
-        collect_map!(TieredSegment::Council, Council, world.council);
-        collect_map!(
-            TieredSegment::ParliamentBodies,
-            ParliamentBodies,
-            world.parliament_bodies
-        );
         collect_map!(
             TieredSegment::ParliamentAttempts,
             ParliamentAttempt,
@@ -2096,6 +2095,11 @@ impl TieredStateBackend {
             TieredSegment::TleKeySessionRosters,
             TleKeySessionRoster,
             world.tle_key_session_rosters
+        );
+        collect_map!(
+            TieredSegment::TleKeySessionLifecycles,
+            TleKeySessionLifecycle,
+            world.tle_key_session_lifecycles
         );
         collect_map!(
             TieredSegment::TleActiveKeySession,
@@ -2133,9 +2137,34 @@ impl TieredStateBackend {
             world.global_beacon_pulses
         );
         collect_map!(
-            TieredSegment::KagemushaReplayKeys,
-            KagemushaReplayKey,
-            world.kagemusha_replay_keys
+            TieredSegment::KagemushaReservePools,
+            KagemushaReservePool,
+            world.kagemusha_reserve_pools
+        );
+        collect_map!(
+            TieredSegment::KagemushaReserveOperations,
+            KagemushaReserveOperation,
+            world.kagemusha_reserve_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaMintCreditOperations,
+            KagemushaMintCreditOperation,
+            world.kagemusha_mint_credit_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaIssuanceOperations,
+            KagemushaIssuanceOperation,
+            world.kagemusha_issuance_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaRedemptionIdOperations,
+            KagemushaRedemptionIdOperation,
+            world.kagemusha_redemption_id_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaTerminalNullifierOperations,
+            KagemushaTerminalNullifierOperation,
+            world.kagemusha_terminal_nullifier_operations
         );
         Ok(())
     }
@@ -2629,10 +2658,7 @@ mod measured_bytes_impls {
             FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
             GlobalThresholdBeaconPulseLinkV1,
         },
-        governance::{
-            parliament::ParliamentAttemptStateV1, state::ParliamentTerm,
-            timed_ovn::TimedOvnLifecycleStateV1,
-        },
+        governance::{parliament::ParliamentAttemptStateV1, timed_ovn::TimedOvnLifecycleStateV1},
         privacy_state::{
             PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
             PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
@@ -2640,11 +2666,16 @@ mod measured_bytes_impls {
         private_settlement::{
             global_state::{
                 PrivateSettlementFinalizationReferenceV1, PrivateSettlementOutputRecordV1,
-                PrivateSettlementRootProvenanceV1,
+                PrivateSettlementRootProvenanceV1, PrivateSettlementStagedLockRecordV1,
             },
             state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
         },
-        smartcontracts::code::ContractSubjectBinding,
+        smartcontracts::{
+            code::ContractSubjectBinding,
+            isi::kagemusha::kagemusha_v1_reserve::{
+                KagemushaReserveOperationRecordV1, KagemushaReservePoolV1,
+            },
+        },
         state::{
             AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
             ElectionState, FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
@@ -2652,7 +2683,7 @@ mod measured_bytes_impls {
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             GovernanceSlashEntry, GovernanceSlashLedger, ZkAssetState, ZkAssetVerifierBinding,
         },
-        tle_release::TleKeySessionPublicStateV1,
+        tle_release::{TleKeySessionLifecycleV1, TleKeySessionPublicStateV1},
     };
     use iroha_crypto::{
         Hash, HashOf, LaneCommitmentId, MerkleProof, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -2676,22 +2707,21 @@ mod measured_bytes_impls {
             BridgeNativeProtocolProofV1, BridgeProof, BridgeProofPayload, BridgeProofRange,
             BridgeProofRecord, BridgeSccpDestinationProofBackendV1, BridgeSccpDestinationProofV1,
             BridgeTransparentProof, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
-            SccpOutboundPendingMessageRecordV1, SccpOutboundProofRecordV1, SccpRouteLiabilityV1,
-            sccp::SccpInboundMessageRecordV1,
+            SccpOutboundPendingMessageRecordV1, SccpReplayAccumulatorIdV1, SccpReplayForestV1,
+            SccpRouteLiabilityV1, SccpTonBreakerObservationRecordV1,
         },
         common::Owned,
         confidential::ConfidentialStatus,
-        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1, QcRef},
+        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1},
         domain::{Domain, DomainId},
         events::EventFilterBox,
         governance::types::{
-            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-            ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-            RuntimeUpgradeProposal, SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
-            TleKeySessionId, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
+            ProposalKind, RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
+            SorafsProviderGovernanceProposal, TleKeySessionId,
+            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         ipfs::IpfsPath,
-        isi::governance::CouncilDerivationKind,
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -2784,7 +2814,6 @@ mod measured_bytes_impls {
         ConfidentialTreeProfile,
         ContractAbiHash,
         ContractCodeHash,
-        CouncilDerivationKind,
         EntryPointKind,
         GovernanceReferendumMode,
         GovernanceReferendumStatus,
@@ -2795,11 +2824,11 @@ mod measured_bytes_impls {
         NumericSpec,
         ParliamentBody,
         ProofStatus,
-        QcRef,
         Repeats,
         RuntimeUpgradeId,
         RuntimeUpgradeStatus,
         TleKeySessionId,
+        TleKeySessionLifecycleV1,
         PrivacyProtocolActivationRecordV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
@@ -2830,8 +2859,11 @@ mod measured_bytes_impls {
         PrivateSettlementPoolStateV1,
         PrivateSettlementRootProvenanceV1,
         PrivateSettlementOutputRecordV1,
+        PrivateSettlementStagedLockRecordV1,
         PrivateSettlementReceiptV1,
         PrivateSettlementAbortReceiptV1,
+        KagemushaReservePoolV1,
+        KagemushaReserveOperationRecordV1,
     );
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
         fn measured_bytes(&self) -> usize {
@@ -2934,7 +2966,33 @@ mod measured_bytes_impls {
     }
     impl MeasuredBytes for ContractSubjectBinding {
         fn measured_bytes(&self) -> usize {
-            size_of::<ContractSubjectBinding>().saturating_add(self.subject.measured_bytes_extra())
+            use iroha_data_model::smart_contract::{
+                ContractDeploymentOriginV1, ContractLifecycleOwnerV1,
+            };
+            let mut total = size_of::<ContractSubjectBinding>()
+                .saturating_add(self.subject.measured_bytes_extra());
+            let mut add_owner = |owner: &ContractLifecycleOwnerV1| {
+                if let ContractLifecycleOwnerV1::Account(account) = owner {
+                    total = total.saturating_add(account.measured_bytes_extra());
+                }
+            };
+            add_owner(&self.lifecycle.owner);
+            if let Some(owner) = self.lifecycle.pending_owner.as_ref() {
+                add_owner(owner);
+            }
+            match &self.lifecycle.origin {
+                ContractDeploymentOriginV1::Direct(origin) => {
+                    total = total.saturating_add(origin.deployer.measured_bytes_extra());
+                }
+                ContractDeploymentOriginV1::Parliament(origin) => {
+                    let deployer = &origin.proposer;
+                    total = total.saturating_add(deployer.measured_bytes_extra());
+                }
+            }
+            if let Some(hold) = self.lifecycle.emergency_hold.as_ref() {
+                total = total.saturating_add(hold.reason.capacity());
+            }
+            total
         }
     }
     impl MeasuredBytes for AssetDefinitionAliasBindingRecord {
@@ -3455,28 +3513,27 @@ mod measured_bytes_impls {
             size_of::<SccpOutboundMessageKeyV1>()
         }
     }
-    impl MeasuredBytes for SccpOutboundProofRecordV1 {
-        fn measured_bytes(&self) -> usize {
-            size_of::<SccpOutboundProofRecordV1>()
-        }
-    }
     impl MeasuredBytes for SccpRouteLiabilityV1 {
         fn measured_bytes(&self) -> usize {
             size_of::<SccpRouteLiabilityV1>()
         }
     }
-    impl MeasuredBytes for SccpInboundMessageRecordV1 {
+    impl MeasuredBytes for SccpTonBreakerObservationRecordV1 {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<SccpInboundMessageRecordV1>();
-            total = total.saturating_add(self.payload_hash.measured_bytes_extra());
-            total = total.saturating_add(self.source_identity_hash.measured_bytes_extra());
-            total = total.saturating_add(self.trust_anchor.measured_bytes_extra());
-            total = total.saturating_add(self.anchor_interval_height.measured_bytes_extra());
-            total = total.saturating_add(self.source_finality_height.measured_bytes_extra());
-            total = total.saturating_add(self.source_finality_hash.measured_bytes_extra());
-            total = total.saturating_add(self.source_proof_commitment.measured_bytes_extra());
-            total = total.saturating_add(self.admitted_at_height.measured_bytes_extra());
-            total
+            size_of::<SccpTonBreakerObservationRecordV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
+        }
+    }
+    impl MeasuredBytes for SccpReplayAccumulatorIdV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SccpReplayAccumulatorIdV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
+        }
+    }
+    impl MeasuredBytes for SccpReplayForestV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SccpReplayForestV1>()
+                .saturating_add(self.nonempty_shard_roots.measured_bytes_extra())
         }
     }
     impl MeasuredBytes for ProofRecord {
@@ -3701,6 +3758,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
             total = total.saturating_add(self.contract_address.measured_bytes_extra());
             total = total.saturating_add(self.code_hash.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash.measured_bytes_extra());
@@ -3712,6 +3770,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for RuntimeUpgradeProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeProposal>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
             total = total.saturating_add(self.manifest.measured_bytes_extra());
             total
         }
@@ -3767,6 +3826,15 @@ mod measured_bytes_impls {
                 }
                 ProposalKind::MusubiRegistryGovernance(action) => {
                     total = total.saturating_add(norito::codec::Encode::encode(action).len());
+                }
+                ProposalKind::ContractLifecycleGovernance(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
+                ProposalKind::ContractEmergencyHold(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
+                ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
                 }
             }
             total
@@ -3910,26 +3978,6 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for ParliamentRoster {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentRoster>();
-            total = total.saturating_add(self.body.measured_bytes_extra());
-            total = total.saturating_add(self.epoch.measured_bytes_extra());
-            total = total.saturating_add(self.members.measured_bytes_extra());
-            total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
-            total = total.saturating_add(self.derived_by.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for ParliamentBodies {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentBodies>();
-            total = total.saturating_add(self.selection_epoch.measured_bytes_extra());
-            total = total.saturating_add(self.rosters.measured_bytes_extra());
-            total
-        }
-    }
     impl MeasuredBytes for ParliamentAttemptStateV1 {
         fn measured_bytes(&self) -> usize {
             size_of::<ParliamentAttemptStateV1>()
@@ -3964,17 +4012,6 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<FinalizedGlobalThresholdBeaconPulseV1>()
                 .saturating_add(norito::codec::Encode::encode(self).len())
-        }
-    }
-    impl MeasuredBytes for ParliamentTerm {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentTerm>();
-            total = total.saturating_add(self.epoch.measured_bytes_extra());
-            total = total.saturating_add(self.members.measured_bytes_extra());
-            total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
-            total = total.saturating_add(self.derived_by.measured_bytes_extra());
-            total
         }
     }
     impl MeasuredBytes for ProofAttachment {
@@ -4144,11 +4181,11 @@ enum TieredSegment {
     AccountPermissions,
     AccountRoles,
     SccpRouteLiabilities,
+    SccpTonBreakerObservations,
+    SccpReplayForests,
     SccpOutboundPendingMessages,
     SccpOutboundMessageLocators,
     SccpOutboundMessageIndex,
-    SccpOutboundProofs,
-    SccpInboundMessages,
     SccpInboundAnchorHighWater,
     TxSequences,
     VerifyingKeys,
@@ -4165,6 +4202,7 @@ enum TieredSegment {
     PrivateSettlementRoots,
     PrivateSettlementNullifiers,
     PrivateSettlementOutputs,
+    PrivateSettlementStagedLocks,
     PrivateSettlementReceipts,
     PrivateSettlementAborts,
     Proofs,
@@ -4185,11 +4223,10 @@ enum TieredSegment {
     GovernanceReferenda,
     GovernanceLocks,
     GovernanceSlashes,
-    Council,
-    ParliamentBodies,
     ParliamentAttempts,
     TleKeySessions,
     TleKeySessionRosters,
+    TleKeySessionLifecycles,
     TleActiveKeySession,
     TimedOvnEvidence,
     GlobalBeaconDkg,
@@ -4197,7 +4234,12 @@ enum TieredSegment {
     GlobalBeaconActiveSession,
     GlobalBeaconLatestPulse,
     GlobalBeaconPulses,
-    KagemushaReplayKeys,
+    KagemushaReservePools,
+    KagemushaReserveOperations,
+    KagemushaMintCreditOperations,
+    KagemushaIssuanceOperations,
+    KagemushaRedemptionIdOperations,
+    KagemushaTerminalNullifierOperations,
 }
 impl TieredSegment {
     fn dir_name(self) -> &'static str {
@@ -4222,11 +4264,11 @@ impl TieredSegment {
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
             TieredSegment::SccpRouteLiabilities => "sccp_route_liabilities",
+            TieredSegment::SccpTonBreakerObservations => "sccp_ton_breaker_observations",
+            TieredSegment::SccpReplayForests => "sccp_replay_forests",
             TieredSegment::SccpOutboundPendingMessages => "sccp_outbound_pending_messages",
             TieredSegment::SccpOutboundMessageLocators => "sccp_outbound_message_locator",
             TieredSegment::SccpOutboundMessageIndex => "sccp_outbound_message_index",
-            TieredSegment::SccpOutboundProofs => "sccp_outbound_proofs",
-            TieredSegment::SccpInboundMessages => "sccp_inbound_messages",
             TieredSegment::SccpInboundAnchorHighWater => "sccp_inbound_anchor_high_water",
             TieredSegment::TxSequences => "tx_sequences",
             TieredSegment::VerifyingKeys => "verifying_keys",
@@ -4243,6 +4285,7 @@ impl TieredSegment {
             TieredSegment::PrivateSettlementRoots => "private_settlement_roots",
             TieredSegment::PrivateSettlementNullifiers => "private_settlement_nullifiers",
             TieredSegment::PrivateSettlementOutputs => "private_settlement_outputs",
+            TieredSegment::PrivateSettlementStagedLocks => "private_settlement_staged_locks",
             TieredSegment::PrivateSettlementReceipts => "private_settlement_receipts",
             TieredSegment::PrivateSettlementAborts => "private_settlement_aborts",
             TieredSegment::Proofs => "proofs",
@@ -4263,11 +4306,10 @@ impl TieredSegment {
             TieredSegment::GovernanceReferenda => "governance_referenda",
             TieredSegment::GovernanceLocks => "governance_locks",
             TieredSegment::GovernanceSlashes => "governance_slashes",
-            TieredSegment::Council => "council",
-            TieredSegment::ParliamentBodies => "parliament_bodies",
             TieredSegment::ParliamentAttempts => "parliament_attempts",
             TieredSegment::TleKeySessions => "tle_key_sessions",
             TieredSegment::TleKeySessionRosters => "tle_key_session_rosters",
+            TieredSegment::TleKeySessionLifecycles => "tle_key_session_lifecycles",
             TieredSegment::TleActiveKeySession => "tle_active_key_session",
             TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
             TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
@@ -4275,7 +4317,14 @@ impl TieredSegment {
             TieredSegment::GlobalBeaconActiveSession => "global_beacon_active_session",
             TieredSegment::GlobalBeaconLatestPulse => "global_beacon_latest_pulse",
             TieredSegment::GlobalBeaconPulses => "global_beacon_pulses",
-            TieredSegment::KagemushaReplayKeys => "kagemusha_replay_keys",
+            TieredSegment::KagemushaReservePools => "kagemusha_reserve_pools",
+            TieredSegment::KagemushaReserveOperations => "kagemusha_reserve_operations",
+            TieredSegment::KagemushaMintCreditOperations => "kagemusha_mint_credit_operations",
+            TieredSegment::KagemushaIssuanceOperations => "kagemusha_issuance_operations",
+            TieredSegment::KagemushaRedemptionIdOperations => "kagemusha_redemption_id_operations",
+            TieredSegment::KagemushaTerminalNullifierOperations => {
+                "kagemusha_terminal_nullifier_operations"
+            }
         }
     }
 }
@@ -4309,11 +4358,11 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
             "sccp_route_liabilities" => TieredSegment::SccpRouteLiabilities,
+            "sccp_ton_breaker_observations" => TieredSegment::SccpTonBreakerObservations,
+            "sccp_replay_forests" => TieredSegment::SccpReplayForests,
             "sccp_outbound_pending_messages" => TieredSegment::SccpOutboundPendingMessages,
             "sccp_outbound_message_locator" => TieredSegment::SccpOutboundMessageLocators,
             "sccp_outbound_message_index" => TieredSegment::SccpOutboundMessageIndex,
-            "sccp_outbound_proofs" => TieredSegment::SccpOutboundProofs,
-            "sccp_inbound_messages" => TieredSegment::SccpInboundMessages,
             "sccp_inbound_anchor_high_water" => TieredSegment::SccpInboundAnchorHighWater,
             "account_roles" => TieredSegment::AccountRoles,
             "tx_sequences" => TieredSegment::TxSequences,
@@ -4331,6 +4380,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "private_settlement_roots" => TieredSegment::PrivateSettlementRoots,
             "private_settlement_nullifiers" => TieredSegment::PrivateSettlementNullifiers,
             "private_settlement_outputs" => TieredSegment::PrivateSettlementOutputs,
+            "private_settlement_staged_locks" => TieredSegment::PrivateSettlementStagedLocks,
             "private_settlement_receipts" => TieredSegment::PrivateSettlementReceipts,
             "private_settlement_aborts" => TieredSegment::PrivateSettlementAborts,
             "proofs" => TieredSegment::Proofs,
@@ -4351,11 +4401,10 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "governance_referenda" => TieredSegment::GovernanceReferenda,
             "governance_locks" => TieredSegment::GovernanceLocks,
             "governance_slashes" => TieredSegment::GovernanceSlashes,
-            "council" => TieredSegment::Council,
-            "parliament_bodies" => TieredSegment::ParliamentBodies,
             "parliament_attempts" => TieredSegment::ParliamentAttempts,
             "tle_key_sessions" => TieredSegment::TleKeySessions,
             "tle_key_session_rosters" => TieredSegment::TleKeySessionRosters,
+            "tle_key_session_lifecycles" => TieredSegment::TleKeySessionLifecycles,
             "tle_active_key_session" => TieredSegment::TleActiveKeySession,
             "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
             "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
@@ -4363,7 +4412,14 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "global_beacon_active_session" => TieredSegment::GlobalBeaconActiveSession,
             "global_beacon_latest_pulse" => TieredSegment::GlobalBeaconLatestPulse,
             "global_beacon_pulses" => TieredSegment::GlobalBeaconPulses,
-            "kagemusha_replay_keys" => TieredSegment::KagemushaReplayKeys,
+            "kagemusha_reserve_pools" => TieredSegment::KagemushaReservePools,
+            "kagemusha_reserve_operations" => TieredSegment::KagemushaReserveOperations,
+            "kagemusha_mint_credit_operations" => TieredSegment::KagemushaMintCreditOperations,
+            "kagemusha_issuance_operations" => TieredSegment::KagemushaIssuanceOperations,
+            "kagemusha_redemption_id_operations" => TieredSegment::KagemushaRedemptionIdOperations,
+            "kagemusha_terminal_nullifier_operations" => {
+                TieredSegment::KagemushaTerminalNullifierOperations
+            }
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4527,11 +4583,11 @@ pub(crate) enum TieredKeyHandle {
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
     SccpRouteLiability(iroha_data_model::bridge::SccpRouteKeyV1),
+    SccpTonBreakerObservation(iroha_data_model::bridge::SccpRouteKeyV1),
+    SccpReplayForest(iroha_data_model::bridge::SccpReplayAccumulatorIdV1),
     SccpOutboundMessage(iroha_data_model::bridge::SccpOutboundMessageKeyV1),
     SccpOutboundMessageLocator([u8; 32]),
     SccpOutboundMessageIndex(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1),
-    SccpOutboundProof(iroha_data_model::bridge::SccpOutboundMessageKeyV1),
-    SccpInboundMessage(iroha_data_model::bridge::sccp::SccpInboundMessageKeyV1),
     SccpInboundAnchorHighWater(iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1),
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
@@ -4552,6 +4608,9 @@ pub(crate) enum TieredKeyHandle {
         crate::private_settlement::global_state::PrivateSettlementNullifierKeyV1,
     ),
     PrivateSettlementOutput(crate::private_settlement::global_state::PrivateSettlementOutputKeyV1),
+    PrivateSettlementStagedLock(
+        crate::private_settlement::global_state::PrivateSettlementStagedLockKeyV1,
+    ),
     PrivateSettlementReceipt(iroha_crypto::Hash),
     PrivateSettlementAbort(iroha_crypto::Hash),
     Proof(iroha_data_model::proof::ProofId),
@@ -4572,11 +4631,10 @@ pub(crate) enum TieredKeyHandle {
     GovernanceReferendum(String),
     GovernanceLock(String),
     GovernanceSlash(String),
-    Council(u64),
-    ParliamentBodies(u64),
     ParliamentAttempt(iroha_data_model::governance::types::GovernanceAttemptId),
     TleKeySession(iroha_data_model::governance::types::TleKeySessionId),
     TleKeySessionRoster(iroha_data_model::governance::types::TleKeySessionId),
+    TleKeySessionLifecycle(iroha_data_model::governance::types::TleKeySessionId),
     TleActiveKeySession(u64),
     TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
     GlobalBeaconDkg([u8; 32]),
@@ -4584,7 +4642,12 @@ pub(crate) enum TieredKeyHandle {
     GlobalBeaconActiveSession(u64),
     GlobalBeaconLatestPulse(u64),
     GlobalBeaconPulse([u8; 32]),
-    KagemushaReplayKey(iroha_crypto::Hash),
+    KagemushaReservePool([u8; 32]),
+    KagemushaReserveOperation([u8; 32]),
+    KagemushaMintCreditOperation([u8; 32]),
+    KagemushaIssuanceOperation([u8; 32]),
+    KagemushaRedemptionIdOperation([u8; 32]),
+    KagemushaTerminalNullifierOperation([u8; 32]),
 }
 impl TieredKeyHandle {
     fn segment(&self) -> TieredSegment {
@@ -4611,13 +4674,15 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
             TieredKeyHandle::SccpRouteLiability(_) => TieredSegment::SccpRouteLiabilities,
+            TieredKeyHandle::SccpTonBreakerObservation(_) => {
+                TieredSegment::SccpTonBreakerObservations
+            }
+            TieredKeyHandle::SccpReplayForest(_) => TieredSegment::SccpReplayForests,
             TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundPendingMessages,
             TieredKeyHandle::SccpOutboundMessageLocator(_) => {
                 TieredSegment::SccpOutboundMessageLocators
             }
             TieredKeyHandle::SccpOutboundMessageIndex(_) => TieredSegment::SccpOutboundMessageIndex,
-            TieredKeyHandle::SccpOutboundProof(_) => TieredSegment::SccpOutboundProofs,
-            TieredKeyHandle::SccpInboundMessage(_) => TieredSegment::SccpInboundMessages,
             TieredKeyHandle::SccpInboundAnchorHighWater(_) => {
                 TieredSegment::SccpInboundAnchorHighWater
             }
@@ -4640,6 +4705,9 @@ impl TieredKeyHandle {
                 TieredSegment::PrivateSettlementNullifiers
             }
             TieredKeyHandle::PrivateSettlementOutput(_) => TieredSegment::PrivateSettlementOutputs,
+            TieredKeyHandle::PrivateSettlementStagedLock(_) => {
+                TieredSegment::PrivateSettlementStagedLocks
+            }
             TieredKeyHandle::PrivateSettlementReceipt(_) => {
                 TieredSegment::PrivateSettlementReceipts
             }
@@ -4662,11 +4730,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(_) => TieredSegment::GovernanceReferenda,
             TieredKeyHandle::GovernanceLock(_) => TieredSegment::GovernanceLocks,
             TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
-            TieredKeyHandle::Council(_) => TieredSegment::Council,
-            TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
             TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
             TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
             TieredKeyHandle::TleKeySessionRoster(_) => TieredSegment::TleKeySessionRosters,
+            TieredKeyHandle::TleKeySessionLifecycle(_) => TieredSegment::TleKeySessionLifecycles,
             TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
             TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
             TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
@@ -4676,7 +4743,22 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::GlobalBeaconLatestPulse(_) => TieredSegment::GlobalBeaconLatestPulse,
             TieredKeyHandle::GlobalBeaconPulse(_) => TieredSegment::GlobalBeaconPulses,
-            TieredKeyHandle::KagemushaReplayKey(_) => TieredSegment::KagemushaReplayKeys,
+            TieredKeyHandle::KagemushaReservePool(_) => TieredSegment::KagemushaReservePools,
+            TieredKeyHandle::KagemushaReserveOperation(_) => {
+                TieredSegment::KagemushaReserveOperations
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(_) => {
+                TieredSegment::KagemushaMintCreditOperations
+            }
+            TieredKeyHandle::KagemushaIssuanceOperation(_) => {
+                TieredSegment::KagemushaIssuanceOperations
+            }
+            TieredKeyHandle::KagemushaRedemptionIdOperation(_) => {
+                TieredSegment::KagemushaRedemptionIdOperations
+            }
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(_) => {
+                TieredSegment::KagemushaTerminalNullifierOperations
+            }
         }
     }
     fn encode_key(&self) -> Result<Vec<u8>> {
@@ -4706,6 +4788,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpRouteLiability(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpTonBreakerObservation(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
+            TieredKeyHandle::SccpReplayForest(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpOutboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpOutboundMessageLocator(key) => {
                 Ok(norito::codec::Encode::encode(key))
@@ -4713,8 +4799,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::SccpOutboundMessageIndex(key) => {
                 Ok(norito::codec::Encode::encode(key))
             }
-            TieredKeyHandle::SccpOutboundProof(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::SccpInboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpInboundAnchorHighWater(key) => {
                 Ok(norito::codec::Encode::encode(key))
             }
@@ -4735,6 +4819,9 @@ impl TieredKeyHandle {
                 Ok(norito::codec::Encode::encode(key))
             }
             TieredKeyHandle::PrivateSettlementOutput(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivateSettlementStagedLock(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::PrivateSettlementReceipt(key)
             | TieredKeyHandle::PrivateSettlementAbort(key) => {
                 Ok(norito::codec::Encode::encode(key))
@@ -4754,11 +4841,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TleKeySessionLifecycle(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4768,7 +4854,14 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::KagemushaReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::KagemushaReservePool(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::KagemushaReserveOperation(key)
+            | TieredKeyHandle::KagemushaMintCreditOperation(key)
+            | TieredKeyHandle::KagemushaIssuanceOperation(key)
+            | TieredKeyHandle::KagemushaRedemptionIdOperation(key)
+            | TieredKeyHandle::KagemushaTerminalNullifierOperation(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
         }
     }
     fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
@@ -4823,6 +4916,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::SccpRouteLiability(id) => {
                 fetch!(world.sccp_route_liabilities, id)
             }
+            TieredKeyHandle::SccpTonBreakerObservation(id) => {
+                fetch!(world.sccp_ton_breaker_observations, id)
+            }
+            TieredKeyHandle::SccpReplayForest(id) => fetch!(world.sccp_replay_forests, id),
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 fetch!(world.sccp_outbound_pending_messages, id)
             }
@@ -4832,10 +4929,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::SccpOutboundMessageIndex(id) => {
                 fetch!(world.sccp_outbound_message_index, id)
             }
-            TieredKeyHandle::SccpOutboundProof(id) => {
-                fetch!(world.sccp_outbound_proofs, id)
-            }
-            TieredKeyHandle::SccpInboundMessage(id) => fetch!(world.sccp_inbound_messages, id),
             TieredKeyHandle::SccpInboundAnchorHighWater(id) => {
                 fetch!(world.sccp_inbound_anchor_high_water, id)
             }
@@ -4865,6 +4958,9 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 fetch!(world.private_settlement_outputs, id)
+            }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                fetch!(world.private_settlement_staged_locks, id)
             }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 fetch!(world.private_settlement_receipts, id)
@@ -4898,12 +4994,13 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::Council(id) => fetch!(world.council, id),
-            TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 fetch!(world.tle_key_session_rosters, id)
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                fetch!(world.tle_key_session_lifecycles, id)
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
@@ -4920,8 +5017,23 @@ impl TieredKeyHandle {
                 fetch!(world.global_beacon_latest_pulse, id)
             }
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                fetch!(world.kagemusha_replay_keys, id)
+            TieredKeyHandle::KagemushaReservePool(id) => {
+                fetch!(world.kagemusha_reserve_pools, id)
+            }
+            TieredKeyHandle::KagemushaReserveOperation(id) => {
+                fetch!(world.kagemusha_reserve_operations, id)
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(id) => {
+                fetch!(world.kagemusha_mint_credit_operations, id)
+            }
+            TieredKeyHandle::KagemushaIssuanceOperation(id) => {
+                fetch!(world.kagemusha_issuance_operations, id)
+            }
+            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => {
+                fetch!(world.kagemusha_redemption_id_operations, id)
+            }
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => {
+                fetch!(world.kagemusha_terminal_nullifier_operations, id)
             }
         }
     }
@@ -4971,6 +5083,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::SccpRouteLiability(id) => {
                 fetch!(world.sccp_route_liabilities, id)
             }
+            TieredKeyHandle::SccpTonBreakerObservation(id) => {
+                fetch!(world.sccp_ton_breaker_observations, id)
+            }
+            TieredKeyHandle::SccpReplayForest(id) => fetch!(world.sccp_replay_forests, id),
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 fetch!(world.sccp_outbound_pending_messages, id)
             }
@@ -4980,10 +5096,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::SccpOutboundMessageIndex(id) => {
                 fetch!(world.sccp_outbound_message_index, id)
             }
-            TieredKeyHandle::SccpOutboundProof(id) => {
-                fetch!(world.sccp_outbound_proofs, id)
-            }
-            TieredKeyHandle::SccpInboundMessage(id) => fetch!(world.sccp_inbound_messages, id),
             TieredKeyHandle::SccpInboundAnchorHighWater(id) => {
                 fetch!(world.sccp_inbound_anchor_high_water, id)
             }
@@ -5013,6 +5125,9 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 fetch!(world.private_settlement_outputs, id)
+            }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                fetch!(world.private_settlement_staged_locks, id)
             }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 fetch!(world.private_settlement_receipts, id)
@@ -5046,12 +5161,13 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::Council(id) => fetch!(world.council, id),
-            TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 fetch!(world.tle_key_session_rosters, id)
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                fetch!(world.tle_key_session_lifecycles, id)
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
@@ -5068,8 +5184,23 @@ impl TieredKeyHandle {
                 fetch!(world.global_beacon_latest_pulse, id)
             }
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                fetch!(world.kagemusha_replay_keys, id)
+            TieredKeyHandle::KagemushaReservePool(id) => {
+                fetch!(world.kagemusha_reserve_pools, id)
+            }
+            TieredKeyHandle::KagemushaReserveOperation(id) => {
+                fetch!(world.kagemusha_reserve_operations, id)
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(id) => {
+                fetch!(world.kagemusha_mint_credit_operations, id)
+            }
+            TieredKeyHandle::KagemushaIssuanceOperation(id) => {
+                fetch!(world.kagemusha_issuance_operations, id)
+            }
+            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => {
+                fetch!(world.kagemusha_redemption_id_operations, id)
+            }
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => {
+                fetch!(world.kagemusha_terminal_nullifier_operations, id)
             }
         }
     }
@@ -5122,6 +5253,23 @@ impl fmt::Display for TieredKeyHandle {
                 id.route_id,
                 id.revision
             ),
+            TieredKeyHandle::SccpTonBreakerObservation(id) => write!(
+                f,
+                "sccp_ton_breaker_observation:{}:{}:{}:{}",
+                id.lane_id.source.profile_key(),
+                id.lane_id.target.profile_key(),
+                id.route_id,
+                id.revision
+            ),
+            TieredKeyHandle::SccpReplayForest(id) => write!(
+                f,
+                "sccp_replay_forest:{}:{}:{}:{}:{:02x}",
+                id.route_key.lane_id.source.profile_key(),
+                id.route_key.lane_id.target.profile_key(),
+                id.route_key.route_id,
+                id.route_key.revision,
+                id.boundary.tag(),
+            ),
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 write!(
                     f,
@@ -5147,22 +5295,6 @@ impl fmt::Display for TieredKeyHandle {
                 id.lane.target.profile_key(),
                 id.message_id.encode_hex::<String>()
             ),
-            TieredKeyHandle::SccpOutboundProof(id) => write!(
-                f,
-                "sccp_outbound_proof:{}:{}:{}",
-                id.lane.source.profile_key(),
-                id.lane.target.profile_key(),
-                id.message_id.encode_hex::<String>()
-            ),
-            TieredKeyHandle::SccpInboundMessage(id) => {
-                write!(
-                    f,
-                    "sccp_inbound_message:{}:{}:{}",
-                    id.lane.source.profile_key(),
-                    id.lane.target.profile_key(),
-                    id.message_id.encode_hex::<String>()
-                )
-            }
             TieredKeyHandle::SccpInboundAnchorHighWater(id) => write!(
                 f,
                 "sccp_inbound_anchor_high_water:{}:{}:{}",
@@ -5207,6 +5339,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 write!(f, "private_settlement_output:{id:?}")
             }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                write!(f, "private_settlement_staged_lock:{id:?}")
+            }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 write!(f, "private_settlement_receipt:{id}")
             }
@@ -5245,12 +5380,13 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => write!(f, "gov_referendum:{id}"),
             TieredKeyHandle::GovernanceLock(id) => write!(f, "gov_lock:{id}"),
             TieredKeyHandle::GovernanceSlash(id) => write!(f, "gov_slash:{id}"),
-            TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
-            TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
             TieredKeyHandle::ParliamentAttempt(id) => write!(f, "parliament_attempt:{id}"),
             TieredKeyHandle::TleKeySession(id) => write!(f, "tle_key_session:{id}"),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 write!(f, "tle_key_session_roster:{id}")
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                write!(f, "tle_key_session_lifecycle:{id}")
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 write!(f, "tle_active_key_session:{id}")
@@ -5271,9 +5407,36 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconPulse(id) => {
                 write!(f, "global_beacon_pulse:{}", id.encode_hex::<String>())
             }
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                write!(f, "kagemusha_replay_key:{id}")
+            TieredKeyHandle::KagemushaReservePool(id) => {
+                write!(f, "kagemusha_reserve_pool:{}", id.encode_hex::<String>())
             }
+            TieredKeyHandle::KagemushaReserveOperation(id) => {
+                write!(
+                    f,
+                    "kagemusha_reserve_operation:{}",
+                    id.encode_hex::<String>()
+                )
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(id) => write!(
+                f,
+                "kagemusha_mint_credit_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::KagemushaIssuanceOperation(id) => write!(
+                f,
+                "kagemusha_issuance_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => write!(
+                f,
+                "kagemusha_redemption_id_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => write!(
+                f,
+                "kagemusha_terminal_nullifier_operation:{}",
+                id.encode_hex::<String>()
+            ),
         }
     }
 }
@@ -5327,11 +5490,8 @@ mod tests {
         asset::AssetDefinitionId,
         block::BlockHeader,
         bridge::{
-            BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
-            SccpOutboundProofRecordV1, SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteLiabilityV1,
-            sccp::{
-                SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
-            },
+            SccpReplayAccumulatorIdV1, SccpReplayBoundaryV1, SccpReplayForestV1,
+            SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteLiabilityV1, sccp::SccpNetworkV1,
         },
         nexus::{
             AssetHandleIssuerPayloadV1, AxtAssetIncarnationV1, AxtBinding, AxtHandleBudgetKey,
@@ -5430,55 +5590,61 @@ mod tests {
                 );
             }
         }
+
+        let prepared_world =
+            crate::private_settlement::global_state::tests::prepared_world_fixture();
+        backend
+            .record_world_snapshot(&prepared_world)
+            .expect("persist prepared private-settlement tiered snapshot");
+        let prepared_manifest = backend
+            .last_manifest()
+            .expect("prepared snapshot manifest recorded");
+        let prepared_snapshot_dir = root.join(format!("{:020}", prepared_manifest.snapshot_index));
+        let staged_entries = prepared_manifest
+            .cold_entries
+            .iter()
+            .filter(|entry| entry.segment == TieredSegment::PrivateSettlementStagedLocks)
+            .collect::<Vec<_>>();
+        assert!(
+            !staged_entries.is_empty(),
+            "active private-settlement staged locks must be represented in the cold manifest"
+        );
+        for entry in staged_entries {
+            let spill = entry
+                .spill_path
+                .as_ref()
+                .expect("cold staged-lock entry has a spill path");
+            assert_canaries_absent(
+                &fs::read(prepared_snapshot_dir.join(spill))
+                    .expect("read staged-lock cold payload"),
+                "private-settlement staged-lock cold payload",
+            );
+        }
     }
 
-    fn sccp_inbound_fixture() -> (SccpInboundMessageKeyV1, SccpInboundMessageRecordV1) {
-        let key = SccpInboundMessageKeyV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::BscMainnet,
-                target: SccpNetworkV1::SoraTaira,
-            },
-            [0xA6; 32],
-        )
-        .expect("valid inbound replay key");
-        let record = SccpInboundMessageRecordV1 {
-            payload_hash: [0x5B; 32],
-            route_configuration_hash: [0x5E; 32],
-            source_identity_hash: [0x5C; 32],
-            trust_anchor: SccpNativeTrustAnchorV1 {
-                backend: BridgeNativeProofBackendV1::BscParlia,
-                anchor_hash: [0x5D; 32],
-                checkpoint_height: 40_999_999,
-            },
-            anchor_interval_height: 40_999_999,
-            source_finality_height: 41_000_000,
-            source_finality_hash: [0x6C; 32],
-            source_proof_commitment: [0x7D; 32],
-            admitted_at_height: 43,
+    fn sccp_replay_forest_fixture() -> (SccpReplayAccumulatorIdV1, SccpReplayForestV1) {
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
+            iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+        );
+        let domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: route.lane_id.source,
+            target_network: route.lane_id.target,
+            boundary: SccpReplayBoundaryV1::SoraInboundRelease,
+            route_revision: route.revision,
+            route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("replay route configuration hashes"),
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
         };
-        (key, record)
-    }
-    fn sccp_outbound_proof_fixture() -> (SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1) {
-        let key = SccpOutboundMessageKeyV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::SoraTaira,
-                target: SccpNetworkV1::EthereumMainnet,
-            },
-            [0xB1; 32],
-        )
-        .expect("valid outbound proof key");
-        let record = SccpOutboundProofRecordV1 {
-            payload_hash: [0xB2; 32],
-            destination_binding_hash: [0xB3; 32],
-            route_configuration_hash: [0xB4; 32],
-            finality_block_hash: [0xB5; 32],
-            destination_proof_commitment: [0xB6; 32],
-            finality_height: 42,
-            commitment_index: 0,
-            accepted_at_height: 43,
-        };
-        assert!(record.is_well_formed_for_key(&key));
-        (key, record)
+        let id = SccpReplayAccumulatorIdV1::from_domain(route.key(), &domain)
+            .expect("replay accumulator fixture matches its route");
+        let mut forest = SccpReplayForestV1::default();
+        forest.nonempty_shard_roots.insert(0xA6, [0x5B; 32]);
+        forest.leaf_count = 1;
+        forest.update_sequence = 1;
+        forest.validate().expect("replay forest fixture is valid");
+        (id, forest)
     }
     include!("tiered_security_and_measured_bytes_tests.rs");
     #[test]
@@ -5871,80 +6037,82 @@ mod tests {
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
     }
     #[test]
-    fn record_world_snapshot_includes_exact_lane_sccp_outbound_proofs() {
+    fn record_world_snapshot_includes_sccp_replay_forest() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let (key, record) = sccp_outbound_proof_fixture();
-        world.sccp_outbound_proofs.insert(key, record);
+        let (id, forest) = sccp_replay_forest_fixture();
+        world.sccp_replay_forests.insert(id.clone(), forest.clone());
         backend
             .record_world_snapshot(&world)
-            .expect("snapshot with SCCP outbound proof replay entry");
+            .expect("snapshot with SCCP replay forest");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        let key_payload = TieredKeyHandle::SccpOutboundProof(key)
+        let key_payload = TieredKeyHandle::SccpReplayForest(id)
             .encode_key()
-            .expect("SCCP outbound proof key encodes");
+            .expect("SCCP replay accumulator key encodes");
         let entry = manifest
             .hot_entries
             .iter()
             .chain(&manifest.cold_entries)
             .find(|entry| {
-                entry.segment == TieredSegment::SccpOutboundProofs
+                entry.segment == TieredSegment::SccpReplayForests
                     && entry.key_payload == key_payload
             })
-            .expect("SCCP outbound proof replay key should be snapshotted");
+            .expect("SCCP replay forest should be snapshotted");
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(
             entry.value_size_bytes,
-            MeasuredBytes::measured_bytes(&record)
+            MeasuredBytes::measured_bytes(&forest)
         );
     }
     #[test]
-    fn payload_snapshot_updates_and_removes_sccp_outbound_proofs() {
+    fn payload_snapshot_updates_and_removes_sccp_replay_forest() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let (key, record) = sccp_outbound_proof_fixture();
-        world.sccp_outbound_proofs.insert(key, record);
+        let (id, forest) = sccp_replay_forest_fixture();
+        world.sccp_replay_forests.insert(id.clone(), forest.clone());
         backend
             .record_world_snapshot(&world)
-            .expect("initial outbound proof snapshot");
-        let updated = SccpOutboundProofRecordV1 {
-            destination_proof_commitment: [0xB7; 32],
-            accepted_at_height: record.accepted_at_height.saturating_add(1),
-            ..record
-        };
-        assert!(updated.is_well_formed_for_key(&key));
+            .expect("initial SCCP replay-forest snapshot");
+        let mut updated = forest;
+        updated.nonempty_shard_roots.insert(0xB2, [0xD2; 32]);
+        updated.leaf_count = 2;
+        updated.update_sequence = 2;
+        updated.validate().expect("updated replay forest is valid");
         let mut payload = TieredSnapshotPayload::default();
-        payload.push_value(TieredKeyHandle::SccpOutboundProof(key), Some(updated));
+        payload.push_value(
+            TieredKeyHandle::SccpReplayForest(id.clone()),
+            Some(updated.clone()),
+        );
         backend
             .record_world_snapshot_with_payload(&payload)
-            .expect("updated outbound proof payload snapshot");
-        let key_payload = TieredKeyHandle::SccpOutboundProof(key)
+            .expect("updated SCCP replay-forest payload snapshot");
+        let key_payload = TieredKeyHandle::SccpReplayForest(id.clone())
             .encode_key()
-            .expect("outbound proof key encodes");
+            .expect("SCCP replay accumulator key encodes");
         let manifest = backend.last_manifest().expect("updated manifest");
         let entry = manifest
             .hot_entries
             .iter()
             .chain(&manifest.cold_entries)
             .find(|entry| {
-                entry.segment == TieredSegment::SccpOutboundProofs
+                entry.segment == TieredSegment::SccpReplayForests
                     && entry.key_payload == key_payload
             })
-            .expect("updated outbound proof entry remains tracked");
+            .expect("updated SCCP replay forest remains tracked");
         let expected_payload =
-            norito::json::to_vec(&updated).expect("updated proof record encodes");
+            norito::json::to_vec(&updated).expect("updated replay forest encodes");
         assert_eq!(entry.value_hash_hex, hex::encode(sha256(&expected_payload)));
+        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
         let mut removal = TieredSnapshotPayload::default();
-        removal
-            .push_value::<SccpOutboundProofRecordV1>(TieredKeyHandle::SccpOutboundProof(key), None);
+        removal.push_value::<SccpReplayForestV1>(TieredKeyHandle::SccpReplayForest(id), None);
         backend
             .record_world_snapshot_with_payload(&removal)
-            .expect("outbound proof removal payload snapshot");
+            .expect("SCCP replay-forest removal payload snapshot");
         let manifest = backend.last_manifest().expect("removal manifest");
         assert!(
             manifest
@@ -5952,102 +6120,10 @@ mod tests {
                 .iter()
                 .chain(&manifest.cold_entries)
                 .all(|entry| {
-                    entry.segment != TieredSegment::SccpOutboundProofs
+                    entry.segment != TieredSegment::SccpReplayForests
                         || entry.key_payload != key_payload
                 }),
-            "removed outbound proof entry must leave the tiered manifest"
-        );
-    }
-    #[test]
-    fn record_world_snapshot_includes_exact_lane_sccp_inbound_messages() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
-        let mut world = World::default();
-        let (key, record) = sccp_inbound_fixture();
-        world.sccp_inbound_messages.insert(key, record);
-        backend
-            .record_world_snapshot(&world)
-            .expect("snapshot with SCCP inbound replay entry");
-        let manifest = backend.last_manifest().expect("manifest recorded");
-        let key_payload = TieredKeyHandle::SccpInboundMessage(key)
-            .encode_key()
-            .expect("SCCP inbound key encodes");
-        let entry = manifest
-            .hot_entries
-            .iter()
-            .chain(&manifest.cold_entries)
-            .find(|entry| {
-                entry.segment == TieredSegment::SccpInboundMessages
-                    && entry.key_payload == key_payload
-            })
-            .expect("SCCP inbound replay key should be snapshotted");
-        assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
-        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
-        assert_eq!(
-            entry.value_size_bytes,
-            MeasuredBytes::measured_bytes(&record)
-        );
-    }
-    #[test]
-    fn payload_snapshot_updates_and_removes_sccp_inbound_entries() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
-        let mut world = World::default();
-        let (key, record) = sccp_inbound_fixture();
-        world.sccp_inbound_messages.insert(key, record);
-        backend
-            .record_world_snapshot(&world)
-            .expect("initial inbound snapshot");
-        let updated = SccpInboundMessageRecordV1 {
-            anchor_interval_height: record.anchor_interval_height + 1,
-            source_finality_height: record.source_finality_height + 1,
-            source_finality_hash: [0x8E; 32],
-            source_proof_commitment: [0x9F; 32],
-            admitted_at_height: record.admitted_at_height + 1,
-            ..record
-        };
-        let mut payload = TieredSnapshotPayload::default();
-        payload.push_value(TieredKeyHandle::SccpInboundMessage(key), Some(updated));
-        backend
-            .record_world_snapshot_with_payload(&payload)
-            .expect("updated inbound payload snapshot");
-        let manifest = backend.last_manifest().expect("updated manifest");
-        let key_payload = TieredKeyHandle::SccpInboundMessage(key)
-            .encode_key()
-            .expect("inbound key encodes");
-        let entry = manifest
-            .hot_entries
-            .iter()
-            .chain(&manifest.cold_entries)
-            .find(|entry| {
-                entry.segment == TieredSegment::SccpInboundMessages
-                    && entry.key_payload == key_payload
-            })
-            .expect("updated inbound entry remains tracked");
-        let expected_payload = norito::json::to_vec(&updated).expect("updated record encodes");
-        assert_eq!(entry.value_hash_hex, hex::encode(sha256(&expected_payload)));
-        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
-        let mut removal = TieredSnapshotPayload::default();
-        removal.push_value::<SccpInboundMessageRecordV1>(
-            TieredKeyHandle::SccpInboundMessage(key),
-            None,
-        );
-        backend
-            .record_world_snapshot_with_payload(&removal)
-            .expect("inbound removal payload snapshot");
-        let manifest = backend.last_manifest().expect("removal manifest");
-        assert!(
-            manifest
-                .hot_entries
-                .iter()
-                .chain(&manifest.cold_entries)
-                .all(|entry| {
-                    entry.segment != TieredSegment::SccpInboundMessages
-                        || entry.key_payload != key_payload
-                }),
-            "removed inbound replay entry must leave the tiered manifest"
+            "removed SCCP replay forest must leave the tiered manifest"
         );
     }
     #[test]

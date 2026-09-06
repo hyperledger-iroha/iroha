@@ -17,7 +17,7 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
 | Bridge load status & version | `NoritoNativeBridge.shared` loader (`NativeBridge.swift:13`, path-based candidate probing) | `connect.error` events emitted via `ConnectError.telemetryAttributes` (`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`) and `status.md` excerpts | Emit a `connect.error` event tagged `category=internal code=norito_bridge.load_failure` and fail closed when the bridge is unavailable; no JSON codec fallback exists. Record the authenticated manifest identity when the handle resolves successfully. |
 | Connect codec bridge enforcement | `ConnectCodec.encode/decode` (`IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift`) | `connect.error` telemetry + parity feeds | Alert whenever `ConnectCodecError.bridgeUnavailable` is raised so dashboards can confirm the XCFramework ships with every release and fail closed when the bridge is missing. |
 | Sorafs orchestrator reports | `sorafsLocalFetch` (`NativeBridge.swift:1982`) and fixtures (`fixtures/sorafs_orchestrator/README.md`) | CI/SDK parity harness (`ci/sdk_sorafs_orchestrator.sh`) and `specs/sorafs/reports/orchestrator_ga.md` | Persist `reportJSON` produced by the bridge, include it in the fixture bundle, and ensure it flows into the shared parity tests. |
-| XCFramework smoke lanes & device tags | `scripts/ci/run_xcframework_smoke.sh` → `dashboards/mobile_ci.swift` | `artifacts/xcframework_smoke_result.json`, `artifacts/xcframework_smoke_anomalies.json`, `dashboards/data/mobile_ci*.json`, Buildkite metadata `ci/xcframework-smoke:<lane>:device_tag` | Required so dashboards expose StrongBox coverage and macOS fallbacks; validated via `scripts/check_swift_dashboard_data.py`. |
+| XCFramework smoke lanes & device tags | `scripts/ci/run_xcframework_smoke.sh` → `dashboards/mobile_ci.swift` | `artifacts/xcframework_smoke_result.json`, `artifacts/xcframework_smoke_anomalies.json`, `dashboards/data/mobile_ci*.json`, Buildkite metadata `ci/xcframework-smoke:<lane>:device_tag` | Required simulator/fallback telemetry plus optional StrongBox coverage; validated via `scripts/check_swift_dashboard_data.py`. |
 
 ## 2. Prerequisites & Tooling
 
@@ -25,7 +25,10 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
 - `scripts/ci/run_xcframework_smoke.sh` – produces telemetry JSON, anomaly summary, and per-lane logs for IOS6.
 - `scripts/check_swift_dashboard_data.py` – schema validator for the CI/parity feeds referenced in `specs/references/ios_metrics.md`.
 - `ci/sdk_sorafs_orchestrator.sh` – replays the multi-provider fetch parity suite to guarantee consistent `reportJSON` outputs across SDKs.
-- Hardware: simulator pool defined in `specs/swift_xcframework_device_matrix.md` plus the StrongBox device recorded in `specs/swift_xcframework_hardware_plan.md`.
+- Hardware: the simulator pool defined in
+  `specs/swift_xcframework_device_matrix.md`. A StrongBox device recorded in
+  `specs/swift_xcframework_hardware_plan.md` is optional and used only when
+  `IOS6_SMOKE_ENABLE_HARDWARE=true`.
 
 Before any bridge build or smoke run, export the exact first-release envelope:
 
@@ -90,11 +93,16 @@ each Apple slice is freshly invoked.
 
 ### 3.4 XCFramework Smoke & Dashboard Export
 
-1. **Execute the smoke harness on the full device matrix.**
+1. **Execute the required software/simulator smoke matrix.**
    ```bash
    scripts/ci/run_xcframework_smoke.sh
    ```
-   - The harness rebuilds the bridge with the inherited exact envelope and has no skip mode. Confirm `artifacts/xcframework_smoke_result.json` lists every lane (`iphone-sim`, `ipad-sim`, `strongbox`, optional `macos-fallback`) and that Buildkite metadata contains the corresponding `device_tag`. The anomaly summary is written to `artifacts/xcframework_smoke_anomalies.json` for release/incident bundles.
+   - The harness rebuilds the bridge with the inherited exact envelope. Confirm
+     `artifacts/xcframework_smoke_result.json` records the required
+     `iphone-sim` and `ipad-sim` lanes plus `macos-fallback` when needed. The
+     `strongbox` lane is recorded as skipped unless the optional hardware drill
+     is explicitly enabled. The anomaly summary is written to
+     `artifacts/xcframework_smoke_anomalies.json` for release/incident bundles.
 2. **Validate the CI feed.**
    ```bash
    scripts/check_swift_dashboard_data.py artifacts/xcframework_smoke_result.json \
@@ -116,7 +124,10 @@ each Apple slice is freshly invoked.
 
 ## 5. Escalation
 
-- If the bridge fails to load on any device, open an incident referencing the `ci/xcframework-smoke:<lane>` metadata key and page the Swift QA on-call.
+- If the bridge fails to load on a required simulator/fallback lane, open an
+  incident referencing the `ci/xcframework-smoke:<lane>` metadata key and page
+  the Swift QA on-call. Optional hardware-lane failures remain hardware
+  integration incidents, not general release blockers.
 - For telemetry schema regressions, block merges by running `make swift-dashboards` (which invokes `ci/check_swift_dashboards.sh`) and attach the failing JSON plus validator output to the PR.
 
 Keep this document in sync with `specs/references/ios_metrics.md`, the XCFramework hardware plan, and the Sorafs orchestrator fixtures to maintain a single source of truth for bridge instrumentation.

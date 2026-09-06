@@ -10,14 +10,17 @@ use iroha_data_model::{
             SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotContextV1,
         },
         moderation_ledger::{
-            MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_CASE_VERSION_V1,
+            MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+            MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1, MODERATION_LEDGER_CASE_VERSION_V1,
             MODERATION_LEDGER_POLICY_VERSION_V1, ModerationAppealIntakeV1,
             ModerationAppealRecordV1, ModerationCaseRecordV1, ModerationCaseSpecV1,
             ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
             ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1, ModerationLedgerStatusV1,
             ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
             ModerationOutcomeRecordV1, ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
-            ModerationVoteCountsV1, sorafs_moderation_panel_roster_hash_v1,
+            ModerationSortitionAnchorV1, ModerationVoteCountsV1,
+            sorafs_moderation_panel_roster_hash_v1,
         },
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
@@ -34,7 +37,7 @@ use std::{
 };
 use tempfile::TempDir;
 const TEST_ENVELOPE_CREATION_UNIX_MS: u64 = 1_700_000_000_000;
-const TRANSACTION_SIGNER_HANDLE: &str = "moderation-hsm-primary";
+const TRANSACTION_SIGNER_HANDLE: &str = "moderation-provider-primary";
 const STRICT_INGRESS_HANDLE: &str = "moderation-ingress-primary";
 const HANDOFF_PROVIDER_HANDLE: &str = "moderation-handoff-primary";
 const PANEL_NOTIFICATION_PROVIDER_HANDLE: &str = "moderation-notification-primary";
@@ -1173,11 +1176,22 @@ fn policy(revision: u64) -> ModerationLedgerPolicyV1 {
         version: MODERATION_LEDGER_POLICY_VERSION_V1,
         revision,
         predecessor_policy_digest: (revision > 1).then_some([0xA5; 32]),
+        challenge_voting_asset_id:
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                iroha_data_model::domain::DomainId::try_new("sora", "universal")
+                    .expect("governance domain"),
+                "xor".parse().expect("governance asset name"),
+            ),
+        challenge_bond_amount: MODERATION_CHALLENGE_BOND_AMOUNT_V1.into(),
+        challenge_escrow_account: account(90),
+        challenge_slash_receiver_account: account(91),
+        challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+        challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
         max_panel_size: 5,
         max_candidate_pool_size: 32,
         max_waitlist_size: 5,
         max_exclusions_per_case: 16,
-        max_total_window_ms: 60_000,
+        max_total_window_ms: 90_000_000,
         max_challenges_per_case: 4,
         missing_commit_penalty_points: 10,
         unrevealed_commit_penalty_points: 20,
@@ -1285,8 +1299,9 @@ fn awaiting_acceptance_snapshot(
         registration_deadline_unix_ms: 20,
         acceptance_deadline_unix_ms: 30,
         commit_deadline_unix_ms: 40,
-        challenge_deadline_unix_ms: 50,
-        reveal_deadline_unix_ms: 60,
+        challenge_submission_deadline_unix_ms: 50,
+        challenge_resolution_deadline_unix_ms: 86_400_050,
+        reveal_deadline_unix_ms: 86_400_060,
         policy_digest,
     };
     let intake_digest = intake.digest().expect("intake digest");
@@ -1331,13 +1346,18 @@ fn awaiting_acceptance_snapshot(
     let appeal = ModerationAppealRecordV1 {
         intake,
         intake_digest,
-        policy: active_policy,
+        policy: active_policy.clone(),
         pop_snapshot,
         pop_snapshot_digest,
         status: ModerationAppealStatusV1::AwaitingAcceptance,
         submitted_by: appellant,
         submitted_at_unix_ms: 3,
         eligible_jurors,
+        sortition_anchor: Some(ModerationSortitionAnchorV1 {
+            block_height: height.saturating_sub(1).max(1),
+            block_hash: randomness_anchor,
+            block_timestamp_unix_ms: 21,
+        }),
         selection: Some(selection),
         accepted_jurors: Vec::new(),
         replacements: Vec::new(),
@@ -1385,6 +1405,39 @@ fn awaiting_acceptance_snapshot(
         sortition_digest,
     )
 }
+fn registering_snapshot_with_pinned_anchor(
+    finalized_block_hash: [u8; 32],
+    governance: AccountId,
+) -> (ModerationFinalizedLedgerSnapshotV1, [u8; 32]) {
+    let (mut snapshot, _) =
+        awaiting_acceptance_snapshot(3, finalized_block_hash, governance.clone());
+    let appeal = &mut snapshot.appeals[0].appeal;
+    let anchor_hash = appeal
+        .sortition_anchor
+        .as_ref()
+        .expect("awaiting-acceptance fixture has an anchor")
+        .block_hash;
+    appeal.status = ModerationAppealStatusV1::RegisteringJurors;
+    appeal.selection = None;
+    snapshot.finalized_at_unix_ms = 22;
+    let status = snapshot.status.as_mut().expect("moderation status");
+    status.panel_selections = 0;
+    status.updated_at_unix_ms = 19;
+    snapshot.events[0] = ModerationFinalizedEventV1 {
+        sequence: 5,
+        block_height: 1,
+        block_hash: [0x61; 32],
+        event_index: 0,
+        event: SorafsModerationLedgerEvent::new(
+            SorafsModerationLedgerEventKind::EligibilityRegistered,
+            Some("case-failover".to_owned()),
+            Some("round-1".to_owned()),
+            governance,
+            19,
+        ),
+    };
+    (snapshot, anchor_hash)
+}
 fn activated_case_snapshot(
     height: u64,
     block_hash: [u8; 32],
@@ -1417,11 +1470,12 @@ fn activated_case_snapshot(
             jurors,
             quorum: intake.quorum,
             commit_deadline_unix_ms: intake.commit_deadline_unix_ms,
-            challenge_deadline_unix_ms: intake.challenge_deadline_unix_ms,
+            challenge_submission_deadline_unix_ms: intake.challenge_submission_deadline_unix_ms,
+            challenge_resolution_deadline_unix_ms: intake.challenge_resolution_deadline_unix_ms,
             reveal_deadline_unix_ms: intake.reveal_deadline_unix_ms,
             policy_digest: intake.policy_digest,
         },
-        policy: appeal.policy,
+        policy: appeal.policy.clone(),
         status: ModerationCaseStatusV1::Open,
         opened_at_unix_ms: 31,
         opened_by: governance.clone(),
@@ -1603,7 +1657,7 @@ fn provider_test_request() -> ModerationTransactionRequestV1 {
 #[test]
 fn runtime_provider_handles_use_canonical_production_grammar() {
     for handle in [
-        "hsm://sorafs/moderation/signer-primary",
+        "provider://sorafs/moderation/signer-primary",
         "https-pinned-source-pool:moderation-ingress-primary",
     ] {
         assert_eq!(
@@ -1612,11 +1666,11 @@ fn runtime_provider_handles_use_canonical_production_grammar() {
         );
     }
     for handle in [
-        "hsm://sorafs/moderation/operator@signer",
-        "hsm://sorafs/moderation/signer?token",
-        "hsm://sorafs/moderation/signer#fragment",
-        "hsm://sorafs/moderation/%73igner",
-        "hsm://sorafs/moderation/signer\\primary",
+        "provider://sorafs/moderation/operator@signer",
+        "provider://sorafs/moderation/signer?token",
+        "provider://sorafs/moderation/signer#fragment",
+        "provider://sorafs/moderation/%73igner",
+        "provider://sorafs/moderation/signer\\primary",
     ] {
         assert_eq!(
             validate_moderation_runtime_provider_handle(handle, true),
@@ -1628,11 +1682,11 @@ fn runtime_provider_handles_use_canonical_production_grammar() {
         );
     }
     assert_eq!(
-        validate_moderation_runtime_provider_handle("hsm://sorafs/moderation/dummy", true,),
+        validate_moderation_runtime_provider_handle("provider://sorafs/moderation/dummy", true,),
         Err(ModerationRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle)
     );
     assert_eq!(
-        validate_moderation_runtime_provider_handle("hsm://sorafs/moderation/dummy", false,),
+        validate_moderation_runtime_provider_handle("provider://sorafs/moderation/dummy", false,),
         Err(ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
     );
 }
@@ -1658,7 +1712,7 @@ fn external_providers_are_qualified_before_checkpoint_access() {
             if message.contains("runtime provider binding")
     ));
     assert!(!missing_parent.exists());
-    config.transaction_signer_handle = "moderation-hsm-secondary".to_owned();
+    config.transaction_signer_handle = "moderation-provider-secondary".to_owned();
     assert_default_open_error!(config.clone(); Err(ModerationOrchestratorError::InvalidConfiguration(message)) if message.contains("runtime provider binding"));
     assert!(!missing_parent.exists());
     config.transaction_signer_handle = TRANSACTION_SIGNER_HANDLE.to_owned();

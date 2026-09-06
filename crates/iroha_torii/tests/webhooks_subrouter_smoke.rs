@@ -16,11 +16,10 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 #[tokio::test]
-async fn webhooks_endpoints_exposed() {
+async fn webhooks_endpoints_exposed_by_default() {
     // Minimal Torii setup
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.webhooks_enabled = true;
     cfg.torii.operator_signatures.enabled = true;
     cfg.torii.operator_signatures.allow_node_key = true;
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -29,7 +28,15 @@ async fn webhooks_endpoints_exposed() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let chain_id = cfg.common.chain.clone();
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        query,
+        chain_id.clone(),
+        network_id,
+    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -40,8 +47,8 @@ async fn webhooks_endpoints_exposed() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
-        iroha_data_model::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        chain_id,
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -51,8 +58,12 @@ async fn webhooks_endpoints_exposed() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii webhook fixture");
+    let runtime = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
+    let app = runtime.router();
     // Webhook registry routes reject requests before dispatch unless operator
     // authentication succeeds.
     let resp = app
@@ -102,11 +113,13 @@ async fn webhooks_endpoints_exposed() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
+    runtime.shutdown().await;
 }
 #[tokio::test]
-async fn webhooks_endpoints_disabled_by_default() {
+async fn webhooks_endpoints_hidden_when_disabled() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.webhooks_enabled = false;
     cfg.torii.operator_signatures.enabled = true;
     cfg.torii.operator_signatures.allow_node_key = true;
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -115,7 +128,15 @@ async fn webhooks_endpoints_disabled_by_default() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let chain_id = cfg.common.chain.clone();
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        query,
+        chain_id.clone(),
+        network_id,
+    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -126,8 +147,8 @@ async fn webhooks_endpoints_disabled_by_default() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
-        iroha_data_model::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        chain_id,
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -137,8 +158,12 @@ async fn webhooks_endpoints_disabled_by_default() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii webhook fixture");
+    let runtime = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
+    let app = runtime.router();
     let resp = app
         .clone()
         .oneshot(
@@ -164,4 +189,5 @@ async fn webhooks_endpoints_disabled_by_default() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    runtime.shutdown().await;
 }

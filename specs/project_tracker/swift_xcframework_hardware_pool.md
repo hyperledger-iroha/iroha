@@ -1,13 +1,15 @@
 # Swift XCFramework Smoke Harness Hardware Plan
 
-This tracker outlines the hardware requirements and procurement steps needed to
-support the IOS6 XCFramework smoke harness on Buildkite/macOS runners.
+This tracker outlines optional hardware-integration coverage and procurement
+steps for the IOS6 XCFramework smoke harness on Buildkite/macOS runners. The
+software/simulator build, test, and release baseline does not depend on this
+pool.
 
 ## Goal
 
-Reserve a dedicated StrongBox-capable iPhone device pool and ensure simulator
-fallback capacity so the `xcframework-smoke` pipeline can run continuously
-without device contention.
+Reserve a dedicated StrongBox-capable iPhone device pool for explicitly
+requested Secure Enclave drills while keeping the `xcframework-smoke` baseline
+independent of physical-device availability.
 
 ## Current status
 
@@ -23,9 +25,9 @@ without device contention.
   run (`buildkite #9821`) shows `device_tag=strongbox` and matches the expected
   Buildkite analytics dashboard.
 
-## Required actions
+## Optional hardware-pool actions
 
-1. Confirm the number of StrongBox-capable devices required (target: two active
+1. Confirm the desired number of StrongBox-capable devices (target: two active
    + one spare) and associated maintenance rotation with the hardware lab.
 2. File or update the procurement ticket (INFRA-9321) to cover the device pool
    and any replacement stock; attach the XCFramework device matrix as context.
@@ -62,8 +64,9 @@ Summary: Secure StrongBox iPhone pool for Swift XCFramework smoke harness
   - 1 spare in hardware lab rotation for failover
 - Accessories: USB-C cables, spare chargers, desk mounts for continuous power
 - Runner attachment: Build Infra to wire devices into existing M2 Max runners
-- Rationale: Smoke harness requires StrongBox coverage; simulator fallback cannot
-  validate Secure Enclave flows. Failing runs currently block pipeline parity dashboards.
+- Rationale: Optional StrongBox runs validate Secure Enclave flows that
+  simulators cannot. Their results remain visible on parity dashboards without
+  blocking the software/simulator release baseline.
 - References:
   - Device matrix: specs/swift_xcframework_device_matrix.md
   - Harness script: scripts/ci/run_xcframework_smoke.sh

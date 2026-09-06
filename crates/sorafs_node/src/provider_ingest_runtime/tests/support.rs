@@ -115,7 +115,7 @@ fn completion_signer_binding_rejects_test_handles_stale_revisions_and_key_mismat
     assert_eq!(qualification.validate(), Ok(()));
     assert_eq!(
         ProviderIngestCompletionSignerBindingV1::new(
-            "pkcs11:sorafs-provider-ingest-primary",
+            "provider:sorafs-provider-ingest-primary",
             qualification.clone(),
         )
         .validate(),
@@ -123,7 +123,7 @@ fn completion_signer_binding_rejects_test_handles_stale_revisions_and_key_mismat
     );
     assert_eq!(
         ProviderIngestCompletionSignerBindingV1::new(
-            "pkcs11:sorafs-provider-ingest-test",
+            "provider:sorafs-provider-ingest-test",
             qualification.clone(),
         )
         .validate(),

@@ -7,6 +7,7 @@
 //!
 //! The protocol source is Microsoft `vega-prover` commit
 //! `c0ee259053cd12eaf43ed71b5cde375452b3ee4d`, licensed under MIT.
+pub use crate::vega_constants::*;
 use core::{
     fmt,
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
@@ -234,10 +235,9 @@ pub use zk_ams::{
     zk_ams_mkhe_release_kat_evidence_v1, zk_ams_mkhe_release_manifest_v1,
     zk_ams_mkhe_resource_certificate_digest_v1, zk_ams_mkhe_resource_certificate_v1,
     zk_ams_mkhe_resource_evidence_v1, zk_ams_mkhe_rns_native_profile_manifest_v1,
-    zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
-    zk_ams_mkhe_rns_native_topology_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
-    zk_ams_mkhe_security_candidate_v1, zk_ams_mkhe_security_certificate_v1,
-    zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
+    zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_topology_v1,
+    zk_ams_mkhe_security_candidate_input_digest_v1, zk_ams_mkhe_security_candidate_v1,
+    zk_ams_mkhe_security_certificate_v1, zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
     zk_ams_mkhe_streaming_collective_automorphism_accounting_v1, zk_ams_mkhe_wire_evidence_v1,
     zk_ams_phase3_nifs_verifier_digest_v1, zk_ams_phase3_ordered_public_inputs_digest_v1,
     zk_ams_phase3_terminal_implementation_v1, zk_ams_phase23_cross_term_v1,
@@ -245,11 +245,11 @@ pub use zk_ams::{
     zk_ams_phase23_equation_certificate_v1, zk_ams_phase23_fold_linear_v1,
     zk_ams_phase23_fold_quadratic_v1, zk_ams_phase23_materialize_release_accumulator_chunks_v1,
     zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
-    zk_ams_release_candidate_profile_digest_v1, zk_ams_t256_galois_key_schedule_v1,
-    zk_ams_t256_generator_digest_v1, zk_ams_t256_packed_subfield_conjugation_exponent_v1,
-    zk_ams_t256_packing_layout_v1, zk_ams_t256_release_packing_certificate_v1,
-    zk_ams_t256_rotation_certificate_v1, zk_ams_t256_rotation_exponent_for_direction_v1,
-    zk_ams_t256_rotation_exponent_v1, zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
+    zk_ams_t256_galois_key_schedule_v1, zk_ams_t256_generator_digest_v1,
+    zk_ams_t256_packed_subfield_conjugation_exponent_v1, zk_ams_t256_packing_layout_v1,
+    zk_ams_t256_release_packing_certificate_v1, zk_ams_t256_rotation_certificate_v1,
+    zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
+    zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
 };
 pub use zk_ams::{
     ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
@@ -297,26 +297,6 @@ pub use zk_ams::{
 pub use zk_ams::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePublicKeyV1,
 };
-/// Exact canonical COSE `Sig_structure` width in the released Figure 9 relation.
-pub const VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1: usize = 368;
-/// Exact tagged ISO 18013-5 MSO payload width embedded in the `Sig_structure`.
-pub const VEGA_MDL_MSO_PAYLOAD_BYTES_V1: usize = 348;
-/// Exact tagged `IssuerSignedItemBytes` width for the private birth date.
-pub const VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1: usize = 92;
-/// Exact randomizer width inside the birth-date signed item.
-pub const VEGA_MDL_BIRTH_RANDOM_BYTES_V1: usize = 16;
-/// Exact `YYYY-MM-DD` text width parsed by the released relation.
-pub const VEGA_MDL_FULL_DATE_TEXT_BYTES_V1: usize = 10;
-/// Exact `YYYY-MM-DDTHH:MM:SSZ` text width parsed by the released relation.
-pub const VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1: usize = 20;
-/// Lowest trusted UTC presentation year admitted by the released relation.
-pub const VEGA_MDL_MIN_PRESENTATION_YEAR_V1: u16 = 1_970;
-/// Highest presentation year for which a later four-digit `validUntil` exists.
-pub const VEGA_MDL_MAX_PRESENTATION_YEAR_V1: u16 = 9_998;
-/// Lowest non-degenerate public age threshold admitted by the released relation.
-pub const VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1: u8 = 1;
-/// Highest achievable public age threshold admitted by the released relation.
-pub const VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1: u8 = 150;
 /// Tight first-release cap for one canonical Norito Vega proof.
 ///
 /// A 512 KiB ceiling leaves room for the exact 368-byte Figure 9 relation and Norito framing while

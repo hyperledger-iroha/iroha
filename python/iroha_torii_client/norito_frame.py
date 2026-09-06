@@ -96,7 +96,7 @@ def _validate_norito_frame(
     expected_padding_length: Optional[int] = None,
     expected_flags: Optional[int] = None,
     require_nonempty_payload: bool = True,
-) -> None:
+) -> bytes:
     """Validate one uncompressed Norito frame without decoding its payload."""
 
     if not isinstance(body, bytes) or len(body) < _HEADER_BYTES:
@@ -153,6 +153,7 @@ def _validate_norito_frame(
         raise ValueError(f"{context} contains trailing bytes outside the declared payload")
     if _crc64_xz(payload) != expected_checksum:
         raise ValueError(f"{context} CRC64 mismatch")
+    return payload
 
 
 def validate_norito_frame(
@@ -167,6 +168,27 @@ def validate_norito_frame(
     """Validate one exact-schema, uncompressed Norito frame."""
 
     _validate_norito_frame(
+        body,
+        context=context,
+        expected_type_name=expected_type_name,
+        expected_padding_length=expected_padding_length,
+        expected_flags=expected_flags,
+        require_nonempty_payload=require_nonempty_payload,
+    )
+
+
+def decode_norito_frame_payload(
+    body: bytes,
+    *,
+    context: str,
+    expected_type_name: str,
+    expected_padding_length: Optional[int] = None,
+    expected_flags: Optional[int] = None,
+    require_nonempty_payload: bool = True,
+) -> bytes:
+    """Validate one exact-schema frame and return its immutable payload."""
+
+    return _validate_norito_frame(
         body,
         context=context,
         expected_type_name=expected_type_name,

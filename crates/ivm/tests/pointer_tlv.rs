@@ -36,7 +36,7 @@ fn validate_known_types_ok() {
     for (pty, raw) in cases {
         let payload = common::payload_for_type(pty, raw);
         let tlv = make_tlv(pty as u16, 1, &payload);
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         mem.preload_input(0, &tlv).expect("preload input");
         let v = mem.validate_tlv(Memory::INPUT_START).expect("valid tlv");
         assert_eq!(v.type_id as u16, pty as u16);
@@ -52,7 +52,7 @@ fn reject_hash_mismatch() {
     // Flip one byte in the stored hash
     let off = 7 + payload.len();
     tlv[off] ^= 0xFF;
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     mem.preload_input(0, &tlv).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
@@ -68,7 +68,7 @@ fn reject_oob_length() {
     hdr.push(1);
     hdr.extend_from_slice(&(u32::MAX).to_be_bytes());
     // No payload/hash appended to keep it small in test; bounds check should fail first
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     mem.preload_input(0, &hdr).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
@@ -78,7 +78,7 @@ fn reject_oob_length() {
 #[test]
 fn reject_unknown_type() {
     let tlv = make_tlv(0xFFFF, 1, b"x");
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     mem.preload_input(0, &tlv).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
@@ -89,7 +89,7 @@ fn reject_unknown_type() {
 fn reject_wrong_version() {
     let payload = common::payload_for_type(PointerType::Name, b"cursor");
     let tlv = make_tlv(PointerType::Name as u16, 2, &payload);
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     mem.preload_input(0, &tlv).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
@@ -100,7 +100,7 @@ fn reject_wrong_version() {
 fn reject_wrong_region() {
     let payload = common::payload_for_type(PointerType::Name, b"cursor");
     let tlv = make_tlv(PointerType::Name as u16, 1, &payload);
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     // Place TLV into HEAP region (writes allowed) but validator should enforce INPUT-only
     let heap_addr = Memory::HEAP_START;
     mem.store_bytes(heap_addr, &tlv).unwrap();

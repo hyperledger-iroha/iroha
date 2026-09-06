@@ -1,4 +1,4 @@
-//! Multi-version append-only storage for canonical transaction entrypoint identities.
+//! Multi-version append-only storage for canonical carrier and replay identities.
 #![allow(clippy::disallowed_types)]
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
@@ -19,9 +19,10 @@ use std::{
 };
 type Key = HashOf<TransactionEntrypoint>;
 type Value = NonZeroUsize;
-/// Multi-version append-only key value storage for transaction entrypoints.
+/// Multi-version append-only key value storage for transaction replay identities.
 /// This is analogue of [`mv::storage::Storage`] or `HashMap<Key, Value>`.
-/// Contains canonical entrypoint hashes mapped onto the block height where they are stored.
+/// Contains canonical carrier hashes plus distinct sealed-reveal signed-execution
+/// aliases mapped onto the block height where they are stored.
 ///
 /// * Q: Why don't we use `HashMap`/`BTreeMap`?
 ///   A: Because we need multi-version storage with transactional behaviour

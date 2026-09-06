@@ -360,7 +360,7 @@ enum ConfidentialNoteNativeDerivation {
     }
 
     private static func resolve<T>(_ symbol: String, as type: T.Type) -> T? {
-        NoritoNativeBridge.shared.resolveKagemushaV2Symbol(symbol, as: type)
+        NoritoNativeBridge.shared.resolveNativeSymbol(symbol, as: type)
     }
 
     private static func deriveOne(symbol: String, input: Data, field: String) throws -> Data {

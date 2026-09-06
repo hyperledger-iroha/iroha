@@ -1222,7 +1222,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
             "production Taira profile carries maximum privacy transaction and block-sync frames",
         ),
         (
-            Path("configs/soranexus/taira/genesis.json"),
+            Path("configs/soranexus/taira/genesis.template.json"),
             None,
             '"max_payload_size_bytes":16777216',
             '"max_payload_size_bytes":16777215',
@@ -1233,7 +1233,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         ("p2p_network", Path("crates/iroha_p2p/src/network.rs")),
         ("p2p_peer", Path("crates/iroha_p2p/src/peer.rs")),
         ("taira_config", Path("configs/soranexus/taira/config.toml")),
-        ("taira_genesis", Path("configs/soranexus/taira/genesis.json")),
+        ("taira_genesis", Path("configs/soranexus/taira/genesis.template.json")),
     )
     for index, (relative, item_name, old, new, expected_error) in enumerate(
         refresh_mutations
@@ -1277,7 +1277,7 @@ def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
     baseline = module._transport_geometry_production_source_fidelity_errors(repo_root)
     assert not [error for error in baseline if any(marker in error for marker in markers)], baseline
 
-    production_path = repo_root / "configs/soranexus/taira/genesis.json"
+    production_path = repo_root / "configs/soranexus/taira/genesis.template.json"
     production_source = production_path.read_text(encoding="utf-8")
     production_path.write_text(
         production_source.replace('"max_payload_size_bytes":16777216', '"max_payload_size_bytes":16777215', 1)

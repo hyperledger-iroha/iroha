@@ -167,11 +167,11 @@ test(
     const health = await client.getHealth();
     assert.ok(health, "health snapshot should be present");
 
-    const offlineCapability = await client.getOfflineCapability();
-    assert.deepEqual(offlineCapability, {
-      cash_handoff_capability: "cash_handoff_v1",
-      required_bridge_abi_version: 23,
-      max_hops: 8,
+    const kagemushaReadiness = await client.getKagemushaReadiness();
+    assert.deepEqual(kagemushaReadiness, {
+      kagemusha_handoff_capability: "kagemusha_handoff_v1",
+      wire_version: 1,
+      device_lifecycle_version: 1,
       ready: true,
     });
 
@@ -689,10 +689,10 @@ test(
   },
   async (t) => {
     const count = await OPERATOR_CLIENT.getSumeragiEvidenceCount();
-    assertNonNegativeInteger(count.count, "sumeragi evidence count");
+    assertEvidenceU64(count.count, "sumeragi evidence count");
 
     const page = await OPERATOR_CLIENT.listSumeragiEvidence({ limit: 5 });
-    assertNonNegativeInteger(page.total, "sumeragi evidence total");
+    assertEvidenceU64(page.total, "sumeragi evidence total");
     assert.ok(Array.isArray(page.items), "sumeragi evidence items must be an array");
     assert.ok(
       page.items.length <= 5,
@@ -2034,7 +2034,7 @@ test(
     });
     let summaries;
     try {
-      summaries = await client.listVerifyingKeysTyped();
+      summaries = await client.listVerifyingKeys();
     } catch (error) {
       t.diagnostic(
         `verifying key list endpoint unavailable: ${error instanceof Error ? error.message : String(error)}`,
@@ -2058,7 +2058,7 @@ test(
     const targetId = entryWithRecord.id;
     let detail;
     try {
-      detail = await client.getVerifyingKeyTyped(targetId.backend, targetId.name);
+      detail = await client.getVerifyingKey(targetId.backend, targetId.name);
     } catch (error) {
       t.diagnostic(
         `verifying key detail endpoint unavailable for ${targetId.backend}/${targetId.name}: ${
@@ -2398,18 +2398,6 @@ test(
 
     t.diagnostic(
       "SoraFS storage state is an operator-only local diagnostic and is not exercised by the public integration client",
-    );
-  },
-);
-
-test(
-  "SoraFS public integration client does not use the operator-only legacy payload fetch",
-  {
-    timeout: 90_000,
-  },
-  async (t) => {
-    t.diagnostic(
-      "legacy /v1/sorafs/storage/fetch coverage moved to operator-authenticated canaries; public SDK integration must not send unsigned diagnostic reads",
     );
   },
 );
@@ -3429,53 +3417,6 @@ test(
 );
 
 test(
-  "governance council endpoints respond",
-  {
-    timeout: 60_000,
-  },
-  async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    let council;
-    try {
-      council = await client.getGovernanceCouncilCurrent();
-    } catch (error) {
-      if (shouldSkipGovernanceCouncilEndpoints(error)) {
-        t.diagnostic(
-          "governance council endpoint unavailable on target node; skipping council assertions",
-        );
-        return;
-      }
-      throw error;
-    }
-
-    assert.ok(council, "council payload should be present");
-    assertNonNegativeInteger(council.epoch, "council.epoch");
-    assert.ok(Array.isArray(council.members), "council members must be an array");
-    if (council.members.length === 0) {
-      t.diagnostic("governance council returned zero members");
-    } else {
-      council.members.forEach((member, index) => {
-        assert.equal(
-          typeof member.account_id,
-          "string",
-          `council.members[${index}].account_id must be a string`,
-        );
-        assert.notEqual(
-          member.account_id.length,
-          0,
-          `council.members[${index}].account_id must not be empty`,
-        );
-      });
-    }
-
-  },
-);
-
-test(
   "governance protected namespaces endpoint responds",
   {
     timeout: 60_000,
@@ -3640,40 +3581,32 @@ test(
     }
 
     assert.ok(response, "governance ballot response should be present");
-    assert.equal(typeof response.ok, "boolean", "governance ballot response should expose ok flag");
     assert.equal(
-      typeof response.accepted,
-      "boolean",
-      "governance ballot response should expose accepted flag",
+      response.drafted,
+      true,
+      "governance ballot response should confirm an unsigned draft",
     );
     assert.ok(
       Array.isArray(response.tx_instructions),
       "governance ballot response must expose tx_instructions array",
+    );
+    assert.equal(
+      response.tx_instructions.length,
+      1,
+      "governance ballot response must contain exactly one instruction",
     );
     response.tx_instructions.forEach((instruction, index) => {
       assert.ok(
         isNonEmptyString(instruction.wire_id),
         `governance ballot tx_instructions[${index}].wire_id must be a string`,
       );
-      if (instruction.payload_hex !== undefined) {
-        assertHexString(
-          instruction.payload_hex,
-          `governance ballot tx_instructions[${index}].payload_hex`,
-        );
-      }
-    });
-    if (response.proposal_id !== null && response.proposal_id !== undefined) {
-      assertHexString(response.proposal_id, "governance ballot proposal_id");
-    }
-    if (response.reason !== undefined && response.reason !== null) {
-      assert.equal(
-        typeof response.reason,
-        "string",
-        "governance ballot response reason must be a string when present",
+      assertHexString(
+        instruction.payload_hex,
+        `governance ballot tx_instructions[${index}].payload_hex`,
       );
-    }
+    });
     t.diagnostic(
-      `governance ballot accepted=${response.accepted} instructions=${response.tx_instructions.length} proposal=${response.proposal_id ?? "none"}`,
+      `governance ballot drafted=${response.drafted} instructions=${response.tx_instructions.length}`,
     );
   },
 );
@@ -4943,7 +4876,7 @@ function shouldSkipTriggerEndpoints(error) {
   );
 }
 
-function isOfflineApiUnavailableError(error) {
+function isKagemushaApiUnavailableError(error) {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -4951,19 +4884,6 @@ function isOfflineApiUnavailableError(error) {
   return (
     /unexpected status 404/i.test(message) ||
     (/offline/i.test(message) && /disabled/i.test(message))
-  );
-}
-
-function shouldSkipGovernanceCouncilEndpoints(error) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message ?? "";
-  return (
-    isUnexpectedNotFoundError(error) ||
-    /unexpected status 403/i.test(message) ||
-    /unexpected status 503/i.test(message) ||
-    (/council/i.test(message) && /disabled/i.test(message))
   );
 }
 
@@ -5127,22 +5047,29 @@ function assertVerifyingKeyDetail(detail, expectedId = null) {
     assert.equal(detail.id.name, expectedId.name, "verifying key detail name mismatch");
   }
   assertVerifyingKeyRecord(detail.record, "verifying key detail.record");
+  assert.ok(
+    isNonEmptyString(detail.record_norito_base64),
+    "verifying key detail.record_norito_base64 must be a string",
+  );
 }
 
 function assertVerifyingKeyRecord(record, label = "verifying key record") {
   assert.ok(isPlainObject(record), `${label} must be an object`);
   assertNonNegativeInteger(record.version, `${label}.version`);
   assert.ok(isNonEmptyString(record.circuit_id), `${label}.circuit_id must be a string`);
-  assert.ok(isNonEmptyString(record.backend), `${label}.backend must be a string`);
-  if (record.curve !== null) {
-    assert.ok(isNonEmptyString(record.curve), `${label}.curve must be a string when present`);
+  if (record.owner_manifest_id !== null) {
+    assert.ok(
+      isNonEmptyString(record.owner_manifest_id),
+      `${label}.owner_manifest_id must be a string when present`,
+    );
   }
+  assert.ok(isNonEmptyString(record.namespace), `${label}.namespace must be a string`);
+  assert.ok(isNonEmptyString(record.backend), `${label}.backend must be a string`);
+  assert.ok(isNonEmptyString(record.curve), `${label}.curve must be a string`);
   assertHexString(record.public_inputs_schema_hash, `${label}.public_inputs_schema_hash`);
   assertHexString(record.commitment_hex, `${label}.commitment_hex`);
   assertNonNegativeInteger(record.vk_len, `${label}.vk_len`);
-  if (record.max_proof_bytes !== null) {
-    assertNonNegativeInteger(record.max_proof_bytes, `${label}.max_proof_bytes`);
-  }
+  assertNonNegativeInteger(record.max_proof_bytes, `${label}.max_proof_bytes`);
   if (record.gas_schedule_id !== null) {
     assert.ok(isNonEmptyString(record.gas_schedule_id), `${label}.gas_schedule_id must be a string`);
   }
@@ -5317,95 +5244,64 @@ function assertNonNegativeNumber(value, label) {
   assert.ok(value >= 0, `${label} must be non-negative`);
 }
 
+function assertEvidenceU64(value, label) {
+  const integer = typeof value === "bigint" ? value : BigInt(value);
+  assert.ok(integer >= 0n && integer <= 0xffffffffffffffffn, `${label} must be a u64`);
+}
+
 function assertEvidenceRecord(entry) {
   assert.ok(entry && typeof entry === "object", "evidence entry must be an object");
-  assert.equal(typeof entry.kind, "string", "evidence entry must expose a kind");
-  assertNonNegativeInteger(
+  assert.deepEqual(Object.keys(entry).sort(), [
+    "artifact_hash_1",
+    "artifact_hash_2",
+    "class",
+    "consensus_admitted_height",
+    "context_id",
+    "epoch",
+    "height",
+    "kind",
+    "penalty_status",
+    "recorded_height",
+    "recorded_ms",
+    "recorded_view",
+    "signer",
+    "view",
+  ]);
+  assert.equal(entry.kind, "SumeragiV2Equivocation");
+  assert.ok(
+    ["proposal", "phase_vote", "timeout_vote"].includes(entry.class),
+    "v2 equivocation class must be canonical",
+  );
+  assertEvidenceU64(entry.height, "v2 equivocation height");
+  assertEvidenceU64(entry.view, "v2 equivocation view");
+  assertEvidenceU64(entry.epoch, "v2 equivocation epoch");
+  assertNonNegativeInteger(entry.signer, "v2 equivocation signer must be non-negative");
+  assert.match(entry.context_id, /^[0-9a-f]{64}$/u);
+  assert.match(entry.artifact_hash_1, /^[0-9a-f]{64}$/u);
+  assert.match(entry.artifact_hash_2, /^[0-9a-f]{64}$/u);
+  assert.notEqual(entry.artifact_hash_1, entry.artifact_hash_2);
+  assertEvidenceU64(
     entry.recorded_height,
-    "evidence entry recorded_height must be non-negative",
+    "evidence entry recorded_height",
   );
-  assertNonNegativeInteger(
+  assertEvidenceU64(
     entry.recorded_view,
-    "evidence entry recorded_view must be non-negative",
+    "evidence entry recorded_view",
   );
-  assertNonNegativeInteger(entry.recorded_ms, "evidence entry recorded_ms must be non-negative");
-  if (entry.consensus_admitted_height !== null) {
-    assertNonNegativeInteger(
-      entry.consensus_admitted_height,
-      "evidence entry consensus_admitted_height must be null or non-negative",
+  assertEvidenceU64(entry.recorded_ms, "evidence entry recorded_ms");
+  assertEvidenceU64(
+    entry.consensus_admitted_height,
+    "evidence entry consensus_admitted_height",
+  );
+  assert.deepEqual(Object.keys(entry.penalty_status).sort(), ["details", "status"]);
+  if (entry.penalty_status.status === "pending") {
+    assert.equal(entry.penalty_status.details, null);
+  } else {
+    assert.ok(["applied", "cancelled"].includes(entry.penalty_status.status));
+    assert.deepEqual(Object.keys(entry.penalty_status.details), ["height"]);
+    assertEvidenceU64(
+      entry.penalty_status.details.height,
+      "evidence penalty height",
     );
-  }
-  switch (entry.kind) {
-    case "DoublePrepare":
-    case "DoubleCommit":
-      assert.equal(typeof entry.phase, "string", "double vote evidence must include a phase");
-      assertNonNegativeInteger(entry.height, "double vote evidence height must be non-negative");
-      assertNonNegativeInteger(entry.view, "double vote evidence view must be non-negative");
-      assertNonNegativeInteger(entry.epoch, "double vote evidence epoch must be non-negative");
-      assertNonNegativeInteger(entry.signer, "double vote evidence signer must be non-negative");
-      assertHexString(entry.block_hash_1, "double vote evidence block_hash_1");
-      assertHexString(entry.block_hash_2, "double vote evidence block_hash_2");
-      break;
-    case "InvalidQc":
-      assertNonNegativeInteger(entry.height, "invalid QC height must be non-negative");
-      assertNonNegativeInteger(entry.view, "invalid QC view must be non-negative");
-      assertNonNegativeInteger(entry.epoch, "invalid QC epoch must be non-negative");
-      assertHexString(entry.subject_block_hash, "invalid QC subject_block_hash");
-      assert.equal(typeof entry.phase, "string", "invalid QC entries must expose a phase");
-      assert.equal(typeof entry.reason, "string", "invalid QC entries must expose a reason");
-      break;
-    case "InvalidProposal":
-      assertNonNegativeInteger(entry.height, "invalid proposal height must be non-negative");
-      assertNonNegativeInteger(entry.view, "invalid proposal view must be non-negative");
-      assertNonNegativeInteger(entry.epoch, "invalid proposal epoch must be non-negative");
-      assertHexString(entry.subject_block_hash, "invalid proposal subject_block_hash");
-      assertHexString(entry.payload_hash, "invalid proposal payload_hash");
-      assert.equal(typeof entry.reason, "string", "invalid proposal entries must expose a reason");
-      break;
-    case "Censorship":
-      assertHexString(entry.tx_hash, "censorship tx_hash");
-      assertNonNegativeInteger(entry.receipt_count, "censorship receipt_count must be non-negative");
-      assert.ok(Array.isArray(entry.signers), "censorship signers must be an array");
-      assert.equal(
-        entry.receipt_count,
-        entry.signers.length,
-        "censorship receipt_count must match signers",
-      );
-      entry.signers.forEach((signer) => {
-        assert.equal(typeof signer, "string", "censorship signer must be a string");
-      });
-      if (entry.receipt_count === 0) {
-        assert.ok(!("submitted_at_height_min" in entry));
-        assert.ok(!("submitted_at_height_max" in entry));
-      } else {
-        assertNonNegativeInteger(
-          entry.submitted_at_height_min,
-          "censorship submitted_at_height_min must be non-negative",
-        );
-        assertNonNegativeInteger(
-          entry.submitted_at_height_max,
-          "censorship submitted_at_height_max must be non-negative",
-        );
-        assert.ok(entry.submitted_at_height_min <= entry.submitted_at_height_max);
-      }
-      assert.ok(!("min_height" in entry), "retired min_height alias must be absent");
-      assert.ok(!("max_height" in entry), "retired max_height alias must be absent");
-      break;
-    case "SumeragiV2Equivocation":
-      assert.ok(
-        ["proposal", "phase_vote", "timeout_vote"].includes(entry.class),
-        "v2 equivocation class must be canonical",
-      );
-      assertNonNegativeInteger(entry.height, "v2 equivocation height must be non-negative");
-      assertNonNegativeInteger(entry.view, "v2 equivocation view must be non-negative");
-      assertNonNegativeInteger(entry.epoch, "v2 equivocation epoch must be non-negative");
-      assertNonNegativeInteger(entry.signer, "v2 equivocation signer must be non-negative");
-      assert.match(entry.context_id, /^[0-9a-f]{64}$/u);
-      assert.match(entry.artifact_hash_1, /^[0-9a-f]{64}$/u);
-      assert.match(entry.artifact_hash_2, /^[0-9a-f]{64}$/u);
-      assert.notEqual(entry.artifact_hash_1, entry.artifact_hash_2);
-      break;
-    default:
-      assert.fail(`unexpected evidence kind: ${entry.kind}`);
   }
 }

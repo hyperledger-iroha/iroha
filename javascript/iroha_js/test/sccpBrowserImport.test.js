@@ -9,9 +9,9 @@ test("SCCP imports without a Node Buffer global", () => {
   const script = [
     "delete globalThis.Buffer;",
     'const module = await import("./src/sccp.js");',
-    "if (module.SCCP_SOLANA_TESTNET_GENESIS_HASH !==",
-    '  "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY") {',
-    '  throw new Error("unexpected Solana testnet genesis profile");',
+    "if (module.SCCP_DOMAIN_TON !== 4 ||",
+    '  module.SCCP_NETWORK_PROFILES["ton-mainnet"].globalId !== -239) {',
+    '  throw new Error("unexpected TON mainnet profile");',
     "}",
   ].join("\n");
   const child = spawnSync(

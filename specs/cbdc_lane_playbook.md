@@ -138,8 +138,11 @@ Key requirements:
   authority account plus a concrete `peer_id`. Legacy string-only validator
   arrays are rejected.
 - Each manifest `peer_id` must resolve to a registered runtime peer with a live
-  consensus key that is present in the current commit topology; Torii routes
-  only to those authoritative peer bindings and fails closed when the runtime
+  lane-eligible consensus key. Lane `0` requires an unbounded `Validator` key
+  in the current global commit topology. Non-zero CBDC dataspaces prefer an
+  unbounded `Committee` key and accept a `Validator` key for transparent-path
+  compatibility; participant membership never expands global quorum. Torii
+  routes only to authoritative peer bindings and fails closed when runtime
   truth disagrees with the manifest.
 - Validator accounts should remain stable governance identities even if the
   underlying host or peer keys rotate; update the manifest `peer_id` binding

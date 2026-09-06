@@ -15,10 +15,10 @@ JNI_SOURCE = REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/part_3.r
 SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
 MACRO_NAME = "jni_sdk_android_pairs"
-EXPECTED_MACRO_DIGEST = "11de37a9ba22a1c17f322b2803478a5670ecc17166b23526f080c54fbb8a84bb"
-EXPECTED_ABI_DIGEST = "fa65747adf061879da05b24aeea39d04f3476db289ac590171225ba15a9b491a"
+EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
+EXPECTED_ABI_DIGEST = "b685438fb76abd4cb67c1a60e3d269d0a1013f3d9c80ea5b0b0c8cef9b47b46b"
 EXPECTED_ATTRIBUTE_DIGEST = (
-    "aec610f58c5bc0aaa9d05c7ae73730bc6ae2535c72a2e1b5643a0f446c707eaf"
+    "4e7da2a305ced782a82f6fbdb5e233045c42a5f755420f2abf947e45899fa9e9"
 )
 
 EXPECTED_METHODS = {
@@ -65,61 +65,6 @@ EXPECTED_METHODS = {
         "nativeValidatePdpCommitmentChallengeJson",
         "nativeValidatePdpChallengeProofJson",
         "nativeValidatePdpBundleJson",
-    ),
-    "offline_KagemushaRecursiveSpendProver": (
-        "nativeBridgeAbiVersion",
-        "nativePastaCycleV4BackendAvailable",
-        "nativeArtifactBeginV4",
-        "nativeArtifactWriteV4",
-        "nativeArtifactFinalizeV4",
-        "nativeArtifactCancelV4",
-        "nativeArtifactSetInstallV4",
-        "nativeArtifactSetIsInstalledV4",
-        "nativeInstalledManifestSha256V4",
-        "nativeBuildArtifactBindingV4",
-        "nativeArtifactSetUninstallV4",
-        "nativeInitSpendV4",
-        "nativeAppendSpendV4",
-        "nativeVerifySpendV4",
-        "nativeBuildRedeemV4",
-        "nativePrepareRecipientRequestV2",
-        "nativeCreateRecipientRequestV2",
-        "nativeVerifyRecipientRequestV2",
-        "nativeCreateRecipientLineageQueryV2",
-        "nativeVerifyRecipientRegistrationLineageV2",
-        "nativeCreateRecipientReceiveOfferV2",
-        "nativeProjectRecipientReceiveOfferV2",
-        "nativeVerifyRecipientReceiveOfferV2",
-        "nativeBuildOutputMembershipFrontierV4",
-        "nativeDeriveOutputMembershipPathsV4",
-        "nativeValidateSpendableBranchV4",
-        "nativeBuildOutputMembershipPathsV4",
-        "nativeBuildInitRequestV4",
-        "nativeBuildTopUpProvenanceV4",
-        "nativeValidateTopUpProvenanceV4",
-        "nativeBuildAppendRequestV4",
-        "nativeBuildVerifyRequestV4",
-        "nativeBuildRedeemRequestV4",
-        "nativeProjectPeerPaymentV4",
-        "nativeProjectInitResultV4",
-        "nativeProjectSplitResultV4",
-        "nativeProjectVerifyResultV4",
-        "nativeProjectRedeemBuildResultV4",
-        "nativePrepareAcknowledgementV2",
-        "nativeCreateAcknowledgementV2",
-        "nativeVerifyAcknowledgementV2",
-        "nativePrepareAuthorizationV2",
-        "nativeFinalizeHardwareAuthorizationV2",
-        "nativeFinalizeIosAppAttestAuthorizationV2",
-        "nativeFinalizeTopUpV4",
-        "nativeFinalizeRedeemV4",
-        "nativePrepareTopUpV4",
-        "nativeProjectOperationStatusV4",
-        "nativeBranchClaimsConflictV2",
-        "nativePrepareRedemptionChangeV4",
-        "nativePreparePeerSplitChangeV4",
-        "nativePrepareNoteOpeningV2",
-        "nativeProjectRecipientRequestV2",
     ),
 }
 EXPECTED_SUFFIXES = tuple(
@@ -353,7 +298,6 @@ def audit_source(source: str) -> AuditResult:
         direct_android = f'pub unsafe extern "system" fn {android_name}('
         if direct_android in source:
             raise AuditError(f"Android wrapper escaped the exact pair macro: {android_name}")
-
     abi_digest = hashlib.sha256("\0\0".join(sorted(abi_records)).encode()).hexdigest()
     if abi_digest != EXPECTED_ABI_DIGEST:
         raise AuditError(

@@ -171,7 +171,7 @@ fn proof_blob_for(
         da_commitment: None,
         proof: proof_bytes,
         fastpq_binding: Some(model::AxtFastpqBinding {
-            parameter: "fastpq-lane-balanced".to_string(),
+            parameter: "fastpq-state-transition-stark-v1".to_string(),
             source_dsid: dsid.as_u64(),
             source_dataspace: "ivm-core-host-test-dataspace".to_string(),
             source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),

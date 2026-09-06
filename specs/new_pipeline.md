@@ -99,12 +99,12 @@ On‑node proof creation (bridges and advanced flows)
   schedule → include path.
 
 Verification status
-- Stateless ZK pre‑verification and non‑forking verification of traces are implemented and gated by config/feature flags. Background proving and attachments remain out‑of‑pipeline and are optional.
+- Stateless ZK pre‑verification and non‑forking diagnostic consistency checks of traces are implemented and gated by config/feature flags. Background proving and attachments remain out‑of‑pipeline and are optional.
 
 Acceptance (ZK verification)
-- Feature gates: `zk-preverify` (compile‑time) and `zk.halo2.enabled` (runtime) control pre‑verification and trace verification. Hosts additionally gate by `zk.halo2.max_k` and allowed curves.
+- Feature gates: `zk-preverify` (compile‑time) controls diagnostic trace checks, while `zk.halo2.enabled` (runtime) controls cryptographic pre‑verification. Hosts additionally gate by `zk.halo2.max_k` and allowed curves.
 - Authority boundary: pre‑verification and deduplication are advisory diagnostics only. Their results cannot be installed into execution state or substitute for the normal guarded cryptographic verifier.
-- Determinism: ordering and proposal selection remain unaffected; pre‑verification failures do not reorder transactions. Non‑forking verification reports via Pipeline warnings.
+- Determinism: ordering and proposal selection remain unaffected; pre‑verification failures do not reorder transactions. Diagnostic trace checks report via Pipeline warnings and do not persist artifacts in block sidecars.
 - Safety: proofs and envelopes are bounded (size, k) and verified deterministically; accelerators must produce bit‑exact results to scalar.
 
 Consensus integration
@@ -263,7 +263,14 @@ Example mapping: pacs.008 → ledger
 
 ## Kotodama Smart Contract Lifecycle (IVM Bytecode)
 
-Phases (normative)
+> Historical proposal (non-normative): this section predates the first-release
+> revisioned contract lifecycle. Retired instance registration, upgrade, and
+> deprecation sketches below are retained only as design history. The current
+> normative deployment and ownership model is specified in
+> [`contract_deployment.md`](contract_deployment.md).
+
+Historical phases (non-normative)
+
 - Author: write Kotodama source (`.ko`) with explicit entrypoints and Norito‑typed parameters/returns. Avoid global mutable state; declare state keys via canonical key helpers when possible.
 - Build: compile to IVM bytecode (`.to`) with a pinned toolchain. Produce a manifest:
   - `code_hash` (Blake2b‑32), `abi_hash`, `compiler_fingerprint` (rustc/LLVM), feature bitmap (e.g., `cuda=false`, `metal=false`), `access_set_hints` (advisory RW‑keys per entrypoint), and `schema_hash` for argument/return types. CPU SIMD capability is always reported automatically.
@@ -314,10 +321,12 @@ This section is only a pipeline summary.
 
 - Iroha 3 has one ABI version: V1. Runtime-upgrade proposals target
   `abi_version = 1`; this document does not define a V2 compatibility path.
-- Proposal-backed governance accepts the closed, typed seven-kind
+- Proposal-backed governance accepts the closed, typed ten-kind
   `ProposalKind`: `DeployContract`, `RuntimeUpgrade`, `SccpRouteGovernance`,
   `ValidationFeePolicy`, `ValidationFeePayoutLifecycle`,
-  `MusubiRegistryGovernance`, and `SorafsProviderGovernance`.
+  `MusubiRegistryGovernance`, `SorafsProviderGovernance`,
+  `ContractLifecycleGovernance`, `ContractEmergencyHold`, and
+  `GlobalDataTriggerPermissionGovernance`.
 - A Parliament attempt owns its body pipeline, sortition evidence, results,
   policy and effect bindings, compare-and-set head, and
   `GovernanceCertificateV1`. Core constructs the certificate automatically
@@ -1809,109 +1818,22 @@ Quarantine lane
 
 ---
 
-## Opcode Reference (Normative, Appendix)
+## Opcode and Gas Reference
 
-Purpose
-- Provide the single source of truth for every IVM opcode’s semantics and gas
-  pricing to drive conformance tests and metering.
+IVM ABI V1 has one fixed-width instruction encoding. The canonical opcode set
+is `crates/ivm_abi/src/instruction.rs`, executable semantics live in
+`crates/ivm/src/ivm.rs`, and the consensus gas schedule is
+`crates/ivm/src/gas.rs`. The synchronized human-readable table is
+`crates/ivm/docs/opcodes.md`; this pipeline overview deliberately does not
+duplicate those numeric definitions.
 
-Conventions
-- Default integer arithmetic is mod‑2^64; any exceptions (e.g., saturating
-  behavior) are stated explicitly per opcode in this table. Shifts mask the
-  amount with `0x3F`. Division by zero yields `AssertionFailed` (trap).
-  Memory is little‑endian with alignment checks (misaligned → `MisalignedAccess`).
-
-Memory
-- LOAD (`0x03`): Loads into `rd` from `[rs1 + imm]` by `funct3`:
-  - `0x0 LB` (sign‑extend 8b), `0x4 LBU` (zero‑extend 8b)
-  - `0x1 LH` (sign‑extend 16b), `0x5 LHU` (zero‑extend 16b)
-  - 32‑bit variants: `0x2 = LWU` (zero‑extend 32→64), `0x6 = LW` (sign‑extend 32→64)
-  - `0x3 LD` (64b)
-  - Gas: 3
-- STORE (`0x23`): Stores `rs2` to `[rs1 + imm]` by `funct3`:
-  - `0x0 SB` (8b), `0x1 SH` (16b), `0x2 SW` (32b), `0x3 SD` (64b)
-  - Gas: 3
-- LOAD_VECTOR (`0x3B`): Load 128‑bit into 4×32b lanes at vector slot `vd`.
-  - Alignment: 16‑byte; Gas: 5
-- STORE_VECTOR (`0x3F`): Store 4×32b lanes from vector slot `vs` as 128b.
-  - Alignment: 16‑byte; Gas: 5
-
-Arithmetic (register)
-- OP (`0x33`): `rd ← op(rs1, rs2)` by `(funct3,funct7)`:
-  - `(0,0)` ADD; `(0,0x20)` SUB; Gas: 1
-  - `(0,0x01)` MUL; `(1,0x01)` MULH (signed high 64); `(3,0x01)` MULHU (unsigned high 64); Gas: 3
-  - `(4,0x01)` DIV (signed); `(5,0x01)` DIVU; `(6,0x01)` REM; `(7,0x01)` REMU; Gas: 10
-  - `(1,0)` SLL; `(5,0)` SRL; `(5,0x20)` SRA; Gas: 1
-  - `(7,0)` AND; `(6,0)` OR; `(4,0)` XOR; Gas: 1
-
-Arithmetic (immediate)
-- OP‑IMM (`0x13`): `rd ← op(rs1, imm12)` by `funct3`:
-  - `0x0` ADDI; `0x2` SLTI; `0x3` SLTIU; `0x4` XORI; `0x6` ORI; `0x7` ANDI
-  - `0x1` SLLI; `0x5` SRLI/SRAI (select by imm bit 10)
-  - Gas: 1
-
-Control flow
-- BRANCH (`0x63`): BEQ/BNE/BLT/BGE/BLTU/BGEU by `funct3`. PC ← PC + off.
-  - Gas: 1. Every executed branch consumes one VM cycle.
-- JAL (`0x6F`), JALR (`0x67`), and direct `JMP`/`JALS` transfers (all canonical 32-bit words):
-  - Gas: 2. `HALT` (`0x4C`) Gas: 0
-
-System
-- SCALL (`0x50`): system call; Gas: 5; effects depend on syscall id.
-- GETGAS (`0x51`): read remaining gas into `rd`; Gas: 0
-- SYSTEM (`0x73`): CSR/system. If `imm12==0` treat as ECALL (Gas: 5), else Gas: 1
-
-Vector & cryptography (opcode high byte)
-- VADD32 (`0x60`), VADD64 (`0x61`): per‑lane wrap add; Gas: 2
-- VAND (`0x62`), VXOR (`0x63`), VOR (`0x64`): per‑lane bitwise; Gas: 1
-- VROT32 (`0x67`): per‑lane rotate; Gas: 1
-- SETVL (`0x7C`): set logical vector length; Gas: 1
-- PARBEGIN (`0x7A`), PAREND (`0x7B`): delimit parallel region; Gas: 0
-- SHA256BLOCK (`0x70`): compress one block; Gas: 50
-- SHA3BLOCK (`0x7E`): Keccak/SHA‑3 block; Gas: 50
-- BLAKE2S (`0x78`): compress; Gas: 40
-- AESENC (`0x77`): AES round; Gas: 30. AESDEC (`0x7D`): Gas: 30
-- POSEIDON2 (`0x71`), POSEIDON6 (`0x72`): field S‑box permute; Gas: 10
-- ECADD (`0x75`): elliptic curve add; Gas: 20
-- ECMUL_VAR (`0x76`): variable‑time scalar mul; Gas: 100
-- PAIRING (`0x80`): BLS12‑381 pairing check; Gas: 500
-- ED25519VERIFY (`0x79`): signature verify; Gas: 1000
-- ECDSAVERIFY (`0x7F`): signature verify; Gas: 1500
-- DILITHIUMVERIFY (`0x81`): PQC verify; Gas: 5000
-
-Zero‑knowledge helpers
-- ASSERT (`0x54`), ASSERT_EQ (`0x55`), ASSERT_RANGE (`0x5A`): trap on failure; Gas: 1
-- FADD (`0x56`), FSUB (`0x57`): field add/sub (integer field ops); Gas: 1
-- FMUL (`0x58`): field multiply; Gas: 3
-- FINV (`0x59`): field inverse; Gas: 5
-
-ISO 20022 (messaging)
-- MSG_CREATE (`0x90`), MSG_CLONE (`0x91`), MSG_SET (`0x92`), MSG_GET (`0x93`),
-  MSG_ADD (`0x94`), MSG_REMOVE (`0x95`), MSG_CLEAR (`0x96`), MSG_PARSE (`0x97`),
-  MSG_SERIALIZE (`0x98`), MSG_VALIDATE (`0x99`), MSG_SIGN (`0x9A`),
-  MSG_VERIFY_SIG (`0x9B`), MSG_SEND (`0x9C`), ENCODE_STR (`0x9D`),
-  DECODE_STR (`0x9E`), VALIDATE_FORMAT (`0x9F`)
-- Semantics: build/manipulate ISO 20022 structures; on‑chain effects via syscalls.
-- Gas: 1 unless the underlying syscall applies additional costs per bytes/keys.
-
-Status and source of truth
-- The opcode numbers and gas costs are aligned with `crates/ivm/src/instruction.rs`
-  and `crates/ivm/src/gas.rs`. Where an opcode is listed here but not present
-  in the crate, it is marked “Proposed” and is not consensus‑binding until
-  implemented and covered by tests. If an opcode exists in the crate but is not
-  documented here (e.g., `PUBKGEN`, `VALCOM`), the crate definition is
-  normative and this appendix will be extended; gas follows `gas.rs` (both are
-  currently 50).
-
-Notes
-- This appendix is the normative source for IVM opcode semantics and gas.
-  Implementations MUST conform to this table; code MUST implement the spec.
-  Overall gas is charged by the scalar reference path; acceleration does not
-  change charges. Syscalls and host operations must document access‑set
-  implications. Changes require a gas schedule version bump.
- - Side‑channel note: variable‑time ops (e.g., `ECMUL_VAR`) MUST NOT be used
-   with private scalars in consensus paths. They are intended for verification
-   with public inputs only.
+Deployable artifacts admit only opcodes accepted by
+`instruction::wide::is_valid_opcode`. Reserved values have no gas entry and
+trap if raw code bypasses artifact admission. RISC-V-like field names or
+encodings elsewhere in the repository are implementation details, not an
+alternate contract architecture. Hardware acceleration may change execution
+time only: gas, output, traps, and state must remain byte-identical to the
+scalar path.
 
 ## Appendix: Example Walkthrough
 
@@ -1942,44 +1864,45 @@ CRDT/commutative precompiles (optional)
 
 ---
 
-## ZK Assets (protocol-bound confidential ledger)
+## KAGEMUSHA V1 (protocol-bound aggregate balance)
 
 The first release does not expose generic deposit, transfer, or withdrawal
-instructions. Public settlement belongs exclusively to Kagemusha V4:
+instructions. Its sole KAGEMUSHA settlement surface is:
 
-- `TopUpKagemushaRecursiveV4` transfers the exact public amount into the
-  protocol escrow and appends the proof-authenticated note.
-- `RedeemKagemushaRecursiveV4` consumes the authenticated note and nullifier,
-  allocates exact finalized-anchor drawdown, and transfers the public amount
-  out of that escrow. It never mints against an escrow-backed note.
-- The transfer-v2 relation remains only as an internal recursive-proof
-  component selected by Kagemusha's protocol-global canonical verifier. No
-  executor, IVM guest, Torii client, SDK, or escrow protocol can construct a
-  generic movement instruction.
+- `TopUpKagemushaV1`, which atomically debits the payer, credits the sole
+  reserve for `(network, asset)`, and fixes one hardware-bound mint credit;
+- device-to-device `SendSplit` and singular `ReceiveFold`, which move value
+  between recursively proven aggregate balances without touching consensus
+  state; and
+- `RedeemKagemushaV1`, which verifies a hardware-bound full or partial
+  redemption voucher, consumes one terminal nullifier, debits the reserve, and
+  credits the beneficiary atomically.
 
-Each registered confidential asset persists optional `vk_shield` and
-`vk_unshield` role bindings, its spent nullifier set, append-only commitments,
-the sole first-release depth-16 `PoseidonPastaV1` tree profile, a fixed 16-slot
-frontier, current root, bounded root history, and bounded reorg checkpoints.
-`RegisterZkAsset` has no mode or boolean enablement fields: presence of the
-corresponding verifier-key binding is the sole role-enablement signal. It also
-has no asset-bound transfer verifier. Admission requires a recent root,
-canonical public-input shape, the active canonical verifier for the exact
-Kagemusha operation, bounded proof and output counts, and a valid proof before
-any ledger mutation. Batch append is atomic and costs `O(batch * depth)`;
-snapshot decode and admitted audit rebuild the compact projection and compare
-the root, frontier, history, and checkpoints.
+The top-up Torii adapter accepts only a canonical versioned
+`SignedTransaction` containing exactly one `TopUpKagemushaV1`. It verifies the
+network and transaction signature, requires `authority == request.payer`, and
+binds the HTTP idempotency key to the embedded operation ID before submitting
+the same signed transaction through strict durable ingress. Torii never
+substitutes its configured redemption issuer as the payer. The bounded embedded
+request is at most 16 KiB; enabled nodes reserve at least 32 KiB of ordinary
+signed-transaction ingress capacity for its framing.
 
-The underlying Halo2/IPA-over-Pasta top-up, transfer, full-redemption, and
-change-redemption relations remain implementation components. Their typed
-public-input specifications bind asset/chain domains, roots, commitments,
-nullifiers, amounts, and Kagemusha context. Retaining a circuit does not retain
-a public instruction or a compatibility decoder.
+Each hardware lane and asset has one hidden `u128` balance, policy and device
+binding, hardware epoch, logical sequence, consumed-credit sparse-Merkle root,
+nonce, and public commitment. The fixed-shape paired-Pasta recursion implements
+`Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`, `RedeemSplit`, and
+hardware-only `Rotate`. Each `ReceiveFold` consumes exactly one durably staged
+credit, proves its ID was absent from the sparse-Merkle replay root, and updates
+that root. Wallets may stage any number of credits and perform these serialized
+folds continuously or synchronously before spending. The relation verifies the
+normalized GuardBundle and folds every prior proof obligation into constant-size
+history accumulators. No hop, note, input, origin, fan-in, ancestry, receipt
+count, historical transition count, or proof-depth field participates in
+admission.
 
-Conservation is enforced twice: circuits constrain note values, while the
-Kagemusha ledger independently caps aggregate public redemption by finalized
-top-up drawdown and pays by escrow transfer. Nullifiers are permanent spent-note
-identities for the asset. Kagemusha anchors, drawdowns, and receipts provide the
-auditable public-settlement record; authenticated tree state is available from
-the protocol-specific query surface. There is no generic confidential event
-wire in V1.
+Conservation is enforced twice: circuits prove exact balance arithmetic, while
+the ledger maintains `reserve = total_topups - total_redemptions` with checked
+`u128` arithmetic and idempotent operation records. Peer transfers do not alter
+the reserve. Top-up finality is verified inside the mint helper and redemption
+proofs are terminally decided against the authenticated release artifacts; a
+host-side certificate check alone grants no monetary authority.

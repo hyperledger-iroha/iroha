@@ -34,6 +34,7 @@ use iroha::{
     },
 };
 use iroha_config::parameters::actual::LaneConfig;
+use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
@@ -667,27 +668,70 @@ fn read_checked_v2_body_frame(path: &Path, expected_magic: &[u8; 8]) -> Result<(
         .wrap_err_with(|| format!("validate durable v2 body frame {}", path.display()))?;
     Ok((payload.to_vec(), frame_hash))
 }
-fn validate_exact_da_transaction(transaction: &SignedTransaction) -> Result<()> {
+fn validate_exact_log_transaction(
+    transaction: &SignedTransaction,
+    expected_payload_byte: u8,
+    expected_payload_len: usize,
+    carrier: &str,
+) -> Result<()> {
     let Executable::Instructions(instructions) = transaction.instructions() else {
-        return Err(eyre!(
-            "submitted DA carrier entrypoint is not native instructions"
-        ));
+        return Err(eyre!("{carrier} entrypoint is not native instructions"));
     };
     ensure!(
         instructions.len() == 1,
-        "submitted DA carrier changed its one-instruction entrypoint"
+        "{carrier} changed its one-instruction entrypoint"
     );
     let log = instructions[0]
         .as_any()
         .downcast_ref::<Log>()
-        .ok_or_else(|| eyre!("submitted DA carrier entrypoint is not Log"))?;
+        .ok_or_else(|| eyre!("{carrier} entrypoint is not Log"))?;
     ensure!(
         log.level == Level::INFO
-            && log.msg.len() == PACKET_LOSS_PAYLOAD_BYTES
-            && log.msg.as_bytes().iter().all(|byte| *byte == b'P'),
-        "submitted DA carrier did not preserve the exact 10 MiB P payload"
+            && log.msg.len() == expected_payload_len
+            && log
+                .msg
+                .as_bytes()
+                .iter()
+                .all(|byte| *byte == expected_payload_byte),
+        "{carrier} did not preserve the exact {expected_payload_len}-byte 0x{expected_payload_byte:02x} payload"
     );
     Ok(())
+}
+fn validate_exact_da_transaction(transaction: &SignedTransaction) -> Result<()> {
+    validate_exact_log_transaction(
+        transaction,
+        b'P',
+        PACKET_LOSS_PAYLOAD_BYTES,
+        "submitted DA carrier",
+    )
+}
+fn validate_exact_log_block_transaction(
+    block: &SignedBlock,
+    submitted_hash: HashOf<SignedTransaction>,
+    expected_payload_byte: u8,
+    expected_payload_len: usize,
+    carrier: &str,
+) -> Result<()> {
+    let transactions = block.external_transactions().collect::<Vec<_>>();
+    let matching = transactions
+        .iter()
+        .copied()
+        .filter(|transaction| transaction.hash() == submitted_hash)
+        .collect::<Vec<_>>();
+    ensure!(
+        matching.len() == 1,
+        "{carrier} does not contain exactly one occurrence of submitted transaction {submitted_hash}: observed={:?}",
+        transactions
+            .iter()
+            .map(|transaction| transaction.hash())
+            .collect::<Vec<_>>()
+    );
+    validate_exact_log_transaction(
+        matching[0],
+        expected_payload_byte,
+        expected_payload_len,
+        carrier,
+    )
 }
 fn validate_exact_da_block_transactions(
     block: &SignedBlock,
@@ -703,7 +747,13 @@ fn validate_exact_da_block_transactions(
             .map(|transaction| transaction.hash())
             .collect::<Vec<_>>()
     );
-    validate_exact_da_transaction(transactions[0])
+    validate_exact_log_block_transaction(
+        block,
+        submitted_hash,
+        b'P',
+        PACKET_LOSS_PAYLOAD_BYTES,
+        carrier,
+    )
 }
 fn try_read_exact_held_da_body(
     store_dir: &Path,
@@ -1333,6 +1383,153 @@ async fn wait_for_exact_local_queue_replication(
         .await;
     }
 }
+fn wait_for_exact_large_da_kura_carrier(
+    client: Client,
+    kura_store_dir: PathBuf,
+    submitted_hash: HashOf<SignedTransaction>,
+    carrier_height: u64,
+    expected_payload_byte: u8,
+    expected_payload_len: usize,
+    carrier: &str,
+    timeout: Duration,
+) -> Result<BlockSubject> {
+    let block = wait_for_kura_block_at_height(&kura_store_dir, carrier_height, timeout)
+        .wrap_err_with(|| format!("wait for {carrier}"))?;
+    ensure!(
+        block.header().height().get() == carrier_height,
+        "{carrier} resolved to height {}, expected {carrier_height}",
+        block.header().height()
+    );
+    validate_exact_log_block_transaction(
+        &block,
+        submitted_hash,
+        expected_payload_byte,
+        expected_payload_len,
+        carrier,
+    )?;
+    let header = block.header();
+    let subject = BlockSubject {
+        parent_block_hash: header.prev_block_hash(),
+        block_hash: header.hash(),
+        payload_hash: block
+            .canonical_proposal_wire_hash()
+            .wrap_err_with(|| format!("hash canonical proposal wire for {carrier}"))?,
+    };
+    ensure!(
+        block.hash() == subject.block_hash,
+        "{carrier} header hash disagrees with its canonical block hash"
+    );
+    let status = fetch_v2_status(client)?;
+    validate_committed_da_status(&status, carrier_height)
+        .wrap_err_with(|| format!("validate v2 status for {carrier}"))?;
+    if status.last_committed_height == carrier_height {
+        ensure!(
+            status.last_committed_subject == Some(subject),
+            "{carrier} status subject does not identify its exact Kura block: {:?}",
+            status.last_committed_subject
+        );
+    }
+    Ok(subject)
+}
+/// Submit one exact large Log and bind its Applied result to quorum-identical Kura bytes.
+pub(super) async fn submit_exact_large_da_log_and_verify_quorum(
+    network: &Network,
+    expected_payload_byte: u8,
+    expected_payload_len: usize,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        expected_payload_byte.is_ascii(),
+        "{context}: exact Log payload byte must be ASCII"
+    );
+    let payload = String::from_utf8(vec![expected_payload_byte; expected_payload_len])
+        .wrap_err_with(|| format!("{context}: construct exact Log payload"))?;
+    let submit_client = network.client();
+    let submitted_hash = tokio::task::spawn_blocking(move || {
+        submit_client.submit(
+            Log::new(Level::INFO, payload),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .wrap_err_with(|| format!("{context}: join exact large DA submission"))??;
+
+    let wait_client = network.client();
+    let wait_hash = submitted_hash;
+    let applied = tokio::task::spawn_blocking(move || {
+        wait_client.wait_for_transaction_applied(
+            wait_hash,
+            TransactionWaitOptions {
+                timeout: COMMIT_WAIT_BUDGET,
+                poll_interval: Duration::from_millis(100),
+            },
+        )
+    })
+    .await
+    .wrap_err_with(|| format!("{context}: join exact large DA Applied wait"))??;
+    ensure!(
+        applied.hash == submitted_hash.to_string()
+            && applied.terminal_kind == "Applied"
+            && applied.scope == "global"
+            && applied.resolved_from == "state",
+        "{context}: submitted transaction did not reach state-resolved global Applied: {applied:?}"
+    );
+    let carrier_height = applied
+        .block_height
+        .filter(|height| *height > 0)
+        .ok_or_else(|| eyre!("{context}: Applied transaction omitted its carrier height"))?;
+
+    // The state-resolved outcome supplies the authoritative carrier height, so
+    // unrelated blocks committed between submission and application are harmless.
+    let peer_results = try_join_all(network.peers().iter().map(|peer| {
+        let peer_name = peer.mnemonic().to_owned();
+        let carrier_label = format!("{context} {peer_name} Kura carrier");
+        let client = peer.client();
+        let kura_store_dir = peer.kura_store_dir();
+        async move {
+            let result = tokio::task::spawn_blocking(move || {
+                wait_for_exact_large_da_kura_carrier(
+                    client,
+                    kura_store_dir,
+                    submitted_hash,
+                    carrier_height,
+                    expected_payload_byte,
+                    expected_payload_len,
+                    &carrier_label,
+                    COMMIT_WAIT_BUDGET,
+                )
+            })
+            .await
+            .wrap_err_with(|| format!("{context}: join {peer_name} Kura validation"))?;
+            Ok::<_, eyre::Report>((peer_name, result))
+        }
+    }))
+    .await?;
+    let required = commit_quorum_from_len(network.peers().len()).max(1);
+    let mut subjects = Vec::with_capacity(peer_results.len());
+    let mut failures = Vec::new();
+    for (peer_name, result) in peer_results {
+        match result {
+            Ok(subject) => subjects.push((peer_name, subject)),
+            Err(error) => failures.push(format!("{peer_name}: {error:#}")),
+        }
+    }
+    ensure!(
+        subjects.len() >= required,
+        "{context}: exact transaction reached {}/{} required quorum Kura carriers at height {carrier_height}: {}",
+        subjects.len(),
+        required,
+        failures.join(" | ")
+    );
+    let expected_subject = subjects[0].1;
+    ensure!(
+        subjects
+            .iter()
+            .all(|(_, subject)| *subject == expected_subject),
+        "{context}: quorum Kura carriers disagree on the exact v2 subject at height {carrier_height}: {subjects:?}"
+    );
+    Ok(())
+}
 async fn large_da_payload_commits_with_consistent_v2_subject_for_committee(
     peers: usize,
     scenario: &str,
@@ -1350,47 +1547,8 @@ async fn large_da_payload_commits_with_consistent_v2_subject_for_committee(
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
     wait_for_applied_v2_height(&network, 1, COMMIT_WAIT_BUDGET).await?;
-    let client = network.client();
-    let expected_height = client.get_status()?.blocks.saturating_add(1);
-    let payload = "D".repeat(LARGE_PAYLOAD_BYTES);
-    let submit_client = client.clone();
-    tokio::task::spawn_blocking(move || {
-        submit_client.submit(
-            Log::new(Level::INFO, payload),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-    })
-    .await
-    .wrap_err("join large DA payload submission")??;
-    tokio::time::timeout(
-        COMMIT_WAIT_BUDGET,
-        network.ensure_blocks_with(|height| height.total >= expected_height),
-    )
-    .await
-    .wrap_err("large DA payload did not commit within the budget")??;
-    let required = network.peers().len().saturating_sub(1).max(1);
-    let mut committed_subjects = Vec::new();
-    for peer in network.peers() {
-        let status_client = peer.client();
-        let status = tokio::task::spawn_blocking(move || fetch_v2_status(status_client))
-            .await
-            .wrap_err("join canonical v2 status request")??;
-        if validate_committed_da_status(&status, expected_height).is_ok() {
-            committed_subjects.push(status.last_committed_subject);
-        }
-    }
-    ensure!(
-        committed_subjects.len() >= required,
-        "expected canonical DA commit evidence on {required} peers, observed {}",
-        committed_subjects.len()
-    );
-    let expected_subject = committed_subjects[0];
-    ensure!(
-        committed_subjects
-            .iter()
-            .all(|subject| *subject == expected_subject),
-        "quorum peers must agree on the committed DA subject: {committed_subjects:?}"
-    );
+    submit_exact_large_da_log_and_verify_quorum(&network, b'D', LARGE_PAYLOAD_BYTES, scenario)
+        .await?;
     network.shutdown().await;
     Ok(())
 }

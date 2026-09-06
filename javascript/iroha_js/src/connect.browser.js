@@ -55,7 +55,6 @@ const PAYLOAD_SIGN_RESULT_ERR = 4;
 const CONTROL_AFTER_KEY_CLOSE = 0;
 const CONTROL_AFTER_KEY_REJECT = 1;
 const ALGORITHM_ED25519 = 0;
-const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
 
 export const TORII_CANONICAL_REQUEST_DOMAIN_TAG =
   "iroha:torii:canonical-request:v1";
@@ -173,19 +172,6 @@ function bytesToBase64(bytes) {
     binary += String.fromCharCode(byte);
   }
   return btoa(binary);
-}
-
-function base64ToBytes(value, name) {
-  const normalized = requireNonEmptyString(value, name);
-  if (typeof Buffer !== "undefined") {
-    return new Uint8Array(Buffer.from(normalized, "base64"));
-  }
-  const binary = atob(normalized);
-  const out = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    out[index] = binary.charCodeAt(index);
-  }
-  return out;
 }
 
 export function toHex(bytes) {
@@ -640,39 +626,6 @@ function encodeDir(dir) {
 
 function encodeRole(role) {
   return u32ToBytes(role === ROLE_WALLET ? ROLE_WALLET : ROLE_APP);
-}
-
-function normalizeWalletSignatureAlgorithmTag(algorithm, fieldName = "wallet signature algorithm") {
-  if (algorithm === undefined || algorithm === null) {
-    return ALGORITHM_ED25519;
-  }
-  if (typeof algorithm === "number") {
-    if (Number.isInteger(algorithm) && algorithm === ALGORITHM_ED25519) {
-      return ALGORITHM_ED25519;
-    }
-    throw new TypeError(`${fieldName} must be Ed25519`);
-  }
-  if (typeof algorithm !== "string") {
-    throw new TypeError(`${fieldName} must be a string or numeric tag`);
-  }
-  if (!algorithm || !PRINTABLE_ASCII_RE.test(algorithm)) {
-    throw new TypeError(`${fieldName} must be printable ASCII Ed25519`);
-  }
-  if (algorithm !== algorithm.trim()) {
-    throw new TypeError(`${fieldName} must not contain surrounding whitespace`);
-  }
-  const normalized = algorithm.toLowerCase();
-  if (normalized === "ed25519") {
-    return ALGORITHM_ED25519;
-  }
-  throw new TypeError(`${fieldName} must be Ed25519`);
-}
-
-function encodeWalletSignature(signature) {
-  return encodeNoritoStruct([
-    Uint8Array.of(normalizeWalletSignatureAlgorithmTag(signature.algorithm)),
-    encodeNoritoBytes(signature.signature),
-  ]);
 }
 
 function normalizeAppMeta(appMeta) {

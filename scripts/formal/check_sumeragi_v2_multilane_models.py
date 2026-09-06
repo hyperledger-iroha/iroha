@@ -456,18 +456,13 @@ _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
         "plan_lane_application_evidence_repair",
         "apply_lane_application_evidence_repair",
         "CanonicalExecutedBlockRecovery::new",
-        "CanonicalExecutedBlockRecovery::service_next",
+        "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
         "CanonicalExecutedBlockRecovery::accept_with_ingress_ownership",
         "CanonicalExecutedBlockRecovery::accept_response",
     )
 )
 _ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset()
 _PRODUCTION_TOKEN_REBINDINGS = {
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
-        "peer_is_global_finality_signer",
-        "commit_qc.signers.binary_search",
-    ): "finality.commit_qc.signers.iter().any",
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "V2LaneWorkAdapter::has_pending_historical_recovery",
@@ -1574,6 +1569,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE = (
 QUEUE_PLAN_PENDING_OPAQUE_PREFIXES = (
     "queue_plan_pending_obligation_v1_",
     "queue_plan_pending_route_member_v1_",
+    "queue_plan_pending_signed_alias_member_v1_",
+    "queue_plan_signed_alias_terminal_v1_",
 )
 QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     (
@@ -1587,6 +1584,30 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "entrypoint_hash",
             "binding_hash",
             "member_identity",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "struct",
+        "QueuePlanPendingSignedAliasMemberV1",
+        (
+            "version",
+            "network_id_digest",
+            "signed_transaction_hash",
+            "entrypoint_hash",
+            "binding_hash",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "struct",
+        "QueuePlanSignedAliasTerminalV1",
+        (
+            "version",
+            "network_id_digest",
+            "entrypoint_hash",
+            "signed_transaction_hash",
+            "binding_hash",
         ),
     ),
     (
@@ -1710,8 +1731,175 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "decode_exact_queue_plan_pending_route_member_marker",
             "marker.route != route",
             "queue_plan_pending_obligation_marker_key",
-            "storage.get(&obligation_key).is_none()",
+            "storage.get(&obligation_key).ok_or_else",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "queue_plan_pending_route_member_from_obligation(&obligation, route)",
+            "marker != expected",
             "members.push((key.clone(), marker))",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_signed_alias_member_from_obligation",
+        (
+            ".signed_transaction_hash",
+            "QueuePlanPendingSignedAliasMemberV1",
+            "QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1",
+            "network_id_digest: obligation.network_id_digest",
+            "signed_transaction_hash",
+            "entrypoint_hash: obligation.entrypoint_hash.clone()",
+            "binding_hash: obligation.binding_hash",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_terminal_signed_alias_member_from_obligation",
+        (
+            ".signed_transaction_hash",
+            "QueuePlanSignedAliasTerminalV1",
+            "QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_VERSION_V1",
+            "network_id_digest: obligation.network_id_digest",
+            "entrypoint_hash: obligation.entrypoint_hash.clone()",
+            "signed_transaction_hash",
+            "binding_hash: obligation.binding_hash",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_signed_alias_member_marker_prefix",
+        (
+            "network_id_digest: Hash",
+            "signed_transaction_hash: HashOf<SignedTransaction>",
+            "contains a zero identity",
+            "QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_MARKER_PREFIX",
+            "hex::encode(network_id_digest.as_ref())",
+            "hex::encode(signed_transaction_hash.as_ref())",
+            "let start = literal.parse()",
+            "Ok((literal, start))",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_signed_alias_member_marker_key",
+        (
+            "marker.version != QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1",
+            "marker.network_id_digest",
+            ".signed_transaction_hash",
+            "marker.entrypoint_hash",
+            "marker.binding_hash",
+            "QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_MARKER_PREFIX",
+            "hex::encode(marker.network_id_digest.as_ref())",
+            "hex::encode(marker.signed_transaction_hash.as_ref())",
+            "hex::encode(marker.entrypoint_hash.as_ref())",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_signed_alias_member_marker_payload",
+        (
+            "queue_plan_pending_signed_alias_member_marker_key(marker)?",
+            "norito::to_bytes(marker)",
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "decode_exact_queue_plan_pending_signed_alias_member_marker",
+        (
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+            "norito::decode_from_bytes::<QueuePlanPendingSignedAliasMemberV1>(payload)",
+            "queue_plan_pending_signed_alias_member_marker_payload",
+            "queue_plan_pending_signed_alias_member_marker_key",
+            "canonical.as_slice() != payload || &expected_key != key",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_signed_alias_terminal_marker_key",
+        (
+            "marker.version != QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_VERSION_V1",
+            "marker.network_id_digest",
+            "marker.entrypoint_hash",
+            ".signed_transaction_hash",
+            "marker.binding_hash",
+            "queue_plan_signed_alias_terminal_marker_key_from_claim",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_signed_alias_terminal_marker_key_from_claim",
+        (
+            "network_id_digest: Hash",
+            "entrypoint_hash: HashOf<TransactionEntrypoint>",
+            "contains a zero identity",
+            "QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_MARKER_PREFIX",
+            "hex::encode(network_id_digest.as_ref())",
+            "hex::encode(entrypoint_hash.as_ref())",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_signed_alias_terminal_marker_payload",
+        (
+            "queue_plan_signed_alias_terminal_marker_key(marker)?",
+            "norito::to_bytes(marker)",
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "decode_exact_queue_plan_signed_alias_terminal_marker",
+        (
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+            "norito::decode_from_bytes::<QueuePlanSignedAliasTerminalV1>(payload)",
+            "queue_plan_signed_alias_terminal_marker_payload",
+            "queue_plan_signed_alias_terminal_marker_key",
+            "canonical.as_slice() != payload || &expected_key != key",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "require_queue_plan_pending_signed_alias_member_marker",
+        (
+            "queue_plan_pending_signed_alias_member_from_obligation(obligation)",
+            "return Ok(None)",
+            "queue_plan_pending_signed_alias_member_marker_key(&expected)?",
+            "storage.get(&key).ok_or_else",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "current != expected",
+            "Ok(Some(key))",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_signed_alias_members_from_storage",
+        (
+            "queue_plan_pending_signed_alias_member_marker_prefix",
+            "storage.range(start..)",
+            "key.as_ref().starts_with(&prefix)",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "marker.network_id_digest != network_id_digest",
+            "marker.signed_transaction_hash != signed_transaction_hash",
+            "queue_plan_admission_registry_marker_key",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "registry.binding_hash != marker.binding_hash",
+            "storage.get(&obligation_key).ok_or_else",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
+            "members.push(marker)",
         ),
     ),
     (
@@ -1727,10 +1915,40 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",
-        "validate_queue_plan_pending_obligation_route_member_in_storage",
+        "queue_plan_pending_exact_route_member_state_in_storage",
         (
-            "queue_plan_pending_route_members_from_storage(storage, route)?",
-            "require_queue_plan_pending_route_member_marker(storage, obligation, route)?",
+            "prevalidate_queue_plan_pending_route_rosters",
+            "obligation.routes.iter().copied()",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+        (
+            "for route in &obligation.routes",
+            "prevalidated_routes.contains(route)",
+            "queue_plan_pending_route_member_from_obligation(obligation, *route)?",
+            "queue_plan_pending_route_member_marker_key",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "present = present.saturating_add(1)",
+            "present == obligation.routes.len()",
+            "QueuePlanPendingRouteMemberState::AllPresent",
+            "present == 0",
+            "QueuePlanPendingRouteMemberState::AllAbsent",
+            "partial exact route-member set",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "prevalidate_queue_plan_pending_route_rosters",
+        (
+            "routes.into_iter().collect::<BTreeSet<_>>()",
+            "for route in &distinct_routes",
+            "queue_plan_pending_route_members_from_storage(storage, *route)?",
+            "Ok(distinct_routes)",
         ),
     ),
     (
@@ -1766,12 +1984,22 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "queue_plan_registry_owner_application_state_in_view",
         (
-            "validate_queue_plan_pending_obligation_route_member",
+            "queue_plan_signed_alias_terminal_marker_key_from_claim",
+            "let outer_committed = state.has_entrypoint",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_pending_exact_route_member_state_in_storage",
             "pending obligation `{key}` survived canonical transaction membership",
+            "queue_plan_signed_identity_committed",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             "QueuePlanAdmissionApplicationState::Pending",
             "QueuePlanAdmissionApplicationState::PendingStale",
-            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "directly applied registry owner retains terminal marker",
+            "retains pending reverse index",
+            "terminal.binding_hash == registry_binding_hash",
+            "Some(terminal.signed_transaction_hash)",
+            "QueuePlanAdmissionApplicationState::Applied",
         ),
     ),
     (
@@ -1779,11 +2007,13 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "queue_plan_binding_application_state",
         (
-            "state.has_entrypoint",
+            "let outer_committed = state.has_entrypoint",
+            "queue_plan_signed_identity_committed",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             "queue_plan_binding_application_state_in_storage",
             "expected",
-            "committed",
+            "outer_committed",
+            "signed_committed",
             "active",
         ),
     ),
@@ -1793,11 +2023,45 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "queue_plan_binding_application_state_in_storage",
         (
             "current != expected",
-            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_pending_exact_route_member_state_in_storage",
             "pending-obligation marker `{key}` survived canonical transaction membership",
             "QueuePlanAdmissionApplicationState::Pending",
             "QueuePlanAdmissionApplicationState::PendingStale",
-            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+            "queue_plan_pending_signed_alias_member_from_obligation",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "directly applied admission `{key}` retains a signed-alias marker",
+            "terminal admission `{key}` retains its pending reverse index",
+            "stored_terminal_alias.as_ref() == terminal_alias.as_ref()",
+            "QueuePlanAdmissionApplicationState::Applied",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_binding_application_evidence_in_view",
+        (
+            "binding.validate_structure()?",
+            "binding.network_id_digest != expected_network_id_digest",
+            "queue_plan_pending_obligation_from_binding(binding)",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "registry != binding.registry_value()",
+            "let outer_committed = state.has_entrypoint",
+            "queue_plan_signed_identity_committed",
+            "exact_route_members_absent",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "stored_pending_alias.is_none() && stored_terminal_alias.is_none()",
+            "QueuePlanBindingApplicationEvidence::AppliedDirect",
+            "compact terminal state retains its pending reverse index",
+            "stored == expected_terminal",
+            "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_pending_exact_route_member_state_in_storage",
+            "QueuePlanBindingApplicationEvidence::Pending",
+            "QueuePlanBindingApplicationEvidence::PendingStale",
         ),
     ),
     (
@@ -1827,12 +2091,113 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "classify_pending_queue_plan_admission",
         (
-            "pending_queue_plan_admission_registry_lookup",
+            "let state_view = self.view();",
+            "Self::classify_pending_queue_plan_admission_in_view(&state_view, bytes, carrier_height)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "classify_pending_queue_plan_admission_in_view",
+        (
+            "Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?",
             "QueuePlanAdmissionApplicationState::PendingStale",
             "PendingQueuePlanAdmissionDisposition::Stale",
             "QueuePlanAdmissionApplicationState::Pending",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
             "QueuePlanAdmissionApplicationState::Applied",
-            "PendingQueuePlanAdmissionDisposition::Exact",
+            "PendingQueuePlanAdmissionDisposition::Applied",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "Queue::classify_plan_admission_context_in_view(",
+            "PendingQueuePlanAdmissionDisposition::Future",
+            "Self::validate_queue_plan_admissions_for_carrier_in_view(",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "pending_queue_plan_admission_registry_lookup_in_view",
+        (
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "state_view.network_id()",
+            "Self::queue_plan_admission_registry_match_in_view(",
+            "admission.registry_key.entrypoint_hash.clone()",
+            "admission.registry_value.binding_hash",
+            "map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?",
+            "Self::queue_plan_admission_application_state(state_view, &admission)?",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "persist_classified_queue_plan_admission",
+        (
+            "const FRONTIER_RECONCILIATION_TIMEOUT: Duration = Duration::from_millis(250);",
+            "self.queue_plan_admission_persistence_lock.lock()",
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "pending_queue_plan_admission_certificate(incoming_hash)?",
+            "pending_queue_plan_admission_certificates_bounded(",
+            "self.kura.pending_queue_plan_admission_capacity()",
+            "existing.registry_key != incoming.registry_key",
+            "existing.certificate.binding == incoming.certificate.binding",
+            "self.state_commit_lock.lock()",
+            "Self::classify_pending_queue_plan_admission_in_view(",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
+            "verify_pending_queue_plan_admission_durable_height(committed_height)",
+            "another live QueuePlan binding already owns the same logical admission",
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "expected_durable_height != committed_height",
+            "one_ahead != Some(actual_durable_height)",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "Instant::now() >= *deadline",
+            "std::thread::yield_now();",
+            "Err(error) => return Err(error.into())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+        (
+            "self.ensure_canonical_storage_not_poisoned()?",
+            "self.canonical_chain_lock.lock()",
+            "self.block_store.lock().read_exact_durable_index_count()?",
+            "actual_durable_height != expected_durable_height",
+            "Error::QueuePlanAdmissionDurableHeightMismatch",
+            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "verify_pending_queue_plan_admission_durable_height",
+        (
+            "self.ensure_canonical_storage_not_poisoned()?",
+            "self.canonical_chain_lock.lock()",
+            "self.block_store.lock().read_exact_durable_index_count()?",
+            "actual_durable_height != expected_durable_height",
+            "Error::QueuePlanAdmissionDurableHeightMismatch",
+            "Ok(())",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/lib.rs",
+        "fn",
+        "persist_queue_plan_admission_certificate",
+        (
+            "QueuePlanAdmissionCertificateStrengthV1::Quorum",
+            ".persist_classified_queue_plan_admission(&snapshot.body)",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
+            "admission.certificate.binding != *expected_binding",
+            "snapshot.body = durable_certificate;",
+            "disseminate_queue_plan_admission_publication",
+            "notify_pending_queue_plan_admission",
+            "torii_proxy_snapshot_to_response",
         ),
     ),
     (
@@ -1855,7 +2220,15 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "stage_queue_plan_pending_obligation_marker_in_storage",
         (
             "&mut impl QueuePlanMarkerStorage",
-            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "queue_plan_signed_alias_terminal_marker_key",
+            "queue_plan_pending_exact_route_member_state_in_storage",
+            "queue_plan_pending_signed_alias_member_from_obligation",
+            "queue_plan_pending_signed_alias_members_from_storage",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS",
+            "queue_plan_pending_signed_alias_member_marker_key",
+            "queue_plan_pending_signed_alias_member_marker_payload",
             "queue_plan_pending_route_members_from_storage",
             "members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS",
             "queue_plan_pending_route_member_from_obligation",
@@ -1864,6 +2237,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "queue_plan_pending_route_member_marker_payload",
             "route_updates.push",
             "insert_queue_plan_marker(obligation_key, obligation_payload)",
+            "insert_queue_plan_marker(alias_key, alias_payload)",
             "insert_queue_plan_marker(member_key, member_payload)",
         ),
     ),
@@ -1873,13 +2247,60 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "resolve_queue_plan_pending_obligation_in_storage",
         (
             "&mut impl QueuePlanMarkerStorage",
+            "queue_plan_pending_obligation_marker_key",
+            "storage.get(&obligation_key)",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+            "&BTreeSet::new()",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "prevalidate_queue_plan_pending_route_rosters",
+            "obligation.routes.iter().copied()",
+            "&prevalidated_routes",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+        (
+            "&mut impl QueuePlanMarkerStorage",
+            "prevalidated_routes: &BTreeSet",
             "decode_exact_queue_plan_pending_obligation_marker",
             "decode_exact_queue_plan_admission_registry_marker",
-            "queue_plan_pending_route_members_from_storage",
-            "require_queue_plan_pending_route_member_marker",
+            "registry_value.binding_hash != obligation.binding_hash",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "queue_plan_signed_alias_terminal_marker_key",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
             "member_keys.push",
             "remove_queue_plan_marker(obligation_key)",
+            "remove_queue_plan_marker(alias_key)",
             "remove_queue_plan_marker(member_key)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
+        (
+            "&mut impl QueuePlanMarkerStorage",
+            "queue_plan_pending_signed_alias_member_marker_key(member)?",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "current_alias != member",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+            "prevalidated_routes",
+            "collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "terminal_member.entrypoint_hash != member.entrypoint_hash",
+            "queue_plan_signed_alias_terminal_marker_key(&terminal_member)?",
+            "storage.get(&terminal_key).is_some()",
+            "queue_plan_signed_alias_terminal_marker_payload(&terminal_member)?",
+            "remove_queue_plan_marker(obligation_key)",
+            "remove_queue_plan_marker(alias_key)",
+            "remove_queue_plan_marker(member_key)",
+            "insert_queue_plan_marker(terminal_key, terminal_payload)",
         ),
     ),
     (
@@ -1920,6 +2341,87 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "resolve_queue_plan_pending_obligation_in_storage",
             "markers.apply()",
     )),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_required_queue_plan_pending_obligations",
+        (
+            "committed_signed_identities: impl IntoIterator<Item = HashOf<SignedTransaction>>",
+            "let exact_entrypoints = pending_obligations",
+            "let committed_signed_identities = committed_signed_identities",
+            "let committed_signed_entrypoints = committed_signed_identities",
+            "self.world.smart_contract_state.transaction()",
+            "queue_plan_pending_signed_alias_members_from_storage",
+            "let mut affected_routes = BTreeSet::new()",
+            "for (entrypoint_hash, expected_binding_hash) in &pending_obligations",
+            "affected_routes.extend(obligation.routes.iter().copied())",
+            "for member in alias_members.iter().flatten()",
+            "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
+            "prevalidate_queue_plan_pending_route_rosters",
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
+            "obligation.binding_hash != expected_binding_hash",
+            "autonomous QueuePlan pending obligation disappeared before resolution",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+            "for member in alias_members.into_iter().flatten()",
+            "exact_entrypoints.contains(&member.entrypoint_hash)",
+            "committed_signed_entrypoints.contains(&member.entrypoint_hash)",
+            "QueuePlan direct replay identity lost its exact obligation",
+            "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
+            "&prevalidated_routes",
+            "markers.apply()",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligations_from_block",
+        (
+            "required_queue_plan_pending_obligations_for_entrypoints",
+            "block.external_entrypoints_cloned()",
+            "TransactionEntrypoint::External(transaction) => Some(transaction.hash())",
+            "TransactionEntrypoint::SealedReveal(reveal)",
+            "crate::tx::authenticated_signed_replay_alias(self, &entrypoint)",
+            "Some(reveal.signed_transaction().hash())",
+            "collect::<BTreeSet<_>>()",
+            "resolve_required_queue_plan_pending_obligations(required, committed_signed_identities)",
+        ),
+    ),
+)
+# These helpers are the exact replicated replay-terminal projection layered on
+# the original admission-registry model.  They are source-bound here even
+# though the model ledger still names only the admission-facing projection;
+# skipping its stale token rows avoids treating obsolete helper shapes as
+# authority while retaining stricter checks against the current State code.
+QUEUE_PLAN_PENDING_MEMBERSHIP_SOURCE_REBIND_SYMBOLS = frozenset(
+    {
+        "QueuePlanPendingSignedAliasMemberV1",
+        "QueuePlanSignedAliasTerminalV1",
+        "queue_plan_pending_exact_route_member_state_in_storage",
+        "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+        "prevalidate_queue_plan_pending_route_rosters",
+        "queue_plan_pending_signed_alias_member_from_obligation",
+        "queue_plan_terminal_signed_alias_member_from_obligation",
+        "queue_plan_pending_signed_alias_member_marker_prefix",
+        "queue_plan_pending_signed_alias_member_marker_key",
+        "queue_plan_pending_signed_alias_member_marker_payload",
+        "decode_exact_queue_plan_pending_signed_alias_member_marker",
+        "queue_plan_signed_alias_terminal_marker_key",
+        "queue_plan_signed_alias_terminal_marker_key_from_claim",
+        "queue_plan_signed_alias_terminal_marker_payload",
+        "decode_exact_queue_plan_signed_alias_terminal_marker",
+        "require_queue_plan_pending_signed_alias_member_marker",
+        "queue_plan_pending_signed_alias_members_from_storage",
+        "queue_plan_registry_owner_application_state_in_view",
+        "queue_plan_binding_application_state",
+        "queue_plan_binding_application_state_in_storage",
+        "queue_plan_binding_application_evidence_in_view",
+        "stage_queue_plan_pending_obligation_marker_in_storage",
+        "resolve_queue_plan_pending_obligation_in_storage",
+        "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+        "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
+        "resolve_required_queue_plan_pending_obligations",
+        "resolve_queue_plan_pending_obligations_from_block",
+    }
 )
 QUEUE_PLAN_PENDING_QUEUE_OWNERSHIP_FREE_FN = (
     QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
@@ -1937,6 +2439,13 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         binding for binding in QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
         if binding[2] in (
             "decode_exact_queue_plan_pending_route_member_marker",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "queue_plan_pending_route_members_from_storage_with_limit",
+            "queue_plan_pending_signed_alias_members_from_storage",
+            "queue_plan_pending_exact_route_member_state_in_storage",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+            "prevalidate_queue_plan_pending_route_rosters",
             "validate_queue_plan_admissions_for_carrier_in_view",
             "stage_queue_plan_admissions",
             "resolve_queue_plan_pending_obligations_for_entrypoints",
@@ -1947,12 +2456,25 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         "fn",
         "resolve_required_queue_plan_pending_obligations",
         (
-            "self.world.smart_contract_state.transaction()",
-            "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
-            "decode_exact_queue_plan_pending_obligation_marker",
-            "obligation.binding_hash != expected_binding_hash",
-            "resolve_queue_plan_pending_obligation_in_storage",
-            "markers.apply()",
+            "let mut markers = self.world.smart_contract_state.transaction();",
+            "let alias_members = committed_signed_identities",
+            "State::queue_plan_pending_signed_alias_members_from_storage(",
+            "let mut affected_routes = BTreeSet::new();",
+            "for (entrypoint_hash, expected_binding_hash) in &pending_obligations {",
+            "if obligation.binding_hash != *expected_binding_hash {",
+            "for member in alias_members.iter().flatten() {",
+            "State::queue_plan_pending_signed_alias_member_from_obligation(&obligation).as_ref()",
+            "State::prevalidate_queue_plan_pending_route_rosters(&markers, affected_routes)?;",
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations {",
+            "State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
+            "if obligation.binding_hash != expected_binding_hash {",
+            "autonomous QueuePlan pending obligation disappeared before resolution",
+            "for member in alias_members.into_iter().flatten() {",
+            "if exact_entrypoints.contains(&member.entrypoint_hash) {",
+            "if committed_signed_entrypoints.contains(&member.entrypoint_hash) {",
+            "QueuePlan direct replay identity lost its exact obligation",
+            "State::resolve_queue_plan_pending_obligation_by_signed_alias_in_storage(",
+            "markers.apply();",
         ),
     ),
     (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "queue_plan_pending_obligation_matches_active_lifecycle", (
@@ -1968,13 +2490,22 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         "fn",
         "queue_plan_registry_owner_application_state_in_view",
         (
+            "Self::queue_plan_signed_alias_terminal_marker_key_from_claim(",
+            "let outer_committed = state.has_entrypoint(entrypoint_hash.clone());",
             "Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
-            "Self::validate_queue_plan_pending_obligation_route_member(",
-            "if committed {",
+            "Self::require_queue_plan_pending_signed_alias_member_marker(",
+            "Self::queue_plan_pending_exact_route_member_state_in_storage(",
+            "survived canonical transaction membership",
+            "let signed_committed = Self::queue_plan_signed_identity_committed(",
+            "match (route_state, signed_committed) {",
             "Self::queue_plan_pending_obligation_matches_active_lifecycle(",
             "Ok(QueuePlanAdmissionApplicationState::Pending)",
             "Ok(QueuePlanAdmissionApplicationState::PendingStale)",
-            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+            "Self::decode_exact_queue_plan_signed_alias_terminal_marker(",
+            "directly applied registry owner retains terminal marker",
+            "retains pending reverse index",
+            "Some(terminal.signed_transaction_hash)",
+            "conflicts with registry ownership or committed membership",
         ),
     ),
     (
@@ -1982,11 +2513,14 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         "fn",
         "queue_plan_binding_application_state",
         (
-            "let committed = state.has_entrypoint(",
+            "let outer_committed = state.has_entrypoint(binding.entrypoint_hash);",
+            "let signed_committed =",
+            "Self::queue_plan_signed_identity_committed(state, binding.signed_transaction_hash);",
             "Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &expected);",
             "Self::queue_plan_binding_application_state_in_storage(",
             "expected,",
-            "committed,",
+            "outer_committed,",
+            "signed_committed,",
             "active,",
         ),
     ),
@@ -1997,25 +2531,163 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         (
             "Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
             "if current != expected {",
-            "Self::validate_queue_plan_pending_obligation_route_member_in_storage(",
-            "if committed {",
-            "if active {",
+            "Self::require_queue_plan_pending_signed_alias_member_marker(storage, &current)?;",
+            "Self::queue_plan_pending_exact_route_member_state_in_storage(",
+            "survived canonical transaction membership",
+            "match (route_state, signed_committed) {",
             "Ok(QueuePlanAdmissionApplicationState::Pending)",
             "Ok(QueuePlanAdmissionApplicationState::PendingStale)",
-            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+            "for route in &expected.routes {",
+            "Self::queue_plan_pending_signed_alias_member_from_obligation(&expected);",
+            "Self::queue_plan_terminal_signed_alias_member_from_obligation(&expected);",
+            "Self::decode_exact_queue_plan_pending_signed_alias_member_marker(",
+            "Self::decode_exact_queue_plan_signed_alias_terminal_marker(",
+            "directly applied admission `{key}` retains a signed-alias marker",
+            "terminal admission `{key}` retains its pending reverse index",
+            "stored_terminal_alias.as_ref() == terminal_alias.as_ref()",
+            "has no exact application evidence",
         ),
     ),
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",
-        "classify_pending_queue_plan_admission",
+        "queue_plan_binding_application_evidence_in_view",
         (
-            "QueuePlanAdmissionApplicationState::PendingStale => {\n"
-            "                        PendingQueuePlanAdmissionDisposition::Stale\n"
-            "                    }",
-            "QueuePlanAdmissionApplicationState::Pending\n"
-            "                    | QueuePlanAdmissionApplicationState::Applied => {",
-            "PendingQueuePlanAdmissionDisposition::Exact",
+            "binding.validate_structure()?;",
+            "Self::decode_exact_queue_plan_admission_registry_marker(",
+            "if registry != binding.registry_value() {",
+            "let outer_committed = state.has_entrypoint(binding.entrypoint_hash);",
+            "let signed_committed =",
+            "let Some(obligation_payload) = storage.get(&obligation_key) else {",
+            "Self::decode_exact_queue_plan_pending_signed_alias_member_marker(key, payload)",
+            "Self::decode_exact_queue_plan_signed_alias_terminal_marker(key, payload)",
+            "stored_pending_alias.is_none() && stored_terminal_alias.is_none()",
+            "QueuePlanBindingApplicationEvidence::AppliedDirect",
+            "compact terminal state retains its pending reverse index",
+            "match (stored_terminal_alias, terminal_alias, signed_committed)",
+            "stored == expected_terminal",
+            "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+            "Self::decode_exact_queue_plan_pending_obligation_marker(",
+            "Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)",
+            "Self::queue_plan_pending_exact_route_member_state_in_storage(storage, &obligation)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "stage_queue_plan_pending_obligation_marker_in_storage",
+        (
+            "let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;",
+            "let alias_update = if let Some(alias_member) =",
+            "Self::queue_plan_pending_signed_alias_members_from_storage(",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS",
+            "Self::queue_plan_pending_signed_alias_member_marker_payload(&alias_member)?;",
+            "let mut route_updates = Vec::with_capacity(obligation.routes.len());",
+            "Self::queue_plan_pending_route_members_from_storage(storage, *route)?;",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS",
+            "route_updates.push((member_key, member_payload));",
+            "storage.insert_queue_plan_marker(obligation_key, obligation_payload);",
+            "storage.insert_queue_plan_marker(alias_key, alias_payload);",
+            "storage.insert_queue_plan_marker(member_key, member_payload);",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+        (
+            "Self::decode_exact_queue_plan_admission_registry_marker(",
+            "registry_value.binding_hash != obligation.binding_hash",
+            "Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)?;",
+            "Self::queue_plan_signed_alias_terminal_marker_key(&terminal)?;",
+            "Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(",
+            "prevalidated_routes,",
+            "let mut member_keys = Vec::with_capacity(obligation.routes.len());",
+            "storage.remove_queue_plan_marker(obligation_key);",
+            "storage.remove_queue_plan_marker(alias_key);",
+            "storage.remove_queue_plan_marker(member_key);",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
+        (
+            "Self::decode_exact_queue_plan_pending_signed_alias_member_marker(",
+            "Self::decode_exact_queue_plan_pending_obligation_marker(",
+            "Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)?;",
+            "Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(",
+            "prevalidated_routes,",
+            "let member_keys = obligation",
+            "Self::queue_plan_terminal_signed_alias_member_from_obligation(",
+            "terminal_member.binding_hash != member.binding_hash",
+            "Self::queue_plan_signed_alias_terminal_marker_key(&terminal_member)?;",
+            "storage.get(&terminal_key).is_some()",
+            "Self::queue_plan_signed_alias_terminal_marker_payload(&terminal_member)?;",
+            "storage.remove_queue_plan_marker(obligation_key);",
+            "storage.remove_queue_plan_marker(alias_key);",
+            "storage.remove_queue_plan_marker(member_key);",
+            "storage.insert_queue_plan_marker(terminal_key, terminal_payload);",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "classify_pending_queue_plan_admission_in_view",
+        (
+            "Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?",
+            "QueuePlanAdmissionApplicationState::PendingStale => {",
+            "PendingQueuePlanAdmissionDisposition::Stale\n",
+            "QueuePlanAdmissionApplicationState::Pending => {",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
+            "QueuePlanAdmissionApplicationState::Applied => {",
+            "PendingQueuePlanAdmissionDisposition::Applied",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "persist_classified_queue_plan_admission",
+        (
+            "let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();",
+            "pending_queue_plan_admission_certificates_bounded(",
+            "let state_commit = self.state_commit_lock.lock();",
+            "let state_view = self.view();",
+            "let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(",
+            "let persistence_result =",
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "match persistence_result {",
+            "one_ahead != Some(actual_durable_height)",
+            "drop(state_view);",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            ".get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT)",
+            "Instant::now() >= *deadline",
+            "std::thread::yield_now();",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+        (
+            "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;",
+            "if actual_durable_height != expected_durable_height",
+            "return Err(Error::QueuePlanAdmissionDurableHeightMismatch",
+            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/lib.rs",
+        "fn",
+        "persist_queue_plan_admission_certificate",
+        (
+            "validate_queue_plan_admission_certificate_for_network_digest_v1(",
+            ".persist_classified_queue_plan_admission(&snapshot.body)",
+            "let (certificate_hash, durable_certificate) = match outcome",
+            "snapshot.body = durable_certificate;",
+            "disseminate_queue_plan_admission_publication(",
+            "notify_pending_queue_plan_admission)",
         ),
     ),
     (
@@ -2060,11 +2732,72 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
         ),
     ),
     (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "queue_plan_route_roster_rejects_member_projected_from_another_binding",
+        (
+            "alternate route-member binding",
+            "queue_plan_pending_route_members_from_storage",
+            "a canonical route member must still match the exact obligation projection",
+            "failed roster validation must preserve the forged marker for diagnosis",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "queue_plan_signed_alias_terminal_evidence_is_exact_and_fail_closed",
+        (
+            "signed-alias resolution must delete the potentially large full obligation",
+            "terminalization must remove the signed-first pending reverse index",
+            "terminalization must release exact route capacity",
+            "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+            "compact outer-key terminal marker remains",
+            "tampered compact terminal evidence must fail closed",
+            "missing signed-alias evidence must fail closed",
+            "missing registry ownership must fail closed",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "globally_bound_commit_before_marker_staging_releases_runtime_owner",
+        (
+            "QueuePlanAdmissionRegistryMatch::Absent",
+            "QueuePlanBindingApplicationEvidence::Absent",
+            "committed replay membership terminalizes the unstaged losing owner",
+            "fixture.assert_terminally_removed()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "globally_bound_committed_conflict_tombstones_during_startup_replay",
+        (
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "resolve_globally_bound_fixture_pending_obligation(&fixture)",
+            "QueuePlanBindingApplicationEvidence::AppliedDirect",
+            "read winning QueuePlan terminal evidence",
+            "startup tombstones a committed losing QueuePlan conflict",
+            "summary.tombstoned_conflicting_global_admission",
+            "live_record_count()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "globally_bound_sealed_sibling_is_tombstoned_after_direct_signed_commit",
+        (
+            "direct signed carrier terminalizes its sealed QueuePlan sibling",
+            "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+            "retire exact sealed sibling QueuePlan owner",
+            "runtime cleanup must durably tombstone the sealed sibling journal claim",
+            "startup authenticates and tombstones the replay-terminal sealed sibling",
+            "summary.tombstoned_committed",
+        ),
+    ),
+    (
         QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
         "contract_state_namespace_access_covers_consensus_owned_prefixes",
         (
             "queue_plan_pending_obligation_v1_deadbeef_cafebabe",
             "queue_plan_pending_route_member_v1_0_0_deadbeef_cafebabe",
+            "queue_plan_pending_signed_alias_member_v1_deadbeef_cafebabe_deadbeef",
+            "queue_plan_signed_alias_terminal_v1_deadbeef_cafebabe",
             "ContractStateNamespaceAccess::OpaqueSystem",
             "must remain opaque to generic contract state syscalls",
         ),
@@ -4241,6 +4974,8 @@ def _validate_queue_plan_pending_membership_contract(
     for relative, kind, symbol, expected_tokens in (
         QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
     ):
+        if symbol in QUEUE_PLAN_PENDING_MEMBERSHIP_SOURCE_REBIND_SYMBOLS:
+            continue
         matches = [
             binding
             for binding in production_symbols
@@ -4294,6 +5029,21 @@ def _validate_queue_plan_pending_membership_contract(
                 f"{state_path}: QueuePlan authoritative route roster must use "
                 "the one exact block/proposal admission consensus bound"
             )
+        signed_alias_roster_bound = (
+            "const MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS: usize = "
+            "MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;"
+        )
+        if state_source.count(signed_alias_roster_bound) != 1:
+            errors.append(
+                f"{state_path}: QueuePlan signed-alias reverse roster must use "
+                "the one exact block/proposal admission consensus bound"
+            )
+        for prefix in QUEUE_PLAN_PENDING_OPAQUE_PREFIXES:
+            if state_source.count(f'"{prefix}"') != 1:
+                errors.append(
+                    f"{state_path}: QueuePlan State marker prefix {prefix!r} "
+                    "must have one exact canonical declaration"
+                )
         for forbidden in (
             "QUEUE_PLAN_PENDING_ROUTE_COUNT_MARKER_PREFIX",
             "QueuePlanPendingRouteCountV1",
@@ -4413,6 +5163,66 @@ def _validate_queue_plan_pending_membership_contract(
                 break
             cursor = position
 
+    resolution_item = binding_items.get(
+        (
+            QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+            "fn",
+            "resolve_required_queue_plan_pending_obligations",
+        )
+    )
+    if resolution_item is not None:
+        route_extension = "affected_routes.extend(obligation.routes.iter().copied());"
+        route_extensions = tuple(
+            match.start()
+            for match in re.finditer(re.escape(route_extension), resolution_item)
+        )
+        resolver_call = (
+            "State::resolve_queue_plan_pending_obligation_after_roster_prevalidation("
+        )
+        resolver_calls = tuple(
+            match.start()
+            for match in re.finditer(re.escape(resolver_call), resolution_item)
+        )
+        direct_collection = resolution_item.find(
+            "for (entrypoint_hash, expected_binding_hash) in &pending_obligations {"
+        )
+        alias_collection = resolution_item.find(
+            "for member in alias_members.iter().flatten() {"
+        )
+        roster_prevalidation = resolution_item.find(
+            "State::prevalidate_queue_plan_pending_route_rosters(&markers, affected_routes)?;"
+        )
+        direct_resolution = resolution_item.find(
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations {"
+        )
+        alias_resolution = resolution_item.find(
+            "if committed_signed_entrypoints.contains(&member.entrypoint_hash) {"
+        )
+        signed_alias_resolution = resolution_item.find(
+            "State::resolve_queue_plan_pending_obligation_by_signed_alias_in_storage("
+        )
+        if (
+            len(route_extensions) != 2
+            or len(resolver_calls) != 2
+            or not (
+                direct_collection
+                < route_extensions[0]
+                < alias_collection
+                < route_extensions[1]
+                < roster_prevalidation
+                < direct_resolution
+                < resolver_calls[0]
+                < alias_resolution
+                < resolver_calls[1]
+                < signed_alias_resolution
+            )
+        ):
+            errors.append(
+                f"{state_path}: QueuePlan resolution must collect both direct "
+                "and signed-alias route sets before one roster prevalidation, "
+                "then resolve both exact committed corridors before alias terminalization"
+            )
+
     roster_item = binding_items.get(
         (
             QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
@@ -4420,14 +5230,18 @@ def _validate_queue_plan_pending_membership_contract(
             "queue_plan_pending_route_members_from_storage_with_limit",
         )
     )
-    if (
-        roster_item is not None
-        and "decode_exact_queue_plan_pending_obligation_marker" in roster_item
+    roster_projection_tokens = (
+        "decode_exact_queue_plan_pending_obligation_marker",
+        "queue_plan_pending_route_member_from_obligation(&obligation, route)",
+        "marker != expected",
+    )
+    if roster_item is not None and any(
+        token not in roster_item for token in roster_projection_tokens
     ):
         errors.append(
             f"{state_path}: QueuePlan bounded route-roster enumeration must "
-            "validate the compact canonical member and exact obligation-key "
-            "existence without decoding the full obligation payload"
+            "decode the exact bounded obligation and compare the member's "
+            "complete canonical projection"
         )
 
     mutation_re = re.compile(
@@ -4440,7 +5254,11 @@ def _validate_queue_plan_pending_membership_contract(
             "storage.insert_queue_plan_marker(obligation_key, obligation_payload);",
         ),
         (
-            "resolve_queue_plan_pending_obligation_in_storage",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+            "storage.remove_queue_plan_marker(obligation_key);",
+        ),
+        (
+            "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
             "storage.remove_queue_plan_marker(obligation_key);",
         ),
     )

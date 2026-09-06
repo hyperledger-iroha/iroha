@@ -1,8 +1,8 @@
 ---
-title: Offline QR Stream Transport
+title: KAGEMUSHA QR Stream Transport
 ---
 
-This document defines the QR stream framing used to move offline payloads (receipts, bundles,
+This document defines the QR stream framing used to move KAGEMUSHA payloads (receipts, bundles,
 and envelopes) between devices using animated QR codes. The format is deterministic, simple,
 and designed to be implemented across Swift, Android, and JavaScript with consistent results.
 
@@ -10,9 +10,11 @@ and designed to be implemented across Swift, Android, and JavaScript with consis
 
 QR stream splits a binary payload into fixed-size chunks, adds optional XOR parity frames, and
 wraps each chunk in a CRC32-protected frame. A header frame carries the envelope metadata
-needed to reassemble the payload and verify its hash. Payloads are Norito-encoded structures
-(KagemushaPaymentRequest, KagemushaPayment, or KagemushaAcknowledgement) and the `payload_kind` tag binds the schema used to
-interpret the bytes.
+needed to reassemble the payload and verify its hash. Payloads are canonical
+`KagemushaPaymentRequestV1`, `KagemushaPaymentV1`, or
+`KagemushaAcknowledgementV1` values; the `payload_kind` tag binds the schema
+used to interpret the bytes. KAGEMUSHA V1 has no acceptance-intent or
+acceptance-ticket payload.
 
 Key properties:
 
@@ -45,9 +47,13 @@ The envelope is encoded as a fixed 47-byte structure and is carried inside the h
 | Value | Meaning |
 |-------|---------|
 | `0` | `unspecified` |
-| `1` | `kagemusha_payment_request` |
-| `2` | `kagemusha_payment` |
-| `3` | `kagemusha_acknowledgement` |
+| `1` | `kagemusha_payment_request_v1` |
+| `2` | `kagemusha_payment_v1` |
+| `3` | `kagemusha_acknowledgement_v1` |
+
+This is the `IQ` envelope's little-endian `u16` registry. The numeric meanings
+mirror the KAGEMUSHA V1 peer protocol, but this outer QR tag is distinct from
+the one-byte kind field inside an `IPM1` message.
 
 ## 3. Frame (`QrStreamFrame`)
 
@@ -164,20 +170,16 @@ The default assembler limits enforced by `iroha_data_model::qr_stream`:
 
 Override these in clients if a tighter budget is required.
 
-## 9. Fixtures and regeneration
+## 9. Fixtures and verification
 
 Fixtures live under `fixtures/qr_stream/`:
 
 - `qr_stream_basic.json`
 - `qr_stream_parity.json`
 
-Regenerate with:
-
-```
-cargo run -p iroha_data_model --features test-fixtures,dev-tools --bin qr_stream_fixtures
-```
-
-Use `--check` to verify fixtures are up to date.
+The focused `iroha_data_model` QR stream tests reconstruct every envelope and
+frame with the production encoder and compare the resulting bytes with these
+fixtures.
 
 ## 10. CLI helpers
 

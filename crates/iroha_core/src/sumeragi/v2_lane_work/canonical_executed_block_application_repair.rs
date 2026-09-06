@@ -1,3 +1,20 @@
+#[derive(Debug, Error)]
+enum CanonicalRecoveryReadError {
+    #[error("{0}")]
+    Rejected(String),
+    #[error("canonical recovery durable read failed: {0}")]
+    LocalPersistence(String),
+}
+impl From<String> for CanonicalRecoveryReadError {
+    fn from(reason: String) -> Self {
+        Self::Rejected(reason)
+    }
+}
+impl CanonicalRecoveryReadError {
+    fn storage(error: crate::kura::Error) -> Self {
+        Self::LocalPersistence(error.to_string())
+    }
+}
 const CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES: usize = MAX_CERTIFIED_MERGE_CHUNK_BYTES;
 const CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS: usize =
     (STRICT_INIT_MAX_BLOCK_BYTES as usize).div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
@@ -22,17 +39,6 @@ fn canonical_executed_block_response_fits_frame(
         .len();
     super::fair_v2_ingress_required_lane_p2p_frame_bytes(bytes)
         <= limits.historical_recovery_response_frame_capacity.get()
-}
-fn peer_is_global_finality_signer(
-    finality: &wire::finality::V2FinalityArtifact,
-    peer: &PeerId,
-) -> bool {
-    finality.commit_qc.signers.iter().any(|index| {
-        usize::try_from(*index)
-            .ok()
-            .and_then(|index| finality.height_context.roster.get(index))
-            .is_some_and(|entry| &entry.validator == peer)
-    })
 }
 /// Build one exact chunk-recovery dependency from locally verified durable
 /// State, Kura finality, and the consensus-signed canonical wire length.
@@ -61,7 +67,9 @@ pub(crate) fn canonical_executed_block_need_for_height(
         executed_block_wire_hash: execution_commitment.executed_block_wire_hash,
     };
     if header.hash() != expected_hash
-        || kura.durable_block_payload_len_by_hash(expected_hash)
+        || kura
+            .durable_block_payload_len_by_hash(expected_hash)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
             != Some((height, need.executed_block_wire_len))
     {
         return Err(V2LaneWorkError::Persistence(format!(
@@ -69,7 +77,7 @@ pub(crate) fn canonical_executed_block_need_for_height(
         )));
     }
     validate_canonical_executed_block_need(context, state, kura, need)
-        .map_err(V2LaneWorkError::Persistence)?;
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
     Ok(need)
 }
 fn validate_canonical_executed_block_need(
@@ -77,7 +85,7 @@ fn validate_canonical_executed_block_need(
     state: &State,
     kura: &Kura,
     need: CanonicalExecutedBlockNeedV1,
-) -> Result<wire::finality::V2FinalityArtifact, String> {
+) -> Result<wire::finality::V2FinalityArtifact, CanonicalRecoveryReadError> {
     if need.height == 0
         || need.height > u64::try_from(state.committed_height()).unwrap_or(u64::MAX)
         || need.height > context.height
@@ -90,19 +98,24 @@ fn validate_canonical_executed_block_need(
     {
         return Err(
             "canonical executed-block need has an invalid State, height, or execution binding"
-                .to_owned(),
+                .to_owned()
+                .into(),
         );
     }
-    if kura.durable_block_payload_len_by_hash(need.block_hash)
+    if kura
+        .durable_block_payload_len_by_hash(need.block_hash)
+        .map_err(CanonicalRecoveryReadError::storage)?
         != Some((need.height, need.executed_block_wire_len))
     {
         return Err(
-            "canonical executed-block need differs from durable Kura length authority".to_owned(),
+            "canonical executed-block need differs from durable Kura length authority"
+                .to_owned()
+                .into(),
         );
     }
     let (header, finality) = kura
         .v2_finality_artifact_with_header(need.height)
-        .map_err(|error| error.to_string())?
+        .map_err(CanonicalRecoveryReadError::storage)?
         .ok_or_else(|| "canonical executed-block need lacks durable finality".to_owned())?;
     if HashOf::new(&finality) != need.finality_artifact_hash
         || finality.verify().is_err()
@@ -117,7 +130,11 @@ fn validate_canonical_executed_block_need(
         || finality.commit_qc.execution_commitment != need.execution_commitment
         || finality.height_context.network_id != context.network_id
     {
-        return Err("canonical executed-block need differs from exact local finality".to_owned());
+        return Err(
+            "canonical executed-block need differs from exact local finality"
+                .to_owned()
+                .into(),
+        );
     }
     Ok(finality)
 }
@@ -134,11 +151,13 @@ fn validate_canonical_executed_block_request(
         wire::finality::V2FinalityArtifact,
         u32,
     ),
-    String,
+    CanonicalRecoveryReadError,
 > {
     let LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock { need, chunk_index } = &request.kind
     else {
-        return Err("request is not canonical executed-block recovery".to_owned());
+        return Err("request is not canonical executed-block recovery"
+            .to_owned()
+            .into());
     };
     if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
         || &request.requester != sender
@@ -154,7 +173,8 @@ fn validate_canonical_executed_block_request(
     {
         return Err(
             "canonical executed-block recovery request has invalid shape, sender, chunk, or size"
-                .to_owned(),
+                .to_owned()
+                .into(),
         );
     }
     let finality = validate_canonical_executed_block_need(context, state, kura, **need)?;
@@ -169,7 +189,9 @@ fn validate_canonical_executed_block_request(
             .any(|entry| &entry.validator == sender);
     if !requester_is_authorized {
         return Err(
-            "canonical executed-block requester is outside authenticated rosters".to_owned(),
+            "canonical executed-block requester is outside authenticated rosters"
+                .to_owned()
+                .into(),
         );
     }
     Ok((**need, finality, *chunk_index))
@@ -197,32 +219,33 @@ fn build_canonical_executed_block_response(
     state: &State,
     kura: &Kura,
     limits: V2LaneWorkLimits,
-    local_peer: &PeerId,
     request: &LaneHistoricalRecoveryRequestV1,
     sender: &PeerId,
-) -> Result<LaneHistoricalRecoveryResponseV1, String> {
+) -> Result<LaneHistoricalRecoveryResponseV1, CanonicalRecoveryReadError> {
     let (need, finality, chunk_index) =
         validate_canonical_executed_block_request(context, state, kura, limits, request, sender)?;
-    if !peer_is_global_finality_signer(&finality, local_peer) {
-        return Err(
-            "canonical executed-block responder is not an exact CommitQC signer".to_owned(),
-        );
-    }
     let height = usize::try_from(need.height)
         .ok()
         .and_then(NonZeroUsize::new)
         .ok_or_else(|| "canonical executed-block height is invalid".to_owned())?;
     let block = kura
-        .get_block_without_merge_sidecar(height)
+        .read_block_body(height)
+        .map_err(CanonicalRecoveryReadError::storage)?
         .ok_or_else(|| "canonical executed block is unavailable at responder".to_owned())?;
     if !canonical_executed_block_matches_need(&block, &finality, need) {
-        return Err("canonical executed-block response differs from finality".to_owned());
+        return Err("canonical executed-block response differs from finality"
+            .to_owned()
+            .into());
     }
     let wire = block.encode_wire().map_err(|error| error.to_string())?;
     if u64::try_from(wire.len()).ok() != Some(need.executed_block_wire_len)
         || Hash::new(&wire) != need.executed_block_wire_hash
     {
-        return Err("canonical executed-block wire exceeds the durable block bound".to_owned());
+        return Err(
+            "canonical executed-block wire exceeds the durable block bound"
+                .to_owned()
+                .into(),
+        );
     }
     let chunk_count = wire.len().div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
     let chunk_index_usize = usize::try_from(chunk_index).map_err(|error| error.to_string())?;
@@ -230,7 +253,9 @@ fn build_canonical_executed_block_response(
         || chunk_count > CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS
         || chunk_index_usize >= chunk_count
     {
-        return Err("canonical executed-block chunk is outside the exact wire".to_owned());
+        return Err("canonical executed-block chunk is outside the exact wire"
+            .to_owned()
+            .into());
     }
     let start = chunk_index_usize
         .checked_mul(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES)
@@ -252,7 +277,8 @@ fn build_canonical_executed_block_response(
     if !canonical_executed_block_response_fits_frame(limits, &response) {
         return Err(
             "canonical executed-block chunk exceeds the configured authenticated response frame"
-                .to_owned(),
+                .to_owned()
+                .into(),
         );
     }
     Ok(response)
@@ -269,8 +295,8 @@ struct OutstandingCanonicalExecutedBlockRequest {
     request: LaneHistoricalRecoveryRequestV1,
     responder: CanonicalExecutedBlockResponder,
     /// The first timeout retransmits the byte-identical request to the pinned
-    /// responder. A subsequent timeout advances to the next exact CommitQC
-    /// signer and necessarily restarts the wire at chunk zero.
+    /// responder. A subsequent timeout refreshes current archive candidates
+    /// and necessarily restarts the wire at chunk zero.
     retry_sent: bool,
 }
 /// Recovery-only, bounded owner for exact canonical executed bodies required
@@ -279,7 +305,7 @@ struct OutstandingCanonicalExecutedBlockRequest {
 /// This type deliberately has no Queue handle and no lane signing state. It
 /// can therefore run while ordinary Queue publication and full lane work are
 /// still disabled. At most one canonical wire is assembled at a time; chunks
-/// are requested sequentially from exact CommitQC signers.
+/// are requested sequentially from one pinned authenticated archive.
 pub(crate) struct CanonicalExecutedBlockRecovery {
     context: wire::HeightContext,
     local_peer: PeerId,
@@ -293,6 +319,9 @@ pub(crate) struct CanonicalExecutedBlockRecovery {
     /// Whole-wire assemblies abandoned before the current body was authenticated.
     whole_wire_restarts: u32,
     next_peer_index: usize,
+    /// Most recently abandoned responder. A fresh candidate snapshot skips
+    /// this peer when another current archive is available.
+    last_abandoned_peer: Option<PeerId>,
     assembly_responder: Option<CanonicalExecutedBlockResponder>,
     next_chunk_index: u32,
     assembly_wire_len: Option<usize>,
@@ -333,23 +362,8 @@ impl CanonicalExecutedBlockRecovery {
             .validate()
             .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
         for need in &needs {
-            let finality = validate_canonical_executed_block_need(
-                &context,
-                state.as_ref(),
-                kura.as_ref(),
-                *need,
-            )
-            .map_err(V2LaneWorkError::Persistence)?;
-            if !finality.commit_qc.signers.iter().any(|index| {
-                usize::try_from(*index)
-                    .ok()
-                    .and_then(|index| finality.height_context.roster.get(index))
-                    .is_some_and(|entry| entry.validator != local_peer)
-            }) {
-                return Err(V2LaneWorkError::Persistence(
-                    "canonical executed-block recovery has no remote CommitQC signer".to_owned(),
-                ));
-            }
+            validate_canonical_executed_block_need(&context, state.as_ref(), kura.as_ref(), *need)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         }
         Ok(Self {
             context,
@@ -362,6 +376,7 @@ impl CanonicalExecutedBlockRecovery {
             front_attempts: 0,
             whole_wire_restarts: 0,
             next_peer_index: 0,
+            last_abandoned_peer: None,
             assembly_responder: None,
             next_chunk_index: 0,
             assembly_wire_len: None,
@@ -437,7 +452,7 @@ impl CanonicalExecutedBlockRecovery {
         }
     }
     /// Drain canonical request identities superseded by exact chunk progress,
-    /// signer abandonment, or local cache completion.
+    /// responder abandonment, or local cache completion.
     pub(crate) fn drain_retired_request_hashes(
         &mut self,
     ) -> BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>> {
@@ -476,8 +491,8 @@ impl CanonicalExecutedBlockRecovery {
         self.next_chunk_index = 0;
         self.assembly_wire_len = None;
         self.assembly_chunk_count = None;
-        // Drop even the allocation: a failed signer must not leave a large
-        // poisoned prefix resident while the next signer restarts at zero.
+        // Drop even the allocation: a failed archive must not leave a large
+        // poisoned prefix resident while the next archive restarts at zero.
         self.assembly = Vec::new();
         self.retire_outstanding_request();
     }
@@ -521,6 +536,7 @@ impl CanonicalExecutedBlockRecovery {
             .cloned();
         if let Some(responder) = responder {
             self.next_peer_index = (responder.index + 1) % responder.count.max(1);
+            self.last_abandoned_peer = Some(responder.peer);
         }
         self.reset_front_assembly();
     }
@@ -555,6 +571,7 @@ impl CanonicalExecutedBlockRecovery {
         loop {
             let Some(need) = self.needs.front().copied() else {
                 self.whole_wire_restarts = 0;
+                self.last_abandoned_peer = None;
                 self.reset_front_assembly();
                 return Ok(());
             };
@@ -566,7 +583,11 @@ impl CanonicalExecutedBlockRecovery {
                         "canonical executed-block recovery has an invalid height".to_owned(),
                     )
                 })?;
-            let Some(block) = self.kura.get_block_without_merge_sidecar(height) else {
+            let Some(block) = self.kura.read_block_body(height).map_err(|error| {
+                self.output_guard.close_admission_for_restart();
+                V2LaneWorkError::Persistence(error.to_string())
+            })?
+            else {
                 return Ok(());
             };
             let finality = validate_canonical_executed_block_need(
@@ -575,7 +596,7 @@ impl CanonicalExecutedBlockRecovery {
                 self.kura.as_ref(),
                 need,
             )
-            .map_err(V2LaneWorkError::Persistence)?;
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             if !canonical_executed_block_matches_need(&block, &finality, need) {
                 return Err(V2LaneWorkError::Persistence(
                     "locally cached canonical executed block conflicts with its exact need"
@@ -594,11 +615,24 @@ impl CanonicalExecutedBlockRecovery {
     ///
     /// Returns `true` exactly when a new transport request was retained.
     ///
-    /// A body assembly is pinned to one exact remote CommitQC signer. Its
-    /// first timeout retransmits the exact request bytes to that signer. A
-    /// second timeout (or signer-set drift) abandons every unverified prefix,
-    /// advances deterministically, and restarts at chunk zero.
+    /// A body assembly is pinned to one exact authenticated archive. Its
+    /// first timeout retransmits the exact request bytes to that archive. A
+    /// second timeout abandons every unverified prefix, refreshes from the
+    /// supplied current configured-peer snapshot, and restarts at chunk zero.
+    #[cfg(test)]
     pub(crate) fn service_next(&mut self) -> Result<bool, V2LaneWorkError> {
+        self.service_next_with_archive_targets(&[])
+    }
+    /// Queue one bounded retry using current configured archives first.
+    ///
+    /// An empty usable snapshot falls back to the exact historical CommitQC
+    /// signers. Once a responder supplies the first exact chunk, the complete
+    /// wire remains pinned to it until success or the existing abandonment
+    /// transition clears the unverified prefix.
+    pub(crate) fn service_next_with_archive_targets(
+        &mut self,
+        current_archive_targets: &[PeerId],
+    ) -> Result<bool, V2LaneWorkError> {
         let guard = Arc::clone(&self.output_guard);
         let Some(_permit) = guard.acquire() else {
             return Err(V2LaneWorkError::RestartRequired);
@@ -619,34 +653,13 @@ impl CanonicalExecutedBlockRecovery {
             self.kura.as_ref(),
             need,
         )
-        .map_err(V2LaneWorkError::Persistence)?;
-        let mut seen = BTreeSet::new();
-        let eligible_peers = finality
-            .commit_qc
-            .signers
-            .iter()
-            .filter_map(|index| {
-                usize::try_from(*index)
-                    .ok()
-                    .and_then(|index| finality.height_context.roster.get(index))
-                    .map(|entry| entry.validator.clone())
-            })
-            .filter(|peer| peer != &self.local_peer && seen.insert(peer.clone()))
-            .collect::<Vec<_>>();
-        if eligible_peers.is_empty() {
-            return Err(V2LaneWorkError::Persistence(
-                "canonical executed-block recovery has no remote CommitQC signer".to_owned(),
-            ));
-        }
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         if let Some(outstanding) = self.outstanding.as_ref() {
-            let responder_is_still_exact = outstanding.responder.count == eligible_peers.len()
-                && eligible_peers.get(outstanding.responder.index)
-                    == Some(&outstanding.responder.peer)
-                && self.assembly_responder.as_ref().is_some_and(|pinned| {
-                    pinned.peer == outstanding.responder.peer
-                        && pinned.index == outstanding.responder.index
-                        && pinned.count == outstanding.responder.count
-                });
+            let responder_is_still_exact = self.assembly_responder.as_ref().is_some_and(|pinned| {
+                pinned.peer == outstanding.responder.peer
+                    && pinned.index == outstanding.responder.index
+                    && pinned.count == outstanding.responder.count
+            });
             if !responder_is_still_exact {
                 self.abandon_front_responder()?;
             } else if !outstanding.retry_sent {
@@ -667,23 +680,41 @@ impl CanonicalExecutedBlockRecovery {
             }
         }
         let responder = match self.assembly_responder.as_ref() {
-            Some(responder)
-                if responder.count == eligible_peers.len()
-                    && eligible_peers.get(responder.index) == Some(&responder.peer) =>
-            {
-                responder.clone()
-            }
-            Some(_) => {
-                self.abandon_front_responder()?;
-                let index = self.next_peer_index % eligible_peers.len();
-                CanonicalExecutedBlockResponder {
-                    peer: eligible_peers[index].clone(),
-                    index,
-                    count: eligible_peers.len(),
-                }
-            }
+            Some(responder) => responder.clone(),
             None => {
-                let index = self.next_peer_index % eligible_peers.len();
+                let mut seen = BTreeSet::new();
+                let mut eligible_peers = current_archive_targets
+                    .iter()
+                    .filter(|peer| *peer != &self.local_peer && seen.insert((*peer).clone()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if eligible_peers.is_empty() {
+                    eligible_peers = finality
+                        .commit_qc
+                        .signers
+                        .iter()
+                        .filter_map(|index| {
+                            usize::try_from(*index)
+                                .ok()
+                                .and_then(|index| finality.height_context.roster.get(index))
+                                .map(|entry| entry.validator.clone())
+                        })
+                        .filter(|peer| peer != &self.local_peer && seen.insert(peer.clone()))
+                        .collect::<Vec<_>>();
+                }
+                if eligible_peers.is_empty() {
+                    return Err(V2LaneWorkError::Persistence(
+                        "canonical executed-block recovery has no current archive or remote CommitQC signer"
+                            .to_owned(),
+                    ));
+                }
+                let mut index = self.next_peer_index % eligible_peers.len();
+                if eligible_peers.len() > 1
+                    && self.last_abandoned_peer.as_ref() == eligible_peers.get(index)
+                {
+                    index = (index + 1) % eligible_peers.len();
+                }
+                self.last_abandoned_peer = None;
                 CanonicalExecutedBlockResponder {
                     peer: eligible_peers[index].clone(),
                     index,
@@ -746,7 +777,8 @@ impl CanonicalExecutedBlockRecovery {
             return Err(V2LaneWorkError::RestartRequired);
         };
         let Some(ownership) = inbound.take_ingress_ownership() else {
-            return Ok(V2LaneIngressOutcome::Rejected);
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::RestartRequired);
         };
         let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
         if !ownership.validate_exact()
@@ -754,7 +786,8 @@ impl CanonicalExecutedBlockRecovery {
             || !ownership.matches_semantic_origin(&sender)
             || !ownership.matches_reply_routes(reply_routes.as_ref())
         {
-            return Ok(V2LaneIngressOutcome::Rejected);
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::RestartRequired);
         }
         match message {
             BlockMessage::LaneHistoricalRecoveryRequest(request) => {
@@ -766,16 +799,16 @@ impl CanonicalExecutedBlockRecovery {
                     self.state.as_ref(),
                     self.kura.as_ref(),
                     self.limits,
-                    &self.local_peer,
                     &request,
                     &sender,
                 ) {
                     Ok(response) => response,
-                    Err(error) => {
-                        iroha_logger::debug!(
-                            %error,
-                            "rejected canonical executed-block recovery request"
-                        );
+                    Err(CanonicalRecoveryReadError::LocalPersistence(error)) => {
+                        self.output_guard.close_admission_for_restart();
+                        return Err(V2LaneWorkError::Persistence(error));
+                    }
+                    Err(CanonicalRecoveryReadError::Rejected(error)) => {
+                        iroha_logger::debug!(%error, "rejected canonical executed-block recovery request");
                         return Ok(V2LaneIngressOutcome::Rejected);
                     }
                 };
@@ -786,7 +819,9 @@ impl CanonicalExecutedBlockRecovery {
                 Ok(V2LaneIngressOutcome::Inserted)
             }
             BlockMessage::LaneHistoricalRecoveryResponse(response) => {
-                self.accept_response(*response, &sender)
+                self.accept_response(*response, &sender).inspect_err(|_| {
+                    self.output_guard.close_admission_for_restart();
+                })
             }
             _ => Ok(V2LaneIngressOutcome::Rejected),
         }
@@ -839,7 +874,7 @@ impl CanonicalExecutedBlockRecovery {
             self.kura.as_ref(),
             need,
         )
-        .map_err(V2LaneWorkError::Persistence)?;
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         let signed_wire_len = usize::try_from(need.executed_block_wire_len).ok();
         let chunk_count_usize = usize::try_from(chunk_count).ok();
         let expected_count =
@@ -855,7 +890,6 @@ impl CanonicalExecutedBlockRecovery {
         };
         if HashOf::new(&finality_artifact) != need.finality_artifact_hash
             || finality_artifact != local_finality
-            || !peer_is_global_finality_signer(&finality_artifact, sender)
             || chunk_index != *requested_chunk
             || chunk_index != self.next_chunk_index
             || wire_len != need.executed_block_wire_len
@@ -1161,7 +1195,10 @@ pub(crate) fn plan_lane_application_evidence_repair(
                     "Native AMX carrier height is not representable".to_owned(),
                 )
             })?;
-        let Some(block) = kura.get_block_without_merge_sidecar(height) else {
+        let Some(block) = kura
+            .read_block_body(height)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+        else {
             let need = canonical_executed_block_need_for_height(
                 context,
                 state,
@@ -1238,7 +1275,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
                 height,
                 block.hash(),
             )
-            .map_err(V2LaneWorkError::Persistence)?,
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
         );
     }
     ordinary.sort_by_key(|repair| {
@@ -1370,7 +1407,7 @@ pub(crate) fn apply_lane_application_evidence_repair(
         };
         state
             .persist_committed_lane_block_session_lifecycle_bound(&session, &artifact.signer_pops)
-            .map_err(V2LaneWorkError::Persistence)?;
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         summary.ordinary_pairs = summary.ordinary_pairs.saturating_add(1);
     }
     summary.merge_carriers = kura

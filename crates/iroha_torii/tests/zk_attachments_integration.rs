@@ -40,7 +40,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     // Use a temp dir for persistence
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     ensure_quota_config();
-    iroha_torii::zk_attachments::init_persistence();
+    iroha_torii::zk_attachments::init_persistence().expect("attachment persistence preflight");
     // Account-specific uploads should hash tenant identity and remain distinct.
     let tenant_token_a = iroha_torii::zk_attachments::AttachmentTenant::from_account(&ALICE_ID);
     let meta_token_a: norito::json::Value = {
@@ -239,7 +239,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
 async fn attachments_enforce_per_tenant_quota() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     ensure_quota_config();
-    iroha_torii::zk_attachments::init_persistence();
+    iroha_torii::zk_attachments::init_persistence().expect("attachment persistence preflight");
     // Seed enough attachments to exceed the per-tenant count limit (default 128)
     let mut ids = Vec::new();
     for i in 0..130u32 {

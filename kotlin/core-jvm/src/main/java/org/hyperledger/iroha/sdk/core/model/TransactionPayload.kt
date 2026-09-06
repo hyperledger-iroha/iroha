@@ -38,7 +38,14 @@ class TransactionPayload(
     metadata: Map<String, JsonValue> = emptyMap(),
     attachments: List<ProofAttachment>? = null,
 ) {
-    private val _metadata: Map<String, JsonValue> = metadata.toMap()
+    private val _metadata: Map<String, JsonValue> = Collections.unmodifiableMap(
+        metadata.toMap().also { values ->
+            values.forEach { (key, value) ->
+                require(!key.isNullOrBlank()) { "metadata key must not be blank" }
+                requireNotNull(value) { "metadata values must be JSON values; use JsonValue.nullValue() for JSON null" }
+            }
+        },
+    )
     private val _attachments: List<ProofAttachment>? =
         attachments?.let { values ->
             Collections.unmodifiableList(
@@ -59,9 +66,6 @@ class TransactionPayload(
         }
         if (nonce != null) {
             require(nonce in 1..MAX_U32) { "nonce must fit in the nonzero u32 range" }
-        }
-        _metadata.keys.forEach { key ->
-            require(key.isNotBlank()) { "metadata key must not be blank" }
         }
     }
 

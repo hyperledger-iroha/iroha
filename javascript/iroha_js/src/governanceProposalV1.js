@@ -44,6 +44,15 @@ export function normalizeGovernanceProposalWireV1(value, context = "proposal") {
       return { kind, payload: normalizeMusubiAction(record.payload, payloadContext) };
     case "SorafsProviderGovernance":
       return { kind, payload: normalizeSorafsProvider(record.payload, payloadContext) };
+    case "ContractLifecycleGovernance":
+      return { kind, payload: normalizeContractLifecycle(record.payload, payloadContext) };
+    case "ContractEmergencyHold":
+      return { kind, payload: normalizeContractEmergencyHold(record.payload, payloadContext) };
+    case "GlobalDataTriggerPermissionGovernance":
+      return {
+        kind,
+        payload: normalizeGlobalDataTriggerPermission(record.payload, payloadContext),
+      };
     default:
       throw new TypeError(`${context}.kind contains an unsupported V1 proposal variant: ${kind}`);
   }
@@ -51,6 +60,7 @@ export function normalizeGovernanceProposalWireV1(value, context = "proposal") {
 
 function normalizeDeployContract(value, context) {
   const record = exactRecord(value, [
+    "proposal_operator",
     "contract_address",
     "code_hash",
     "abi_hash",
@@ -63,6 +73,10 @@ function normalizeDeployContract(value, context) {
   const contractAddress = nonEmptyString(record.contract_address, `${context}.contract_address`);
   parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
   return {
+    proposal_operator: canonicalAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     contract_address: contractAddress,
     code_hash: lowerHex32(record.code_hash, `${context}.code_hash`),
     abi_hash: lowerHex32(record.abi_hash, `${context}.abi_hash`),
@@ -85,7 +99,7 @@ function normalizeManifestProvenance(value, context) {
 }
 
 function normalizeRuntimeUpgrade(value, context) {
-  const record = exactRecord(value, ["manifest"], context);
+  const record = exactRecord(value, ["proposal_operator", "manifest"], context);
   const manifestContext = `${context}.manifest`;
   const manifest = exactRecord(record.manifest, [
     "name",
@@ -120,6 +134,10 @@ function normalizeRuntimeUpgrade(value, context) {
     throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
   }
   return {
+    proposal_operator: canonicalAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     manifest: {
       name: nonEmptyString(manifest.name, `${manifestContext}.name`),
       description: exactString(manifest.description, `${manifestContext}.description`),
@@ -697,6 +715,198 @@ function normalizeSorafsProvider(value, context) {
     };
   }
   throw new TypeError(`${actionContext}.action contains an unsupported provider action`);
+}
+
+function normalizeContractLifecycle(value, context) {
+  const record = exactRecord(
+    value,
+    ["proposal_operator", "contract_address", "expected_revision", "action"],
+    context,
+  );
+  const contractAddress = nonEmptyString(record.contract_address, `${context}.contract_address`);
+  parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
+  return {
+    proposal_operator: canonicalAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
+    contract_address: contractAddress,
+    expected_revision: jsonUint(
+      record.expected_revision,
+      `${context}.expected_revision`,
+      { allowZero: false },
+    ),
+    action: normalizeContractLifecycleAction(record.action, `${context}.action`),
+  };
+}
+
+function normalizeContractLifecycleAction(value, context) {
+  if (!plainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const tag = nonEmptyString(value.action, `${context}.action`);
+  if (tag === "CancelOwnershipOffer" || tag === "AcceptParliamentOwnership") {
+    const unit = exactRecord(value, ["action", "payload"], context);
+    if (unit.payload !== null) {
+      throw new TypeError(`${context}.payload must be null for ${tag}`);
+    }
+    return { action: tag, payload: null };
+  }
+  const record = exactRecord(value, ["action", "payload"], context);
+  const payloadContext = `${context}.payload`;
+  switch (tag) {
+    case "Activate": {
+      const payload = exactRecord(record.payload, [
+        "code_hash",
+        "abi_hash",
+        "abi_version",
+        "manifest_provenance",
+      ], payloadContext);
+      if (payload.abi_version !== 1) {
+        throw new TypeError(`${payloadContext}.abi_version must be the number 1`);
+      }
+      return {
+        action: tag,
+        payload: {
+          code_hash: lowerHex32(payload.code_hash, `${payloadContext}.code_hash`),
+          abi_hash: lowerHex32(payload.abi_hash, `${payloadContext}.abi_hash`),
+          abi_version: 1,
+          manifest_provenance: payload.manifest_provenance === null
+            ? null
+            : normalizeManifestProvenance(
+              payload.manifest_provenance,
+              `${payloadContext}.manifest_provenance`,
+            ),
+        },
+      };
+    }
+    case "Deactivate": {
+      const hasReason = plainObject(record.payload) && Object.hasOwn(record.payload, "reason");
+      const payload = exactRecord(
+        record.payload,
+        hasReason ? ["expected_code_hash", "reason"] : ["expected_code_hash"],
+        payloadContext,
+      );
+      return {
+        action: tag,
+        payload: {
+          expected_code_hash: lowerHex32(
+            payload.expected_code_hash,
+            `${payloadContext}.expected_code_hash`,
+          ),
+          reason: !hasReason || payload.reason === null
+            ? null
+            : exactString(payload.reason, `${payloadContext}.reason`),
+        },
+      };
+    }
+    case "OfferOwnership": {
+      const payload = exactRecord(record.payload, ["new_owner"], payloadContext);
+      return {
+        action: tag,
+        payload: {
+          new_owner: canonicalAccountId(payload.new_owner, `${payloadContext}.new_owner`),
+        },
+      };
+    }
+    case "CompleteEmergencyHoldRetrospective": {
+      const payload = exactRecord(record.payload, [
+        "hold_proposal_content_id",
+        "hold_governance_attempt_id",
+        "incident_digest",
+        "retrospective_finding_root",
+      ], payloadContext);
+      return {
+        action: tag,
+        payload: {
+          hold_proposal_content_id: byteArray(
+            payload.hold_proposal_content_id,
+            32,
+            `${payloadContext}.hold_proposal_content_id`,
+            { nonZero: true },
+          ),
+          hold_governance_attempt_id: byteArray(
+            payload.hold_governance_attempt_id,
+            32,
+            `${payloadContext}.hold_governance_attempt_id`,
+            { nonZero: true },
+          ),
+          incident_digest: byteArray(
+            payload.incident_digest,
+            32,
+            `${payloadContext}.incident_digest`,
+            { nonZero: true },
+          ),
+          retrospective_finding_root: byteArray(
+            payload.retrospective_finding_root,
+            32,
+            `${payloadContext}.retrospective_finding_root`,
+            { nonZero: true },
+          ),
+        },
+      };
+    }
+    default:
+      throw new TypeError(`${context}.action contains an unsupported lifecycle action`);
+  }
+}
+
+function normalizeContractEmergencyHold(value, context) {
+  const record = exactRecord(value, [
+    "contract_address",
+    "expected_revision",
+    "expected_code_hash",
+    "incident_digest",
+    "reason",
+    "duration_blocks",
+  ], context);
+  const contractAddress = nonEmptyString(record.contract_address, `${context}.contract_address`);
+  parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
+  const durationBlocks = jsonUint(
+    record.duration_blocks,
+    `${context}.duration_blocks`,
+    { allowZero: false },
+  );
+  if (durationBlocks > 3_600) {
+    throw new TypeError(`${context}.duration_blocks exceeds the V1 maximum of 3600`);
+  }
+  const reason = exactString(record.reason, `${context}.reason`);
+  if (reason.trim().length === 0) {
+    throw new TypeError(`${context}.reason must not be blank`);
+  }
+  return {
+    contract_address: contractAddress,
+    expected_revision: jsonUint(
+      record.expected_revision,
+      `${context}.expected_revision`,
+      { allowZero: false },
+    ),
+    expected_code_hash: lowerHex32(record.expected_code_hash, `${context}.expected_code_hash`),
+    incident_digest: byteArray(
+      record.incident_digest,
+      32,
+      `${context}.incident_digest`,
+      { nonZero: true },
+    ),
+    reason,
+    duration_blocks: durationBlocks,
+  };
+}
+
+function normalizeGlobalDataTriggerPermission(value, context) {
+  const record = exactRecord(value, ["authority", "action"], context);
+  const action = exactRecord(record.action, ["action", "value"], `${context}.action`);
+  const kind = nonEmptyString(action.action, `${context}.action.action`);
+  if (kind !== "grant" && kind !== "revoke") {
+    throw new TypeError(`${context}.action.action must be grant or revoke`);
+  }
+  if (action.value !== null) {
+    throw new TypeError(`${context}.action.value must be null`);
+  }
+  return {
+    authority: ensureCanonicalAccountId(record.authority, `${context}.authority`),
+    action: { action: kind, value: null },
+  };
 }
 
 function exactRecord(value, fields, context) {

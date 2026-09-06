@@ -1360,41 +1360,6 @@ struct SwiftTransactionEncoder {
         }
     }
 
-    static func encodePersistCouncil(request: PersistCouncilRequest,
-                                     keypair: Keypair,
-                                     creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodePersistCouncil(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
-    }
-
-    static func encodePersistCouncil(request: PersistCouncilRequest,
-                                     signingKey: SigningKey,
-                                     creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let memberAccounts = request.members.enumerated().map {
-            TransactionInputValidator.NamedAccountId(field: "members[\($0.offset)]", value: $0.element)
-        }
-        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
-                                                         authorityId: request.authority,
-                                                         accountIds: memberAccounts)
-        let sanitizedMembers = memberAccounts.map { ids.accountIds[$0.field] ?? $0.value }
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let membersJson = try NoritoJSON(sanitizedMembers).data
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeGovernancePersistCouncil(
-                networkId: ids.networkId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: request.ttlMs,
-                epoch: request.epoch,
-                membersJson: membersJson,
-                feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                privateKey: privateKey,
-                algorithm: signingKey.algorithm
-            )
-        }
-        return try wrap(native: native)
-    }
-
     static func privateKeyBytes(from signingKey: SigningKey) throws -> Data {
         if signingKey.algorithm != .ed25519 {
             guard NoritoNativeBridge.shared.supportsTransactions(using: signingKey.algorithm) else {

@@ -771,8 +771,8 @@ gas = "G_get_pub + bytes"
 [[syscall]]
 number = "0xF4"
 args = "-"
-ret = "r10=0/1"
-gas = "G_prove"
+ret = "r10=ptr (&NoritoBytes(ExecutionSummary)), r11=status:u64"
+gas = "G_execution_summary"
 
 [[syscall]]
 number = "0xF5"

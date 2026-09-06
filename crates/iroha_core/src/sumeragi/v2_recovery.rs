@@ -25,14 +25,16 @@ use super::{
     },
     v2_first_release_recovery::{LifecycleContext, LifecycleDigest},
     v2_lane_work::durable_lane_completion_matches_finality_during_startup,
+    v2_lifecycle_coordinator::LifecycleLedgerError,
 };
 use crate::{
     kura::{
         CommitManifestBindingState, ExactReplayBoundary, Kura, KuraInstanceIdentity,
         KuraV2CommitReceipt, V2StartupFinalityVerificationSession, V2StartupReplayStorageBinding,
     },
+    smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
-        State, WorldReadOnly, live_consensus_key_pop_for_peer,
+        State, WorldReadOnly, live_consensus_key_pop_for_peer_with_role,
         public_lane_validator_record_matches_key,
     },
 };
@@ -40,7 +42,7 @@ use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, consensus_v2 as wire},
-    nexus::PublicLaneValidatorStatus,
+    consensus::ConsensusKeyRole,
 };
 use mv::storage::StorageReadOnly;
 use std::{
@@ -884,10 +886,11 @@ fn authenticate_snapshot_bootstrap_record(
             .zip(&record.validator_set_pops)
             .enumerate()
         {
-            let live_pop = live_consensus_key_pop_for_peer(
+            let live_pop = live_consensus_key_pop_for_peer_with_role(
                 world,
                 &entry.validator,
                 record.context.height,
+                ConsensusKeyRole::Validator,
             )
             .ok_or_else(|| {
                 snapshot_bootstrap_error(format!(
@@ -980,6 +983,27 @@ pub(crate) struct RecoveredV2Height {
     successor_activation: Option<RecoveredSuccessorActivationAuthority>,
     staged_genesis_nexus_amx_context: Option<StagedGenesisNexusAmxContext>,
 }
+/// Authenticated startup disposition selected before consensus ingress opens.
+///
+/// A terminal complete tip deliberately carries no active-height lifecycle
+/// storage or successor activation authority: height `u64::MAX` has no H+1.
+pub(crate) enum RecoveredV2Startup {
+    /// One executable height and all of its sealed runtime inputs.
+    Active(RecoveredV2Height),
+    /// A fully finalized terminal tip which must remain consensus-inert.
+    Terminal(RecoveredTerminalCompleteTipV1),
+}
+/// Exact complete-tip authority for the terminal wire height.
+///
+/// The verified context and complete durable predecessor identity are retained
+/// together with the Kura instance which authenticated them. No lifecycle
+/// storage target is projected because a terminal tip has no successor.
+#[must_use = "terminal complete-tip authority must enter the inert runner"]
+pub(crate) struct RecoveredTerminalCompleteTipV1 {
+    verified_context: VerifiedHeightContext,
+    predecessor: DurableV2PredecessorIdentity,
+    kura_identity: KuraInstanceIdentity,
+}
 /// Move-only permit proving recovery selected one exact Kura/context/policy tuple.
 ///
 /// Only this module can construct the permit. The lifecycle adapter may consume
@@ -1006,6 +1030,20 @@ impl RecoveredLifecycleStorageMintPermitV1 {
             height: verified.context().height,
             signature_policy: signature_policy.clone(),
         }
+    }
+    /// Construct the exact recovery permit for a sibling-module lifecycle fixture.
+    ///
+    /// Shipping code can mint this capability only inside recovery. The
+    /// test-only bridge lets the production-factory fixture exercise the same
+    /// consuming boundary without exposing a raw-root constructor.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        kura: &Kura,
+        verified: &VerifiedHeightContext,
+        signature_policy: &BlockSignaturePolicy,
+        genesis_account: &AccountId,
+    ) -> Self {
+        Self::new(kura, verified, signature_policy, genesis_account)
     }
     /// Consume the permit while comparing every recovery-authenticated input.
     pub(in crate::sumeragi) fn authorizes(
@@ -1134,6 +1172,95 @@ impl DurableV2PredecessorIdentity {
         }
     }
 }
+
+const fn complete_tip_is_terminal(height: wire::Height) -> bool {
+    height.checked_add(1).is_none()
+}
+
+const fn state_is_immediate_predecessor(
+    state_height: wire::Height,
+    persisted_height: wire::Height,
+) -> bool {
+    match state_height.checked_add(1) {
+        Some(successor_height) => successor_height == persisted_height,
+        None => false,
+    }
+}
+
+fn authenticate_complete_tip_evidence(
+    expected_context: &wire::HeightContext,
+    expected_pops: &[Vec<u8>],
+    artifact: &wire::finality::V2FinalityArtifact,
+    receipt: &KuraV2CommitReceipt,
+) -> Result<DurableV2PredecessorIdentity, V2RecoveryError> {
+    artifact
+        .verify()
+        .map_err(|error| V2RecoveryError::TerminalCompleteTipAuthentication(error.to_string()))?;
+    if &artifact.height_context != expected_context
+        || artifact.validator_set_pops.as_slice() != expected_pops
+    {
+        return Err(V2RecoveryError::TerminalCompleteTipAuthentication(
+            "finality artifact differs from the verified terminal context".to_owned(),
+        ));
+    }
+    DurableV2PredecessorIdentity::authenticate(artifact, receipt)
+}
+
+fn authenticate_kura_predecessor(
+    kura: &Kura,
+    predecessor: DurableV2PredecessorIdentity,
+) -> Result<(), V2RecoveryError> {
+    let durable_index = NonZeroUsize::new(usize::try_from(predecessor.height)?)
+        .ok_or(V2RecoveryError::HeightOverflow)?;
+    let actual_block_hash = kura.get_durable_block_hash(durable_index);
+    if actual_block_hash != Some(predecessor.block_hash) {
+        return Err(V2RecoveryError::FinalizedKuraPredecessorMismatch {
+            expected_height: predecessor.height,
+            expected_block_hash: predecessor.block_hash,
+            actual_block_hash,
+        });
+    }
+    Ok(())
+}
+
+/// Authenticate a finalized terminal tip without deriving an impossible H+1.
+pub(crate) fn authenticate_terminal_complete_tip(
+    state: &State,
+    kura: &Kura,
+    expected_context: &wire::HeightContext,
+    expected_pops: &[Vec<u8>],
+    artifact: &wire::finality::V2FinalityArtifact,
+    receipt: &KuraV2CommitReceipt,
+) -> Result<DurableV2PredecessorIdentity, V2RecoveryError> {
+    if expected_context.height != u64::MAX || artifact.height != u64::MAX {
+        return Err(V2RecoveryError::TerminalCompleteTipAuthentication(
+            "terminal complete-tip authority requires height u64::MAX".to_owned(),
+        ));
+    }
+    if !state
+        .kura()
+        .instance_identity()
+        .same_instance(&kura.instance_identity())
+    {
+        return Err(V2RecoveryError::TerminalCompleteTipAuthentication(
+            "terminal complete-tip authority changed its live Kura instance".to_owned(),
+        ));
+    }
+    let predecessor =
+        authenticate_complete_tip_evidence(expected_context, expected_pops, artifact, receipt)?;
+    authenticate_kura_predecessor(kura, predecessor)?;
+    let state_height = u64::try_from(state.committed_height())?;
+    let state_block_hash = state.committed_block_hash_at_height(state_height);
+    if state_height != predecessor.height || state_block_hash != Some(predecessor.block_hash) {
+        return Err(V2RecoveryError::FinalizedStatePredecessorMismatch {
+            expected_height: predecessor.height,
+            actual_height: state_height,
+            expected_block_hash: predecessor.block_hash,
+            actual_block_hash: state_block_hash,
+        });
+    }
+    Ok(predecessor)
+}
 /// One-shot authority to publish a successor derived from a complete durable tip.
 #[derive(Debug)]
 pub(crate) struct DurableSuccessorActivationAuthority {
@@ -1238,6 +1365,8 @@ struct CanonicalCompleteTipLifecycleStorageV1 {
     predecessor: CanonicalLifecycleHeightStorageV1,
     successor: CanonicalLifecycleHeightStorageV1,
     body_store_root: PathBuf,
+    serve_payload_directory_authority:
+        Option<crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority>,
 }
 impl CanonicalCompleteTipLifecycleStorageV1 {
     fn from_kura(
@@ -1259,6 +1388,7 @@ impl CanonicalCompleteTipLifecycleStorageV1 {
                 successor_height,
             ),
             body_store_root: kura.sumeragi_v2_storage_root().join("bodies"),
+            serve_payload_directory_authority: None,
         }
     }
 }
@@ -1279,7 +1409,7 @@ impl RecoveredCompleteTipActivationAuthority {
             verified_successor.context().id(),
             verified_successor.context().height,
         );
-        Self::authenticate_exact(
+        let mut authenticated = Self::authenticate_exact(
             artifact,
             receipt,
             verified_predecessor,
@@ -1288,7 +1418,16 @@ impl RecoveredCompleteTipActivationAuthority {
             activation,
             lifecycle_storage,
             Some(kura.instance_identity()),
-        )
+        )?;
+        if !kura.emergency_fast_startup_enabled() {
+            authenticated
+                .lifecycle_storage
+                .serve_payload_directory_authority =
+                Some(kura.mint_v2_certified_serve_payload_directory_authority(
+                    authenticated.verified_predecessor.context(),
+                )?);
+        }
+        Ok(authenticated)
     }
     fn authenticate_exact(
         artifact: wire::finality::V2FinalityArtifact,
@@ -1486,6 +1625,12 @@ impl RecoveredCompleteTipActivationAuthority {
             _ => false,
         }
     }
+    /// Compare the live predecessor-store owner with the Kura that authenticated CompleteTip.
+    pub(in crate::sumeragi) fn authorizes_predecessor_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity
+            .as_ref()
+            .is_some_and(|expected| expected.matches(kura))
+    }
     /// Compare every caller-visible predecessor-storage input in one closed oracle.
     ///
     /// Only the local signer remains caller-selected. Roots, contexts, PoPs,
@@ -1513,8 +1658,49 @@ impl RecoveredCompleteTipActivationAuthority {
     /// The exact Kura-derived roots, predecessor context, and signature policy
     /// never cross this boundary as caller-supplied values. The local signer is
     /// used only to reauthenticate its frozen-roster Serve retention authority.
+    pub(in crate::sumeragi) fn into_kura_bound_canonical_predecessor_storage(
+        mut self,
+        kura: &Kura,
+        local_signer: &KeyPair,
+    ) -> Result<
+        crate::sumeragi::v2_first_release_recovery::AuthenticatedCompleteTipPredecessorStorageV1,
+        crate::sumeragi::v2_first_release_recovery::CompleteTipPredecessorStorageErrorV1,
+    > {
+        let authority = self
+            .lifecycle_storage
+            .serve_payload_directory_authority
+            .take()
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip has no recovery-minted Certified-Serve payload authority"
+                        .to_owned(),
+                )
+            })?;
+        self.into_canonical_predecessor_storage_at(
+            crate::sumeragi::v2_first_release_recovery::CompleteTipPayloadStoreOpenTargetV1::Kura {
+                kura,
+                authority,
+            },
+            local_signer,
+        )
+    }
+    /// Open a raw-root CompleteTip fixture without exposing that path in production.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn into_canonical_predecessor_storage(
         self,
+        local_signer: &KeyPair,
+    ) -> Result<
+        crate::sumeragi::v2_first_release_recovery::AuthenticatedCompleteTipPredecessorStorageV1,
+        crate::sumeragi::v2_first_release_recovery::CompleteTipPredecessorStorageErrorV1,
+    > {
+        self.into_canonical_predecessor_storage_at(
+            crate::sumeragi::v2_first_release_recovery::CompleteTipPayloadStoreOpenTargetV1::FixtureRoot,
+            local_signer,
+        )
+    }
+    fn into_canonical_predecessor_storage_at(
+        self,
+        payload_store_target: crate::sumeragi::v2_first_release_recovery::CompleteTipPayloadStoreOpenTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<
         crate::sumeragi::v2_first_release_recovery::AuthenticatedCompleteTipPredecessorStorageV1,
@@ -1533,6 +1719,7 @@ impl RecoveredCompleteTipActivationAuthority {
         let verified_predecessor = self.verified_predecessor.clone();
         let signature_policy = self.predecessor_signature_policy.clone();
         crate::sumeragi::v2_first_release_recovery::open_complete_tip_predecessor_storage(
+            payload_store_target,
             &predecessor_root,
             &successor_root,
             successor_context,
@@ -1555,6 +1742,10 @@ impl RecoveredCompleteTipActivationAuthority {
             artifact.height_context.clone(),
             artifact.validator_set_pops.clone(),
         )?;
+        let successor_height = artifact
+            .height
+            .checked_add(1)
+            .ok_or(V2RecoveryError::HeightOverflow)?;
         let lifecycle_storage = CanonicalCompleteTipLifecycleStorageV1 {
             predecessor: CanonicalLifecycleHeightStorageV1 {
                 context_id: artifact.context_id(),
@@ -1563,10 +1754,11 @@ impl RecoveredCompleteTipActivationAuthority {
             },
             successor: CanonicalLifecycleHeightStorageV1 {
                 context_id: successor_context_id,
-                height: artifact.height.saturating_add(1),
+                height: successor_height,
                 root: PathBuf::from("test-only-unbound-complete-tip-successor-root"),
             },
             body_store_root: PathBuf::from("test-only-unbound-complete-tip-body-root"),
+            serve_payload_directory_authority: None,
         };
         Self::authenticate_exact(
             artifact,
@@ -1594,6 +1786,9 @@ impl RecoveredCompleteTipActivationAuthority {
         )?;
         let predecessor_context_id = artifact.context_id();
         let predecessor_height = artifact.height;
+        let successor_height = predecessor_height
+            .checked_add(1)
+            .ok_or(V2RecoveryError::HeightOverflow)?;
         Self::authenticate_exact(
             artifact,
             receipt,
@@ -1609,10 +1804,11 @@ impl RecoveredCompleteTipActivationAuthority {
                 },
                 successor: CanonicalLifecycleHeightStorageV1 {
                     context_id: successor_context_id,
-                    height: predecessor_height.saturating_add(1),
+                    height: successor_height,
                     root: predecessor_root.join("test-only-successor"),
                 },
                 body_store_root: predecessor_root.join("test-only-body-root"),
+                serve_payload_directory_authority: None,
             },
             None,
         )
@@ -1628,14 +1824,18 @@ impl RecoveredCompleteTipActivationAuthority {
         activation: DurableSuccessorActivationAuthority,
         kura: &Kura,
     ) -> Result<Self, V2RecoveryError> {
+        let successor_height = artifact
+            .height
+            .checked_add(1)
+            .ok_or(V2RecoveryError::HeightOverflow)?;
         let lifecycle_storage = CanonicalCompleteTipLifecycleStorageV1::from_kura(
             kura,
             artifact.context_id(),
             artifact.height,
             successor_context_id,
-            artifact.height.saturating_add(1),
+            successor_height,
         );
-        Self::authenticate_exact(
+        let mut authenticated = Self::authenticate_exact(
             artifact,
             receipt,
             verified_predecessor,
@@ -1644,7 +1844,16 @@ impl RecoveredCompleteTipActivationAuthority {
             activation,
             lifecycle_storage,
             Some(kura.instance_identity()),
-        )
+        )?;
+        if !kura.emergency_fast_startup_enabled() {
+            authenticated
+                .lifecycle_storage
+                .serve_payload_directory_authority =
+                Some(kura.mint_v2_certified_serve_payload_directory_authority(
+                    authenticated.verified_predecessor.context(),
+                )?);
+        }
+        Ok(authenticated)
     }
 }
 /// Distinct one-shot authority for the first executable height after an audited snapshot.
@@ -1783,7 +1992,7 @@ impl VerifiedSuccessorHeight {
                 &signature_policy,
                 genesis_account,
                 permit,
-            );
+            )?;
         Ok((verified_context, activation, lifecycle_storage_authority))
     }
 }
@@ -1869,21 +2078,48 @@ impl RecoveredV2Height {
         )
     }
 }
-/// Select and verify the only active v2 height after a fresh start or crash.
+impl RecoveredTerminalCompleteTipV1 {
+    /// Borrow the exact verified terminal context.
+    pub(in crate::sumeragi) const fn verified_context(&self) -> &VerifiedHeightContext {
+        &self.verified_context
+    }
+
+    /// Return the complete durable predecessor identity authenticated at startup.
+    pub(in crate::sumeragi) const fn predecessor(&self) -> DurableV2PredecessorIdentity {
+        self.predecessor
+    }
+
+    /// Confirm that the retained terminal authority belongs to this live Kura.
+    pub(in crate::sumeragi) fn matches_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity.matches(kura)
+    }
+}
+/// Recover one non-terminal active height for ordinary-height unit fixtures.
 ///
-/// The caller must invoke this before opening consensus ingress. A context is
-/// never inferred from mutable local configuration: height one comes from
-/// signed genesis, and every successor is checked against the durable parent
-/// artifact and current finalized state.
+/// Production startup consumes [`RecoveredV2Startup`] directly. This helper
+/// keeps ordinary-height tests compact and treats a terminal fixture as a test
+/// construction error rather than misclassifying valid chain termination as
+/// height overflow.
 #[cfg(test)]
-pub(crate) fn recover_active_height(
+pub(crate) fn recover_non_terminal_active_height_for_test(
     kura: &Kura,
     state: &State,
     fresh_genesis: Option<GenesisV2Bootstrap>,
     genesis_public_key: PublicKey,
 ) -> Result<RecoveredV2Height, V2RecoveryError> {
     let replay_plan = plan_v2_startup_replay(kura)?;
-    recover_active_height_with_plan(kura, state, fresh_genesis, genesis_public_key, replay_plan)
+    match recover_active_height_with_plan(
+        kura,
+        state,
+        fresh_genesis,
+        genesis_public_key,
+        replay_plan,
+    )? {
+        RecoveredV2Startup::Active(recovered) => Ok(recovered),
+        RecoveredV2Startup::Terminal(_) => {
+            panic!("non-terminal recovery fixture unexpectedly reached the terminal wire height")
+        }
+    }
 }
 struct StartupFinalityInventoryCleanup<'a>(&'a Kura);
 impl Drop for StartupFinalityInventoryCleanup<'_> {
@@ -1899,7 +2135,7 @@ pub(crate) fn recover_active_height_with_plan(
     fresh_genesis: Option<GenesisV2Bootstrap>,
     genesis_public_key: PublicKey,
     replay_plan: V2StartupReplayPlan,
-) -> Result<RecoveredV2Height, V2RecoveryError> {
+) -> Result<RecoveredV2Startup, V2RecoveryError> {
     // Recovery consumes the O(H) startup-only inventory. Clear it on every
     // success and error exit; the fixed-size runtime LRU remains available.
     let _inventory_cleanup = StartupFinalityInventoryCleanup(kura);
@@ -1939,8 +2175,8 @@ pub(crate) fn recover_active_height_with_plan(
                 &signature_policy,
                 &genesis_account,
                 lifecycle_storage_mint,
-            );
-        return Ok(RecoveredV2Height {
+            )?;
+        return Ok(RecoveredV2Startup::Active(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy,
@@ -1949,7 +2185,7 @@ pub(crate) fn recover_active_height_with_plan(
             pending_kura_apply: None,
             successor_activation: None,
             staged_genesis_nexus_amx_context: Some(staged_genesis_nexus_amx_context),
-        });
+        }));
     }
     if state_height > durable_height || durable_height.saturating_sub(state_height) > 1 {
         return Err(V2RecoveryError::StateKuraMismatch {
@@ -2002,8 +2238,8 @@ pub(crate) fn recover_active_height_with_plan(
                 &signature_policy,
                 &genesis_account,
                 lifecycle_storage_mint,
-            );
-        return Ok(RecoveredV2Height {
+            )?;
+        return Ok(RecoveredV2Startup::Active(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy,
@@ -2012,7 +2248,7 @@ pub(crate) fn recover_active_height_with_plan(
             pending_kura_apply: None,
             successor_activation,
             staged_genesis_nexus_amx_context: None,
-        });
+        }));
     }
     if replay_plan.pending_tip_height().is_none() {
         if state_height != durable_height {
@@ -2039,6 +2275,23 @@ pub(crate) fn recover_active_height_with_plan(
         } else {
             BlockSignaturePolicy::RotatingLeader
         };
+        if complete_tip_is_terminal(durable_height) {
+            let predecessor = authenticate_terminal_complete_tip(
+                state,
+                kura,
+                verified_predecessor.context(),
+                verified_predecessor.proofs_of_possession(),
+                &parent_artifact,
+                &parent_receipt,
+            )?;
+            return Ok(RecoveredV2Startup::Terminal(
+                RecoveredTerminalCompleteTipV1 {
+                    verified_context: verified_predecessor,
+                    predecessor,
+                    kura_identity: kura.instance_identity(),
+                },
+            ));
+        }
         let successor =
             build_verified_successor(state, &context_store, &parent_artifact, &parent_receipt)?;
         let (verified_context, activation) = successor.into_parts();
@@ -2065,8 +2318,8 @@ pub(crate) fn recover_active_height_with_plan(
                 &signature_policy,
                 &genesis_account,
                 lifecycle_storage_mint,
-            );
-        return Ok(RecoveredV2Height {
+            )?;
+        return Ok(RecoveredV2Startup::Active(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy,
@@ -2077,7 +2330,7 @@ pub(crate) fn recover_active_height_with_plan(
                 complete_tip_activation,
             )),
             staged_genesis_nexus_amx_context: None,
-        });
+        }));
     }
     if replay_plan.pending_tip_height() != Some(durable_height) {
         return Err(V2RecoveryError::MissingRecoverableTip(durable_height));
@@ -2133,8 +2386,8 @@ pub(crate) fn recover_active_height_with_plan(
             &signature_policy,
             &genesis_account,
             lifecycle_storage_mint,
-        );
-    Ok(RecoveredV2Height {
+        )?;
+    Ok(RecoveredV2Startup::Active(RecoveredV2Height {
         verified_context,
         context_store,
         signature_policy,
@@ -2143,7 +2396,7 @@ pub(crate) fn recover_active_height_with_plan(
         pending_kura_apply,
         successor_activation: None,
         staged_genesis_nexus_amx_context: None,
-    })
+    }))
 }
 fn verify_state_kura_prefix(
     kura: &Kura,
@@ -2338,7 +2591,7 @@ fn verify_persisted_height(
     // the record is the only pre-state snapshot; the matching WAL, body marker,
     // and canonical Kura block complete the crash-recovery binding.
     let state_height = u64::try_from(state.committed_height())?;
-    if state_height.saturating_add(1) == height {
+    if state_is_immediate_predecessor(state_height, height) {
         let state_view = state.view();
         let expected = build_successor_height_context_from_state(
             &parent_artifact,
@@ -2370,12 +2623,17 @@ fn successor_proofs_of_possession(parent: &wire::finality::V2FinalityArtifact) -
 }
 pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
     let view = state.view();
-    let active_validators = view
+    // A height context is frozen from its predecessor state, so committed
+    // height `h` supplies the exact validator tenure for target height `h + 1`.
+    let target_height = u64::try_from(view.block_hashes.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let eligible_validators = view
         .world()
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| validator_election_eligible_at_height(record, target_height))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
     let retained_lane_lineage = view
@@ -2393,7 +2651,7 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
     iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
         &view.nexus,
         &view.pipeline,
-        &active_validators,
+        &eligible_validators,
         &retained_lane_lineage,
     )
 }
@@ -2556,6 +2814,9 @@ pub(crate) enum V2RecoveryError {
     /// A Kura finality receipt does not bind every field of the supplied parent artifact.
     #[error("Sumeragi v2 durable predecessor authority mismatch at height {0}")]
     DurablePredecessorAuthorityMismatch(wire::Height),
+    /// Terminal complete-tip evidence does not authenticate one exact finalized MAX height.
+    #[error("Sumeragi v2 terminal complete-tip authentication failed: {0}")]
+    TerminalCompleteTipAuthentication(String),
     /// Complete-tip recovery's activation token does not name the verified successor context.
     #[error(
         "Sumeragi v2 recovered complete-tip successor authority mismatch after predecessor height {predecessor_height}"
@@ -2576,6 +2837,18 @@ pub(crate) enum V2RecoveryError {
         /// Block authenticated by the durable finality artifact and receipt.
         expected_block_hash: HashOf<BlockHeader>,
         /// Current committed WSV tip, if its hash journal is populated.
+        actual_block_hash: Option<HashOf<BlockHeader>>,
+    },
+    /// Canonical Kura does not end at the exact block authenticated by durable finality.
+    #[error(
+        "Sumeragi v2 finalized Kura does not match durable predecessor: expected height {expected_height} block {expected_block_hash}, actual block {actual_block_hash:?}"
+    )]
+    FinalizedKuraPredecessorMismatch {
+        /// Height authenticated by the durable finality artifact and receipt.
+        expected_height: wire::Height,
+        /// Block authenticated by the durable finality artifact and receipt.
+        expected_block_hash: HashOf<BlockHeader>,
+        /// Canonical Kura block at that height, if present.
         actual_block_hash: Option<HashOf<BlockHeader>>,
     },
     /// Persisted successor differs from the unique projection of finalized state.
@@ -2608,4 +2881,88 @@ pub(in crate::sumeragi) fn production_empty_genesis_complete_tip_fixture_for_tes
 #[cfg(test)]
 mod tests {
     include!("v2_recovery_tests.rs");
+
+    fn committed_nexus_hash_with_tenure_record(
+        status: Option<iroha_data_model::nexus::PublicLaneValidatorStatus>,
+        activation_height: u64,
+        deactivation_height: Option<u64>,
+    ) -> Hash {
+        let keys = verified_keys();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("committed-nexus-tenure-boundary-test");
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_consensus_keys(&kura, network_id, &keys);
+        let context = verified_context_for_policy_state(&state, network_id, &keys);
+        let block = dummy_block(&keys[0], 1, None);
+        commit_to_state(&state, &block, context.context());
+
+        if let Some(status) = status {
+            let peer_id = PeerId::new(keys[0].public_key().clone());
+            let validator = AccountId::new(peer_id.public_key().clone());
+            let lane_id = LaneId::new(91);
+            let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id,
+                stake_account: validator.clone(),
+                total_stake: iroha_primitives::numeric::Quantity::from(0_u64),
+                self_stake: iroha_primitives::numeric::Quantity::from(0_u64),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status,
+                activation_height,
+                deactivation_height,
+                last_reward_epoch: None,
+            };
+            let mut validators = state.world.public_lane_validators.block();
+            validators.insert((lane_id, validator), record);
+            validators.commit();
+        }
+
+        committed_nexus_amx_context_hash(&state)
+    }
+
+    #[test]
+    fn committed_hash_uses_successor_height_half_open_validator_tenure() {
+        use iroha_data_model::nexus::PublicLaneValidatorStatus;
+
+        let empty_hash = committed_nexus_hash_with_tenure_record(None, 0, None);
+        assert_ne!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::PendingActivation(2)),
+                2,
+                None,
+            ),
+            empty_hash,
+            "committed height one freezes due activation for successor height two"
+        );
+        assert_ne!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::Exiting(u64::MAX)),
+                1,
+                Some(3),
+            ),
+            empty_hash,
+            "an exiting label cannot suppress tenure retained at successor height two"
+        );
+        assert_ne!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::Slashed(Hash::new(
+                    b"successor-height slash",
+                ))),
+                1,
+                Some(3),
+            ),
+            empty_hash,
+            "a slashed label cannot suppress tenure retained at successor height two"
+        );
+        assert_eq!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::Exiting(u64::MAX)),
+                1,
+                Some(2),
+            ),
+            empty_hash,
+            "successor height two is outside a tenure ending at height two"
+        );
+    }
 }

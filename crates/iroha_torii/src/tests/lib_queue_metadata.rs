@@ -20,6 +20,13 @@ mod tests_queue_metadata {
                 "transaction expired before admission",
             ),
             (
+                queue::Error::KagemushaV1OperationCarrierRejected {
+                    reason: "non-canonical carrier".to_owned(),
+                },
+                "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
+                "KAGEMUSHA V1 operation carrier failed canonical admission: non-canonical carrier",
+            ),
+            (
                 queue::Error::UnresolvedRoute {
                     reason: "lane 9 is unknown".to_owned(),
                 },
@@ -36,6 +43,13 @@ mod tests_queue_metadata {
                 "PRTRY:ALREADY_ENQUEUED",
                 "transaction already present in the queue",
             ),
+            (
+                queue::Error::KagemushaV1OperationIndexInconsistent {
+                    reason: "reverse owner missing".to_owned(),
+                },
+                "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
+                "KAGEMUSHA V1 pending-operation index requires recovery: reverse owner missing",
+            ),
         ];
         for (error, expected_code, expected_detail) in cases {
             // array copy, pattern moves
@@ -45,10 +59,43 @@ mod tests_queue_metadata {
         }
     }
     #[test]
+    fn kagemusha_v1_queue_conflict_has_stable_code_and_status() {
+        let existing_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::new(b"existing-kagemusha-v1-entrypoint"),
+        );
+        let operation_id = [0xA5; 32];
+        let error = queue::Error::KagemushaV1OperationIdConflict {
+            operation_id,
+            existing_entrypoint_hash,
+        };
+        let (code, detail) = queue_rejection_metadata(&error);
+        assert_eq!(code, "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT");
+        assert!(detail.contains(&hex::encode(operation_id)));
+        assert!(detail.contains(&existing_entrypoint_hash.to_string()));
+        assert_eq!(
+            super::Error::queue_error_summary(&error),
+            (
+                "kagemusha_v1_operation_id_conflict",
+                "KAGEMUSHA V1 operation identifier is already pending",
+            )
+        );
+        assert_eq!(
+            super::Error::status_code_for_queue_error(&error),
+            StatusCode::CONFLICT
+        );
+
+        let inconsistent = queue::Error::KagemushaV1OperationIndexInconsistent {
+            reason: "reverse owner missing".to_owned(),
+        };
+        assert_eq!(
+            super::Error::status_code_for_queue_error(&inconsistent),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    #[test]
     fn queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash() {
-        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-            b"outcome-unknown",
-        ));
+        let entrypoint_hash =
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(b"outcome-unknown"));
         let signed_transaction_hash =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(b"signed-transaction"));
         let error = queue::Error::PlanJournalDurabilityIndeterminate {
@@ -72,7 +119,7 @@ mod tests_queue_metadata {
             StatusCode::SERVICE_UNAVAILABLE
         );
         let envelope =
-            super::Error::queue_error_envelope(&error, queue::BackpressureState::default());
+            super::Error::queue_error_envelope(&error, Some(queue::BackpressureState::default()));
         let details = envelope.details.expect("outcome-unknown details");
         let expected_entrypoint_hash = entrypoint_hash.to_string();
         let expected_signed_hash = signed_transaction_hash.to_string();
@@ -80,7 +127,10 @@ mod tests_queue_metadata {
             details.entrypoint_hash.as_deref(),
             Some(expected_entrypoint_hash.as_str())
         );
-        assert_eq!(details.tx_hash.as_deref(), Some(expected_signed_hash.as_str()));
+        assert_eq!(
+            details.tx_hash.as_deref(),
+            Some(expected_signed_hash.as_str())
+        );
         assert!(
             details
                 .hint
@@ -95,7 +145,7 @@ mod tests_queue_metadata {
         };
         let envelope = super::Error::queue_error_envelope(
             &error_without_signed_hash,
-            queue::BackpressureState::default(),
+            Some(queue::BackpressureState::default()),
         );
         let details = envelope.details.expect("entrypoint-only outcome details");
         assert_eq!(

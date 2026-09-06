@@ -18,6 +18,8 @@ mod model {
     /// byte and checksum. On-chain asset aliases resolve to this identifier only.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, CopyGetters, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::asset::id::model::AssetDefinitionId")]
     pub struct AssetDefinitionId {
         /// Canonical `UUIDv4` bytes.
         #[getset(get_copy = "pub")]
@@ -44,6 +46,8 @@ mod model {
     )]
     #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::asset::id::model::AssetBalanceScope")]
     pub enum AssetBalanceScope {
         /// Unrestricted balance bucket shared across all dataspaces.
         #[default]
@@ -55,6 +59,8 @@ mod model {
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::asset::id::model::AssetId")]
     pub struct AssetId {
         /// Account Identification.
         pub account: AccountId,

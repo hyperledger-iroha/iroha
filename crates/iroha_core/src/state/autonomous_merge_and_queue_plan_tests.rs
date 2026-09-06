@@ -287,6 +287,51 @@ fn assert_fastpq_batch_rejected(
 }
 include!("autonomous_merge_fastpq_shape_tests.rs");
 #[test]
+fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias() {
+    let (state, entry, _) = autonomous_sealed_reveal_merge_commit_authorization_fixture();
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries one sealed-reveal execution batch");
+    let reveal = match &batch.lanes[0].entrypoints[0] {
+        TransactionEntrypoint::SealedReveal(reveal) => reveal,
+        _ => panic!("fixture execution entrypoint must be a sealed reveal"),
+    };
+    let outer_hash = batch.lanes[0].entrypoints[0].hash();
+    let signed_execution_alias = reveal.signed_transaction().hash_as_entrypoint();
+    assert_ne!(outer_hash, signed_execution_alias);
+
+    let historical_height = NonZeroUsize::new(state.committed_height())
+        .expect("fixture has a non-zero committed parent height");
+    state.record_committed_entrypoints_for_tests([signed_execution_alias], historical_height);
+    assert!(state.has_committed_entrypoint(signed_execution_alias));
+    assert!(
+        !state.has_committed_entrypoint(outer_hash),
+        "the regression must exercise a fresh outer carrier with a replayed signed identity"
+    );
+
+    state
+        .validate_merge_execution_batch(
+            &entry.active_lanes,
+            batch,
+            &std::collections::BTreeMap::new(),
+            false,
+            None,
+        )
+        .expect("historical validation must not reject its already-committed identities");
+    assert!(matches!(
+        state.validate_merge_execution_batch(
+            &entry.active_lanes,
+            batch,
+            &std::collections::BTreeMap::new(),
+            true,
+            Some(ConsensusMode::Permissioned),
+        ),
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
+            if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
+    ));
+}
+#[test]
 fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
     let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
     let lane = &entry
@@ -1565,6 +1610,187 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
     );
 }
 #[test]
+fn queue_plan_signed_alias_terminal_evidence_is_exact_and_fail_closed() {
+    let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let tag = 0x6D;
+    let direct_entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
+    let TransactionEntrypoint::External(direct_transaction) = &direct_entrypoint else {
+        unreachable!("QueuePlan fixture entrypoint is External")
+    };
+    let (direct_binding, direct_certificate) =
+        queue_plan_admission_certificate_for_entrypoint_state_test(
+            &state,
+            routing_plan.clone(),
+            &validator_keypairs,
+            queue_plan_authority_height_for_state_test(&state),
+            tag,
+            &direct_entrypoint,
+        );
+    let salt = [0xD7; 32];
+    let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+        state.network_id_ref(),
+        direct_transaction,
+        salt,
+        128,
+    );
+    let sealed_entrypoint = TransactionEntrypoint::SealedReveal(
+        iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+            commitment,
+            direct_transaction.clone(),
+            salt,
+        ),
+    );
+    let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        &state.network_id,
+        &sealed_entrypoint,
+        &routing_plan,
+        direct_binding.admission_context.clone(),
+        direct_binding.enqueue_timestamp_ms.saturating_add(1),
+    )
+    .expect("sealed sibling QueuePlan binding");
+    seed_exact_queue_plan_admission_state_for_test(&state, &direct_certificate);
+    seed_pending_queue_plan_binding_state_for_test(&state, &sealed_binding);
+
+    let sealed_obligation = State::queue_plan_pending_obligation_from_binding(&sealed_binding)
+        .expect("sealed sibling obligation");
+    let sealed_obligation_key = State::queue_plan_pending_obligation_marker_key(
+        sealed_binding.network_id_digest,
+        sealed_binding.entrypoint_hash,
+    )
+    .expect("sealed sibling obligation key");
+    let sealed_alias =
+        State::queue_plan_pending_signed_alias_member_from_obligation(&sealed_obligation)
+            .expect("sealed sibling signed alias");
+    let sealed_pending_alias_key =
+        State::queue_plan_pending_signed_alias_member_marker_key(&sealed_alias)
+            .expect("sealed sibling alias key");
+    let sealed_terminal =
+        State::queue_plan_terminal_signed_alias_member_from_obligation(&sealed_obligation)
+            .expect("sealed sibling terminal evidence");
+    let sealed_terminal_key = State::queue_plan_signed_alias_terminal_marker_key(&sealed_terminal)
+        .expect("sealed sibling terminal key");
+    let sealed_route_member = State::queue_plan_pending_route_member_from_obligation(
+        &sealed_obligation,
+        sealed_obligation.routes[0],
+    )
+    .expect("sealed sibling route member");
+    let sealed_route_member_key = State::queue_plan_pending_route_member_marker_key(
+        sealed_route_member.route,
+        sealed_route_member.member_identity,
+    )
+    .expect("sealed sibling route-member key");
+    let sealed_registry_key =
+        State::queue_plan_admission_registry_marker_key(&sealed_binding.registry_key())
+            .expect("sealed sibling registry key");
+
+    let mut block = empty_global_block_after(Some(&parent));
+    block.set_external_entrypoints(vec![direct_entrypoint]);
+    let block_height = NonZeroUsize::new(
+        usize::try_from(block.header().height().get()).expect("fixture height fits usize"),
+    )
+    .expect("fixture height is non-zero");
+    let mut state_block = state.block(block.header());
+    state_block
+        .stage_canonical_carrier_membership(
+            crate::tx::canonical_carrier_membership_hashes(
+                &state_block,
+                block.external_entrypoints_slice(),
+            ),
+            block_height,
+        )
+        .expect("stage direct signed membership");
+    state_block
+        .resolve_queue_plan_pending_obligations_from_block(&block)
+        .expect("direct commit reconciles the distinct sealed sibling");
+
+    assert!(
+        state_block
+            .world
+            .smart_contract_state
+            .get(&sealed_obligation_key)
+            .is_none(),
+        "signed-alias resolution must delete the potentially large full obligation"
+    );
+    assert!(
+        state_block
+            .world
+            .smart_contract_state
+            .get(&sealed_pending_alias_key)
+            .is_none(),
+        "terminalization must remove the signed-first pending reverse index"
+    );
+    assert!(
+        state_block
+            .world
+            .smart_contract_state
+            .get(&sealed_route_member_key)
+            .is_none(),
+        "terminalization must release exact route capacity"
+    );
+    assert_eq!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .expect("exact terminal evidence"),
+        QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias,
+    );
+
+    let terminal_payload = state_block
+        .world
+        .smart_contract_state
+        .get(&sealed_terminal_key)
+        .cloned()
+        .expect("compact outer-key terminal marker remains");
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_terminal_key.clone(), vec![0x00]);
+    assert!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .is_err(),
+        "tampered compact terminal evidence must fail closed"
+    );
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_terminal_key.clone(), terminal_payload.clone());
+    state_block
+        .world
+        .smart_contract_state
+        .remove(sealed_terminal_key.clone());
+    assert!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .is_err(),
+        "missing signed-alias evidence must fail closed"
+    );
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_terminal_key, terminal_payload);
+
+    let registry_payload = state_block
+        .world
+        .smart_contract_state
+        .get(&sealed_registry_key)
+        .cloned()
+        .expect("terminal registry owner remains");
+    state_block
+        .world
+        .smart_contract_state
+        .remove(sealed_registry_key.clone());
+    assert!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .is_err(),
+        "missing registry ownership must fail closed"
+    );
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_registry_key, registry_payload);
+}
+#[test]
 fn queue_plan_native_pending_obligations_count_all_unique_routes_and_block_drain() {
     let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
     let participant_lane = LaneId::new(1);
@@ -1850,6 +2076,16 @@ fn queue_plan_same_route_roles_share_one_pending_route_counter() {
     let members =
         State::queue_plan_pending_route_members_from_storage(world.smart_contract_state(), route)
             .expect("same-route exact member roster");
+    let prevalidated_routes = State::prevalidate_queue_plan_pending_route_rosters(
+        world.smart_contract_state(),
+        [route, route, route],
+    )
+    .expect("deduplicate route roster prevalidation");
+    assert_eq!(
+        prevalidated_routes,
+        BTreeSet::from([route]),
+        "one reconciliation pass must prevalidate each distinct route only once"
+    );
     assert_eq!(
         members.len(),
         1,
@@ -1877,6 +2113,67 @@ fn queue_plan_same_route_roles_share_one_pending_route_counter() {
         route.lane_incarnation,
     ));
 }
+
+#[test]
+fn queue_plan_route_roster_rejects_member_projected_from_another_binding() {
+    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(&state),
+        0x6D,
+    );
+    let obligation = queue_plan_pending_obligation_for_test(&state, &certificate);
+    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
+    let route = obligation.routes[0];
+    let alternate_binding_hash = Hash::new(b"alternate route-member binding");
+    assert_ne!(alternate_binding_hash, obligation.binding_hash);
+    let alternate_member_identity = State::queue_plan_pending_route_member_identity_from_claim(
+        obligation.network_id_digest,
+        obligation.entrypoint_hash.clone(),
+        alternate_binding_hash,
+        route,
+    )
+    .expect("derive self-consistent alternate member identity");
+    let alternate_member = QueuePlanPendingRouteMemberV1 {
+        version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1,
+        route,
+        network_id_digest: obligation.network_id_digest,
+        entrypoint_hash: obligation.entrypoint_hash.clone(),
+        binding_hash: alternate_binding_hash,
+        member_identity: alternate_member_identity,
+    };
+    let alternate_key =
+        State::queue_plan_pending_route_member_marker_key(route, alternate_member_identity)
+            .expect("alternate route-member key");
+    let alternate_payload =
+        State::queue_plan_pending_route_member_marker_payload(&alternate_member)
+            .expect("canonical alternate route-member payload");
+    {
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(alternate_key.clone(), alternate_payload.clone());
+        world.commit();
+    }
+    let world = state.world.view();
+    assert!(
+        State::queue_plan_pending_route_members_from_storage(world.smart_contract_state(), route,)
+            .is_err(),
+        "a canonical route member must still match the exact obligation projection"
+    );
+    assert_eq!(
+        world.smart_contract_state().get(&alternate_key),
+        Some(&alternate_payload),
+        "failed roster validation must preserve the forged marker for diagnosis"
+    );
+}
+
 #[test]
 fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() {
     #[derive(Clone, Copy)]
@@ -2804,6 +3101,10 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         view: 0,
         carrier_height,
         carrier_parent_hash: parent.hash(),
+        lane_authority_catalog: state
+            .merge_active_lane_authority_snapshot(carrier_height)
+            .expect("fixture exact lane authority")
+            .2,
         lane_catalog_hash: merge_lane_catalog_hash(&lifecycle.nexus.lane_catalog),
         active_lanes: active_lanes.clone(),
         incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
@@ -2823,7 +3124,7 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         .expect("candidate is valid with exact committed pre-carrier authority");
 }
 #[test]
-fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_advance() {
+fn pending_queue_plan_admission_accepts_unchanged_source_after_height_only_advance() {
     let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
     let authority_height = parent.header().height().get();
     let proposal_height = authority_height
@@ -2863,13 +3164,58 @@ fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_adva
         .get()
         .checked_add(1)
         .expect("fixture next proposal height");
+    let certificate_hash = Hash::new(&certificate);
+    assert!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificate(certificate_hash)
+            .expect("inspect pre-carrier sidecar state")
+            .is_none(),
+        "carrier validation must not depend on prior local sidecar ingestion"
+    );
     assert_eq!(
         state
             .classify_pending_queue_plan_admission(&certificate, next_proposal_height)
-            .expect("historically bound certificate remains classifiable after advancement")
+            .expect("historically bound certificate remains structurally classifiable")
             .1,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent,
-        "advancing the receiver must retain the exact predecessor, roster, and incarnation authority at H"
+        "a height-only advance must not strand a quorum certificate whose complete authority source is unchanged"
+    );
+    let carrier = empty_global_block_after(Some(&successor));
+    let staged = state
+        .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.clone()])
+        .expect("a leader may directly carry the safe historical certificate");
+    assert_eq!(
+        staged.staged_queue_plan_admissions(),
+        core::slice::from_ref(&certificate)
+    );
+    drop(staged);
+    let persisted = state
+        .persist_classified_queue_plan_admission(&certificate)
+        .expect("safe historical certificate persists at the exact durable frontier");
+    let PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+        certificate_hash: persisted_hash,
+        certificate: persisted_bytes,
+        disposition,
+        inserted,
+        ..
+    } = persisted
+    else {
+        panic!("safe historical certificate must remain durable")
+    };
+    assert_eq!(persisted_hash, certificate_hash);
+    assert_eq!(persisted_bytes, certificate);
+    assert_eq!(
+        disposition,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    assert!(inserted);
+    assert_eq!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificate(certificate_hash)
+            .expect("read exact historical sidecar"),
+        Some(certificate)
     );
 }
 #[test]
@@ -3000,66 +3346,195 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
     );
 }
+
+fn assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
+    state: &State,
+    certificate: &[u8],
+    carrier: &SignedBlock,
+    label: &str,
+) {
+    let carrier_height = carrier.header().height().get();
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(certificate, carrier_height)
+            .unwrap_or_else(|error| panic!(
+                "{label} must remain structurally classifiable: {error}"
+            ))
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale,
+        "{label} must be stale"
+    );
+    let outcome = state
+        .persist_classified_queue_plan_admission(certificate)
+        .unwrap_or_else(|error| panic!("{label} persistence must fail closed: {error}"));
+    assert!(
+        matches!(
+            outcome,
+            PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+                disposition: PendingQueuePlanAdmissionDisposition::Stale,
+                ..
+            }
+        ),
+        "{label} must be rejected by durable admission persistence: {outcome:?}"
+    );
+    assert!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificate(Hash::new(certificate))
+            .unwrap_or_else(|error| panic!("inspect {label} sidecar state: {error}"))
+            .is_none(),
+        "{label} must leave no durable sidecar"
+    );
+    assert!(
+        state
+            .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.to_vec()],)
+            .is_err(),
+        "a direct carrier must reject {label}"
+    );
+}
+
+fn assert_invalid_historical_queue_plan_admission_is_not_retained_or_carried(
+    state: &State,
+    certificate: &[u8],
+    carrier: &SignedBlock,
+    label: &str,
+) {
+    let carrier_height = carrier.header().height().get();
+    assert!(
+        state
+            .classify_pending_queue_plan_admission(certificate, carrier_height)
+            .is_err(),
+        "{label} must fail certificate authentication"
+    );
+    assert!(
+        state
+            .persist_classified_queue_plan_admission(certificate)
+            .is_err(),
+        "{label} must fail before durable admission persistence"
+    );
+    assert!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificate(Hash::new(certificate))
+            .unwrap_or_else(|error| panic!("inspect {label} sidecar state: {error}"))
+            .is_none(),
+        "{label} must leave no durable sidecar"
+    );
+    assert!(
+        state
+            .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.to_vec()],)
+            .is_err(),
+        "a direct carrier must reject {label}"
+    );
+}
+
 #[test]
-fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_stale() {
+fn pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarnation() {
     let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
     let authority_height = parent.header().height().get();
-    let proposal_height = authority_height
-        .checked_add(1)
-        .expect("fixture proposal height");
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,
         DataSpaceId::UNIVERSAL,
     ));
-    let forged_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"mutated-pending-queue-plan-predecessor",
-    ));
-    {
-        let mut block_hashes = state.block_hashes.block_and_revert();
-        block_hashes.push_for_tests(forged_predecessor);
-        block_hashes.commit_for_tests();
-    }
-    let (_, predecessor_certificate) = queue_plan_admission_certificate_for_state_test(
+    let (mut predecessor_binding, _) = queue_plan_admission_certificate_for_state_test(
         &state,
         routing_plan.clone(),
         &validator_keypairs,
         authority_height,
         0x65,
     );
-    {
-        let mut block_hashes = state.block_hashes.block_and_revert();
-        block_hashes.push_for_tests(parent.hash());
-        block_hashes.commit_for_tests();
-    }
-    assert_eq!(
-        state
-            .classify_pending_queue_plan_admission(&predecessor_certificate, proposal_height)
-            .expect("authenticated predecessor mutation is classifiable")
-            .1,
-        PendingQueuePlanAdmissionDisposition::Stale
+    let forged_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"mutated-pending-queue-plan-predecessor",
+    ));
+    predecessor_binding.admission_context.predecessor_block_hash = Some(forged_predecessor);
+    let predecessor_certificate = queue_plan_admission_certificate_bytes_for_state_test(
+        &predecessor_binding,
+        &validator_keypairs,
     );
-    let (alternate_validator_ids, alternate_validator_keypairs) =
-        bls_accounts_in("mutated-queue-plan-roster", 4);
-    seed_consensus_keys_with_pops(&state, &alternate_validator_keypairs);
+    let (_, roster_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        authority_height,
+        0x66,
+    );
+    let (_, incarnation_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        authority_height,
+        0x67,
+    );
+    let mut below_quorum = norito::decode_from_bytes::<
+        crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+    >(&roster_certificate)
+    .expect("decode quorum certificate fixture");
+    assert_eq!(below_quorum.attestations.len(), 2);
+    let retained_signer_ids = below_quorum
+        .attestations
+        .iter()
+        .map(|attestation| {
+            let validator = below_quorum.binding.admission_context.route_incarnations[0]
+                .validator_set
+                .get(usize::from(attestation.validator_index))
+                .expect("fixture signer index is in bounds");
+            AccountId::new(validator.public_key().clone())
+        })
+        .collect::<Vec<_>>();
+    below_quorum.attestations.pop();
+    let below_quorum = norito::to_bytes(&below_quorum).expect("encode below-quorum fixture");
+
+    let successor = empty_global_block_after(Some(&parent));
+    state
+        .kura
+        .store_block(Arc::new(successor.clone()))
+        .expect("store the canonical successor before committing State metadata");
+    commit_block_metadata_to_state(&state, &successor);
+    let carrier_height = successor
+        .header()
+        .height()
+        .get()
+        .checked_add(1)
+        .expect("fixture carrier height");
+    let carrier = empty_global_block_after(Some(&successor));
+    assert_eq!(carrier.header().height().get(), carrier_height);
+    assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
+        &state,
+        &predecessor_certificate,
+        &carrier,
+        "historical certificate with a forged predecessor",
+    );
+    assert_invalid_historical_queue_plan_admission_is_not_retained_or_carried(
+        &state,
+        &below_quorum,
+        &carrier,
+        "historical certificate with only f signatures",
+    );
+
+    let (replacement_validator_ids, replacement_validator_keypairs) =
+        bls_accounts_in("mutated-queue-plan-roster", 2);
+    let mut partially_changed_validator_ids = retained_signer_ids;
+    partially_changed_validator_ids.extend(replacement_validator_ids);
+    assert_eq!(partially_changed_validator_ids.len(), 4);
+    seed_consensus_keys_with_pops(&state, &replacement_validator_keypairs);
     install_lane_manifest_registry(
         &state,
         &[(
             LaneId::SINGLE,
             DataSpaceId::UNIVERSAL,
-            alternate_validator_ids,
+            partially_changed_validator_ids,
         )],
-    );
-    let (_, roster_certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan.clone(),
-        &alternate_validator_keypairs,
-        authority_height,
-        0x66,
     );
     let original_validator_ids = validator_keypairs
         .iter()
         .map(|keypair| AccountId::new(keypair.public_key().clone()))
         .collect::<Vec<_>>();
+    assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
+        &state,
+        &roster_certificate,
+        &carrier,
+        "historical certificate whose current roster retains its signers but replaces non-signers",
+    );
     install_lane_manifest_registry(
         &state,
         &[(
@@ -3070,35 +3545,433 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
     );
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&roster_certificate, proposal_height)
-            .expect("authenticated roster mutation is classifiable")
+            .classify_pending_queue_plan_admission(&roster_certificate, carrier_height)
+            .expect("restored exact source is classifiable")
             .1,
-        PendingQueuePlanAdmissionDisposition::Stale
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent,
+        "the static-f model intentionally accepts an old certificate whenever its exact source is current again"
+    );
+    let original_incarnation = state
+        .lane_incarnation(LaneId::SINGLE)
+        .expect("fixture lane incarnation");
+    let _ = state.set_lane_incarnation_for_test(
+        LaneId::SINGLE,
+        Hash::new(b"mutated-pending-queue-plan-incarnation"),
+    );
+    assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
+        &state,
+        &incarnation_certificate,
+        &carrier,
+        "historical certificate with a stale lane incarnation",
+    );
+    let _ = state.set_lane_incarnation_for_test(LaneId::SINGLE, original_incarnation);
+}
+
+#[test]
+fn pending_queue_plan_admission_checks_historical_native_amx_participant_sources() {
+    let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
+    let participant_lane = LaneId::new(1);
+    let routing_plan = crate::queue::RoutingPlan::native_amx(
+        crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        vec![crate::queue::RouteLeg::new(
+            crate::queue::RoutingDecision::new(participant_lane, DataSpaceId::UNIVERSAL),
+            crate::queue::RouteLegRole::Participant,
+        )],
+    );
+    let authority_height = parent.header().height().get();
+    let (_, roster_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        authority_height,
+        0x69,
     );
     let (_, incarnation_certificate) = queue_plan_admission_certificate_for_state_test(
         &state,
         routing_plan,
         &validator_keypairs,
         authority_height,
-        0x67,
+        0x6A,
     );
-    let original_incarnation = state
-        .lane_incarnation(LaneId::SINGLE)
-        .expect("fixture lane incarnation");
-    let _ = state.lane_incarnations.write().insert(
-        LaneId::SINGLE,
-        Hash::new(b"mutated-pending-queue-plan-incarnation"),
+    let successor = empty_global_block_after(Some(&parent));
+    state
+        .kura
+        .store_block(Arc::new(successor.clone()))
+        .expect("store the canonical successor before committing State metadata");
+    commit_block_metadata_to_state(&state, &successor);
+    let carrier = empty_global_block_after(Some(&successor));
+
+    let original_validator_ids = validator_keypairs
+        .iter()
+        .map(|keypair| AccountId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    let (replacement_validator_ids, replacement_validator_keypairs) =
+        bls_accounts_in("mutated-native-amx-participant-roster", 4);
+    seed_consensus_keys_with_pops(&state, &replacement_validator_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                original_validator_ids.clone(),
+            ),
+            (
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                replacement_validator_ids,
+            ),
+        ],
+    );
+    assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
+        &state,
+        &roster_certificate,
+        &carrier,
+        "historical Native-AMX certificate with a stale participant roster",
+    );
+
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                original_validator_ids.clone(),
+            ),
+            (
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                original_validator_ids,
+            ),
+        ],
     );
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&incarnation_certificate, proposal_height)
-            .expect("authenticated incarnation mutation is classifiable")
+            .classify_pending_queue_plan_admission(
+                &roster_certificate,
+                carrier.header().height().get(),
+            )
+            .expect("restored Native-AMX sources are classifiable")
             .1,
-        PendingQueuePlanAdmissionDisposition::Stale
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
     );
-    let _ = state
-        .lane_incarnations
-        .write()
-        .insert(LaneId::SINGLE, original_incarnation);
+
+    let original_incarnation = state
+        .lane_incarnation(participant_lane)
+        .expect("fixture participant lane incarnation");
+    let _ = state.set_lane_incarnation_for_test(
+        participant_lane,
+        Hash::new(b"mutated-native-amx-participant-incarnation"),
+    );
+    assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
+        &state,
+        &incarnation_certificate,
+        &carrier,
+        "historical Native-AMX certificate with a stale participant incarnation",
+    );
+    let _ = state.set_lane_incarnation_for_test(participant_lane, original_incarnation);
+}
+
+#[test]
+fn pending_queue_plan_persistence_serializes_alternate_quorum_subsets() {
+    let (state, validator_keypairs, _, _) = configured_single_lane_queue_plan_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (binding, first_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(&state),
+        0x68,
+    );
+    let second_certificate = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &binding,
+        &validator_keypairs,
+        &[2, 3],
+    );
+    assert_ne!(first_certificate, second_certificate);
+
+    let state = Arc::new(state);
+    let commit_guard = state.state_commit_lock.lock();
+    let scans_before = state
+        .kura
+        .pending_queue_plan_admission_inventory_scans
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let (first_started_tx, first_started_rx) = std::sync::mpsc::channel();
+    let first_state = Arc::clone(&state);
+    let first = std::thread::spawn(move || {
+        first_started_tx.send(()).expect("announce first writer");
+        first_state.persist_classified_queue_plan_admission(&first_certificate)
+    });
+    first_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("first persistence writer starts");
+    let scan_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while state
+        .kura
+        .pending_queue_plan_admission_inventory_scans
+        .load(std::sync::atomic::Ordering::Relaxed)
+        == scans_before
+    {
+        assert!(
+            std::time::Instant::now() < scan_deadline,
+            "first writer must finish its inventory scan outside state_commit_lock"
+        );
+        std::thread::yield_now();
+    }
+
+    let (second_started_tx, second_started_rx) = std::sync::mpsc::channel();
+    let second_state = Arc::clone(&state);
+    let second = std::thread::spawn(move || {
+        second_started_tx.send(()).expect("announce second writer");
+        second_state.persist_classified_queue_plan_admission(&second_certificate)
+    });
+    second_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("second persistence writer starts");
+    let serialization_deadline = std::time::Instant::now() + Duration::from_millis(100);
+    while std::time::Instant::now() < serialization_deadline {
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        state
+            .kura
+            .pending_queue_plan_admission_inventory_scans
+            .load(std::sync::atomic::Ordering::Relaxed),
+        scans_before + 1,
+        "the outer admission mutex must stop a second stale inventory snapshot"
+    );
+    drop(commit_guard);
+
+    let first = first
+        .join()
+        .expect("join first persistence writer")
+        .expect("first persistence writer retains one exact certificate");
+    let second = second
+        .join()
+        .expect("join second persistence writer")
+        .expect("alternate signer subset reuses the first logical certificate");
+    let durable_projection = |outcome: PendingQueuePlanAdmissionPersistenceOutcome| {
+        let PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+            certificate_hash,
+            certificate,
+            ..
+        } = outcome
+        else {
+            panic!("both quorum subsets must resolve to durable evidence")
+        };
+        (certificate_hash, certificate)
+    };
+    let first = durable_projection(first);
+    let second = durable_projection(second);
+    assert_eq!(first, second);
+    let inventory = state
+        .kura
+        .pending_queue_plan_admission_certificates()
+        .expect("inspect deduplicated QueuePlan inventory");
+    assert_eq!(inventory, vec![first]);
+}
+
+#[test]
+fn pending_queue_plan_persistence_yields_to_one_ahead_state_publication() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        parent.header().height().get(),
+        0x6B,
+    );
+    let certificate_hash = Hash::new(&certificate);
+    let successor = empty_global_block_after(Some(&parent));
+    state
+        .kura
+        .store_block(Arc::new(successor.clone()))
+        .expect("store the canonical successor before publishing State metadata");
+
+    let state = Arc::new(state);
+    let state_commit_guard = state.state_commit_lock.lock();
+    let scans_before = state
+        .kura
+        .pending_queue_plan_admission_inventory_scans
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let admission_state = Arc::clone(&state);
+    let admission = std::thread::spawn(move || {
+        admission_state.persist_classified_queue_plan_admission(&certificate)
+    });
+    let scan_deadline = Instant::now() + Duration::from_secs(5);
+    while state
+        .kura
+        .pending_queue_plan_admission_inventory_scans
+        .load(std::sync::atomic::Ordering::Relaxed)
+        == scans_before
+    {
+        assert!(
+            Instant::now() < scan_deadline,
+            "admission must finish its inventory scan before entering the State fence"
+        );
+        std::thread::yield_now();
+    }
+    drop(state_commit_guard);
+    commit_block_metadata_to_state(&state, &successor);
+
+    let outcome = admission
+        .join()
+        .expect("join QueuePlan admission writer")
+        .expect("one-ahead admission must retry after State publication catches up");
+    let PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+        certificate_hash: persisted_hash,
+        inserted,
+        ..
+    } = outcome
+    else {
+        panic!("caught-up QueuePlan admission must become durable")
+    };
+    assert_eq!(persisted_hash, certificate_hash);
+    assert!(inserted);
+}
+
+#[test]
+fn pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        parent.header().height().get(),
+        0x6C,
+    );
+    let certificate_hash = Hash::new(&certificate);
+    let successor = empty_global_block_after(Some(&parent));
+    state
+        .kura
+        .store_block(Arc::new(successor.clone()))
+        .expect("store the one-ahead canonical successor");
+
+    let assert_height_mismatch = |error: MergeLedgerCommitError, actual_durable_height| {
+        assert!(
+            matches!(
+                &error,
+                MergeLedgerCommitError::Persistence(
+                    crate::kura::Error::QueuePlanAdmissionDurableHeightMismatch {
+                        expected_durable_height,
+                        actual_durable_height: actual,
+                    }
+                ) if *expected_durable_height == parent.header().height().get()
+                    && *actual == actual_durable_height
+            ),
+            "admission must retain the exact fail-closed frontier diagnostic: {error}"
+        );
+    };
+    let timeout_error = state
+        .persist_classified_queue_plan_admission(&certificate)
+        .expect_err("one-ahead Kura must time out when State never publishes");
+    assert_height_mismatch(timeout_error, successor.header().height().get());
+    assert!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificate(certificate_hash)
+            .expect("inspect timed-out admission sidecar")
+            .is_none(),
+        "a timed-out frontier reconciliation must not persist the certificate"
+    );
+
+    let second_successor = empty_global_block_after(Some(&successor));
+    state
+        .kura
+        .store_block(Arc::new(second_successor.clone()))
+        .expect("store the second canonical successor");
+    let hard_mismatch = state
+        .persist_classified_queue_plan_admission(&certificate)
+        .expect_err("Kura more than one ahead must fail closed");
+    assert_height_mismatch(hard_mismatch, second_successor.header().height().get());
+    assert!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificate(certificate_hash)
+            .expect("inspect hard-mismatch admission sidecar")
+            .is_none(),
+        "a hard frontier mismatch must not persist the certificate"
+    );
 }
 include!("autonomous_merge_and_queue_plan_native_diagnostic_tests.rs");
+#[test]
+fn merge_execution_prefix_budget_includes_historical_authority_catalog() {
+    let (_state, entry, _carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
+    let mut template = crate::merge::MergeLedgerCandidate::from(&entry);
+    let batch = template
+        .execution_batch
+        .take()
+        .expect("certified execution fixture");
+    // Repeat the fixture lane only to vary encoded prefix sizes at this byte
+    // selection boundary. Full lane/source validity is checked by admission.
+    let build_batch = |prefix: usize| {
+        let mut prefix_batch = batch.clone();
+        prefix_batch.lanes = vec![batch.lanes[0].clone(); prefix];
+        prefix_batch.entrypoint_count *= u64::try_from(prefix).unwrap();
+        Some(prefix_batch)
+    };
+    let mut two_source_candidate = template.clone();
+    two_source_candidate.execution_batch = build_batch(2);
+    let unsigned_limit = two_source_candidate.canonical_bytes().len();
+    let selected =
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, build_batch)
+            .expect("exactly fitting two-source prefix");
+    assert_eq!(selected.execution_batch.unwrap().lanes.len(), 2);
+
+    let mut expanded_catalog = template.clone();
+    let mut validators = expanded_catalog.lane_authority_catalog.rosters[0]
+        .validators
+        .clone();
+    validators.extend((0xB1_u8..=0xB3).map(|seed| {
+        PeerId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("distinct budget fixture validator")
+                .public_key()
+                .clone(),
+        )
+    }));
+    validators.sort();
+    expanded_catalog.lane_authority_catalog.rosters[0] =
+        iroha_data_model::merge::MergeLaneCommitteeRosterV1::new(validators);
+    expanded_catalog
+        .lane_authority_catalog
+        .validate_for_active_lanes(expanded_catalog.active_lanes.len())
+        .expect("expanded catalog remains canonical");
+    let selected = State::select_merge_execution_candidate_prefix(
+        &expanded_catalog,
+        3,
+        unsigned_limit,
+        build_batch,
+    )
+    .expect("smaller prefix still fits with a larger authority catalog");
+    assert_eq!(
+        selected.lane_authority_catalog,
+        expanded_catalog.lane_authority_catalog
+    );
+    assert_eq!(selected.execution_batch.unwrap().lanes.len(), 1);
+    assert!(
+        State::select_merge_execution_candidate_prefix(&expanded_catalog, 3, 0, build_batch,)
+            .is_none(),
+        "an uncarryable first source must never produce a candidate"
+    );
+    assert!(
+        State::select_merge_execution_candidate_prefix(&template, 0, unsigned_limit, build_batch,)
+            .is_none()
+    );
+    assert!(
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| None,)
+            .is_none(),
+        "failed source construction remains fail-closed"
+    );
+}

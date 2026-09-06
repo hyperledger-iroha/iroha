@@ -159,6 +159,18 @@ def _governance_deploy_draft_response() -> dict[str, Any]:
     }
 
 
+def _governance_ballot_draft_response() -> dict[str, Any]:
+    return {
+        "drafted": True,
+        "tx_instructions": [
+            {
+                "wire_id": "CastZkBallot",
+                "payload_hex": "00",
+            }
+        ],
+    }
+
+
 def _governance_client(session: RecordingSession) -> ToriiClient:
     return ToriiClient(
         "http://node.test",
@@ -581,7 +593,7 @@ def test_governance_mutations_preserve_supported_canonical_payloads(
     response_payload = (
         _governance_deploy_draft_response()
         if method_name == "governance_deploy_contract_proposal"
-        else {"ok": True}
+        else _governance_ballot_draft_response()
     )
     session = RecordingSession(StubResponse(payload=response_payload))
     client = _governance_client(session)

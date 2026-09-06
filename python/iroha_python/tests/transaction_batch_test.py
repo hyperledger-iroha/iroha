@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -61,12 +62,13 @@ def test_transaction_draft_keeps_instruction_call_instruction_order(
 
     assert tuple(draft.entries) == (first, call, last)
     assert tuple(draft.instructions) == (first, last)
-    assert draft.sign(b"private") == "signed"
+    assert tuple(draft) == (first, call, last)
+    assert draft.sign(bytes([0x11]) * 32) == "signed"
     assert captured["kwargs"]["instructions"] is None
     assert captured["kwargs"]["entries"] == [first, call, last]
 
 
-def test_instruction_only_draft_stays_legacy_unless_batch_is_explicit(
+def test_instruction_only_draft_uses_instruction_executable_unless_batch_is_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -77,18 +79,138 @@ def test_instruction_only_draft_stays_legacy_unless_batch_is_explicit(
 
     monkeypatch.setattr(tx_module, "build_signed_transaction", fake_build_signed_transaction)
     instruction = object()
-    legacy = TransactionDraft(config())
-    legacy.add_instruction(instruction)  # type: ignore[arg-type]
-    legacy.sign(b"private")
+    instruction_draft = TransactionDraft(config())
+    instruction_draft.add_instruction(instruction)  # type: ignore[arg-type]
+    instruction_draft.sign(bytes([0x11]) * 32)
 
     explicit = TransactionDraft(config()).use_executable_batch()
     explicit.add_instruction(instruction)  # type: ignore[arg-type]
-    explicit.sign(b"private")
+    explicit.sign(bytes([0x11]) * 32)
 
     assert calls[0]["instructions"] == [instruction]
     assert calls[0]["entries"] is None
     assert calls[1]["instructions"] is None
     assert calls[1]["entries"] == [instruction]
+
+
+def test_transaction_config_is_strict_and_defensively_immutable() -> None:
+    fee_payment = {
+        "payer": "authority",
+        "value": {"charge_limits": [], "gas_limit": 1000},
+    }
+    metadata = {"labels": ["first"]}
+    value = TransactionConfig(
+        network_id=NETWORK_ID,
+        authority="ed0120" + "11" * 32,
+        fee_payment=fee_payment,
+        creation_time_ms=0,
+        ttl_ms=1,
+        nonce=1,
+        metadata=metadata,
+    )
+    fee_payment["value"]["charge_limits"].append("changed")
+    metadata["labels"].append("changed")
+
+    assert value.creation_time_ms == 0
+    assert value.fee_payment["value"]["charge_limits"] == ()
+    assert value.metadata is not None
+    assert value.metadata["labels"] == ("first",)
+    with pytest.raises(TypeError):
+        value.fee_payment["payer"] = "changed"  # type: ignore[index]
+
+    for field, invalid in (
+        ("creation_time_ms", True),
+        ("creation_time_ms", -1),
+        ("ttl_ms", 0),
+        ("nonce", 0),
+        ("nonce", 1 << 32),
+    ):
+        kwargs = {field: invalid}
+        with pytest.raises((TypeError, ValueError), match=field):
+            TransactionConfig(
+                network_id=NETWORK_ID,
+                authority="ed0120" + "11" * 32,
+                fee_payment={"payer": "authority"},
+                **kwargs,
+            )
+
+    for invalid_metadata in (
+        {"value": float("nan")},
+        {"value": float("inf")},
+        {"value": object()},
+    ):
+        with pytest.raises((TypeError, ValueError), match="metadata"):
+            TransactionConfig(
+                network_id=NETWORK_ID,
+                authority="ed0120" + "11" * 32,
+                fee_payment={"payer": "authority"},
+                metadata=invalid_metadata,
+            )
+
+
+def test_sign_uses_exact_staged_state_without_override_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        tx_module,
+        "build_signed_transaction",
+        lambda *_args, **kwargs: captured.append(kwargs) or "signed",
+    )
+    monkeypatch.setattr(tx_module.time, "time", lambda: 123.456)
+    draft = TransactionDraft(
+        TransactionConfig(
+            network_id=NETWORK_ID,
+            authority="ed0120" + "11" * 32,
+            fee_payment={"payer": "authority"},
+        )
+    )
+    draft.add_instruction(object())  # type: ignore[arg-type]
+    monkeypatch.setattr(tx_module.time, "time", lambda: 999.0)
+
+    assert draft.sign(bytes([0x11]) * 32) == "signed"
+    assert draft.sign(bytes([0x11]) * 32) == "signed"
+    assert [call["creation_time_ms"] for call in captured] == [123456, 123456]
+    assert set(inspect.signature(draft.sign).parameters) == {"private_key"}
+    with pytest.raises(TypeError, match="unexpected keyword argument 'metadata'"):
+        draft.sign(bytes([0x11]) * 32, metadata={})  # type: ignore[call-arg]
+
+
+def test_generated_creation_time_is_shared_by_manifest_and_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builders: list[RecordingBuilder] = []
+    monkeypatch.setattr(tx_module.time, "time", lambda: 123.456)
+    draft = TransactionDraft(
+        TransactionConfig(
+            network_id=NETWORK_ID,
+            authority="ed0120" + "11" * 32,
+            fee_payment={"payer": "authority"},
+        )
+    )
+    monkeypatch.setattr(tx_module.time, "time", lambda: 999.0)
+    monkeypatch.setattr(
+        tx_module,
+        "TransactionBuilder",
+        lambda *_args: builders.append(RecordingBuilder()) or builders[-1],
+    )
+
+    first_manifest = draft.to_manifest_dict(include_creation_time=True)
+    second_manifest = draft.to_manifest_dict(include_creation_time=True)
+    draft.to_builder()
+
+    assert first_manifest["creation_time_ms"] == 123456
+    assert second_manifest == first_manifest
+    assert "creation_time_ms" not in draft.to_manifest_dict()
+    assert ("time", 123456) in builders[0].operations
+
+
+@pytest.mark.parametrize("private_key", [bytearray(32), memoryview(bytes(32)), bytes(31)])
+def test_sign_rejects_mutable_or_wrong_length_private_keys(private_key: object) -> None:
+    draft = TransactionDraft(config())
+
+    with pytest.raises((TypeError, ValueError), match="private_key"):
+        draft.sign(private_key)  # type: ignore[arg-type]
 
 
 def test_asset_definition_registration_uses_transaction_authority_as_owner(
@@ -332,9 +454,40 @@ class RecordingBuilder:
     def set_creation_time_ms(self, value: int) -> None:
         self.operations.append(("time", value))
 
+    def bind_privacy_exact12_capability_manifest_v1(self, manifest: Any) -> None:
+        self.operations.append(("manifest", manifest))
+
     def sign(self, private_key: bytes) -> str:
         self.operations.append(("sign", private_key))
         return "signed"
+
+
+def test_to_builder_is_a_pure_repeatable_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builders: list[RecordingBuilder] = []
+    manifest = object()
+    monkeypatch.setattr(
+        tx_module,
+        "_is_native_crypto_instance",
+        lambda value, name: value is manifest and name == "PrivacyExact12CapabilityManifestV1",
+    )
+    monkeypatch.setattr(
+        tx_module,
+        "TransactionBuilder",
+        lambda *_args: builders.append(RecordingBuilder()) or builders[-1],
+    )
+    draft = TransactionDraft(config()).bind_privacy_exact12_capability_manifest_v1(
+        manifest  # type: ignore[arg-type]
+    )
+
+    first = draft.to_builder()
+    second = draft.to_builder()
+
+    assert first is builders[0]
+    assert second is builders[1]
+    assert builders[0].operations == [("manifest", manifest), ("time", 42)]
+    assert builders[1].operations == [("manifest", manifest), ("time", 42)]
 
 
 def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
@@ -354,7 +507,7 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
     result = crypto_module.build_signed_transaction(
         NETWORK_ID,
         "authority",
-        b"private",
+        bytes([0x11]) * 32,
         fee_payment={"payer": "authority", "value": {}},
         entries=[instruction, call],  # type: ignore[list-item]
         creation_time_ms=42,
@@ -366,16 +519,80 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
         ("batch",),
         ("instruction", instruction),
         ("call", VALID_ADDRESS, VALID_HASH, "run", b"abc"),
-        ("sign", b"private"),
+        ("sign", bytes([0x11]) * 32),
     ]
     with pytest.raises(ValueError, match="mutually exclusive"):
         crypto_module.build_signed_transaction(
             NETWORK_ID,
             "authority",
-            b"private",
+            bytes([0x11]) * 32,
             fee_payment={"payer": "authority", "value": {}},
             instructions=[],
             entries=[],
+        )
+    with pytest.raises(TypeError, match="exact immutable bytes"):
+        crypto_module.build_signed_transaction(
+            NETWORK_ID,
+            "authority",
+            bytearray(32),  # type: ignore[arg-type]
+            fee_payment={"payer": "authority", "value": {}},
+        )
+    with pytest.raises(ValueError, match="exactly 32 bytes"):
+        crypto_module.build_signed_transaction(
+            NETWORK_ID,
+            "authority",
+            bytes(31),
+            fee_payment={"payer": "authority", "value": {}},
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("creation_time_ms", True, "integer"),
+        ("ttl_ms", 1.5, "integer"),
+        ("ttl_ms", 0, "positive"),
+        ("nonce", "1", "integer"),
+        ("nonce", 1 << 32, "no greater than"),
+    ],
+)
+def test_build_signed_transaction_rejects_lossy_integer_inputs(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        crypto_module.build_signed_transaction(
+            NETWORK_ID,
+            "authority",
+            bytes([0x11]) * 32,
+            fee_payment={"payer": "authority", "value": {}},
+            **{field: value},
+        )
+
+
+def test_build_signed_transaction_rejects_non_json_payload_values() -> None:
+    with pytest.raises(ValueError, match="NaN or Infinity"):
+        crypto_module.build_signed_transaction(
+            NETWORK_ID,
+            "authority",
+            bytes([0x11]) * 32,
+            fee_payment={"payer": "authority", "value": {"gas": float("nan")}},
+        )
+    with pytest.raises(TypeError, match="keys must be strings"):
+        crypto_module.build_signed_transaction(
+            NETWORK_ID,
+            "authority",
+            bytes([0x11]) * 32,
+            fee_payment={"payer": "authority", 1: "not-json"},  # type: ignore[dict-item]
+        )
+    with pytest.raises(TypeError, match="exact JSON values"):
+        crypto_module.build_signed_transaction(
+            NETWORK_ID,
+            "authority",
+            bytes([0x11]) * 32,
+            fee_payment={"payer": "authority", "value": {}},
+            metadata={"unsupported": object()},
         )
 
 

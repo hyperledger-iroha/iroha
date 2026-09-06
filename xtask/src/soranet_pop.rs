@@ -1863,7 +1863,7 @@ fn write_bringup_checklist(pop: &PopDescriptor, root: &Path, image_tag: &str) ->
     .unwrap();
     writeln!(
         contents,
-        "- [ ] Fill `pop.env` and `secrets/secret_placeholders.toml` with site defaults (vault/KMS references only)."
+        "- [ ] Fill `pop.env` and `secrets/secret_placeholders.toml` with site defaults (deployment-owned secret references only)."
     )
     .unwrap();
     writeln!(
@@ -1989,7 +1989,7 @@ fn promotion_gate_messages(pop_name: &str, image_tag: &str) -> Vec<String> {
             "Golden image `{}` signed with sigstore; `pxe_profile.toml` boot_image/checksum updated for {}",
             image_tag, pop_name
         ),
-        "Secrets resolved via vault/KMS references inside secrets/secret_placeholders.toml (no cleartext)".to_string(),
+        "Secrets resolved via deployment-owned references inside secrets/secret_placeholders.toml (no cleartext)".to_string(),
         "FRR + resolver configs applied with checksums matching bundle_manifest.json".to_string(),
         "Health probe passes twice post-convergence using health_probe.sh".to_string(),
         format!(

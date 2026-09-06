@@ -11,21 +11,24 @@ use std::{cmp::Ordering, vec::Vec};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+pub use crate::governance::types::{
+    PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+    parliament_timed_ovn_required_chunk_blocks_v1,
+};
+
 use crate::{
     governance::types::{
         AssignmentId, BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
         BodyInstanceId, DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1,
-        GovernanceAttemptV1, GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody,
-        ProposalKind, RiskTierV1, SortitionRequestId, SortitionRequestV1, TleKeySessionId,
-        TleSessionId,
+        GovernanceAttemptV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+        MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1, MAX_PARLIAMENT_BALLOT_RETRIES_V1,
+        MAX_PARLIAMENT_SORTITION_RETRIES_V1, ParliamentBody, ProposalKind, RiskTierV1,
+        SortitionRequestId, SortitionRequestV1, TleKeySessionId, TleSessionId,
     },
     seal,
 };
 
-/// Exact canonical width of one timed-OVN participant-registration record.
-pub const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
-/// Exact canonical width of one timed-OVN masked-ballot record.
-pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
 /// Number of distinct Parliament body roles and the maximum atomic sortition batch width.
 pub const MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10;
 
@@ -40,6 +43,8 @@ pub const MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::CreateParliamentGovernanceAttemptV1")]
 pub struct CreateParliamentGovernanceAttemptV1 {
     /// Exact typed proposal whose fingerprint is shared by every retry.
     pub proposal: ProposalKind,
@@ -95,6 +100,8 @@ impl seal::Instruction for CreateParliamentGovernanceAttemptV1 {}
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentEscalateRiskV1")]
 pub struct ParliamentEscalateRiskV1 {
     /// Strictly nondecreasing policy-derived risk tier.
     pub target: RiskTierV1,
@@ -107,6 +114,8 @@ pub struct ParliamentEscalateRiskV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentSortitionRequestRegistrationV1")]
 pub struct ParliamentSortitionRequestRegistrationV1 {
     /// Zero-based retry sequence for this body election.
     pub sequence: u32,
@@ -128,6 +137,8 @@ pub struct ParliamentSortitionRequestRegistrationV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterSortitionRequestV1")]
 pub struct ParliamentRegisterSortitionRequestV1 {
     /// Canonically body-ordered requests sharing one candidate snapshot and pulse slot.
     pub requests: Vec<ParliamentSortitionRequestRegistrationV1>,
@@ -140,6 +151,8 @@ pub struct ParliamentRegisterSortitionRequestV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentConsumeSortitionPulseBatchV1")]
 pub struct ParliamentConsumeSortitionPulseBatchV1 {
     /// Strictly ordered complete request identifiers for the pulse slot.
     pub request_ids: Vec<SortitionRequestId>,
@@ -158,6 +171,8 @@ pub struct ParliamentConsumeSortitionPulseBatchV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentBeginInvitationAcceptanceV1")]
 pub struct ParliamentBeginInvitationAcceptanceV1 {
     /// Election attempt whose finalized-pulse draw completed.
     pub election_attempt_id: BodyElectionAttemptId,
@@ -170,6 +185,8 @@ pub struct ParliamentBeginInvitationAcceptanceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentFailBodyElectionNoRosterV1")]
 pub struct ParliamentFailBodyElectionNoRosterV1 {
     /// Election attempt that failed.
     pub election_attempt_id: BodyElectionAttemptId,
@@ -186,6 +203,8 @@ pub struct ParliamentFailBodyElectionNoRosterV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentInvitationDecisionV1")]
 pub enum ParliamentInvitationDecisionV1 {
     /// Accept the offered Parliament assignment.
     #[codec(index = 0)]
@@ -202,6 +221,8 @@ pub enum ParliamentInvitationDecisionV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentRecordInvitationResponseV1")]
 pub struct ParliamentRecordInvitationResponseV1 {
     /// Election attempt whose ranked invitation is being answered.
     pub election_attempt_id: BodyElectionAttemptId,
@@ -221,6 +242,8 @@ pub struct ParliamentRecordInvitationResponseV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentSealBodyRosterV1")]
 pub struct ParliamentSealBodyRosterV1 {
     /// Election whose ranked, authority-bound responses determine the roster.
     ///
@@ -236,6 +259,8 @@ pub struct ParliamentSealBodyRosterV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentAdvanceBodyPhaseV1")]
 pub struct ParliamentAdvanceBodyPhaseV1 {
     /// Body instance being advanced.
     pub body_instance_id: BodyInstanceId,
@@ -250,6 +275,8 @@ pub struct ParliamentAdvanceBodyPhaseV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentRecordAttemptAbsenceV1")]
 pub struct ParliamentRecordAttemptAbsenceV1 {
     /// Body instance whose transaction-authority member declares their own absence.
     pub body_instance_id: BodyInstanceId,
@@ -266,6 +293,8 @@ pub struct ParliamentRecordAttemptAbsenceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentEndorsePublicFindingV1")]
 pub struct ParliamentEndorsePublicFindingV1 {
     /// Body instance contributing the finding.
     pub body_instance_id: BodyInstanceId,
@@ -280,6 +309,8 @@ pub struct ParliamentEndorsePublicFindingV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentFailPublicFindingNoResultV1")]
 pub struct ParliamentFailPublicFindingNoResultV1 {
     /// Public body whose frozen endorsement deadline has elapsed.
     pub body_instance_id: BodyInstanceId,
@@ -292,6 +323,8 @@ pub struct ParliamentFailPublicFindingNoResultV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterBallotAttemptV1")]
 pub struct ParliamentRegisterBallotAttemptV1 {
     /// Binding body instance receiving the private ballot.
     pub body_instance_id: BodyInstanceId,
@@ -320,6 +353,8 @@ pub struct ParliamentRegisterBallotAttemptV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterBallotParticipantV1")]
 pub struct ParliamentRegisterBallotParticipantV1 {
     /// Ballot attempt accepting the authenticated member registration.
     pub ballot_attempt_id: BallotAttemptId,
@@ -334,6 +369,8 @@ pub struct ParliamentRegisterBallotParticipantV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentCloseBallotRegistrationV1")]
 pub struct ParliamentCloseBallotRegistrationV1 {
     /// Ballot attempt whose registration closes.
     pub ballot_attempt_id: BallotAttemptId,
@@ -349,6 +386,8 @@ pub struct ParliamentCloseBallotRegistrationV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentRecordBallotDropoutV1")]
 pub struct ParliamentRecordBallotDropoutV1 {
     /// Ballot attempt from which the authenticated member withdraws.
     pub ballot_attempt_id: BallotAttemptId,
@@ -361,18 +400,26 @@ pub struct ParliamentRecordBallotDropoutV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentFreezeBallotSurvivorsV1")]
 pub struct ParliamentFreezeBallotSurvivorsV1 {
     /// Ballot attempt whose survivor set becomes immutable.
     pub ballot_attempt_id: BallotAttemptId,
 }
 
-/// Payload freezing the exact timed-OVN ciphertext and one-hot-proof corpus.
+/// Payload appending the exact next timed-OVN ciphertext and one-hot-proof chunk.
+///
+/// This is a permissionless progress transition. Core derives the starting
+/// survivor offset from committed state and accepts only proof-valid contiguous
+/// records, so the relayer cannot select or rewrite the corpus.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentFreezeTimedOvnCorpusV1")]
 pub struct ParliamentFreezeTimedOvnCorpusV1 {
     /// Ballot attempt whose next contiguous corpus chunk is appended.
     pub ballot_attempt_id: BallotAttemptId,
@@ -394,6 +441,8 @@ pub struct ParliamentFreezeTimedOvnCorpusV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentBeginBallotOpeningBatchV1")]
 pub struct ParliamentBeginBallotOpeningBatchV1 {
     /// Strictly ordered complete ballot attempts for the release slot.
     pub ballot_attempt_ids: Vec<BallotAttemptId>,
@@ -412,6 +461,8 @@ pub struct ParliamentBeginBallotOpeningBatchV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentFailBallotNoResultV1")]
 pub struct ParliamentFailBallotNoResultV1 {
     /// Ballot attempt that failed.
     pub ballot_attempt_id: BallotAttemptId,
@@ -428,6 +479,8 @@ pub struct ParliamentFailBallotNoResultV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentTleFinalReleaseSignatureV1")]
 pub struct ParliamentTleFinalReleaseSignatureV1 {
     /// Long-lived TLE key session producing the final signature.
     pub key_session_id: TleKeySessionId,
@@ -444,6 +497,8 @@ pub struct ParliamentTleFinalReleaseSignatureV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentFinalizeOpenedBallotV1")]
 pub struct ParliamentFinalizeOpenedBallotV1 {
     /// Ballot attempt whose complete survivor aggregate is opened.
     pub ballot_attempt_id: BallotAttemptId,
@@ -458,6 +513,8 @@ pub struct ParliamentFinalizeOpenedBallotV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticSupersededV1")]
 pub struct ParliamentAutomaticSupersededV1 {
     /// Different committed head observed when execution became due.
     pub observed_head: GovernanceExpectedHeadV1,
@@ -470,6 +527,8 @@ pub struct ParliamentAutomaticSupersededV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticExecutionFailedV1")]
 pub struct ParliamentAutomaticExecutionFailedV1 {
     /// Exact certified effect preimage hash.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -493,6 +552,8 @@ pub struct ParliamentAutomaticExecutionFailedV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticExecutionOutcomeV1")]
 pub enum ParliamentAutomaticExecutionOutcomeV1 {
     /// The exact certified effect enacted successfully.
     #[codec(index = 0)]
@@ -523,6 +584,8 @@ pub enum ParliamentAutomaticExecutionOutcomeV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentLifecycleTransitionV1")]
 pub enum ParliamentLifecycleTransitionV1 {
     /// Escalate the attempt's risk tier before Policy Jury sortition is frozen.
     #[codec(index = 0)]
@@ -605,6 +668,8 @@ pub enum ParliamentLifecycleTransitionV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentLifecycleTransitionKindV1")]
 pub enum ParliamentLifecycleTransitionKindV1 {
     /// Risk escalation.
     #[codec(index = 0)]
@@ -689,6 +754,298 @@ pub const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOME_DIGEST_V1: &[u8] =
     b"iroha.governance.parliament.automatic_execution_outcome.digest.v1";
 
 impl ParliamentLifecycleTransitionV1 {
+    /// Reject an inert or cross-attempt transition before stateful execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable message when the enclosing attempt is zero, an embedded
+    /// sortition request names another attempt, or [`Self::validate_static`]
+    /// rejects the payload.
+    pub fn validate_static_for_attempt(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+    ) -> Result<(), &'static str> {
+        require_nonzero_id(
+            governance_attempt_id.as_bytes(),
+            "governance attempt id must be non-zero",
+        )?;
+        if let Self::RegisterSortitionRequest(payload) = self
+            && payload
+                .requests
+                .iter()
+                .any(|entry| entry.request.governance_attempt_id != governance_attempt_id)
+        {
+            return Err(
+                "sortition request governance attempt id does not match the enclosing attempt",
+            );
+        }
+        self.validate_static()
+    }
+
+    /// Reject state-independent malformed or unbounded transition payloads.
+    ///
+    /// This validation is suitable for untrusted API requests and instruction
+    /// preflight. Authority, current phase, finalized height, candidate corpus,
+    /// and cryptographic proof checks remain consensus responsibilities because
+    /// they require authoritative world state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable message when an identifier, commitment, height, derived
+    /// binding, batch, or fixed-width cryptographic record is structurally invalid.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed V1 transition table stays auditable as one exhaustive match"
+    )]
+    pub fn validate_static(&self) -> Result<(), &'static str> {
+        match self {
+            Self::EscalateRisk(_) | Self::CompleteQualification => {}
+            Self::RegisterSortitionRequest(payload) => {
+                if payload.requests.is_empty()
+                    || payload.requests.len() > MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1
+                {
+                    return Err("sortition request batch must be nonempty and bounded");
+                }
+                if payload
+                    .requests
+                    .windows(2)
+                    .any(|pair| pair[0].request.body >= pair[1].request.body)
+                {
+                    return Err("sortition request batch must be strictly body-ordered");
+                }
+                let first = &payload.requests[0].request;
+                for entry in &payload.requests {
+                    if entry.sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+                        return Err("sortition retry sequence exceeds the protocol maximum");
+                    }
+                    // An empty canonical intent carries the immutable bindings Core needs
+                    // to record typed hidden-electorate capacity evidence. Core still
+                    // authenticates the live snapshot and decision mode before mutation.
+                    if entry.request.validate_capacity_intent(None).is_err() {
+                        return Err("sortition request is structurally invalid");
+                    }
+                    if entry.request.body_election_attempt_id
+                        != BodyElectionAttemptId::derive_v1(
+                            entry.request.governance_attempt_id,
+                            entry.request.body,
+                            entry.sequence,
+                        )
+                    {
+                        return Err("sortition election attempt id is not canonical");
+                    }
+                    if entry.request.governance_attempt_id != first.governance_attempt_id
+                        || entry.request.candidate_count != first.candidate_count
+                        || entry.request.request_height != first.request_height
+                        || entry.request.pulse_height != first.pulse_height
+                        || entry.request.beacon_session_id != first.beacon_session_id
+                    {
+                        return Err("sortition request batch does not share immutable bindings");
+                    }
+                }
+            }
+            Self::ConsumeSortitionPulseBatch(payload) => {
+                if !strictly_ordered_nonempty_bounded(
+                    &payload.request_ids,
+                    MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1,
+                ) {
+                    return Err("sortition request batch must be nonempty, bounded, and ordered");
+                }
+                if payload
+                    .request_ids
+                    .iter()
+                    .any(|id| bytes_are_zero(id.as_bytes()))
+                    || bytes_are_zero(payload.beacon_session_id.as_bytes())
+                    || payload.pulse_height == 0
+                    || bytes_are_zero(payload.pulse_id.as_bytes())
+                {
+                    return Err("sortition pulse batch bindings must be non-zero");
+                }
+            }
+            Self::BeginInvitationAcceptance(payload) => {
+                require_nonzero_id(
+                    payload.election_attempt_id.as_bytes(),
+                    "body-election attempt id must be non-zero",
+                )?;
+            }
+            Self::FailBodyElectionNoRoster(payload) => {
+                require_nonzero_id(
+                    payload.election_attempt_id.as_bytes(),
+                    "body-election attempt id must be non-zero",
+                )?;
+            }
+            Self::SealBodyRoster(payload) => {
+                require_nonzero_id(
+                    payload.election_attempt_id.as_bytes(),
+                    "body-election attempt id must be non-zero",
+                )?;
+            }
+            Self::AdvanceBodyPhase(payload) => {
+                require_nonzero_id(
+                    payload.body_instance_id.as_bytes(),
+                    "body instance id must be non-zero",
+                )?;
+            }
+            Self::RecordAttemptAbsence(payload) => {
+                require_nonzero_id(
+                    payload.body_instance_id.as_bytes(),
+                    "body instance id must be non-zero",
+                )?;
+                require_nonzero_id(
+                    payload.assignment_id.as_bytes(),
+                    "assignment id must be non-zero",
+                )?;
+            }
+            Self::EndorsePublicFinding(payload) => {
+                require_nonzero_id(
+                    payload.body_instance_id.as_bytes(),
+                    "body instance id must be non-zero",
+                )?;
+                require_nonzero_id(&payload.result_root, "public finding root must be non-zero")?;
+            }
+            Self::FailPublicFindingNoResult(payload) => {
+                require_nonzero_id(
+                    payload.body_instance_id.as_bytes(),
+                    "body instance id must be non-zero",
+                )?;
+            }
+            Self::RegisterBallotAttempt(payload) => {
+                require_nonzero_id(
+                    payload.body_instance_id.as_bytes(),
+                    "body instance id must be non-zero",
+                )?;
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+                require_nonzero_id(
+                    payload.tle_session_id.as_bytes(),
+                    "TLE session id must be non-zero",
+                )?;
+                require_nonzero_id(
+                    payload.tle_key_session_id.as_bytes(),
+                    "TLE key session id must be non-zero",
+                )?;
+                require_nonzero_id(
+                    payload.release_beacon_session_id.as_bytes(),
+                    "release beacon session id must be non-zero",
+                )?;
+                if payload.release_height == 0 {
+                    return Err("ballot release height must be non-zero");
+                }
+                if payload.sequence > MAX_PARLIAMENT_BALLOT_RETRIES_V1 {
+                    return Err("ballot retry sequence exceeds the protocol maximum");
+                }
+                if payload.ballot_attempt_id
+                    != BallotAttemptId::derive_v1(payload.body_instance_id, payload.sequence)
+                {
+                    return Err("ballot attempt id is not canonical");
+                }
+                if payload.tle_session_id
+                    != TleSessionId::derive_v1(
+                        payload.ballot_attempt_id,
+                        payload.tle_key_session_id,
+                        payload.release_beacon_session_id,
+                        payload.release_height,
+                    )
+                {
+                    return Err("TLE session id is not canonical");
+                }
+            }
+            Self::RegisterBallotParticipant(payload) => {
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+                if payload.registration_record.len()
+                    != PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1
+                {
+                    return Err("timed-OVN registration record has the wrong canonical width");
+                }
+            }
+            Self::CloseBallotRegistration(payload) => {
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+            }
+            Self::RecordBallotDropout(payload) => {
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+            }
+            Self::FreezeBallotSurvivors(payload) => {
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+            }
+            Self::FreezeTimedOvnCorpus(payload) => {
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+                if payload.ballot_records.is_empty()
+                    || payload.ballot_records.len()
+                        > PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+                    || payload
+                        .ballot_records
+                        .iter()
+                        .any(|record| record.len() != PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1)
+                {
+                    return Err("timed-OVN ballot chunk violates its count or record-width bound");
+                }
+            }
+            Self::BeginBallotOpeningBatch(payload) => {
+                let maximum = usize::try_from(MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
+                    .expect("the V1 ballot corpus bound fits usize");
+                if !strictly_ordered_nonempty_bounded(&payload.ballot_attempt_ids, maximum) {
+                    return Err("ballot opening batch must be nonempty, bounded, and ordered");
+                }
+                if payload
+                    .ballot_attempt_ids
+                    .iter()
+                    .any(|id| bytes_are_zero(id.as_bytes()))
+                    || bytes_are_zero(payload.release_beacon_session_id.as_bytes())
+                    || payload.release_height == 0
+                    || bytes_are_zero(payload.pulse_id.as_bytes())
+                {
+                    return Err("ballot opening batch bindings must be non-zero");
+                }
+            }
+            Self::FailBallotNoResult(payload) => {
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+            }
+            Self::FinalizeOpenedBallot(payload) => {
+                require_nonzero_id(
+                    payload.ballot_attempt_id.as_bytes(),
+                    "ballot attempt id must be non-zero",
+                )?;
+                require_nonzero_id(
+                    payload.final_release.key_session_id.as_bytes(),
+                    "TLE key session id must be non-zero",
+                )?;
+                require_nonzero_id(
+                    &payload.final_release.identity_digest,
+                    "release identity digest must be non-zero",
+                )?;
+                if bytes_are_zero(&payload.final_release.signature) {
+                    return Err("release signature must be non-zero");
+                }
+            }
+            Self::RecordInvitationResponse(payload) => {
+                require_nonzero_id(
+                    payload.election_attempt_id.as_bytes(),
+                    "body-election attempt id must be non-zero",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// Return the bounded audit classification for this transition.
     #[must_use]
     pub const fn kind(&self) -> ParliamentLifecycleTransitionKindV1 {
@@ -758,6 +1115,22 @@ impl ParliamentLifecycleTransitionV1 {
     }
 }
 
+fn bytes_are_zero<const N: usize>(bytes: &[u8; N]) -> bool {
+    bytes.iter().all(|byte| *byte == 0)
+}
+
+fn require_nonzero_id(bytes: &[u8; 32], message: &'static str) -> Result<(), &'static str> {
+    if bytes_are_zero(bytes) {
+        Err(message)
+    } else {
+        Ok(())
+    }
+}
+
+fn strictly_ordered_nonempty_bounded<T: Ord>(items: &[T], maximum: usize) -> bool {
+    !items.is_empty() && items.len() <= maximum && items.windows(2).all(|pair| pair[0] < pair[1])
+}
+
 impl ParliamentAutomaticExecutionOutcomeV1 {
     /// Return the bounded lifecycle-event classification for this automatic outcome.
     #[must_use]
@@ -783,18 +1156,21 @@ impl ParliamentAutomaticExecutionOutcomeV1 {
 ///
 /// A member's own invitation response, absence declaration, public-finding
 /// endorsement, timed-OVN registration, or dropout is bound to the signed
-/// authority. Deterministic ballot checkpoint, release, failure, and aggregate
-/// finalization variants are permissionless liveness triggers. Core requires
-/// the exact `CanManageParliament` permission for every remaining management
-/// transition. None of these callers can select a consensus result: the
-/// containing finalized block supplies order and height, and Core derives or
-/// revalidates every state, corpus, pulse, proof, and result binding.
+/// authority. Deterministic ballot checkpoints, exact-next proof-valid corpus
+/// chunks, release, failure, and aggregate finalization variants are
+/// permissionless liveness triggers. Core requires the exact
+/// `CanManageParliament` permission for every remaining management transition.
+/// None of these callers can select a consensus result: the containing finalized
+/// block supplies order and height, and Core derives or revalidates every state,
+/// corpus, pulse, proof, and result binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::SubmitParliamentLifecycleTransitionV1")]
 pub struct SubmitParliamentLifecycleTransitionV1 {
     /// Attempt whose reducer must consume the transition.
     pub governance_attempt_id: GovernanceAttemptId,
@@ -805,6 +1181,18 @@ pub struct SubmitParliamentLifecycleTransitionV1 {
 impl SubmitParliamentLifecycleTransitionV1 {
     /// Stable path-independent identifier used by the instruction registry.
     pub const WIRE_ID: &'static str = "iroha.governance.parliament.transition.submit.v1";
+
+    /// Reject state-independent malformed or cross-attempt transition payloads.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable message when the outer attempt is inert, an embedded
+    /// sortition request names another attempt, or the transition payload is
+    /// structurally invalid.
+    pub fn validate_static(&self) -> Result<(), &'static str> {
+        self.transition
+            .validate_static_for_attempt(self.governance_attempt_id)
+    }
 }
 
 impl seal::Instruction for SubmitParliamentLifecycleTransitionV1 {}
@@ -889,6 +1277,7 @@ mod tests {
 
     fn proposal() -> ProposalKind {
         ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: account(0x10),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse::<ContractAddress>()
                 .expect("parse Parliament instruction fixture contract address"),
@@ -1094,6 +1483,9 @@ mod tests {
         ];
         for (expected_index, variant) in variants.into_iter().enumerate() {
             let kind = variant.kind();
+            variant
+                .validate_static()
+                .unwrap_or_else(|error| panic!("valid {kind:?} transition rejected: {error}"));
             assert_eq!(
                 variant.encode()[0],
                 u8::try_from(expected_index).expect("V1 transition index fits u8")
@@ -1101,6 +1493,9 @@ mod tests {
             assert_ne!(kind.encode(), Vec::<u8>::new());
             assert_ne!(variant.digest_v1(), [0; 32]);
             let instruction = transition(variant);
+            instruction
+                .validate_static()
+                .unwrap_or_else(|error| panic!("valid {kind:?} instruction rejected: {error}"));
             assert_slice_roundtrip(instruction.clone());
             let encoded_json = json::to_vec(&instruction)
                 .expect("encode Parliament lifecycle instruction JSON fixture");
@@ -1109,6 +1504,404 @@ mod tests {
                     .expect("decode Parliament lifecycle instruction JSON fixture");
             assert_eq!(decoded_json, instruction);
         }
+    }
+
+    #[test]
+    fn zero_candidate_sortition_intent_reaches_consensus_capacity_validation() {
+        let governance_attempt_id = GovernanceAttemptId::new([0x71; 32]);
+        let body = ParliamentBody::PolicyJury;
+        let body_election_attempt_id =
+            BodyElectionAttemptId::derive_v1(governance_attempt_id, body, 0);
+        let candidates = Vec::new();
+        let mut request = SortitionRequestV1 {
+            id: SortitionRequestId::new([0; 32]),
+            governance_attempt_id,
+            body_election_attempt_id,
+            body,
+            candidate_root: parliament_candidate_root_v1(governance_attempt_id, body, &candidates),
+            candidate_count: 0,
+            target_seats: 3,
+            request_height: 10,
+            pulse_height: 15,
+            beacon_session_id: BeaconSessionId::new([0x72; 32]),
+        };
+        request.id = request.canonical_id();
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                ParliamentRegisterSortitionRequestV1 {
+                    requests: vec![ParliamentSortitionRequestRegistrationV1 {
+                        sequence: 0,
+                        request,
+                    }],
+                },
+            )
+            .validate_static(),
+            Ok(()),
+            "an empty canonical snapshot is a capacity intent that Core must classify against consensus state"
+        );
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the table covers every transition payload and each shared structural bound"
+    )]
+    fn lifecycle_transition_static_validation_rejects_impossible_payloads() {
+        let body_instance_id = BodyInstanceId::new([0x32; 32]);
+        let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
+        let tle_key_session_id = TleKeySessionId::new([0x34; 32]);
+        let beacon_session_id = BeaconSessionId::new([0x35; 32]);
+        let release_height = 40;
+        let tle_session_id = TleSessionId::derive_v1(
+            ballot_attempt_id,
+            tle_key_session_id,
+            beacon_session_id,
+            release_height,
+        );
+        let pulse_id = BeaconPulseId::new([0x36; 32]);
+
+        assert_eq!(
+            SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: GovernanceAttemptId::new([0; 32]),
+                transition: ParliamentLifecycleTransitionV1::CompleteQualification,
+            }
+            .validate_static(),
+            Err("governance attempt id must be non-zero")
+        );
+
+        let invalid = vec![
+            (
+                "empty sortition registration batch",
+                ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                    ParliamentRegisterSortitionRequestV1 {
+                        requests: Vec::new(),
+                    },
+                ),
+            ),
+            (
+                "zero sortition pulse height",
+                ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+                    ParliamentConsumeSortitionPulseBatchV1 {
+                        request_ids: vec![SortitionRequestId::new([0x37; 32])],
+                        beacon_session_id,
+                        pulse_height: 0,
+                        pulse_id,
+                    },
+                ),
+            ),
+            (
+                "zero invitation election",
+                ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                    ParliamentBeginInvitationAcceptanceV1 {
+                        election_attempt_id: BodyElectionAttemptId::new([0; 32]),
+                    },
+                ),
+            ),
+            (
+                "zero failed election",
+                ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(
+                    ParliamentFailBodyElectionNoRosterV1 {
+                        election_attempt_id: BodyElectionAttemptId::new([0; 32]),
+                    },
+                ),
+            ),
+            (
+                "zero sealed election",
+                ParliamentLifecycleTransitionV1::SealBodyRoster(ParliamentSealBodyRosterV1 {
+                    election_attempt_id: BodyElectionAttemptId::new([0; 32]),
+                }),
+            ),
+            (
+                "zero phase body",
+                ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
+                    body_instance_id: BodyInstanceId::new([0; 32]),
+                    target: DeliberationPhaseV1::Evidence,
+                }),
+            ),
+            (
+                "zero absence assignment",
+                ParliamentLifecycleTransitionV1::RecordAttemptAbsence(
+                    ParliamentRecordAttemptAbsenceV1 {
+                        body_instance_id,
+                        assignment_id: AssignmentId::new([0; 32]),
+                    },
+                ),
+            ),
+            (
+                "zero public finding root",
+                ParliamentLifecycleTransitionV1::EndorsePublicFinding(
+                    ParliamentEndorsePublicFindingV1 {
+                        body_instance_id,
+                        result_root: [0; 32],
+                    },
+                ),
+            ),
+            (
+                "zero ballot release height",
+                ParliamentLifecycleTransitionV1::RegisterBallotAttempt(
+                    ParliamentRegisterBallotAttemptV1 {
+                        body_instance_id,
+                        ballot_attempt_id,
+                        sequence: 0,
+                        tle_session_id,
+                        tle_key_session_id,
+                        release_beacon_session_id: beacon_session_id,
+                        release_height: 0,
+                    },
+                ),
+            ),
+            (
+                "wrong registration record width",
+                ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+                    ParliamentRegisterBallotParticipantV1 {
+                        ballot_attempt_id,
+                        registration_record: vec![0; 1],
+                    },
+                ),
+            ),
+            (
+                "zero close ballot",
+                ParliamentLifecycleTransitionV1::CloseBallotRegistration(
+                    ParliamentCloseBallotRegistrationV1 {
+                        ballot_attempt_id: BallotAttemptId::new([0; 32]),
+                    },
+                ),
+            ),
+            (
+                "zero dropout ballot",
+                ParliamentLifecycleTransitionV1::RecordBallotDropout(
+                    ParliamentRecordBallotDropoutV1 {
+                        ballot_attempt_id: BallotAttemptId::new([0; 32]),
+                    },
+                ),
+            ),
+            (
+                "zero survivor ballot",
+                ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(
+                    ParliamentFreezeBallotSurvivorsV1 {
+                        ballot_attempt_id: BallotAttemptId::new([0; 32]),
+                    },
+                ),
+            ),
+            (
+                "empty timed-OVN corpus chunk",
+                ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                    ParliamentFreezeTimedOvnCorpusV1 {
+                        ballot_attempt_id,
+                        ballot_records: Vec::new(),
+                    },
+                ),
+            ),
+            (
+                "zero ballot opening height",
+                ParliamentLifecycleTransitionV1::BeginBallotOpeningBatch(
+                    ParliamentBeginBallotOpeningBatchV1 {
+                        ballot_attempt_ids: vec![ballot_attempt_id],
+                        release_beacon_session_id: beacon_session_id,
+                        release_height: 0,
+                        pulse_id,
+                    },
+                ),
+            ),
+            (
+                "zero failed ballot",
+                ParliamentLifecycleTransitionV1::FailBallotNoResult(
+                    ParliamentFailBallotNoResultV1 {
+                        ballot_attempt_id: BallotAttemptId::new([0; 32]),
+                    },
+                ),
+            ),
+            (
+                "zero final release digest",
+                ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(
+                    ParliamentFinalizeOpenedBallotV1 {
+                        ballot_attempt_id,
+                        final_release: ParliamentTleFinalReleaseSignatureV1 {
+                            key_session_id: tle_key_session_id,
+                            identity_digest: [0; 32],
+                            signature: [0x38; 48],
+                        },
+                    },
+                ),
+            ),
+            (
+                "zero final release signature",
+                ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(
+                    ParliamentFinalizeOpenedBallotV1 {
+                        ballot_attempt_id,
+                        final_release: ParliamentTleFinalReleaseSignatureV1 {
+                            key_session_id: tle_key_session_id,
+                            identity_digest: [0x38; 32],
+                            signature: [0; 48],
+                        },
+                    },
+                ),
+            ),
+            (
+                "zero invitation response election",
+                ParliamentLifecycleTransitionV1::RecordInvitationResponse(
+                    ParliamentRecordInvitationResponseV1 {
+                        election_attempt_id: BodyElectionAttemptId::new([0; 32]),
+                        body: ParliamentBody::RulesCommittee,
+                        decision: ParliamentInvitationDecisionV1::Accept,
+                    },
+                ),
+            ),
+            (
+                "zero public-finding failure body",
+                ParliamentLifecycleTransitionV1::FailPublicFindingNoResult(
+                    ParliamentFailPublicFindingNoResultV1 {
+                        body_instance_id: BodyInstanceId::new([0; 32]),
+                    },
+                ),
+            ),
+        ];
+        for (name, transition) in invalid {
+            assert!(
+                transition.validate_static().is_err(),
+                "invalid transition was accepted: {name}"
+            );
+        }
+
+        let over_limit_sequence = MAX_PARLIAMENT_BALLOT_RETRIES_V1 + 1;
+        let over_limit_ballot = BallotAttemptId::derive_v1(body_instance_id, over_limit_sequence);
+        let over_limit_tle = TleSessionId::derive_v1(
+            over_limit_ballot,
+            tle_key_session_id,
+            beacon_session_id,
+            release_height,
+        );
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::RegisterBallotAttempt(
+                ParliamentRegisterBallotAttemptV1 {
+                    body_instance_id,
+                    ballot_attempt_id: over_limit_ballot,
+                    sequence: over_limit_sequence,
+                    tle_session_id: over_limit_tle,
+                    tle_key_session_id,
+                    release_beacon_session_id: beacon_session_id,
+                    release_height,
+                },
+            )
+            .validate_static(),
+            Err("ballot retry sequence exceeds the protocol maximum")
+        );
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::RegisterBallotAttempt(
+                ParliamentRegisterBallotAttemptV1 {
+                    body_instance_id,
+                    ballot_attempt_id: BallotAttemptId::new([0x39; 32]),
+                    sequence: 0,
+                    tle_session_id,
+                    tle_key_session_id,
+                    release_beacon_session_id: beacon_session_id,
+                    release_height,
+                },
+            )
+            .validate_static(),
+            Err("ballot attempt id is not canonical")
+        );
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::RegisterBallotAttempt(
+                ParliamentRegisterBallotAttemptV1 {
+                    body_instance_id,
+                    ballot_attempt_id,
+                    sequence: 0,
+                    tle_session_id: TleSessionId::new([0x3A; 32]),
+                    tle_key_session_id,
+                    release_beacon_session_id: beacon_session_id,
+                    release_height,
+                },
+            )
+            .validate_static(),
+            Err("TLE session id is not canonical")
+        );
+
+        let governance_attempt_id = GovernanceAttemptId::new([0x3B; 32]);
+        let sortition_sequence = MAX_PARLIAMENT_SORTITION_RETRIES_V1 + 1;
+        let sortition_election_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::RulesCommittee,
+            sortition_sequence,
+        );
+        let sortition_request = SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            sortition_election_id,
+            ParliamentBody::RulesCommittee,
+            [0x3C; 32],
+            1,
+            1,
+            10,
+            20,
+            beacon_session_id,
+            None,
+        )
+        .expect("construct structurally valid over-limit sortition request");
+        let sortition_registration = ParliamentSortitionRequestRegistrationV1 {
+            sequence: sortition_sequence,
+            request: sortition_request,
+        };
+        assert_eq!(
+            SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: GovernanceAttemptId::new([0x3E; 32]),
+                transition: ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                    ParliamentRegisterSortitionRequestV1 {
+                        requests: vec![sortition_registration],
+                    },
+                ),
+            }
+            .validate_static(),
+            Err("sortition request governance attempt id does not match the enclosing attempt")
+        );
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                ParliamentRegisterSortitionRequestV1 {
+                    requests: vec![sortition_registration],
+                },
+            )
+            .validate_static(),
+            Err("sortition retry sequence exceeds the protocol maximum")
+        );
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                ParliamentRegisterSortitionRequestV1 {
+                    requests: vec![
+                        sortition_registration;
+                        MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1 + 1
+                    ],
+                },
+            )
+            .validate_static(),
+            Err("sortition request batch must be nonempty and bounded")
+        );
+
+        let duplicate_ballots = ParliamentLifecycleTransitionV1::BeginBallotOpeningBatch(
+            ParliamentBeginBallotOpeningBatchV1 {
+                ballot_attempt_ids: vec![ballot_attempt_id, ballot_attempt_id],
+                release_beacon_session_id: beacon_session_id,
+                release_height,
+                pulse_id,
+            },
+        );
+        assert_eq!(
+            duplicate_ballots.validate_static(),
+            Err("ballot opening batch must be nonempty, bounded, and ordered")
+        );
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+                ParliamentConsumeSortitionPulseBatchV1 {
+                    request_ids: vec![
+                        SortitionRequestId::new([0x3D; 32]),
+                        SortitionRequestId::new([0x3D; 32]),
+                    ],
+                    beacon_session_id,
+                    pulse_height: 20,
+                    pulse_id,
+                },
+            )
+            .validate_static(),
+            Err("sortition request batch must be nonempty, bounded, and ordered")
+        );
     }
 
     #[test]
@@ -1362,3 +2155,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_parliament_schema_tests;

@@ -33,9 +33,9 @@ fn registers_root_and_path_combined_matches_separate() {
     regs.set(77, 0xA5A5);
     regs.set_tag(77, false);
     for &idx in &[0usize, 5, 17, 77, 255] {
-        let path_s = regs.merkle_path(idx);
+        let path_s = regs.merkle_path(idx).unwrap();
         let root_s = regs.merkle_root();
-        let (root_c, path_c) = regs.merkle_root_and_path(idx);
+        let (root_c, path_c) = regs.merkle_root_and_path(idx).unwrap();
         assert_eq!(root_s, root_c, "root mismatch at idx={idx}");
         assert_eq!(path_s, path_c, "path mismatch at idx={idx}");
     }

@@ -755,7 +755,7 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
     );
 }
 #[test]
-fn legacy_scalar_crypto_opcodes_never_declassify_private_operands() {
+fn poseidon_opcodes_never_declassify_private_operands() {
     fn program_fetching_private_operands(operands: &[u8], word: u32) -> Vec<u8> {
         let mut words = Vec::with_capacity(operands.len() * 4 + 1);
         for (index, register) in operands.iter().copied().enumerate() {
@@ -793,16 +793,6 @@ fn legacy_scalar_crypto_opcodes_never_declassify_private_operands() {
             encoding::wide::encode_poseidon6(3, 20),
             (20..26).collect(),
         ),
-        (
-            "PUBKGEN",
-            encoding::wide::encode_rr(instruction::wide::crypto::PUBKGEN, 3, 1, 0),
-            vec![1],
-        ),
-        (
-            "VALCOM",
-            encoding::wide::encode_rr(instruction::wide::crypto::VALCOM, 3, 1, 2),
-            vec![1, 2],
-        ),
     ] {
         let program = program_fetching_private_operands(&operands, word);
         let mut all_private = IVM::new(100_000);
@@ -830,78 +820,6 @@ fn legacy_scalar_crypto_opcodes_never_declassify_private_operands() {
                 "{label} accepted mixed-visibility operands"
             );
         }
-    }
-}
-#[test]
-fn elliptic_curve_operations_propagate_matching_private_tags() {
-    for opcode in [
-        instruction::wide::crypto::ECADD,
-        instruction::wide::crypto::ECMUL_VAR,
-        instruction::wide::crypto::PAIRING,
-    ] {
-        let program = raw_zk_program(&[encoding::wide::encode_rr(opcode, 3, 1, 2)]);
-        let mut vm = IVM::new(10_000);
-        vm.load_program(&program).unwrap();
-        vm.set_register(1, 7);
-        vm.set_register(2, 11);
-        vm.registers.set_tag(1, true);
-        vm.registers.set_tag(2, true);
-        vm.run()
-            .unwrap_or_else(|error| panic!("private EC opcode {opcode:#x} failed: {error}"));
-        assert!(
-            vm.registers.tag(3),
-            "EC opcode {opcode:#x} laundered a private result"
-        );
-    }
-}
-#[test]
-fn elliptic_curve_operations_reject_mixed_visibility() {
-    for opcode in [
-        instruction::wide::crypto::ECADD,
-        instruction::wide::crypto::ECMUL_VAR,
-        instruction::wide::crypto::PAIRING,
-    ] {
-        let program = raw_zk_program(&[encoding::wide::encode_rr(opcode, 3, 1, 2)]);
-        let mut vm = IVM::new(10_000);
-        vm.load_program(&program).unwrap();
-        vm.set_register(1, 7);
-        vm.set_register(2, 11);
-        vm.registers.set_tag(1, true);
-        vm.registers.set_tag(2, false);
-        let error = vm
-            .run()
-            .expect_err("mixed public/private EC operands must trap");
-        assert!(
-            matches!(error, VMError::PrivacyViolation),
-            "EC opcode {opcode:#x} returned {error}"
-        );
-    }
-}
-#[test]
-fn elliptic_curve_results_cannot_reach_public_syscall_sinks() {
-    for opcode in [
-        instruction::wide::crypto::ECADD,
-        instruction::wide::crypto::ECMUL_VAR,
-        instruction::wide::crypto::PAIRING,
-    ] {
-        let program = raw_zk_program(&[
-            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 0),
-            scall(syscalls::SYSCALL_GET_PRIVATE_INPUT),
-            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 10, 0),
-            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 10, 0),
-            encoding::wide::encode_rr(opcode, 10, 1, 2),
-            scall(syscalls::SYSCALL_DEBUG_PRINT),
-        ]);
-        let mut vm = IVM::new(10_000);
-        vm.set_host(int_private_host(&[7]));
-        vm.load_program(&program).unwrap();
-        let error = vm
-            .run()
-            .expect_err("an EC-derived secret must not reach a public syscall");
-        assert!(
-            matches!(error, VMError::PrivacyViolation),
-            "EC opcode {opcode:#x} returned {error}"
-        );
     }
 }
 #[test]
@@ -1177,11 +1095,11 @@ fn complete_public_overwrite_clears_private_stack_range() {
     assert!(!vm.registers.tag(3));
 }
 #[test]
-fn execution_proof_commit_preserves_private_stack_ranges() {
+fn execution_summary_preserves_private_stack_ranges() {
     let mut vm = vm_with_private_stack_word();
-    let _proof = vm.execution_proof();
+    let _summary = vm.execution_summary();
     vm.run()
-        .expect("proof commitment must not discard privacy metadata");
+        .expect("execution summary must not discard privacy metadata");
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
     assert!(vm.registers.tag(3));
 }

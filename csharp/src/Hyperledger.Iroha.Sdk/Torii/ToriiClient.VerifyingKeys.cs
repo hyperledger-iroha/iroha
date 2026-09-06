@@ -20,6 +20,8 @@ namespace Hyperledger.Iroha.Torii;
 
 public sealed partial class ToriiClient
 {
+    private const int VerifyingKeyDraftResponseMaxBytes = 24 * 1024 * 1024;
+
     public async Task<JsonDocument> GetVerifyingKeyAsync(
         string backend,
         string name,
@@ -41,16 +43,16 @@ public sealed partial class ToriiClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var signingContext = Options.LocalSigningContext
+        var networkId = Options.NetworkId
             ?? throw new InvalidOperationException(
-                "Verifying-key draft preparation requires an immutable ToriiLocalSigningContext.");
+                "Verifying-key draft preparation requires ToriiClientOptions.NetworkId.");
 
         var normalizedRequest = NormalizeVerifyingKeyRegisterRequest(request);
         return await PrepareVerifyingKeyTransactionDraftAsync(
             "/v1/zk/vk/register",
             normalizedRequest,
             "verifying key register response",
-            signingContext.NetworkId,
+            networkId,
             VerifyingKeyDraftOperation.Register,
             cancellationToken);
     }
@@ -60,16 +62,16 @@ public sealed partial class ToriiClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var signingContext = Options.LocalSigningContext
+        var networkId = Options.NetworkId
             ?? throw new InvalidOperationException(
-                "Verifying-key draft preparation requires an immutable ToriiLocalSigningContext.");
+                "Verifying-key draft preparation requires ToriiClientOptions.NetworkId.");
 
         var normalizedRequest = NormalizeVerifyingKeyUpdateRequest(request);
         return await PrepareVerifyingKeyTransactionDraftAsync(
             "/v1/zk/vk/update",
             normalizedRequest,
             "verifying key update response",
-            signingContext.NetworkId,
+            networkId,
             VerifyingKeyDraftOperation.Update,
             cancellationToken);
     }
@@ -99,11 +101,11 @@ public sealed partial class ToriiClient
             throw new JsonException($"{context} must use the application/json media type.");
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
+        using var document = await ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+            response.Content,
             context,
-            cancellationToken);
+            cancellationToken,
+            VerifyingKeyDraftResponseMaxBytes);
         return ParseVerifyingKeyTransactionDraft(
             document,
             context,

@@ -28,7 +28,7 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 
    [sorafs.storage.stream_tokens]
    enabled = true
-   signer_handle = "pkcs11:prod/stream-token/v4"
+   signer_handle = "signer://prod/stream-token/v4"
    signer_public_key_hex = "<64-lowercase-hex-characters>"
    signer_revision = 4
    signer_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"

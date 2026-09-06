@@ -3,12 +3,15 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.math.BigInteger
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.Base64
 import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.Locale
@@ -16,6 +19,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.consensus.NativeAmxV2
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 /** Authentication class required by an atomic-private-settlement Torii operation. */
@@ -82,15 +86,25 @@ enum class AtomicPrivateSettlementOperationV1(
         32 * 1024 * 1024,
     ),
 
+    /** Fetch one restricted capsule using the exact current governed audit policy. */
+    AUDITOR_CAPSULE(
+        "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
+        AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
+        setOf("audit_policy"),
+        1024 * 1024,
+    ),
+
     /** Submit one purpose-separated governed auditor approval. */
     AUDIT_APPROVAL(
         "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
         AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
-        setOf("approval"),
+        setOf("audit_policy", "approval"),
         2 * 1024 * 1024,
     ),
 
-    /** Submit one sponsor-signed exact global finalization carrier. */
+    /**
+     * Submit one sponsor-signed exact Prepare-lock registration, finalization, or abort carrier.
+     */
     BUNDLE_SUBMIT(
         "/v1/nexus/private-settlements/bundles",
         AtomicPrivateSettlementAuthV1.SPONSOR,
@@ -247,13 +261,46 @@ class AtomicPrivateSettlementJsonResponseV1 internal constructor(
 }
 
 /** Exact-route V1 client for prepared-leg, audit, coordination, and redacted query workflows. */
-class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder) {
+class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
+
+    private data class AuditApprovalRequestContext(
+        val networkId: String,
+        val bundleId: String,
+        val legOrdinal: BigInteger,
+        val dataspaceId: BigInteger,
+        val expiryHeight: BigInteger,
+    )
+
+    private sealed class RestrictedResponseVerification {
+        abstract val payloadDigest: AtomicPrivateSettlementIdentifierV1
+
+        data class CommitteeProof(
+            override val payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        ) : RestrictedResponseVerification()
+
+        data class AuditorCapsule(
+            override val payloadDigest: AtomicPrivateSettlementIdentifierV1,
+            val requestJson: ByteArray,
+            val auditorPublicKey: String,
+        ) : RestrictedResponseVerification()
+
+        data class AuditApproval(
+            override val payloadDigest: AtomicPrivateSettlementIdentifierV1,
+            val requestJson: ByteArray,
+            val auditorPublicKey: String,
+        ) : RestrictedResponseVerification()
+    }
+
     private val executor: HttpTransportExecutor =
-        builder.executor ?: PlatformHttpTransportExecutor.createDefault()
+        HttpTransportScope.create(builder.executor)
     private val baseUri: URI = requireBaseUri(builder.baseUri)
     private val localSigningContext: LocalSigningContext = checkNotNull(builder.localSigningContext) {
         "localSigningContext must be configured before building a settlement client"
     }
+    private val responseVerifier: AtomicPrivateSettlementResponseVerifierV1? =
+        builder.responseVerifier
     private val timeout: Duration? = builder.timeout
     private val defaultHeaders: Map<String, String> =
         Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
@@ -303,11 +350,19 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         request: AtomicPrivateSettlementPreparedRequestV1,
         auditorSigningContext: OperatorSigningContext,
     ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> {
+        require(auditorSigningContext.networkId() == localSigningContext.networkId()) {
+            "auditor signing context must use the settlement client's exact network"
+        }
         requireOperation(request, AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL)
         val path = operationPath(request.operation, payloadDigest)
+        val body = request.bytes()
+        val approvalContext = auditApprovalRequestContext(body)
+        require(approvalContext.networkId == localSigningContext.networkId().literal) {
+            "prepared settlement approval must use the settlement client's exact network"
+        }
         return executeMutation(
             path,
-            request.bytes(),
+            body,
             identityHeaders = { target, body ->
                 OperatorRequestSigner.buildHeaders(
                     auditorSigningContext,
@@ -318,10 +373,18 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             },
             expectedIdentifier = payloadDigest,
             expectedIdentifierField = "payload_digest",
+            approvalContext = approvalContext,
+            restrictedVerification = RestrictedResponseVerification.AuditApproval(
+                payloadDigest,
+                body.copyOf(),
+                auditorSigningContext.publicKey(),
+            ),
         )
     }
 
-    /** Submit one sponsor-signed global carrier exactly once. */
+    /**
+     * Submit one sponsor-signed Prepare-lock registration, finalization, or abort carrier.
+     */
     fun submitBundle(
         request: AtomicPrivateSettlementPreparedRequestV1,
         sponsorAuth: ToriiCanonicalRequestAuth,
@@ -341,12 +404,28 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             expectedIdentifierField = "payload_digest",
         )
 
+    /** Recover the persisted Prepare and Commit certificates for one local leg. */
+    fun getPhaseCertificates(
+        payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        sponsorAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> =
+        executeGet(
+            "/v1/nexus/private-settlements/legs/${payloadDigest.pathComponent()}/phase-certificates",
+            RESPONSE_SMALL_MAX_BYTES,
+            identityHeaders = { target, body -> sponsorHeaders("GET", target, body, sponsorAuth) },
+            expectedIdentifier = payloadDigest,
+            expectedIdentifierField = "payload_digest",
+        )
+
     /** Fetch proof and opaque delta material as one exact participant validator. */
     fun getCommitteeProof(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
         validatorSigningContext: OperatorSigningContext,
-    ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> =
-        executeGet(
+    ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> {
+        require(validatorSigningContext.networkId() == localSigningContext.networkId()) {
+            "validator signing context must use the settlement client's exact network"
+        }
+        return executeGet(
             "/v1/nexus/private-settlements/legs/${payloadDigest.pathComponent()}/committee-proof",
             RESPONSE_RESTRICTED_MAX_BYTES,
             identityHeaders = { target, body ->
@@ -359,27 +438,42 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             },
             expectedIdentifier = payloadDigest,
             expectedIdentifierField = null,
+            restrictedVerification = RestrictedResponseVerification.CommitteeProof(payloadDigest),
         )
+    }
 
     /** Fetch one padded encrypted capsule as one exact governed local auditor. */
     fun getAuditorCapsule(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        request: AtomicPrivateSettlementPreparedRequestV1,
         auditorSigningContext: OperatorSigningContext,
-    ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> =
-        executeGet(
-            "/v1/nexus/private-settlements/legs/${payloadDigest.pathComponent()}/audit-capsule",
-            RESPONSE_RESTRICTED_MAX_BYTES,
-            identityHeaders = { target, body ->
+    ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> {
+        require(auditorSigningContext.networkId() == localSigningContext.networkId()) {
+            "auditor signing context must use the settlement client's exact network"
+        }
+        requireOperation(request, AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE)
+        val path = operationPath(request.operation, payloadDigest)
+        val body = request.bytes()
+        return executeMutation(
+            path,
+            body,
+            identityHeaders = { target, signedBody ->
                 OperatorRequestSigner.buildHeaders(
                     auditorSigningContext,
-                    "GET",
+                    "POST",
                     target,
-                    body,
+                    signedBody,
                 )
             },
             expectedIdentifier = payloadDigest,
             expectedIdentifierField = null,
+            restrictedVerification = RestrictedResponseVerification.AuditorCapsule(
+                payloadDigest,
+                body.copyOf(),
+                auditorSigningContext.publicKey(),
+            ),
         )
+    }
 
     /** Read the public allowlisted lifecycle for one bundle. */
     fun getBundleStatus(
@@ -429,6 +523,8 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         identityHeaders: (URI, ByteArray) -> Map<String, String>,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
+        approvalContext: AuditApprovalRequestContext? = null,
+        restrictedVerification: RestrictedResponseVerification? = null,
     ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> {
         val target = resolvePath(path)
         val headers = requestHeaders(includeContentType = true)
@@ -440,6 +536,8 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             RESPONSE_RESTRICTED_MAX_BYTES,
             expectedIdentifier,
             expectedIdentifierField,
+            approvalContext,
+            restrictedVerification,
         )
     }
 
@@ -449,6 +547,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         identityHeaders: ((URI, ByteArray) -> Map<String, String>)?,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
+        restrictedVerification: RestrictedResponseVerification? = null,
     ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> {
         val target = resolvePath(path)
         val body = ByteArray(0)
@@ -461,6 +560,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             maximumResponseBytes,
             expectedIdentifier,
             expectedIdentifierField,
+            restrictedVerification = restrictedVerification,
         )
     }
 
@@ -470,8 +570,22 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         maximumResponseBytes: Int,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
+        approvalContext: AuditApprovalRequestContext? = null,
+        restrictedVerification: RestrictedResponseVerification? = null,
     ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> {
         val result = CompletableFuture<AtomicPrivateSettlementJsonResponseV1>()
+        if (restrictedVerification != null) {
+            try {
+                checkNotNull(responseVerifier) {
+                    "restricted private settlement response verifier is not configured"
+                }.requireAvailable()
+            } catch (_: RuntimeException) {
+                result.completeExceptionally(
+                    AtomicPrivateSettlementToriiExceptionV1(INVALID_RESPONSE_MESSAGE),
+                )
+                return result
+            }
+        }
         val execution = try {
             executor.execute(request)
         } catch (error: RuntimeException) {
@@ -499,16 +613,17 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                         maximumResponseBytes,
                         expectedIdentifier,
                         expectedIdentifierField,
+                        approvalContext,
+                        restrictedVerification,
                     ),
                 )
             } catch (error: RuntimeException) {
                 result.completeExceptionally(
-                    if (error is AtomicPrivateSettlementToriiExceptionV1) {
+                    if (error is AtomicPrivateSettlementToriiExceptionV1 && error.cause == null) {
                         error
                     } else {
                         AtomicPrivateSettlementToriiExceptionV1(
-                            "atomic private settlement response is invalid",
-                            error,
+                            INVALID_RESPONSE_MESSAGE,
                         )
                     },
                 )
@@ -524,34 +639,92 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         maximumResponseBytes: Int,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
+        approvalContext: AuditApprovalRequestContext?,
+        restrictedVerification: RestrictedResponseVerification?,
     ): AtomicPrivateSettlementJsonResponseV1 {
-        require(
-            !response.redirected &&
-                response.finalUri?.toASCIIString() == request.uri.toASCIIString(),
+        if (
+            response.redirected ||
+            response.finalUri?.toASCIIString() != request.uri.toASCIIString()
         ) {
-            "atomic private settlement response must come from the exact request URL without redirects"
+            throw AtomicPrivateSettlementToriiExceptionV1(
+                "atomic private settlement response must come from the exact request URL without redirects",
+            )
         }
         if (response.statusCode !in 200..299) {
             val rejectCode = HttpErrorMessageExtractor.extractRejectCode(
                 response.headers,
                 "x-iroha-reject-code",
                 ByteArray(0),
-            )
+            )?.takeIf { REJECT_CODE.matches(it) }
             val suffix = if (rejectCode.isNullOrBlank()) "" else "; reject_code=$rejectCode"
             throw AtomicPrivateSettlementToriiExceptionV1(
                 "atomic private settlement request failed with HTTP ${response.statusCode}$suffix",
             )
         }
-        val body = response.body
-        require(body.isNotEmpty()) { "atomic private settlement response must not be empty" }
-        require(body.size <= maximumResponseBytes) {
-            "atomic private settlement response exceeds $maximumResponseBytes bytes"
+        val expectedStatus = if (route.endsWith("/bundles")) 202 else 200
+        if (response.statusCode != expectedStatus) {
+            throw AtomicPrivateSettlementToriiExceptionV1(
+                "atomic private settlement response status is invalid",
+            )
         }
-        requireExactJsonContentType(response.headers)
-        val parsed = parseExactJsonObject(body, "atomic private settlement response")
-        validateRouteShape(route, parsed, expectedIdentifier, expectedIdentifierField)
-        val canonical = JsonEncoder.encode(parsed).toByteArray(StandardCharsets.UTF_8)
-        return AtomicPrivateSettlementJsonResponseV1(route, canonical)
+        try {
+            val body = response.body
+            require(body.isNotEmpty()) { "atomic private settlement response must not be empty" }
+            require(body.size <= maximumResponseBytes) {
+                "atomic private settlement response exceeds $maximumResponseBytes bytes"
+            }
+            requireExactJsonContentType(response.headers)
+            requireAbsentOrIdentityContentEncoding(response.headers)
+            val parsed = parseExactJsonObject(body, "atomic private settlement response")
+            validateRouteShape(
+                route,
+                parsed,
+                expectedIdentifier,
+                expectedIdentifierField,
+                approvalContext,
+            )
+            verifyRestrictedResponse(restrictedVerification, body)
+            val canonical = JsonEncoder.encode(parsed).toByteArray(StandardCharsets.UTF_8)
+            return AtomicPrivateSettlementJsonResponseV1(route, canonical)
+        } catch (_: RuntimeException) {
+            throw AtomicPrivateSettlementToriiExceptionV1(INVALID_RESPONSE_MESSAGE)
+        }
+    }
+
+    private fun verifyRestrictedResponse(
+        verification: RestrictedResponseVerification?,
+        exactResponseJson: ByteArray,
+    ) {
+        if (verification == null) return
+        val verifier = checkNotNull(responseVerifier) {
+            "restricted private settlement response verifier is not configured"
+        }
+        val network = localSigningContext.networkId().bytes()
+        val payload = verification.payloadDigest.bytes()
+        when (verification) {
+            is RestrictedResponseVerification.CommitteeProof ->
+                verifier.verifyCommitteeProofResponse(
+                    exactResponseJson.copyOf(),
+                    network,
+                    payload,
+                )
+            is RestrictedResponseVerification.AuditorCapsule ->
+                verifier.verifyAuditorCapsuleResponse(
+                    exactResponseJson.copyOf(),
+                    verification.requestJson.copyOf(),
+                    network,
+                    payload,
+                    verification.auditorPublicKey,
+                )
+            is RestrictedResponseVerification.AuditApproval ->
+                verifier.verifyAuditApprovalResponse(
+                    exactResponseJson.copyOf(),
+                    verification.requestJson.copyOf(),
+                    network,
+                    payload,
+                    verification.auditorPublicKey,
+                )
+        }
     }
 
     private fun validateRouteShape(
@@ -559,6 +732,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         parsed: Map<String, Any?>,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
+        approvalContext: AuditApprovalRequestContext?,
     ) {
         val expectedFields = responseFields(route)
         require(parsed.keys == expectedFields) {
@@ -569,10 +743,337 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 "atomic private settlement response identifier is substituted"
             }
         }
-        if (route.endsWith("/receipt")) {
-            validateReceiptIdentity(parsed, checkNotNull(expectedIdentifier))
-        } else if (route.contains("/bundles/") && !route.endsWith("/receipt")) {
-            validateBundleStatusIdentity(parsed, checkNotNull(expectedIdentifier))
+        if (route.endsWith("/phase-certificates")) {
+            require(
+                parsed["prepare_certificate"] == null ||
+                    parsed["prepare_certificate"] is Map<*, *>,
+            ) { "settlement Prepare certificate must be null or an opaque object" }
+            require(
+                parsed["commit_certificate"] == null ||
+                    parsed["commit_certificate"] is Map<*, *>,
+            ) { "settlement Commit certificate must be null or an opaque object" }
+        }
+        when {
+            route.endsWith("/bundles") -> validateBundleAdmission(parsed)
+            route.endsWith("/audit-capsule") -> {
+                validateAuditorCapsuleHeight(parsed)
+                validateAuditorCapsuleAttestation(parsed, checkNotNull(expectedIdentifier))
+            }
+            route.endsWith("/audit-approvals") ->
+                validateAuditApprovalAcknowledgementAttestation(
+                    parsed,
+                    checkNotNull(expectedIdentifier),
+                    checkNotNull(approvalContext),
+                )
+            route.endsWith("/receipt") ->
+                validateReceiptIdentity(parsed, checkNotNull(expectedIdentifier))
+            route.contains("/bundles/") ->
+                validateBundleStatusIdentity(parsed, checkNotNull(expectedIdentifier))
+        }
+    }
+
+    private fun validateBundleAdmission(parsed: Map<String, Any?>) {
+        requireCanonicalHashLiteral(parsed["bundle_id"], "settlement bundle admission.bundle_id")
+        requireCanonicalHashLiteral(parsed["carrier_id"], "settlement bundle admission.carrier_id")
+        val acceptedAtHeight = when (val value = parsed["accepted_at_height"]) {
+            is BigInteger -> value
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Long -> BigInteger.valueOf(value)
+            else -> throw IllegalArgumentException(
+                "settlement bundle admission.accepted_at_height must be an integer",
+            )
+        }
+        require(acceptedAtHeight.signum() >= 0 && acceptedAtHeight <= U64_MAX) {
+            "settlement bundle admission.accepted_at_height must fit in unsigned 64-bit range"
+        }
+    }
+
+    private fun validateAuditorCapsuleHeight(parsed: Map<String, Any?>) {
+        val authoritativeHeight = when (val value = parsed["authoritative_height"]) {
+            is BigInteger -> value
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Long -> BigInteger.valueOf(value)
+            else -> throw IllegalArgumentException(
+                "settlement auditor capsule.authoritative_height must be an integer",
+            )
+        }
+        require(authoritativeHeight.signum() > 0 && authoritativeHeight <= U64_MAX) {
+            "settlement auditor capsule.authoritative_height must be a nonzero unsigned 64-bit integer"
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun validateAuditorCapsuleAttestation(
+        parsed: Map<String, Any?>,
+        expectedPayloadDigest: AtomicPrivateSettlementIdentifierV1,
+    ) {
+        val attestation = parsed["responder_attestation"]
+        require(attestation is Map<*, *> && attestation.keys == setOf("body", "signature")) {
+            "settlement auditor capsule responder attestation is invalid"
+        }
+        val body = attestation["body"]
+        val bodyFields = setOf(
+            "version",
+            "network_id",
+            "payload_digest",
+            "view_digest",
+            "authority_digest",
+            "lifecycle_code",
+            "authoritative_height",
+            "responder",
+        )
+        require(body is Map<*, *> && body.keys == bodyFields) {
+            "settlement auditor capsule attestation body is invalid"
+        }
+        val typedBody = body as Map<String, Any?>
+        fun integer(value: Any?): BigInteger = when (value) {
+            is BigInteger -> value
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Long -> BigInteger.valueOf(value)
+            else -> throw IllegalArgumentException(
+                "settlement auditor capsule attestation integer is invalid",
+            )
+        }
+        val lifecycle = parsed["lifecycle"] as? Map<*, *>
+        val lifecycleCode = when (lifecycle?.get("status")) {
+            "collecting" -> 0
+            "audited" -> 1
+            "prepared" -> 2
+            "commit_certified" -> 3
+            "finalized" -> 4
+            "aborted" -> 5
+            "expired" -> 6
+            else -> -1
+        }
+        require(
+            integer(typedBody["version"]) == BigInteger.ONE &&
+                integer(typedBody["authoritative_height"]) == integer(parsed["authoritative_height"]) &&
+                integer(typedBody["lifecycle_code"]) == BigInteger.valueOf(lifecycleCode.toLong()) &&
+                typedBody["network_id"] == localSigningContext.networkId().literal &&
+                typedBody["payload_digest"] == expectedPayloadDigest.jsonLiteral() &&
+                typedBody["responder"] is String &&
+                NativeAmxV2.isCanonicalBlsNormalPeerId(typedBody["responder"] as String),
+        ) { "settlement auditor capsule responder attestation is invalid" }
+        requireCanonicalBlsSignature(
+            attestation["signature"],
+            "settlement auditor capsule responder attestation.signature",
+        )
+        for (field in listOf("network_id", "payload_digest", "view_digest", "authority_digest")) {
+            requireCanonicalHashLiteral(
+                typedBody[field],
+                "settlement auditor capsule attestation.$field",
+            )
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun validateAuditApprovalAcknowledgementAttestation(
+        parsed: Map<String, Any?>,
+        expectedPayloadDigest: AtomicPrivateSettlementIdentifierV1,
+        approvalContext: AuditApprovalRequestContext,
+    ) {
+        val attestation = parsed["responder_attestation"]
+        require(attestation is Map<*, *> && attestation.keys == setOf("body", "signature")) {
+            "settlement approval acknowledgement responder attestation is invalid"
+        }
+        val body = attestation["body"]
+        val bodyFields = setOf(
+            "version",
+            "network_id",
+            "payload_digest",
+            "approval_digest",
+            "acknowledgement_digest",
+            "authority_digest",
+            "lifecycle_code",
+            "authoritative_height",
+            "responder",
+        )
+        require(body is Map<*, *> && body.keys == bodyFields) {
+            "settlement approval acknowledgement attestation body is invalid"
+        }
+        val typedBody = body as Map<String, Any?>
+        fun integer(value: Any?): BigInteger = when (value) {
+            is BigInteger -> value
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Long -> BigInteger.valueOf(value)
+            else -> throw IllegalArgumentException(
+                "settlement approval acknowledgement attestation integer is invalid",
+            )
+        }
+        val lifecycle = parsed["lifecycle"] as? Map<*, *>
+        val lifecycleCode = when (lifecycle?.get("status")) {
+            "collecting" -> 0
+            "audited" -> 1
+            else -> -1
+        }
+        val height = integer(parsed["authoritative_height"])
+        val collected = integer(parsed["collected"])
+        val required = integer(parsed["required"])
+        val legOrdinal = integer(parsed["leg_ordinal"])
+        val lifecycleIsExact = if (collected < required) lifecycleCode == 0 else lifecycleCode == 1
+        require(
+            height.signum() > 0 &&
+                height <= U64_MAX &&
+                height <= approvalContext.expiryHeight &&
+                collected > BigInteger.ZERO &&
+                required > BigInteger.ZERO &&
+                collected <= required &&
+                required <= U8_MAX &&
+                legOrdinal >= BigInteger.ZERO &&
+                legOrdinal < U8_MAX &&
+                legOrdinal == approvalContext.legOrdinal &&
+                parsed["bundle_id"] is String &&
+                parsed["committee_authority"] is Map<*, *> &&
+                parsed["newly_recorded"] is Boolean &&
+                lifecycleIsExact &&
+                integer(typedBody["version"]) == BigInteger.ONE &&
+                integer(typedBody["authoritative_height"]) == height &&
+                typedBody["network_id"] == localSigningContext.networkId().literal &&
+                typedBody["network_id"] == approvalContext.networkId &&
+                typedBody["payload_digest"] == expectedPayloadDigest.jsonLiteral() &&
+                parsed["payload_digest"] == expectedPayloadDigest.jsonLiteral() &&
+                integer(typedBody["lifecycle_code"]) == BigInteger.valueOf(lifecycleCode.toLong()) &&
+                typedBody["responder"] is String &&
+                NativeAmxV2.isCanonicalBlsNormalPeerId(typedBody["responder"] as String),
+        ) { "settlement approval acknowledgement responder attestation is invalid" }
+        requireCanonicalHashLiteral(
+            parsed["bundle_id"],
+            "settlement approval acknowledgement.bundle_id",
+        )
+        require(parsed["bundle_id"] == approvalContext.bundleId) {
+            "settlement approval acknowledgement bundle is substituted"
+        }
+        val authority = parsed["committee_authority"] as Map<*, *>
+        val authorityRoute = authority["route"] as? Map<*, *>
+        require(authorityRoute != null && integer(authorityRoute["dataspace_id"]) == approvalContext.dataspaceId) {
+            "settlement approval acknowledgement authority is substituted"
+        }
+        requireCanonicalBlsSignature(
+            attestation["signature"],
+            "settlement approval acknowledgement responder attestation.signature",
+        )
+        for (field in listOf(
+            "network_id",
+            "payload_digest",
+            "approval_digest",
+            "acknowledgement_digest",
+            "authority_digest",
+        )) {
+            requireCanonicalHashLiteral(
+                typedBody[field],
+                "settlement approval acknowledgement attestation.$field",
+            )
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun auditApprovalRequestContext(bodyBytes: ByteArray): AuditApprovalRequestContext {
+        val request = parseExactJsonObject(bodyBytes, "prepared settlement audit approval")
+        require(
+            request.keys == setOf("audit_policy", "approval") &&
+                request["audit_policy"] is Map<*, *>,
+        ) {
+            "prepared settlement audit approval has invalid fields"
+        }
+        val approval = request["approval"]
+        require(approval is Map<*, *> && approval.keys == setOf("body", "signature")) {
+            "prepared settlement audit approval is invalid"
+        }
+        require(approval["signature"] != null) {
+            "prepared settlement audit approval signature is missing"
+        }
+        val body = approval["body"]
+        val expectedFields = setOf(
+            "version",
+            "network_id",
+            "bundle_id",
+            "leg_ordinal",
+            "dataspace_id",
+            "auditor_id",
+            "audit_policy_digest",
+            "audit_key_epoch",
+            "proof_digest",
+            "capsule_digest",
+            "delta_digest",
+            "old_root",
+            "new_root",
+            "expiry_height",
+        )
+        require(body is Map<*, *> && body.keys == expectedFields) {
+            "prepared settlement audit approval body is invalid"
+        }
+        val typedBody = body as Map<String, Any?>
+        val networkId = typedBody["network_id"] as? String
+            ?: throw IllegalArgumentException("prepared settlement approval network is invalid")
+        requireCanonicalHashLiteral(networkId, "prepared settlement approval.network_id")
+        val bundleId = typedBody["bundle_id"] as? String
+            ?: throw IllegalArgumentException("prepared settlement approval bundle is invalid")
+        requireCanonicalHashLiteral(bundleId, "prepared settlement approval.bundle_id")
+        val version = integer(typedBody["version"])
+        val legOrdinal = integer(typedBody["leg_ordinal"])
+        val dataspaceId = integer(typedBody["dataspace_id"])
+        val expiryHeight = integer(typedBody["expiry_height"])
+        require(version == BigInteger.ONE) { "prepared settlement approval version is invalid" }
+        require(legOrdinal >= BigInteger.ZERO && legOrdinal < U8_MAX) {
+            "prepared settlement approval leg ordinal is outside 0..=254"
+        }
+        require(dataspaceId >= BigInteger.ZERO && dataspaceId <= U64_MAX) {
+            "prepared settlement approval dataspace is invalid"
+        }
+        require(expiryHeight > BigInteger.ZERO && expiryHeight <= U64_MAX) {
+            "prepared settlement approval expiry is invalid"
+        }
+        for (field in listOf(
+            "audit_policy_digest",
+            "proof_digest",
+            "capsule_digest",
+            "delta_digest",
+        )) {
+            requireCanonicalHashLiteral(typedBody[field], "prepared settlement approval.$field")
+        }
+        return AuditApprovalRequestContext(
+            networkId,
+            bundleId,
+            legOrdinal,
+            dataspaceId,
+            expiryHeight,
+        )
+    }
+
+    private fun integer(value: Any?): BigInteger = when (value) {
+        is BigInteger -> value
+        is Byte -> BigInteger.valueOf(value.toLong())
+        is Short -> BigInteger.valueOf(value.toLong())
+        is Int -> BigInteger.valueOf(value.toLong())
+        is Long -> BigInteger.valueOf(value)
+        else -> throw IllegalArgumentException("settlement integer is invalid")
+    }
+
+    private fun requireCanonicalHashLiteral(value: Any?, field: String) {
+        require(value is String) { "$field must be a canonical Iroha hash literal" }
+        val parsed = AtomicPrivateSettlementIdentifierV1.parse(value)
+        require(parsed.jsonLiteral() == value) { "$field must be a canonical Iroha hash literal" }
+    }
+
+    private fun requireCanonicalBlsSignature(value: Any?, field: String) {
+        require(value is String && value.isNotEmpty() && value == value.trim()) {
+            "$field must be canonical base64"
+        }
+        val decoded = try {
+            Base64.getDecoder().decode(value)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalArgumentException("$field must be canonical base64", error)
+        }
+        require(decoded.size == BLS_SIGNATURE_BYTES && Base64.getEncoder().encodeToString(decoded) == value) {
+            "$field must encode one exact BLS-normal signature"
         }
     }
 
@@ -622,7 +1123,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 target,
                 body,
                 sponsorAuth.accountId,
-                sponsorAuth.privateKey,
+                sponsorAuth.signer,
             )
         } else {
             CanonicalRequestSigner.buildHeaders(
@@ -631,7 +1132,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 target,
                 body,
                 sponsorAuth.accountId,
-                sponsorAuth.privateKey,
+                sponsorAuth.signer,
                 timestampMs,
                 checkNotNull(nonce),
             )
@@ -683,6 +1184,8 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         internal var executor: HttpTransportExecutor? = null
         internal var baseUri: URI = URI.create("http://localhost:8080")
         internal var localSigningContext: LocalSigningContext? = null
+        internal var responseVerifier: AtomicPrivateSettlementResponseVerifierV1? =
+            AtomicPrivateSettlementNativeResponseVerifierV1
         internal var timeout: Duration? = Duration.ofSeconds(30)
         internal val defaultHeaders = LinkedHashMap<String, String>()
 
@@ -695,6 +1198,16 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         /** Bind sponsor signatures to one exact genesis-derived network identity. */
         fun localSigningContext(context: LocalSigningContext): Builder = apply {
             this.localSigningContext = context
+        }
+
+        /**
+         * Set the restricted-response verifier.
+         *
+         * Passing `null` keeps public routes usable but makes every restricted route fail before
+         * dispatch. Production callers should retain the default JNI-backed verifier.
+         */
+        fun responseVerifier(verifier: AtomicPrivateSettlementResponseVerifierV1?): Builder = apply {
+            this.responseVerifier = verifier
         }
 
         /** Set the one-shot request timeout; `null` delegates to the executor. */
@@ -719,6 +1232,12 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         private const val RESPONSE_SMALL_MAX_BYTES = 1024 * 1024
         private const val RESPONSE_PUBLIC_BUNDLE_MAX_BYTES = 8 * 1024 * 1024
         private const val RESPONSE_RESTRICTED_MAX_BYTES = 32 * 1024 * 1024
+        private const val INVALID_RESPONSE_MESSAGE =
+            "atomic private settlement response is invalid"
+        private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        private val U8_MAX: BigInteger = BigInteger.valueOf(255)
+        private const val BLS_SIGNATURE_BYTES = 96
+        private val REJECT_CODE = Regex("^[A-Za-z0-9_.:-]{1,128}$")
 
         private val FORBIDDEN_DEFAULT_HEADERS = setOf(
             "authorization",
@@ -787,11 +1306,32 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             }
         }
 
+        private fun requireAbsentOrIdentityContentEncoding(headers: Map<String, List<String>>) {
+            val values = headers.entries
+                .filter { it.key.equals("Content-Encoding", true) }
+                .flatMap { it.value }
+            require(
+                values.isEmpty() ||
+                    values.size == 1 && values.single().trim().equals("identity", true),
+            ) {
+                "atomic private settlement response Content-Encoding must be absent or identity"
+            }
+        }
+
         private fun responseFields(route: String): Set<String> = when {
             route.endsWith("/availability-shares") ->
                 setOf("bundle_id", "payload_digest", "leg_ordinal", "disposition", "share")
             route.endsWith("/prepare-votes") || route.endsWith("/commit-votes") ->
                 setOf("bundle_id", "payload_digest", "leg_ordinal", "vote")
+            route.endsWith("/phase-certificates") ->
+                setOf(
+                    "bundle_id",
+                    "payload_digest",
+                    "leg_ordinal",
+                    "lifecycle",
+                    "prepare_certificate",
+                    "commit_certificate",
+                )
             route.endsWith("/certificates") ->
                 setOf("bundle_id", "payload_digest", "leg_ordinal", "phase", "lifecycle")
             route.endsWith("/legs") ->
@@ -804,16 +1344,19 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 )
             route.endsWith("/audit-approvals") ->
                 setOf(
+                    "authoritative_height",
                     "bundle_id",
                     "payload_digest",
                     "leg_ordinal",
+                    "committee_authority",
                     "collected",
                     "required",
                     "newly_recorded",
                     "lifecycle",
+                    "responder_attestation",
                 )
             route.endsWith("/bundles") ->
-                setOf("bundle_id", "accepted_at_height", "carrier_id", "lifecycle")
+                setOf("bundle_id", "accepted_at_height", "carrier_id")
             route.endsWith("/status") ->
                 setOf(
                     "bundle_id",
@@ -824,8 +1367,6 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                     "lifecycle_height",
                     "expiry_height",
                     "lifecycle",
-                    "audit_approvals",
-                    "required_audit_approvals",
                 )
             route.endsWith("/committee-proof") ->
                 setOf(
@@ -842,14 +1383,17 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 )
             route.endsWith("/audit-capsule") ->
                 setOf(
+                    "authoritative_height",
                     "manifest",
                     "audit_policy",
+                    "access_audit_policy",
                     "committee_authority",
                     "statement",
                     "delta",
                     "audit_capsule",
                     "availability",
                     "lifecycle",
+                    "responder_attestation",
                 )
             route.endsWith("/receipt") -> setOf("status", "value")
             route.contains("/bundles/") -> setOf("manifest", "lifecycle", "finalized_height")
@@ -893,5 +1437,7 @@ private fun requireJsonIntegersAreBounded(value: Any?, label: String) {
         is Map<*, *> -> value.values.forEach { requireJsonIntegersAreBounded(it, label) }
         is List<*> -> value.forEach { requireJsonIntegersAreBounded(it, label) }
         is BigInteger -> require(value.bitLength() <= 256) { "$label contains an oversized integer" }
+        is java.math.BigDecimal, is Double, is Float ->
+            throw IllegalArgumentException("$label must use the integer-only Norito JSON profile")
     }
 }

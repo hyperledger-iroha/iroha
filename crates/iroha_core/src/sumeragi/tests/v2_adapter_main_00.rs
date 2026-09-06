@@ -31,7 +31,6 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
     let binding =
         RecoveredLifecycleOwnerKuraBindingV1::for_test(kura.as_ref(), Some(&local_signer));
     let storage_root = kura.sumeragi_v2_storage_root();
-    let expected_chunk_root = storage_root.join("chunks");
     let paths = binding
         .storage_paths_for_launch(kura.as_ref())
         .expect("the exact Kura projects its sealed launch paths");
@@ -39,7 +38,6 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
         paths.wal_path(),
         storage_root.join("wal").join(format!("{:020}.wal", 1_u64))
     );
-    assert_eq!(paths.chunk_root(), expected_chunk_root);
     assert!(binding.matches_launch_identity(kura.as_ref(), &local_signer));
     assert!(!binding.matches_launch_identity(kura.as_ref(), &foreign_signer));
     assert!(!binding.matches_launch_identity(foreign_kura.as_ref(), &local_signer));
@@ -49,7 +47,6 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
             .is_none(),
         "a foreign Kura must not project launch storage paths"
     );
-    assert_eq!(paths.into_chunk_root(), expected_chunk_root);
 }
 #[derive(Debug)]
 struct TestAggregator;
@@ -80,8 +77,11 @@ fn context() -> wire::HeightContext {
         })
         .collect::<Vec<_>>();
     roster.sort();
+    let network_id = test_network_id(0x61);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
     wire::HeightContext {
-        network_id: test_network_id(0x61),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 1,
@@ -92,6 +92,8 @@ fn context() -> wire::HeightContext {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
@@ -161,8 +163,11 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = test_network_id(0x62);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 3, &roster);
     let context = wire::HeightContext {
-        network_id: test_network_id(0x62),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 3,
@@ -173,6 +178,8 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
@@ -397,8 +404,17 @@ fn aggregate_verification_rejects_signer_without_aligned_pop() {
 fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_voting() {
     let (mut context, _keys, proofs) = authenticated_context();
     context.epoch_end_height = context.height;
+    let next_epoch = context.epoch + 1;
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            context.network_id,
+            next_epoch,
+            &context.roster,
+        );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
-        epoch: context.epoch + 1,
+        epoch: next_epoch,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         epoch_end_height: context.height + 10,
         mode: context.mode,
         roster: context.roster.clone(),
@@ -830,7 +846,7 @@ fn subject(byte: u8) -> wire::BlockSubject {
     }
 }
 fn execution_commitment(byte: u8) -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new([byte, 3]),
         Hash::new([byte, 4]),
         Hash::new([byte, 5]),

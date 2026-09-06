@@ -1106,7 +1106,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | Entrypoint { .. }
         | NumericStatus { .. }
         | GetTriggerEvent { .. }
-        | ProveExecution { .. }
+        | ExecutionSummary { .. }
         | TransferBatchBegin
         | TransferBatchEnd
         | CommitOutput => {}
@@ -1792,7 +1792,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::IrohaHash { dest, .. } => Some(*dest),
         Instr::Sm2Verify { dest, .. } => Some(*dest),
         Instr::VerifySignature { dest, .. } => Some(*dest),
-        Instr::ProveExecution { dest } => Some(*dest),
+        Instr::ExecutionSummary { dest } => Some(*dest),
         Instr::GrowHeap { dest, .. } => Some(*dest),
         Instr::GetMerklePath { dest, .. }
         | Instr::GetMerkleCompact { dest, .. }

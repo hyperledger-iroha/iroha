@@ -9,13 +9,9 @@ import * as sourcePrivacyApi from "../src/privacyCapabilities.js";
 import * as distPrivacyApi from "../dist/privacyCapabilities.js";
 import {
   PRIVACY_PROTOCOL_IDS_V1 as SOURCE_IDS,
-  PrivacyCapabilitySnapshotError as SourceSnapshotError,
-  parsePrivacyCapabilitySnapshotV1 as parseSourceSnapshot,
 } from "../src/privacyCapabilities.js";
 import {
   PRIVACY_PROTOCOL_IDS_V1 as DIST_IDS,
-  PrivacyCapabilitySnapshotError as DistSnapshotError,
-  parsePrivacyCapabilitySnapshotV1 as parseDistSnapshot,
 } from "../dist/privacyCapabilities.js";
 
 const MATRIX_TEXT = readFileSync(
@@ -74,37 +70,11 @@ const RETIRED_EXPORTS = Object.freeze([
   "buildPenumbraOutputProofV1",
   "buildAztecPrivateKernelProofV1",
   "buildMidenStarkTransactionProofV1",
+  "getPrivacyCapabilitiesV1",
+  "parsePrivacyCapabilitySnapshotV1",
+  "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+  "PrivacyCapabilitySnapshotError",
 ]);
-
-function snapshot() {
-  return {
-    version: 1,
-    committed_height: 1,
-    consensus_policy: {
-      current_limits: {
-        max_actions_per_transaction: 1,
-        max_actions_per_block: 2,
-        max_proof_bytes_per_action: 9 * 1024 * 1024,
-        max_action_bytes: 9 * 1024 * 1024,
-        max_privacy_bytes_per_transaction: 9 * 1024 * 1024,
-        max_privacy_bytes_per_block: 18 * 1024 * 1024,
-        max_statement_and_encrypted_output_bytes_per_transaction: 256 * 1024,
-        max_nullifiers_per_action: 8,
-        max_commitments_per_action: 8,
-        retained_root_count: 2048,
-      },
-      pending_tightening: null,
-    },
-    protocols: EXPECTED_PROTOCOL_IDS.map((protocol) => ({
-      protocol_id: { protocol, value: null },
-      compiled_profile: {
-        status: "unavailable",
-        value: { reason: "engine-unavailable", detail: null },
-      },
-      activation: null,
-    })),
-  };
-}
 
 test("source and checked dist expose exactly the canonical 12 protocol ids", () => {
   assert.deepEqual(SOURCE_IDS, EXPECTED_PROTOCOL_IDS);
@@ -151,43 +121,6 @@ test("the shared exact12 matrix binds order, routes, typed envelopes, and retire
   );
 });
 
-test("source and checked dist parse the same closed capability snapshot", () => {
-  assert.deepEqual(parseSourceSnapshot(snapshot()), parseDistSnapshot(snapshot()));
-});
-
-test("aliases, unknown protocol ids, and unknown fields fail closed in both builds", () => {
-  const hostileProtocolIds = [
-    "",
-    "unknown-privacy-protocol-v1",
-    ...RETIRED_PROTOCOL_IDS,
-    "ZK-ACE-PQ-AUTHORIZATION-V0",
-    " zk-ace-pq-authorization-v0",
-    "zk-ace-pq-authorization-v0 ",
-    "zk-ace‑pq-authorization-v0",
-    "zk-аce-pq-authorization-v0",
-    "zk-ace-pq-authorization-v0\u0000",
-  ];
-  const hostileCases = [
-    ...hostileProtocolIds.map((protocol) => (value) => {
-      value.protocols[0].protocol_id.protocol = protocol;
-    }),
-    (value) => {
-      value.protocols[0].unexpected = true;
-    },
-    (value) => {
-      value.consensus_policy.current_limits.unexpected = 1;
-    },
-  ];
-  for (const mutate of hostileCases) {
-    const sourceValue = snapshot();
-    mutate(sourceValue);
-    assert.throws(() => parseSourceSnapshot(sourceValue), SourceSnapshotError);
-    const distValue = snapshot();
-    mutate(distValue);
-    assert.throws(() => parseDistSnapshot(distValue), DistSnapshotError);
-  }
-});
-
 test("retired catalog and research-builder exports are absent", () => {
   for (const name of RETIRED_EXPORTS) {
     assert.equal(Object.hasOwn(sourceApi, name), false, `source export ${name}`);
@@ -195,20 +128,16 @@ test("retired catalog and research-builder exports are absent", () => {
   }
 });
 
-test("privacy capability policy is available only from the optional subpath", () => {
+test("Exact12 capability admission is available only from the optional subpath", () => {
   const expectedOptionalExports = [
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
-    "PrivacyCapabilitySnapshotError",
     "PrivacyExact12CapabilityManifestError",
     "PrivacyExact12CapabilityManifestV1",
     "compiledProfileCatalogV1",
     "decodePrivacyExact12CapabilityManifestV1",
-    "getPrivacyCapabilitiesV1",
     "getPrivacyExact12CapabilityManifestV1",
-    "parsePrivacyCapabilitySnapshotV1",
     "requirePrivacyExact12CapabilityAdmissionV1",
     "requirePrivacyExact12CapabilityTupleV1",
   ];

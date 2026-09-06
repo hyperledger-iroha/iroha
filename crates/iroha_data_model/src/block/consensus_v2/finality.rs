@@ -9,6 +9,7 @@ use super::{
     PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
 };
 use crate::block::BlockHeader;
+use crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1;
 use core::fmt;
 use iroha_crypto::{Algorithm, HashOf};
 use iroha_schema::IntoSchema;
@@ -30,9 +31,15 @@ pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot")]
 pub struct FinalizedNextEpochSnapshot {
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,
+    /// Canonical identifier of the separately provisioned paired-Pasta roster for this epoch.
+    pub kagemusha_mint_finality_epoch_id: [u8; 32],
+    /// Complete paired-Pasta public roster authenticated by the old epoch's boundary `CommitQC`.
+    pub kagemusha_mint_finality_epoch_roster: KagemushaMintFinalityEpochRosterV1,
     /// Last height governed by the next epoch.
     pub epoch_end_height: Height,
     /// Genesis-selected consensus mode used to select the committee.
@@ -54,6 +61,23 @@ impl FinalizedNextEpochSnapshot {
             .ok_or(ValidationError::InvalidNextEpoch)?;
         if self.epoch != expected_epoch {
             return Err(ValidationError::InvalidNextEpoch);
+        }
+        if self.kagemusha_mint_finality_epoch_id == [0; 32] {
+            return Err(ValidationError::InvalidKagemushaMintFinalityEpochId);
+        }
+        let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
+        if mint_roster.validate().is_err()
+            || mint_roster.network_id != context.network_id
+            || mint_roster.epoch != self.epoch
+            || mint_roster.validators.len() != self.roster.len()
+            || mint_roster
+                .validators
+                .iter()
+                .zip(&self.roster)
+                .any(|(mint, consensus)| mint.validator != consensus.validator)
+            || mint_roster.finality_epoch_id().ok() != Some(self.kagemusha_mint_finality_epoch_id)
+        {
+            return Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster);
         }
         let successor_height = context
             .height
@@ -99,6 +123,8 @@ impl FinalizedNextEpochSnapshot {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact")]
 pub struct V2FinalityArtifact {
     /// Norito layout version; currently [`V2_FINALITY_ARTIFACT_VERSION`].
     pub format_version: u16,
@@ -458,9 +484,12 @@ pub fn verify_quorum_certificate_with_validator_pops(
             V2QuorumCertificateVerificationError::InvalidProofOfPossession { index: *signer }
         })?;
     }
+    let aggregate_signature = certificate
+        .bls_aggregate_signature()
+        .map_err(V2QuorumCertificateVerificationError::InvalidCertificate)?;
     iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
-        &certificate.aggregate_signature,
+        aggregate_signature,
         &public_keys,
         &pops,
     )
@@ -724,10 +753,47 @@ mod tests {
             })
             .collect()
     }
+    fn mint_finality_roster(
+        network_id: NetworkId,
+        epoch: u64,
+        roster: &[ValidatorPower],
+    ) -> KagemushaMintFinalityEpochRosterV1 {
+        use crate::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityValidatorKeysV1,
+        };
+
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                })
+                .collect(),
+        }
+    }
     fn context() -> HeightContext {
         let roster = roster();
+        let network_id = network_id(0xA1);
+        let current_mint_finality_roster = mint_finality_roster(network_id, 7, &roster);
+        let mint_finality_epoch_id = current_mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid fixture mint-finality roster");
+        let next_mint_finality_roster = mint_finality_roster(network_id, 8, &roster);
+        let next_mint_finality_epoch_id = next_mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid next-epoch fixture mint-finality roster");
         let next_epoch_snapshot = FinalizedNextEpochSnapshot {
             epoch: 8,
+            kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
             epoch_end_height: 9,
             mode: ConsensusMode::Permissioned,
             roster: roster.clone(),
@@ -736,10 +802,12 @@ mod tests {
             leader_seed: [0xC3; 32],
         };
         HeightContext {
-            network_id: network_id(0xA1),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 7,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: current_mint_finality_roster,
             epoch_end_height: 1,
             next_epoch_snapshot: Some(next_epoch_snapshot),
             mode: ConsensusMode::Permissioned,
@@ -1051,3 +1119,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_finality_schema_tests;

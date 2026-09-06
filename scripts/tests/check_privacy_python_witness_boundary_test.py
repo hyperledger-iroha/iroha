@@ -37,7 +37,7 @@ def _write_fixture(
         """fn retained_protocol(protocol: &str) {
     let protocol_id = protocol;
     match protocol_id {
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
             return Err(WorkerError::UnsupportedProtocol);
         }
     }

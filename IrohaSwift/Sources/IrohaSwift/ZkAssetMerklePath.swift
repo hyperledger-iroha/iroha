@@ -193,7 +193,7 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     }
 
     /// Recompute the path root after replacing its leaf with one exact
-    /// commitment. Kagemusha uses the authoritative next-zero path to derive
+    /// commitment. KAGEMUSHA V1 uses the authoritative next-zero path to derive
     /// the post-transfer root for a newly appended output.
     public func root(
         replacingLeafWith commitment: Data
@@ -210,7 +210,7 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     /// Derive the padded-zero path immediately after inserting `commitment`
     /// at this authoritative frontier path. The returned path authenticates
     /// leaf `leafIndex + 1` against the exact post-insertion root and is the
-    /// dummy path consumed by Kagemusha's fixed two-slot circuit layout. The
+    /// dummy path consumed by the fixed two-slot circuit layout. The
     /// current contract permits one real input and binds the second slot to zero.
     public func nextZeroPathAfterInsertion(
         commitment: Data,
@@ -663,7 +663,8 @@ enum StrictJSONDuplicateKeyRejector {
     static func rejectDuplicateObjectKeys(
         in data: Data,
         integerKeys: Set<String> = [],
-        integerArrayKeys: Set<String> = []
+        integerArrayKeys: Set<String> = [],
+        requireAllNumbersInteger: Bool = false
     ) throws {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ZkAssetMerklePathError.invalidField("json")
@@ -671,7 +672,8 @@ enum StrictJSONDuplicateKeyRejector {
         var parser = Parser(
             text,
             integerKeys: integerKeys,
-            integerArrayKeys: integerArrayKeys
+            integerArrayKeys: integerArrayKeys,
+            requireAllNumbersInteger: requireAllNumbersInteger
         )
         try parser.parse()
     }
@@ -681,16 +683,19 @@ enum StrictJSONDuplicateKeyRejector {
         private let text: String
         private let integerKeys: Set<String>
         private let integerArrayKeys: Set<String>
+        private let requireAllNumbersInteger: Bool
         private var index: String.Index
 
         init(
             _ text: String,
             integerKeys: Set<String>,
-            integerArrayKeys: Set<String>
+            integerArrayKeys: Set<String>,
+            requireAllNumbersInteger: Bool
         ) {
             self.text = text
             self.integerKeys = integerKeys
             self.integerArrayKeys = integerArrayKeys
+            self.requireAllNumbersInteger = requireAllNumbersInteger
             self.index = text.startIndex
         }
 
@@ -732,7 +737,7 @@ enum StrictJSONDuplicateKeyRejector {
             case "\"":
                 _ = try parseString()
             case "-", "0"..."9":
-                try parseNumber(requireInteger: requireInteger)
+                try parseNumber(requireInteger: requireInteger || requireAllNumbersInteger)
             case "t":
                 try consume("true")
             case "f":

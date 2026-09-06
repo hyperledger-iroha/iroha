@@ -1,0 +1,41 @@
+{
+  "schema": "sccp-ceremony-policy-final-v1",
+  "version": 1,
+  "phase1": [
+    {"id":"sccp-final-v1-bn254-phase1","curve":"bn254","contributions":8,"future_beacon_required":true},
+    {"id":"sccp-final-v1-bls12-381-phase1","curve":"bls12-381","contributions":8,"future_beacon_required":true}
+  ],
+  "phase2": [
+    {"id":"sccp-final-v1-bsc-mainnet-epoch-anchor-update-phase2","profile":"sccp-final-v1-bsc-mainnet-epoch-anchor-update","contributions":8},
+    {"id":"sccp-final-v1-bsc-mainnet-message-phase2","profile":"sccp-final-v1-bsc-mainnet-message","contributions":8},
+    {"id":"sccp-final-v1-ethereum-mainnet-epoch-anchor-update-phase2","profile":"sccp-final-v1-ethereum-mainnet-epoch-anchor-update","contributions":8},
+    {"id":"sccp-final-v1-ethereum-mainnet-message-phase2","profile":"sccp-final-v1-ethereum-mainnet-message","contributions":8},
+    {"id":"sccp-final-v1-ton-mainnet-epoch-anchor-update-phase2","profile":"sccp-final-v1-ton-mainnet-epoch-anchor-update","contributions":8},
+    {"id":"sccp-final-v1-ton-mainnet-message-phase2","profile":"sccp-final-v1-ton-mainnet-message","contributions":8},
+    {"id":"sccp-final-v1-tron-mainnet-epoch-anchor-update-phase2","profile":"sccp-final-v1-tron-mainnet-epoch-anchor-update","contributions":8},
+    {"id":"sccp-final-v1-tron-mainnet-message-phase2","profile":"sccp-final-v1-tron-mainnet-message","contributions":8}
+  ],
+  "future_beacon": {
+    "announcement_must_precede_last_contribution": true,
+    "reveal_must_follow_last_contribution": true,
+    "minimum_entropy_bytes": 32
+  },
+  "key_separation": {
+    "phase2_per_profile": true,
+    "proving_and_verifying_key_reuse_forbidden": true
+  },
+  "invalidation": [
+    "circuit_source_change",
+    "constant_change",
+    "dependency_or_vendor_change",
+    "compiler_or_builder_change",
+    "r1cs_change",
+    "witness_compiler_change"
+  ],
+  "required_independent_audits": [
+    "semantic-cryptographic",
+    "reproducibility-ceremony",
+    "destination-integration"
+  ],
+  "maximum_unresolved_severity": "low"
+}

@@ -28,11 +28,12 @@ public final class IrohaPeerCanonicalPayload {
             + profile.requiredSchemaVersion()
             + ", received "
             + schemaVersion);
-    this.bytes = Objects.requireNonNull(bytes, "bytes").clone();
-    require(this.bytes.length > 0, "Peer payload is empty");
+    final byte[] requiredBytes = Objects.requireNonNull(bytes, "bytes");
+    require(requiredBytes.length > 0, "Peer payload is empty");
     require(
-        this.bytes.length <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES,
-        "Peer payload exceeds its bound");
+        requiredBytes.length <= maximumCanonicalBytes(this.profile, this.kind),
+        "Peer payload exceeds the frozen " + this.kind + " bound");
+    this.bytes = requiredBytes.clone();
     validateTypedCanonicalPayload(this.profile, this.kind, this.bytes);
     this.schemaVersion = schemaVersion;
   }
@@ -80,17 +81,17 @@ public final class IrohaPeerCanonicalPayload {
       final IrohaPeerPayloadProfile profile,
       final IrohaPeerPayloadKind kind,
       final byte[] bytes) {
-    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) return;
+    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_V1) return;
     final String schema = switch (kind) {
-      case RECEIVE_REQUEST ->
-          "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2";
+      case REQUEST ->
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1";
       case PAYMENT ->
-          "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4";
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1";
       case ACKNOWLEDGEMENT ->
-          "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2";
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1";
     };
     final int requiredPadding = switch (kind) {
-      case RECEIVE_REQUEST, PAYMENT -> 8;
+      case REQUEST, PAYMENT -> 8;
       case ACKNOWLEDGEMENT -> 0;
     };
     try {
@@ -105,11 +106,22 @@ public final class IrohaPeerCanonicalPayload {
                   == NoritoHeader.HEADER_LENGTH + requiredPadding + decoded.payload().length
               && Arrays.equals(
                   header.encode(), Arrays.copyOfRange(bytes, 0, NoritoHeader.HEADER_LENGTH)),
-          "Kagemusha canonical payload must use canonical compact Norito framing");
+          "KAGEMUSHA V1 payload must use canonical compact Norito framing");
       header.validateChecksum(decoded.payload());
     } catch (RuntimeException failure) {
       throw new IllegalArgumentException(
-          "Invalid Kagemusha canonical payload for " + kind, failure);
+          "Invalid KAGEMUSHA V1 payload for " + kind, failure);
     }
+  }
+
+  private static int maximumCanonicalBytes(
+      final IrohaPeerPayloadProfile profile, final IrohaPeerPayloadKind kind) {
+    return switch (profile) {
+      case KAGEMUSHA_V1 -> switch (kind) {
+        case REQUEST -> KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES;
+        case PAYMENT -> KagemushaWireV1.MAXIMUM_PAYMENT_BYTES;
+        case ACKNOWLEDGEMENT -> KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_BYTES;
+      };
+    };
   }
 }

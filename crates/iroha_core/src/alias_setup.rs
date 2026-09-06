@@ -28,6 +28,39 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 /// Error code returned when public alias setup tries to claim an operator-catalogued dataspace.
 pub const CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE: &str = "alias.catalog.bootstrap_required";
+/// Read an exact governed grant without allowing a malformed reservation to disappear.
+fn dataspace_bootstrap_grant(
+    world: &impl WorldReadOnly,
+    selector: &NameSelectorV1,
+) -> Result<Option<iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1>, AliasSetupError>
+{
+    use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
+
+    // Legacy targets are normalized by the SNS selector. Do not introduce a new rejection for
+    // their raw spelling when no grant exists, including names outside the grant-key grammar.
+    let Some(parameter_id) = selector
+        .normalized_label()
+        .parse()
+        .ok()
+        .and_then(|name| AliasDataspaceBootstrapGrantV1::parameter_id_for(&name).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(custom) = world.parameters().custom().get(&parameter_id) else {
+        return Ok(None);
+    };
+    AliasDataspaceBootstrapGrantV1::from_custom_parameter(custom)
+        .map_err(|error| {
+            AliasSetupError::new("alias.catalog.bootstrap_grant_invalid", error.to_string())
+        })?
+        .map(Some)
+        .ok_or_else(|| {
+            AliasSetupError::new(
+                "alias.catalog.bootstrap_grant_invalid",
+                "installed bootstrap grant identifier does not match its key",
+            )
+        })
+}
 /// Deterministic conflict or validation failure produced while classifying an alias intent.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{code}: {message}")]
@@ -1038,15 +1071,24 @@ pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
     }
     if record.is_none()
         && let AliasIntentV1::Dataspace(value) = intent
-        && catalog.by_id(value.dataspace.dataspace_id).is_some()
     {
-        return Err(AliasSetupError::new(
-            CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE,
-            format!(
-                "catalogued dataspace `{}` ({}) must be bound by the governed genesis bootstrap before public alias setup",
-                value.dataspace.canonical_name, value.dataspace.dataspace_id
-            ),
-        ));
+        let grant = dataspace_bootstrap_grant(world, &selector)?;
+        if let Some(grant) = grant {
+            if grant.dataspace != value.dataspace || grant.owner != value.owner {
+                return Err(AliasSetupError::new(
+                    "alias.catalog.bootstrap_grant_conflict",
+                    "dataspace setup must match the exact governed bootstrap grant and owner",
+                ));
+            }
+        } else if catalog.by_id(value.dataspace.dataspace_id).is_some() {
+            return Err(AliasSetupError::new(
+                CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE,
+                format!(
+                    "catalogued dataspace `{}` ({}) must be bound by the governed genesis bootstrap before public alias setup",
+                    value.dataspace.canonical_name, value.dataspace.dataspace_id
+                ),
+            ));
+        }
     }
     let resource_needs_repair = match intent {
         AliasIntentV1::Dataspace(_) => false,
@@ -1073,8 +1115,8 @@ pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
         AliasIntentV1::AccountAlias(value) => classify_account_state(world, value)?,
     };
     if record.is_none() {
-        // Only a deterministic dynamic mapping reaches this branch. Catalog entries are
-        // operator-governed namespace declarations and must already have a bootstrap record.
+        // A catalogued dataspace reaches this branch only with an exact, replayed governance
+        // grant installed before its first record. Unreserved dynamic mappings remain public.
         return Ok(AliasPlanDispositionV1::Create);
     }
     if resource_needs_repair || !exact_permissions_present(world, intent) {
@@ -1227,6 +1269,26 @@ mod tests {
         );
     }
     #[test]
+    fn ungranted_dataspace_preserves_legacy_selector_normalization() {
+        let owner = account(23);
+        let world = world_with_accounts(core::slice::from_ref(&owner));
+        let catalog = DataSpaceCatalog::new(Vec::new()).expect("empty dynamic catalog");
+        let AliasIntentV1::Dataspace(mut intent) = dynamic_dataspace_intent(owner) else {
+            unreachable!()
+        };
+        intent.dataspace.canonical_name = "PAYNET".parse().expect("legacy raw spelling");
+        assert_eq!(
+            classify_alias_intent(
+                &world.view(),
+                &catalog,
+                &AliasIntentV1::Dataspace(intent),
+                1
+            )
+            .expect("an absent grant must preserve legacy SNS normalization"),
+            AliasPlanDispositionV1::Create
+        );
+    }
+    #[test]
     fn catalogued_dataspace_requires_governed_bootstrap_record() {
         let owner = account(2);
         let mut world = world_with_accounts(core::slice::from_ref(&owner));
@@ -1248,12 +1310,96 @@ mod tests {
         let error = classify_alias_intent(&world.view(), &catalog, &intent, 1)
             .expect_err("public setup must not claim an operator-catalogued dataspace");
         assert_eq!(error.code(), CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE,);
+        assert_eq!(
+            error.message(),
+            "catalogued dataspace `governance` (7) must be bound by the governed genesis bootstrap before public alias setup",
+            "historical rejection bytes must remain unchanged when no grant exists"
+        );
         insert_record(&mut world, &intent, owner);
         assert_eq!(
             classify_alias_intent(&world.view(), &catalog, &intent, 1)
                 .expect("a governed bootstrap record establishes the owner"),
             AliasPlanDispositionV1::Repair,
             "the authenticated bootstrap owner may repair missing derived permissions",
+        );
+    }
+    #[test]
+    fn dataspace_bootstrap_grant_preserves_create_across_catalog_expansion() {
+        use iroha_data_model::{alias_setup::AliasDataspaceBootstrapGrantV1, parameter::Parameter};
+
+        let owner = account(21);
+        let other = account(22);
+        let world = world_with_accounts(&[owner.clone(), other.clone()]);
+        let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", owner.clone())
+            .expect("canonical bootstrap grant");
+        let intent = AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: grant.dataspace.clone(),
+            owner,
+        });
+        let expanded_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: grant.dataspace.dataspace_id,
+            alias: "bpng".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("expanded BPNG catalog");
+        let error = classify_alias_intent(&world.view(), &expanded_catalog, &intent, 1)
+            .expect_err("catalogued names remain protected without a grant");
+        assert_eq!(error.code(), CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE);
+        {
+            let mut block = world.block();
+            let mut transaction = block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
+            transaction
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(
+                    grant
+                        .clone()
+                        .into_custom_parameter()
+                        .expect("grant parameter"),
+                ));
+            transaction.apply();
+            block.commit();
+        }
+        for catalog in [DataSpaceCatalog::default(), expanded_catalog.clone()] {
+            assert_eq!(
+                classify_alias_intent(&world.view(), &catalog, &intent, 1)
+                    .expect("the same pre-existing grant authorizes creation before and after catalog expansion"),
+                AliasPlanDispositionV1::Create
+            );
+            let foreign = AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                dataspace: grant.dataspace.clone(),
+                owner: other.clone(),
+            });
+            let error = classify_alias_intent(&world.view(), &catalog, &foreign, 1)
+                .expect_err("a grant reserves its owner even before catalog installation");
+            assert_eq!(error.code(), "alias.catalog.bootstrap_grant_conflict");
+            let noncanonical = AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                dataspace: ResolvedDataSpaceV1::new(
+                    "BPNG".parse().expect("noncanonical raw name"),
+                    grant.dataspace.dataspace_id,
+                ),
+                owner: grant.owner.clone(),
+            });
+            let error = classify_alias_intent(&world.view(), &catalog, &noncanonical, 1)
+                .expect_err("SNS normalization cannot hide an existing exact grant");
+            assert_eq!(error.code(), "alias.catalog.bootstrap_grant_conflict");
+        }
+        let wrong_static_mapping = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(10),
+            alias: "bpng".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("conflicting static catalog");
+        let error = classify_alias_intent(&world.view(), &wrong_static_mapping, &intent, 1)
+            .expect_err("a grant cannot override an existing static ID mapping");
+        assert_eq!(
+            error.code(),
+            crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE
         );
     }
     #[test]

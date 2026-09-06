@@ -87,7 +87,7 @@ use std::{
 };
 use tokio::time::{Instant, sleep, timeout};
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
-const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -874,6 +874,8 @@ fn build_zk_ams_batch_action(
     let profile = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
         .wrap_err("load canonical compiled ZK-AMS profile for envelope")?;
     let envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -996,6 +998,8 @@ fn build_zk_ams_provision_action(
     let profile = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
         .wrap_err("load canonical compiled ZK-AMS profile for provisioning envelope")?;
     let envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -1339,7 +1343,7 @@ fn independently_resigned_governance_tamper(
         }
         (
             GovernanceTamper::VegaIssuerRecord,
-            PrivacyStatementV1::VegaExistingCredentialZkV0(statement),
+            PrivacyStatementV1::VegaExistingCredentialZkV1(statement),
         ) => {
             let mut digest = *statement.issuer_record_digest.as_bytes();
             digest[0] ^= 0x80;
@@ -1394,7 +1398,7 @@ fn independently_resigned_vega_proof_corruption(
         .wrap_err("scan canonical Vega transaction before proof corruption")?
         .ok_or_else(|| eyre!("canonical Vega transaction omitted its direct submission"))?;
     let mut envelope = submission.envelope.clone();
-    let PrivacyProofV1::VegaExistingCredentialZkV0(proof) = &mut envelope.proof else {
+    let PrivacyProofV1::VegaExistingCredentialZkV1(proof) = &mut envelope.proof else {
         return Err(eyre!(
             "Vega proof corruption reached a different proof suite"
         ));

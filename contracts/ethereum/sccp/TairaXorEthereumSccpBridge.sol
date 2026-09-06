@@ -10,6 +10,7 @@ contract TairaXorEthereumSccpBridge is TairaXorExactEvmSccpBridge {
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint8 configuredEthereumProfile,
         uint32 configuredRouteRevision,
+        address[5] memory configuredMintGuardians,
         uint256 configuredMaxWrappedSupply
     ) TairaXorExactEvmSccpBridge(
         tokenAddress,
@@ -17,10 +18,11 @@ contract TairaXorEthereumSccpBridge is TairaXorExactEvmSccpBridge {
         1,
         configuredEthereumProfile,
         configuredRouteRevision,
+        configuredMintGuardians,
         configuredMaxWrappedSupply
     ) {}
 
-    /** Return the exact SCCP Ethereum profile tag (`2` mainnet or `3` Sepolia). */
+    /** Return the exact SCCP Ethereum mainnet profile tag (`0x41`). */
     function ethereumProfile() external view returns (uint8) {
         return networkProfile;
     }

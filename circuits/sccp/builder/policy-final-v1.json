@@ -1,0 +1,23 @@
+{
+  "schema": "sccp-circuit-builder-policy-final-v1",
+  "version": 1,
+  "platform": "linux/amd64",
+  "goamd64": "v1",
+  "base_image": "golang:1.25.7-bookworm",
+  "base_image_platform_manifest_sha256": "58259daf0a27c150118663ef7452aa94d66a86d55e73b3443386146623f5364d",
+  "base_image_multiarch_index_sha256": "564e366a28ad1d70f460a2b97d1d299a562f08707eb0ecb24b659e5bd6c108e1",
+  "go_version": "go1.25.7",
+  "official_go_linux_amd64_archive_sha256": "12e6d6e280fd8ddcd416659b7f2a754da34e2cb9360f3027348ef63e2a35e6bc",
+  "gnark_version": "v0.16.3",
+  "gnark_module_h1": "h1:S7BtIQSX2WLHV2857HrLmrQ5xIl0ZRL8kT6rcLn8gow=",
+  "network": "none",
+  "module_mode": "vendor",
+  "goenv": "off",
+  "gowork": "off",
+  "cgo": false,
+  "source_date_epoch": 1787875200,
+  "test_timeout": "2h",
+  "build_flags": ["-trimpath", "-buildvcs=false", "-ldflags=-buildid="],
+  "production_key_generation": false,
+  "production_verifying_key_injection": false
+}

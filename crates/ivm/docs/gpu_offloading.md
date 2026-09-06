@@ -70,12 +70,12 @@ The following hotspots contain tight loops or field arithmetic that map well to 
 ## Scheduler Integration
 
 The [`Scheduler`](../src/parallel.rs) detects all available GPUs on start up using `GpuManager` and exposes `gpu_count()` as a hint for higher layers. GPU assignment is purely data-driven so each task always maps to the same device across nodes. Transactions with heavy vector or hashing workloads can thus run in parallel across up to eight GPUs while CPU threads handle the coordination.
-Runtime behaviour can be adjusted with environment variables:
-- `IVM_DISABLE_CUDA` – disable offloading even when compiled with the `cuda` feature.
-- `IVM_MAX_GPUS` – limit the number of GPUs initialised.
-- `IVM_FORCE_CUDA_SELFTEST_FAIL` – force CUDA golden self‑test to fail and disable the backend (tests/dev).
-- `IVM_DISABLE_METAL` – disable Metal backend even on supported macOS hosts (tests/dev).
-- `IVM_FORCE_METAL_SELFTEST_FAIL` – force Metal golden self‑test to fail and disable the backend (tests/dev).
+Production runtime behaviour is sourced from the node's `[accel]`
+configuration. `enable_cuda` and `enable_metal` select backends, while
+`max_gpus` caps the number of devices (`0` means no cap). The corresponding
+`ACCEL_*` environment names are configuration-input aliases, not a separate
+runtime policy. `IVM_DISABLE_{CUDA,METAL}` and `IVM_FORCE_*_SELFTEST_FAIL` are
+developer/test shims and are ignored by release builds.
 
 SIMD selection is driven by configuration. For deterministic runs or benchmarks,
 set `AccelerationPolicy::with_forced_simd(Some(SimdChoice::Scalar|Sse2|Avx2|Avx512|Neon))`
@@ -93,7 +93,7 @@ fall back to the scalar backend.
 - **Synchronous Commits** – The VM waits for all kernels in a cycle to finish before applying their outputs to the state. Results are committed sequentially in instruction order as done for CPU execution.
 - **Golden Self‑tests and Auto‑Disable** – On startup/first use, GPU backends (Metal, CUDA) execute small golden vectors (vadd32, SHA‑256, Keccak). Any mismatch disables the backend at runtime and the VM falls back to CPU scalar/SIMD paths, preserving correctness.
 - **Deterministic Work Assignment** – Mapping from instruction index to GPU ID is purely data driven (e.g., `gpu_id = hash(tx_id, instr_index) % 8`). Every node derives the same mapping and thus launches kernels in the same sequence.
-- **Runtime selection + fallbacks** – `AccelerationConfig` and env overrides (`IVM_DISABLE_{CUDA,METAL}`, `IVM_FORCE_*_SELFTEST_FAIL`) short‑circuit GPU use. CUDA helpers either return `None` (Poseidon/Keccak/BN254/bitonic sort) or a CPU result wrapped in `Some` (AES rounds) so callers always get deterministic outputs. Tests in `crates/ivm/tests/cuda_disable_on_mismatch.rs` cover forced self‑test failures and config disables for SHA‑256, Poseidon, AES, and the bitonic-sort helper.
+- **Runtime selection + fallbacks** – `AccelerationConfig`, populated from the node's `[accel]` configuration in production, short-circuits GPU use. Developer/test self-test overrides exercise the same fail-closed fallback. CUDA helpers either return `None` (Poseidon/Keccak/BN254/bitonic sort) or a CPU result wrapped in `Some` (AES rounds) so callers always get deterministic outputs. Tests in `crates/ivm/tests/cuda_disable_on_mismatch.rs` cover forced self-test failures and configuration disables for SHA‑256, Poseidon, AES, and the bitonic-sort helper.
 
 ## Summary Roadmap
 
@@ -131,37 +131,29 @@ stream, or re-uploading Poseidon constant tables on every dispatch. The BN254
 helpers can also batch many field-element pairs into one kernel launch when
 higher layers have enough work to amortize the transfer.
 
-The number of initialised devices is capped by the `IVM_MAX_GPUS` environment variable:
+The number of initialised devices is capped by `[accel].max_gpus`, which is
+applied through `GpuManager::set_max_gpus` before device discovery:
 
 ```rust
-let max = std::env::var("IVM_MAX_GPUS")
-    .ok()
-    .and_then(|v| v.parse::<u32>().ok())
-    .unwrap_or(count);
-let limit = std::cmp::min(count, max);
+let mut cfg = AccelerationConfig::default();
+cfg.max_gpus = Some(1);
+set_acceleration_config(cfg);
 ```
 
-Unit tests verify that setting `IVM_DISABLE_CUDA` disables GPU use and that `IVM_MAX_GPUS` limits the device count:
+Unit tests verify that changing the configured limit invalidates the cached GPU
+manager and applies the new cap. Developer-only environment tests cover the
+release-disabled diagnostic shims separately.
 
 ```rust
 #[test]
-fn disable_cuda_via_env() {
-    std::env::set_var("IVM_DISABLE_CUDA", "1");
-    let vm = IVM::new(1_000);
-    assert!(!vm.use_cuda, "VM should not enable CUDA when IVM_DISABLE_CUDA is set");
-    std::env::remove_var("IVM_DISABLE_CUDA");
-}
-
-#[test]
-fn limit_gpu_count_env() {
-    std::env::set_var("IVM_MAX_GPUS", "1");
-    let mgr = GpuManager::init().unwrap();
-    assert!(mgr.device_count() <= 1);
-    std::env::remove_var("IVM_MAX_GPUS");
+fn set_max_gpus_invalidates_cached_manager() {
+    GpuManager::set_max_gpus(Some(1));
+    assert_eq!(test_current_max_gpus(), Some(1));
 }
 ```
 
-Additional tests use a simple `MockNode` wrapper to run the same program with and without CUDA. By toggling the `IVM_DISABLE_CUDA` variable each node executes either the GPU or CPU path and their outputs are compared:
+Parity tests run the same inputs through GPU and CPU paths and compare their
+outputs. Backend choice is a performance decision and is not consensus-visible:
 
 ```rust
 struct MockNode { use_cuda: bool }

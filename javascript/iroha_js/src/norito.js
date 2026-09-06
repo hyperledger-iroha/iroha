@@ -35,7 +35,10 @@ import {
   normalizeAssetHoldingId,
   normalizeAssetId,
 } from "./normalizers.js";
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import {
   createNoritoContractCodecs,
   createNoritoProofValueCodecs,
@@ -46,7 +49,6 @@ import {
 } from "./noritoGovernanceBoundary.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
-import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
   validatePrivacyExact12NetworkBindingsV1,
@@ -75,17 +77,17 @@ const NORITO_SUPPORTED_HEADER_FLAGS =
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const BASE58_ALPHABET = BASE58_ALPHABET_TEXT;
-const UINT128_MASK = (1n << 128n) - 1n;
 const HASH_LITERAL_RE = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/;
 const CANONICAL_HASH_LITERAL_RE = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/;
 const MULTIHASH_LITERAL_RE = /^([0-9a-fA-F]+)$/;
-const DEFAULT_SM2_DISTINGUISHED_ID = new Uint8Array(16);
 const SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
   "zk::ScheduleConfidentialPolicyTransition";
 const CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
   "zk::CancelConfidentialPolicyTransition";
 const SET_ASSET_TRANSFER_AVAILABILITY_VARIANT =
   "SetAssetTransferAvailability";
+const SET_ASSET_TRANSFER_BLACKLIST_VARIANT = "SetAssetTransferBlacklist";
+const SET_ASSET_TRANSFER_CONTROL_VARIANT = "SetAssetTransferControl";
 const SET_TRANSFER_REASON_CONTEXT = "SetAssetTransferAvailability.reason";
 const COMPLETE_ORDER_REVISION_CONTEXT = "CompleteReplicationOrder.expected_assignment_revision";
 const COMPLETE_ORDER_REVISION_MESSAGE = "CompleteReplicationOrder.expected_assignment_revision must be greater than zero";
@@ -119,18 +121,23 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Governance.*",
   "Social.*",
   "SmartContract.*",
+  "TopUpKagemushaV1",
   "zk.*",
   "VerifyingKey.*",
   "Rwa.*",
   "CancelAssetLock",
   SET_ASSET_TRANSFER_AVAILABILITY_VARIANT,
+  SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
+  SET_ASSET_TRANSFER_CONTROL_VARIANT,
   "SoraFS.ReplicationOrder.*",
   "RecordSccpMessage",
 ];
 const CANCEL_ASSET_LOCK_WIRE_ID =
+  "iroha.instruction.v1::escrow::CancelAssetLock";
+const CANCEL_ASSET_LOCK_INNER_TYPE_NAME =
   "iroha_data_model::isi::escrow::CancelAssetLock";
 const CANCEL_ASSET_LOCK_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
-  CANCEL_ASSET_LOCK_WIRE_ID,
+  CANCEL_ASSET_LOCK_INNER_TYPE_NAME,
 );
 // A transparent 32-byte EscrowId plus one positive signed-512-bit Quantity
 // yields an unpadded canonical archive in this exact range. Enforce it before
@@ -140,15 +147,19 @@ const CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES = 85;
 const CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES = 148;
 const SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID =
   "iroha.asset.transfer.availability.set";
+const SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID =
+  "iroha.asset.transfer.blacklist.set";
+const SET_ASSET_TRANSFER_CONTROL_WIRE_ID =
+  "iroha.asset.transfer.control.set";
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const RECORD_SCCP_MESSAGE_WIRE_ID =
-  "iroha_data_model::isi::bridge::RecordSccpMessage";
+  "iroha.instruction.v1::bridge::RecordSccpMessage";
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
-  "iroha_data_model::isi::sorafs::IssueReplicationOrder";
+  "iroha.instruction.v1::sorafs::IssueReplicationOrder";
 const COMPLETE_REPLICATION_ORDER_WIRE_ID =
-  "iroha_data_model::isi::sorafs::CompleteReplicationOrder";
+  "iroha.instruction.v1::sorafs::CompleteReplicationOrder";
 const EXPIRE_REPLICATION_ORDER_WIRE_ID =
-  "iroha_data_model::isi::sorafs::ExpireReplicationOrder";
+  "iroha.instruction.v1::sorafs::ExpireReplicationOrder";
 const REPLICATION_ORDER_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "sorafs_manifest::capacity::ReplicationOrderV1",
 );
@@ -180,19 +191,27 @@ export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1 =
   "iroha.privacy.exact12-typed-fixture-bundle.v1";
 export const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 = 2 * 1024 * 1024;
 export const PRIVACY_EXACT12_PROTOCOL_IDS_V1 = /* @__PURE__ */ Object.freeze([
-  "zk-ace-pq-authorization-v0",
+  "zk-ace-pq-authorization-v1",
   "anonymous-pgc-k-out-of-n-v1",
   "verange-transparent-range-v1",
   "iroha-zk-ams-v1",
-  "vega-existing-credential-zk-v0",
-  "iroha-zk-x509-stark-p256-v0",
-  "iroha-jindo-polynomial-commitment-v0",
+  "vega-existing-credential-zk-v1",
+  "iroha-zk-x509-stark-p256-v1",
+  "iroha-jindo-polynomial-commitment-v1",
   "iroha-bootle-lantern-anoncred-v1",
   "orchard-halo2-actions-v1",
   "monero-fcmp-plus-plus-v1",
   "iroha-ivm-private-note-stark-v1",
-  "pq-masp-stark-v0",
+  "pq-masp-stark-v1",
 ]);
+/** Exact bare-wire magic for `ConfidentialMemoEnvelopeV1`. */
+export const CONFIDENTIAL_MEMO_WIRE_MAGIC_V1 = /* @__PURE__ */ Object.freeze([
+  0x49, 0x52, 0x48, 0x43, 0x4d, 0x31, 0xa5, 0x5a,
+]);
+/** Every confidential memo has exactly eight real-or-padding slots. */
+export const CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1 = 8;
+/** Maximum authenticated memo ciphertext accepted by the V1 wire. */
+export const CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1 = 64 * 1024;
 const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
   PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1,
 );
@@ -241,6 +260,8 @@ const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze(
   "signedTransactionHash",
 ]);
 const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
+  "wire_magic",
+  "catalog_commitment",
   "protocol_id",
   "proof_system_id",
   "engine_id",
@@ -253,6 +274,11 @@ const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "statement",
   "proof",
 ]);
+const PRIVACY_EXACT12_WIRE_MAGIC_V1 = /* @__PURE__ */ Buffer.from("4952485a4b31a55a", "hex");
+const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(
+  "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+  "hex",
+);
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
@@ -270,15 +296,19 @@ const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
 );
 const BLOCK_PROOFS_TYPE_NAME =
   "iroha_data_model::block::proofs::BlockProofs";
-const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode";
-const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes";
-const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance";
-const ACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::ActivateContractInstance";
-const COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment";
-const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk";
-const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload";
-const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload";
-const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes";
+const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode";
+const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RegisterSmartContractBytes";
+const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::DeactivateContractInstance";
+const ACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::ActivateContractInstance";
+const SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID = "iroha.instruction.v1::smart_contract_code::SetContractParliamentDelegation";
+const OFFER_CONTRACT_OWNERSHIP_WIRE_ID = "iroha.instruction.v1::smart_contract_code::OfferContractOwnership";
+const ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID = "iroha.instruction.v1::smart_contract_code::AcceptContractOwnership";
+const CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CancelContractOwnershipOffer";
+const COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CommitContractDeployment";
+const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk";
+const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload";
+const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload";
+const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes";
 const CREATE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::CreateKaigi";
 const JOIN_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::JoinKaigi";
 const LEAVE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::LeaveKaigi";
@@ -288,30 +318,29 @@ const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha.instruction.v1::kaigi::SetKaigiR
 const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::RegisterKaigiRelay";
 const UNREGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::UnregisterKaigiRelay";
 const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth";
-const KAIGI_WIRE_IDS = new Set([
-  CREATE_KAIGI_WIRE_ID,
-  JOIN_KAIGI_WIRE_ID,
-  LEAVE_KAIGI_WIRE_ID,
-  END_KAIGI_WIRE_ID,
-  RECORD_KAIGI_USAGE_WIRE_ID,
-  SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
-  REGISTER_KAIGI_RELAY_WIRE_ID,
-  UNREGISTER_KAIGI_RELAY_WIRE_ID,
-  REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
-]);
-const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
-const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
-const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
-const PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID = "iroha_data_model::isi::governance::PersistCouncilForEpoch";
-const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha_data_model::isi::social::ClaimTwitterFollowReward";
-const SEND_TO_TWITTER_WIRE_ID = "iroha_data_model::isi::social::SendToTwitter";
-const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha_data_model::isi::social::CancelTwitterEscrow";
-const REGISTER_ZK_ASSET_WIRE_ID = "iroha_data_model::isi::zk::RegisterZkAsset";
-const CREATE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::CreateElection";
-const SUBMIT_BALLOT_WIRE_ID = "iroha_data_model::isi::zk::SubmitBallot";
-const FINALIZE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::FinalizeElection";
-const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey";
-const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey";
+const PROPOSE_DEPLOY_CONTRACT_WIRE_ID =
+  "iroha.instruction.v1::governance::ProposeDeployContract";
+const CAST_ZK_BALLOT_WIRE_ID = "iroha.instruction.v1::governance::CastZkBallot";
+const CAST_PLAIN_BALLOT_WIRE_ID = "iroha.instruction.v1::governance::CastPlainBallot";
+const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha.instruction.v1::social::ClaimTwitterFollowReward";
+const SEND_TO_TWITTER_WIRE_ID = "iroha.instruction.v1::social::SendToTwitter";
+const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha.instruction.v1::social::CancelTwitterEscrow";
+const REGISTER_ZK_ASSET_WIRE_ID = "iroha.instruction.v1::zk::RegisterZkAsset";
+const CREATE_ELECTION_WIRE_ID = "iroha.instruction.v1::zk::CreateElection";
+const SUBMIT_BALLOT_WIRE_ID = "iroha.instruction.v1::zk::SubmitBallot";
+const FINALIZE_ELECTION_WIRE_ID = "iroha.instruction.v1::zk::FinalizeElection";
+const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey";
+const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey";
+const TOP_UP_KAGEMUSHA_WIRE_ID = "iroha.kagemusha.v1.top_up";
+const TOP_UP_KAGEMUSHA_INNER_TYPE_NAME =
+  "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1";
+const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME =
+  "iroha.torii.v1.kagemusha.top_up.request";
+const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
+  KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME,
+);
+const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 16 * 1024;
+const KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING = 8;
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
@@ -320,13 +349,21 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.custom": "iroha_data_model::isi::transparent::CustomInstruction",
   "iroha.execute_trigger": "iroha_data_model::isi::transparent::ExecuteTrigger",
   "iroha.rwa": "iroha_data_model::isi::rwa::RwaInstructionBox",
-  [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_WIRE_ID,
+  [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_INNER_TYPE_NAME,
   [SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID]:
     "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability",
-  [RECORD_SCCP_MESSAGE_WIRE_ID]: RECORD_SCCP_MESSAGE_WIRE_ID,
-  [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
-  [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
-  [EXPIRE_REPLICATION_ORDER_WIRE_ID]: EXPIRE_REPLICATION_ORDER_WIRE_ID,
+  [SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID]:
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist",
+  [SET_ASSET_TRANSFER_CONTROL_WIRE_ID]:
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl",
+  [RECORD_SCCP_MESSAGE_WIRE_ID]:
+    "iroha_data_model::isi::bridge::RecordSccpMessage",
+  [ISSUE_REPLICATION_ORDER_WIRE_ID]:
+    "iroha_data_model::isi::sorafs::IssueReplicationOrder",
+  [COMPLETE_REPLICATION_ORDER_WIRE_ID]:
+    "iroha_data_model::isi::sorafs::CompleteReplicationOrder",
+  [EXPIRE_REPLICATION_ORDER_WIRE_ID]:
+    "iroha_data_model::isi::sorafs::ExpireReplicationOrder",
   [CREATE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::CreateKaigi",
   [JOIN_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::JoinKaigi",
   [LEAVE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::LeaveKaigi",
@@ -341,33 +378,63 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::kaigi::UnregisterKaigiRelay",
   [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]:
     "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
-  [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
-  [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
-  [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
-  [PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID]: PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
-  [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]: CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
-  [SEND_TO_TWITTER_WIRE_ID]: SEND_TO_TWITTER_WIRE_ID,
-  [CANCEL_TWITTER_ESCROW_WIRE_ID]: CANCEL_TWITTER_ESCROW_WIRE_ID,
-  [REGISTER_SMART_CONTRACT_CODE_WIRE_ID]: REGISTER_SMART_CONTRACT_CODE_WIRE_ID,
-  [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]: REGISTER_SMART_CONTRACT_BYTES_WIRE_ID,
-  [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
-  [ACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: ACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
-  [COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID]: COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID,
-  [UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID]: UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID,
-  [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
-  [CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
-  [REMOVE_SMART_CONTRACT_BYTES_WIRE_ID]: REMOVE_SMART_CONTRACT_BYTES_WIRE_ID,
-  [REGISTER_ZK_ASSET_WIRE_ID]: REGISTER_ZK_ASSET_WIRE_ID,
+  [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]:
+    "iroha_data_model::isi::governance::ProposeDeployContract",
+  [CAST_ZK_BALLOT_WIRE_ID]:
+    "iroha_data_model::isi::governance::CastZkBallot",
+  [CAST_PLAIN_BALLOT_WIRE_ID]:
+    "iroha_data_model::isi::governance::CastPlainBallot",
+  [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]:
+    "iroha_data_model::isi::social::ClaimTwitterFollowReward",
+  [SEND_TO_TWITTER_WIRE_ID]: "iroha_data_model::isi::social::SendToTwitter",
+  [CANCEL_TWITTER_ESCROW_WIRE_ID]:
+    "iroha_data_model::isi::social::CancelTwitterEscrow",
+  [REGISTER_SMART_CONTRACT_CODE_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
+  [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes",
+  [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance",
+  [ACTIVATE_CONTRACT_INSTANCE_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::ActivateContractInstance",
+  [SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation",
+  [OFFER_CONTRACT_OWNERSHIP_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::OfferContractOwnership",
+  [ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::AcceptContractOwnership",
+  [CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer",
+  [COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+  [UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+  [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+  [CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
+  [REMOVE_SMART_CONTRACT_BYTES_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
+  [REGISTER_ZK_ASSET_WIRE_ID]: "iroha_data_model::isi::zk::RegisterZkAsset",
   [SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID]:
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   [CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID]:
     "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
-  [CREATE_ELECTION_WIRE_ID]: CREATE_ELECTION_WIRE_ID,
-  [SUBMIT_BALLOT_WIRE_ID]: SUBMIT_BALLOT_WIRE_ID,
-  [FINALIZE_ELECTION_WIRE_ID]: FINALIZE_ELECTION_WIRE_ID,
-  [REGISTER_VERIFYING_KEY_WIRE_ID]: REGISTER_VERIFYING_KEY_WIRE_ID,
-  [UPDATE_VERIFYING_KEY_WIRE_ID]: UPDATE_VERIFYING_KEY_WIRE_ID,
+  [CREATE_ELECTION_WIRE_ID]: "iroha_data_model::isi::zk::CreateElection",
+  [SUBMIT_BALLOT_WIRE_ID]: "iroha_data_model::isi::zk::SubmitBallot",
+  [FINALIZE_ELECTION_WIRE_ID]: "iroha_data_model::isi::zk::FinalizeElection",
+  [REGISTER_VERIFYING_KEY_WIRE_ID]:
+    "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+  [UPDATE_VERIFYING_KEY_WIRE_ID]:
+    "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+  [TOP_UP_KAGEMUSHA_WIRE_ID]: TOP_UP_KAGEMUSHA_INNER_TYPE_NAME,
 });
+const INSTRUCTION_WIRE_SCHEMA_BINDINGS = Object.freeze(
+  Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(
+    ([outerWireId, innerTypeName]) =>
+      Object.freeze({ outerWireId, innerTypeName }),
+  ),
+);
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   Object.fromEntries(
     Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(([wireId, typeName]) => [
@@ -376,14 +443,16 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
     ]),
   ),
 );
-const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({});
+// `TopUpKagemushaV1` embeds a `u128`-aligned request, so its dynamic
+// instruction frame has the eight zero bytes required to align the payload
+// after Norito's 40-byte header.  This is part of the canonical
+// `InstructionBox` bytes and must match `frame_bare_with_header_flags::<T>`.
+const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
+  [TOP_UP_KAGEMUSHA_WIRE_ID]: 8,
+});
 const BASE58_LOOKUP = new Map(
   Array.from(BASE58_ALPHABET, (char, index) => [char, BigInt(index)]),
 );
-const INSTRUCTION_CACHE_SYMBOL = Symbol.for("iroha.js.noritoInstructionCache");
-const instructionCache =
-  globalThis[INSTRUCTION_CACHE_SYMBOL] ??
-  (globalThis[INSTRUCTION_CACHE_SYMBOL] = new Map());
 let noritoLengthFlags = 0;
 class BufferReader {
   constructor(buffer, context, lengthFlags = noritoLengthFlags) {
@@ -498,44 +567,12 @@ function normalizeInstructionJsonValue(value) {
   return value;
 }
 
-function resolveNative(method) {
-  const native = globalThis.__IROHA_NORITO_BINDING__ ?? getNativeBinding();
+function resolveNative(method, nativeRuntime) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (typeof native[method] !== JS_TYPE_FUNCTION) {
     throw new Error(`Native binding does not expose ${method}`);
   }
   return native;
-}
-
-function isNativeBindingUnavailable(error) {
-  const message =
-    error && typeof error.message === JS_TYPE_STRING ? error.message : String(error ?? "");
-  return (
-    message.includes("Native binding required") ||
-    message.includes("Native binding does not expose") ||
-    message.includes("process is not defined") ||
-    message.includes("require is not available") ||
-    message.includes("createRequire is not a function")
-  );
-}
-
-function isNativeBindingUnsupportedInstruction(error) {
-  const message =
-    error && typeof error.message === JS_TYPE_STRING ? error.message : String(error ?? "");
-  return (
-    message.includes("unsupported zk instruction variant") ||
-    message.includes("unsupported instruction") ||
-    message.includes("unsupported instruction variant") ||
-    message.includes("unknown instruction wire id") ||
-    message.includes("unknown instruction schema") ||
-    message.includes("unknown instruction `") ||
-    message.includes("invalid enum discriminant") ||
-    message.includes("(not registered)") ||
-    message.includes("instruction payload must use canonical Norito framing")
-  );
-}
-
-function shouldUsePureJsInstructionFallback(error) {
-  return isNativeBindingUnavailable(error) || isNativeBindingUnsupportedInstruction(error);
 }
 
 const {
@@ -568,134 +605,30 @@ function rejectRetiredGenericZkInstruction(instruction) {
   for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
     if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
       throw new TypeError(
-        `zk.${variant} is retired in ABI V1; use the typed Kagemusha flow`,
+        `zk.${variant} is retired in ABI V1; use the typed KAGEMUSHA flow`,
       );
     }
   }
 }
 
-function encodeNormalizedInstruction(normalized) {
+function encodeNormalizedInstruction(normalized, nativeRuntime) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
-  let encoded;
-  if (kaigiInstructionNeedsLosslessPureCodec(normalized)) {
-    encoded = encodePureJsInstruction(normalized);
-    cacheInstructionRoundTrip(encoded, normalized);
-    return encoded;
-  }
   try {
-    const native = resolveNative("noritoEncodeInstruction");
-    encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
+    return encodePureJsInstruction(normalized);
   } catch (error) {
-    if (!shouldUsePureJsInstructionFallback(error)) {
-      throw error;
-    }
-    try {
-      encoded = encodePureJsInstruction(normalized);
-    } catch (fallbackError) {
-      if (!isPureJsUnsupportedInstructionError(fallbackError)) {
-        throw fallbackError;
-      }
+    if (!isPureJsUnsupportedInstructionError(error)) {
       throw error;
     }
   }
-  cacheInstructionRoundTrip(encoded, normalized);
-  return encoded;
+  const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
+  return native.noritoEncodeInstruction(JSON.stringify(normalized));
 }
 
-function kaigiU64NeedsLosslessPureCodec(value) {
-  return typeof value === JS_TYPE_BIGINT || typeof value === JS_TYPE_STRING;
-}
-
-function kaigiManifestNeedsLosslessPureCodec(manifest) {
-  return isPlainObject(manifest) && kaigiU64NeedsLosslessPureCodec(manifest.expiry_ms);
-}
-
-function kaigiInstructionNeedsLosslessPureCodec(instruction) {
-  if (!isPlainObject(instruction) || !isPlainObject(instruction.Kaigi)) {
-    return false;
-  }
-  const kaigi = instruction.Kaigi;
-  if (isPlainObject(kaigi.CreateKaigi)) {
-    const call = kaigi.CreateKaigi.call;
-    return isPlainObject(call) && (
-      kaigiU64NeedsLosslessPureCodec(call.gas_rate_per_minute) ||
-      kaigiU64NeedsLosslessPureCodec(call.scheduled_start_ms) ||
-      kaigiManifestNeedsLosslessPureCodec(call.relay_manifest)
-    );
-  }
-  if (isPlainObject(kaigi.EndKaigi)) {
-    return kaigiU64NeedsLosslessPureCodec(kaigi.EndKaigi.ended_at_ms);
-  }
-  if (isPlainObject(kaigi.RecordKaigiUsage)) {
-    return kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.duration_ms) ||
-      kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.billed_gas);
-  }
-  if (isPlainObject(kaigi.SetKaigiRelayManifest)) {
-    return kaigiManifestNeedsLosslessPureCodec(
-      kaigi.SetKaigiRelayManifest.relay_manifest,
-    );
-  }
-  if (isPlainObject(kaigi.ReportKaigiRelayHealth)) {
-    return kaigiU64NeedsLosslessPureCodec(
-      kaigi.ReportKaigiRelayHealth.reported_at_ms,
-    );
-  }
-  return false;
-}
+class PureJsUnsupportedInstructionError extends Error {}
 
 function isPureJsUnsupportedInstructionError(error) {
-  const message =
-    error && typeof error.message === JS_TYPE_STRING ? error.message : String(error ?? "");
-  return (
-    message.startsWith("Internal Norito canonicalization supports ") ||
-    message.startsWith("Internal Norito decoder does not support ")
-  );
-}
-
-function cacheInstructionRoundTrip(bytes, instruction) {
-  try {
-    instructionCache.set(
-      Buffer.from(bytes).toString(HEX_ENCODING),
-      canonicalizeInstructionForCache(instruction),
-    );
-  } catch {
-    // Cache misses must not affect Norito encoding/decoding.
-  }
-}
-
-function getCachedInstruction(bytes) {
-  const cached = instructionCache.get(Buffer.from(bytes).toString(HEX_ENCODING));
-  return cached === undefined ? null : cloneJson(cached);
-}
-
-function canonicalizeInstructionForCache(instruction) {
-  const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-  let canonicalInstruction = normalized;
-  if (isPlainObject(instruction.Multisig)) {
-    canonicalInstruction = { Custom: { payload: normalized.Multisig } };
-  } else if (isPlainObject(instruction.MultisigRegister)) {
-    canonicalInstruction = {
-      Custom: { payload: { Register: normalized.MultisigRegister } },
-    };
-  } else if (isPlainObject(instruction.MultisigPropose)) {
-    canonicalInstruction = {
-      Custom: { payload: { Propose: normalized.MultisigPropose } },
-    };
-  } else if (isPlainObject(instruction.MultisigApprove)) {
-    canonicalInstruction = {
-      Custom: { payload: { Approve: normalized.MultisigApprove } },
-    };
-  } else if (isPlainObject(instruction.MultisigCancel)) {
-    canonicalInstruction = {
-      Custom: { payload: { Cancel: normalized.MultisigCancel } },
-    };
-  }
-  try {
-    return decodePureJsInstruction(encodePureJsInstruction(canonicalInstruction));
-  } catch {
-    return cloneJson(canonicalInstruction);
-  }
+  return error instanceof PureJsUnsupportedInstructionError;
 }
 
 /**
@@ -703,39 +636,38 @@ function canonicalizeInstructionForCache(instruction) {
  * @param {object | string | ArrayBufferView | ArrayBuffer | Buffer} instruction
  * @returns {Buffer}
  */
-export function noritoEncodeInstruction(instruction) {
+function encodeInstruction(instruction, nativeRuntime) {
   if (isBinaryLike(instruction)) {
     return toBuffer(instruction);
   }
   if (typeof instruction === JS_TYPE_STRING) {
     const trimmed = instruction.trim();
+    let parsed;
     try {
-      const parsed = JSON.parse(trimmed);
-      const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
-        ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
-        : parsed;
-      const normalized = normalizeInstructionJsonValue(exactParsed);
-      return encodeNormalizedInstruction(normalized);
+      parsed = JSON.parse(trimmed);
     } catch (error) {
-      if (error instanceof SyntaxError) {
-        const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
-        if (decoded) {
-          return decoded;
-        }
-        const native = resolveNative("noritoEncodeInstruction");
-        const encoded = native.noritoEncodeInstruction(instruction);
-        try {
-          cacheInstructionRoundTrip(encoded, JSON.parse(instruction));
-        } catch {
-          // Raw JSON string was not parseable; leave cache empty.
-        }
-        return encoded;
+      if (!(error instanceof SyntaxError)) {
+        throw error;
       }
-      throw error;
+      const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
+      if (decoded) {
+        return decoded;
+      }
+      const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
+      return native.noritoEncodeInstruction(instruction);
     }
+    const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
+      ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
+      : parsed;
+    const normalized = normalizeInstructionJsonValue(exactParsed);
+    return encodeNormalizedInstruction(normalized, nativeRuntime);
   }
   const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-  return encodeNormalizedInstruction(normalized);
+  return encodeNormalizedInstruction(normalized, nativeRuntime);
+}
+
+export function noritoEncodeInstruction(instruction) {
+  return encodeInstruction(instruction, defaultNativeRuntime);
 }
 
 /**
@@ -1052,7 +984,7 @@ function rejectInlinePrivateKeyFields(request, context) {
  * @param {object} request
  * @returns {Buffer}
  */
-export function noritoEncodeMultisigProposeRequest(request) {
+function encodeMultisigProposeRequest(request, nativeRuntime) {
   if (!isPlainObject(request)) {
     throw new TypeError("MultisigProposeDto request must be an object");
   }
@@ -1130,6 +1062,7 @@ export function noritoEncodeMultisigProposeRequest(request) {
           encodeEmbeddedInstructionBox(
             instruction,
             `MultisigProposeDto.instructions[${index}]`,
+            nativeRuntime,
           ),
         ),
       ],
@@ -1150,6 +1083,10 @@ export function noritoEncodeMultisigProposeRequest(request) {
     ]),
   );
   return frameNoritoPayload(payload, MULTISIG_PROPOSE_DTO_SCHEMA_HASH, COMPACT_LEN_FLAG);
+}
+
+export function noritoEncodeMultisigProposeRequest(request) {
+  return encodeMultisigProposeRequest(request, defaultNativeRuntime);
 }
 
 function normalizeMultisigProposeValidationFeeMetadata(request) {
@@ -1463,8 +1400,12 @@ function encodeMultisigAccountSelectorFields(request, context) {
   ];
 }
 
-function encodeEmbeddedInstructionBox(instruction, context) {
-  const framed = Buffer.from(noritoEncodeInstruction(instruction));
+function encodeEmbeddedInstructionBox(
+  instruction,
+  context,
+  nativeRuntime = defaultNativeRuntime,
+) {
+  const framed = Buffer.from(encodeInstruction(instruction, nativeRuntime));
   const { wireId, payload, innerFlags, innerFrame } = decodeInstructionEnvelope(framed);
   const outerFlags = noritoLengthFlags & COMPACT_LEN_FLAG;
   return encodeInstructionBoxPayload(
@@ -1483,10 +1424,14 @@ function encodeEmbeddedInstructionBox(instruction, context) {
  * both its outer schema and its inner instruction schema are verified before
  * the archive crosses the signing boundary.
  */
-export function noritoEncodeInstructionBoxArchive(instruction) {
+function encodeInstructionBoxArchive(instruction, nativeRuntime) {
   return withNoritoLengthFlags(COMPACT_LEN_FLAG, () =>
-    encodeEmbeddedInstructionBox(instruction, "instruction"),
+    encodeEmbeddedInstructionBox(instruction, "instruction", nativeRuntime),
   );
+}
+
+export function noritoEncodeInstructionBoxArchive(instruction) {
+  return encodeInstructionBoxArchive(instruction, defaultNativeRuntime);
 }
 
 /**
@@ -1535,7 +1480,6 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
       wireId,
       inner.payload,
       inner.flags,
-      innerFrame,
     ),
   );
   const canonical = noritoEncodeInstructionBoxArchive(decoded);
@@ -1555,53 +1499,40 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
  * @param {{ parseJson?: boolean }} [options]
  * @returns {string | unknown}
  */
-export function noritoDecodeInstruction(bytes, options = {}) {
+function decodeInstruction(bytes, options, nativeRuntime) {
   const buffer = toBuffer(bytes);
   try {
-    const { wireId } = decodeInstructionEnvelope(buffer);
-    if (KAIGI_WIRE_IDS.has(wireId)) {
-      const decoded = decodePureJsInstruction(buffer);
-      validateDecodedInstructionProofAttachments(decoded);
-      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+    const decoded = decodePureJsInstruction(buffer);
+    validateDecodedInstructionProofAttachments(decoded);
+    return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+  } catch (error) {
+    if (!isPureJsUnsupportedInstructionError(error)) {
+      throw error;
     }
-  } catch {
-    // Let the native decoder below report malformed or non-instruction frames.
   }
   let json;
+  const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
   try {
-    const native = resolveNative("noritoDecodeInstruction");
-    try {
-      json = native.noritoDecodeInstruction(buffer);
-    } catch (error) {
-      if (!isAlignmentError(error)) {
-        throw error;
-      }
-      const decoded =
-        tryDecodeWithAlignedBuffer(native, buffer) ??
-        tryDecodeWithRelocatedStorage(native, buffer);
-      if (decoded === null) {
-        throw error;
-      }
-      json = decoded;
-    }
+    json = native.noritoDecodeInstruction(buffer);
   } catch (error) {
-    if (!shouldUsePureJsInstructionFallback(error)) {
+    if (!isAlignmentError(error)) {
       throw error;
     }
-    try {
-      const decoded = decodePureJsInstruction(buffer);
-      validateDecodedInstructionProofAttachments(decoded);
-      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
-    } catch (fallbackError) {
-      if (!isPureJsUnsupportedInstructionError(fallbackError)) {
-        throw fallbackError;
-      }
+    const decoded =
+      tryDecodeWithAlignedBuffer(native, buffer) ??
+      tryDecodeWithRelocatedStorage(native, buffer);
+    if (decoded === null) {
       throw error;
     }
+    json = decoded;
   }
   const decoded = JSON.parse(json);
   validateDecodedInstructionProofAttachments(decoded);
   return options.parseJson === false ? json : decoded;
+}
+
+export function noritoDecodeInstruction(bytes, options = {}) {
+  return decodeInstruction(bytes, options, defaultNativeRuntime);
 }
 
 function validateDecodedInstructionProofAttachments(instruction) {
@@ -1638,7 +1569,7 @@ function validateDecodedInstructionProofAttachments(instruction) {
  * @param {string} encodedAction
  * @returns {object}
  */
-export function inspectSubscriptionTriggerAction(encodedAction) {
+function inspectTriggerAction(encodedAction, nativeRuntime) {
   if (
     typeof encodedAction !== JS_TYPE_STRING ||
     encodedAction.length === 0 ||
@@ -1648,7 +1579,10 @@ export function inspectSubscriptionTriggerAction(encodedAction) {
       "inspectSubscriptionTriggerAction encodedAction must be a canonical non-empty string",
     );
   }
-  const native = resolveNative("inspectSubscriptionTriggerAction");
+  const native = resolveNative(
+    "inspectSubscriptionTriggerAction",
+    nativeRuntime,
+  );
   const payload = native.inspectSubscriptionTriggerAction(encodedAction);
   try {
     return JSON.parse(payload);
@@ -1659,6 +1593,27 @@ export function inspectSubscriptionTriggerAction(encodedAction) {
       }`,
     );
   }
+}
+
+export function inspectSubscriptionTriggerAction(encodedAction) {
+  return inspectTriggerAction(encodedAction, defaultNativeRuntime);
+}
+
+/** @internal Source-level test facade; intentionally absent from package exports. */
+export function _createNoritoInstructionApi(nativeRuntime) {
+  return Object.freeze({
+    _instructionWireSchemaBindings: () => INSTRUCTION_WIRE_SCHEMA_BINDINGS,
+    inspectSubscriptionTriggerAction: (encodedAction) =>
+      inspectTriggerAction(encodedAction, nativeRuntime),
+    noritoDecodeInstruction: (bytes, options = {}) =>
+      decodeInstruction(bytes, options, nativeRuntime),
+    noritoEncodeInstruction: (instruction) =>
+      encodeInstruction(instruction, nativeRuntime),
+    noritoEncodeInstructionBoxArchive: (instruction) =>
+      encodeInstructionBoxArchive(instruction, nativeRuntime),
+    noritoEncodeMultisigProposeRequest: (request) =>
+      encodeMultisigProposeRequest(request, nativeRuntime),
+  });
 }
 
 function decodeBlockMerkleProofValue(payload, context) {
@@ -2029,6 +1984,34 @@ export function noritoEncodePrivacyExact12FixtureBundleV1(value) {
   return Uint8Array.from(encodePrivacyExact12FixtureBundleCanonicalV1(bundle));
 }
 
+/**
+ * Encode the sole first-release confidential memo envelope.
+ *
+ * The input must use the exact snake-case V1 shape. No version aliases,
+ * recipient-count field, empty slots, or legacy X25519 payload are accepted.
+ *
+ * @param {object} value
+ * @returns {Uint8Array}
+ */
+export function noritoEncodeConfidentialMemoEnvelopeV1(value) {
+  return Uint8Array.from(
+    encodeConfidentialMemoEnvelopeV1Value(value, "ConfidentialMemoEnvelopeV1"),
+  );
+}
+
+/**
+ * Decode exactly one canonical first-release confidential memo envelope.
+ *
+ * @param {Uint8Array | Buffer | number[]} bytes
+ * @returns {object}
+ */
+export function noritoDecodeConfidentialMemoEnvelopeV1(bytes) {
+  const payload = Buffer.from(
+    normalizeFlexibleBytes(bytes, "ConfidentialMemoEnvelopeV1 wire"),
+  );
+  return decodeConfidentialMemoEnvelopeV1Value(payload, "ConfidentialMemoEnvelopeV1");
+}
+
 function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
   const fields = decodeStructFields(payload, "PrivacyExact12FixtureBundleV1", [
     "version",
@@ -2199,6 +2182,12 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1,
     `${context}.envelopeNorito.payload`,
   );
+  if (!envelopeFields.wire_magic.equals(PRIVACY_EXACT12_WIRE_MAGIC_V1)) {
+    throw new TypeError(`${context}.envelopeNorito carries an invalid final V1 wire marker`);
+  }
+  if (!envelopeFields.catalog_commitment.equals(PRIVACY_EXACT12_CATALOG_COMMITMENT_V1)) {
+    throw new TypeError(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
+  }
   if (
     decodeU32Value(
       envelopeFields.protocol_id,
@@ -2719,9 +2708,76 @@ function encodePureJsInstruction(instruction) {
   );
 }
 
+function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
+  const archive = toBuffer(value);
+  if (archive.length === 0 || archive.length > KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES) {
+    throw new RangeError(
+      `${context} must be a non-empty canonical KAGEMUSHA top-up request no larger than ${KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES} bytes`,
+    );
+  }
+  const decoded = validateNoritoFrame(archive, {
+    context,
+    expectedSchemaHash: KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH,
+    expectedPaddingLength: KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
+    requireNonEmptyPayload: true,
+  });
+  if (decoded.flags !== COMPACT_LEN_FLAG) {
+    throw new Error(`${context} must use the canonical compact-length Norito layout`);
+  }
+  const canonical = frameNoritoPayload(
+    decoded.payload,
+    KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+    KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
+  );
+  if (!archive.equals(canonical)) {
+    throw new Error(`${context} is not canonical Norito`);
+  }
+  return decoded.payload;
+}
+
+function encodeTopUpKagemushaInstruction(value) {
+  assertOnlyObjectKeys(value, ["request"], "TopUpKagemushaV1");
+  const requestPayload = decodeCanonicalKagemushaTopUpRequestArchive(
+    value.request,
+    "TopUpKagemushaV1.request",
+  );
+  return encodeInstructionEnvelope(
+    TOP_UP_KAGEMUSHA_WIRE_ID,
+    encodeNoritoField(requestPayload),
+  );
+}
+
+function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
+  if (innerFlags !== COMPACT_LEN_FLAG) {
+    throw new Error("TopUpKagemushaV1 must use the canonical compact-length Norito layout");
+  }
+  const reader = new BufferReader(payload, "TopUpKagemushaV1", innerFlags);
+  const requestPayload = readNoritoField(reader, "request");
+  reader.assertEof();
+  const request = frameNoritoPayload(
+    requestPayload,
+    KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+    KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
+  );
+  decodeCanonicalKagemushaTopUpRequestArchive(
+    request,
+    "TopUpKagemushaV1.request",
+  );
+  return { TopUpKagemushaV1: { request } };
+}
+
 function encodePureJsInstructionPayload(instruction) {
   if (!isPlainObject(instruction)) {
     throw new TypeError("instruction must be a JSON object");
+  }
+  if (Object.prototype.hasOwnProperty.call(instruction, "TopUpKagemushaV1")) {
+    assertOnlyObjectKeys(instruction, ["TopUpKagemushaV1"], "instruction");
+    if (!isPlainObject(instruction.TopUpKagemushaV1)) {
+      throw new TypeError("TopUpKagemushaV1 must be an object");
+    }
+    return encodeTopUpKagemushaInstruction(instruction.TopUpKagemushaV1);
   }
   if (isPlainObject(instruction.Mint)) {
     if (isPlainObject(instruction.Mint.Asset)) {
@@ -2848,6 +2904,36 @@ function encodePureJsInstructionPayload(instruction) {
     );
   }
   if (
+    Object.prototype.hasOwnProperty.call(
+      instruction,
+      SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
+    )
+  ) {
+    assertOnlyObjectKeys(
+      instruction,
+      [SET_ASSET_TRANSFER_BLACKLIST_VARIANT],
+      "instruction",
+    );
+    return encodeSetAssetTransferBlacklistInstruction(
+      instruction.SetAssetTransferBlacklist,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(
+      instruction,
+      SET_ASSET_TRANSFER_CONTROL_VARIANT,
+    )
+  ) {
+    assertOnlyObjectKeys(
+      instruction,
+      [SET_ASSET_TRANSFER_CONTROL_VARIANT],
+      "instruction",
+    );
+    return encodeSetAssetTransferControlInstruction(
+      instruction.SetAssetTransferControl,
+    );
+  }
+  if (
     isPlainObject(instruction.IssueReplicationOrder) ||
     isPlainObject(instruction.CompleteReplicationOrder) ||
     isPlainObject(instruction.ExpireReplicationOrder)
@@ -2930,8 +3016,7 @@ function encodePureJsInstructionPayload(instruction) {
   if (
     instruction.ProposeDeployContract ||
     instruction.CastZkBallot ||
-    instruction.CastPlainBallot ||
-    instruction.PersistCouncilForEpoch
+    instruction.CastPlainBallot
   ) {
     return encodeGovernanceInstruction(instruction);
   }
@@ -2947,6 +3032,10 @@ function encodePureJsInstructionPayload(instruction) {
     instruction.RegisterSmartContractBytes ||
     instruction.DeactivateContractInstance ||
     instruction.ActivateContractInstance ||
+    instruction.SetContractParliamentDelegation ||
+    instruction.OfferContractOwnership ||
+    instruction.AcceptContractOwnership ||
+    instruction.CancelContractOwnershipOffer ||
     instruction.CommitContractDeployment ||
     instruction.UploadSmartContractCodeChunk ||
     instruction.FinalizeSmartContractCodeUpload ||
@@ -2955,7 +3044,7 @@ function encodePureJsInstructionPayload(instruction) {
   ) {
     return encodeSmartContractInstruction(instruction);
   }
-  throw new Error(
+  throw new PureJsUnsupportedInstructionError(
     `Internal Norito canonicalization supports ${SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS.join(", ")}. Received ${describeInstructionShape(instruction)}.`,
   );
 }
@@ -2963,11 +3052,11 @@ function encodePureJsInstructionPayload(instruction) {
 function decodePureJsInstruction(buffer) {
   const { wireId, payload, innerFlags } = decodeInstructionEnvelope(buffer);
   return withNoritoLengthFlags(innerFlags, () =>
-    decodePureJsInstructionPayload(wireId, payload, innerFlags, buffer),
+    decodePureJsInstructionPayload(wireId, payload, innerFlags),
   );
 }
 
-function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstruction) {
+function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
@@ -2983,10 +3072,16 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return { ExecuteTrigger: decodeExecuteTriggerPayload(payload) };
     case "iroha.rwa":
       return decodeRwaInstructionPayload(payload);
+    case TOP_UP_KAGEMUSHA_WIRE_ID:
+      return decodeTopUpKagemushaInstructionPayload(payload, innerFlags);
     case CANCEL_ASSET_LOCK_WIRE_ID:
       return decodeCancelAssetLockInstructionPayload(payload);
     case SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID:
       return decodeSetAssetTransferAvailabilityInstructionPayload(payload);
+    case SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID:
+      return decodeSetAssetTransferBlacklistInstructionPayload(payload);
+    case SET_ASSET_TRANSFER_CONTROL_WIRE_ID:
+      return decodeSetAssetTransferControlInstructionPayload(payload);
     case ISSUE_REPLICATION_ORDER_WIRE_ID:
     case COMPLETE_REPLICATION_ORDER_WIRE_ID:
     case EXPIRE_REPLICATION_ORDER_WIRE_ID:
@@ -2998,7 +3093,6 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case PROPOSE_DEPLOY_CONTRACT_WIRE_ID:
     case CAST_ZK_BALLOT_WIRE_ID:
     case CAST_PLAIN_BALLOT_WIRE_ID:
-    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID:
       return decodeGovernanceInstructionPayload(wireId, payload);
     case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID:
     case SEND_TO_TWITTER_WIRE_ID:
@@ -3013,6 +3107,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID:
     case CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID:
     case REMOVE_SMART_CONTRACT_BYTES_WIRE_ID:
+    case SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID:
+    case OFFER_CONTRACT_OWNERSHIP_WIRE_ID:
+    case ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID:
+    case CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID:
       return decodeSmartContractInstructionPayload(wireId, payload);
     case CREATE_KAIGI_WIRE_ID:
     case JOIN_KAIGI_WIRE_ID:
@@ -3021,6 +3119,7 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case RECORD_KAIGI_USAGE_WIRE_ID:
     case SET_KAIGI_RELAY_MANIFEST_WIRE_ID:
     case REGISTER_KAIGI_RELAY_WIRE_ID:
+    case UNREGISTER_KAIGI_RELAY_WIRE_ID:
     case REPORT_KAIGI_RELAY_HEALTH_WIRE_ID:
       return decodeKaigiInstructionPayload(wireId, payload);
     case REGISTER_ZK_ASSET_WIRE_ID:
@@ -3034,11 +3133,7 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case UPDATE_VERIFYING_KEY_WIRE_ID:
       return decodeVerifyingKeyInstructionPayload(wireId, payload);
     default:
-      const cached = getCachedInstruction(framedInstruction);
-      if (cached !== null) {
-        return cached;
-      }
-      throw new Error(
+      throw new PureJsUnsupportedInstructionError(
         `Internal Norito decoder does not support ${wireId}. Run \`npm run build:native\` for full instruction coverage.`,
       );
   }
@@ -3592,6 +3687,208 @@ function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
   };
 }
 
+function encodeSetAssetTransferBlacklistInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("SetAssetTransferBlacklist must be an object");
+  }
+  const fields = ["account_id", "asset_definition_id", "blacklisted"];
+  assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_BLACKLIST_VARIANT);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`SetAssetTransferBlacklist.${field} is required`);
+    }
+  }
+  return encodeInstructionEnvelope(
+    SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID,
+    encodeStructValue([
+      [
+        encodeAccountIdValue(
+          value.account_id,
+          "SetAssetTransferBlacklist.account_id",
+        ),
+      ],
+      [
+        encodeAssetDefinitionIdValue(
+          value.asset_definition_id,
+          "SetAssetTransferBlacklist.asset_definition_id",
+        ),
+      ],
+      [
+        encodeBoolValue(
+          value.blacklisted,
+          "SetAssetTransferBlacklist.blacklisted",
+        ),
+      ],
+    ]),
+  );
+}
+
+function decodeSetAssetTransferBlacklistInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_BLACKLIST_VARIANT, [
+    "account_id",
+    "asset_definition_id",
+    "blacklisted",
+  ]);
+  return {
+    SetAssetTransferBlacklist: {
+      account_id: decodeAccountIdValue(
+        fields.account_id,
+        "SetAssetTransferBlacklist.account_id",
+      ),
+      asset_definition_id: decodeAssetDefinitionIdValue(
+        fields.asset_definition_id,
+        "SetAssetTransferBlacklist.asset_definition_id",
+      ),
+      blacklisted: decodeBoolValue(
+        fields.blacklisted,
+        "SetAssetTransferBlacklist.blacklisted",
+      ),
+    },
+  };
+}
+
+function encodeAssetTransferControlWindowValue(value, context) {
+  switch (value) {
+    case "Day":
+      return encodeEnumTagValue(0);
+    case "Week":
+      return encodeEnumTagValue(1);
+    case "Month":
+      return encodeEnumTagValue(2);
+    default:
+      throw new TypeError(`${context} must be exactly "Day", "Week", or "Month"`);
+  }
+}
+
+function decodeAssetTransferControlWindowValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  reader.assertEof();
+  switch (tag) {
+    case 0:
+      return "Day";
+    case 1:
+      return "Week";
+    case 2:
+      return "Month";
+    default:
+      throw new Error(`${context} uses unsupported transfer-control window tag ${tag}`);
+  }
+}
+
+function encodeAssetTransferLimitValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const fields = ["window", "cap_amount"];
+  assertOnlyObjectKeys(value, fields, context);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`${context}.${field} is required`);
+    }
+  }
+  return encodeStructValue([
+    [encodeAssetTransferControlWindowValue(value.window, `${context}.window`)],
+    [
+      encodeOptionValue(
+        value.cap_amount,
+        encodeQuantityValue,
+        `${context}.cap_amount`,
+      ),
+    ],
+  ]);
+}
+
+function decodeAssetTransferLimitValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["window", "cap_amount"]);
+  return {
+    window: decodeAssetTransferControlWindowValue(
+      fields.window,
+      `${context}.window`,
+    ),
+    cap_amount: decodeOptionValue(
+      fields.cap_amount,
+      decodeQuantityValue,
+      `${context}.cap_amount`,
+    ),
+  };
+}
+
+function encodeSetAssetTransferControlInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("SetAssetTransferControl must be an object");
+  }
+  const fields = ["account_id", "asset_definition_id", "limits"];
+  assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_CONTROL_VARIANT);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`SetAssetTransferControl.${field} is required`);
+    }
+  }
+  if (!Array.isArray(value.limits)) {
+    throw new TypeError("SetAssetTransferControl.limits must be an array");
+  }
+  for (let index = 0; index < value.limits.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value.limits, index)) {
+      throw new TypeError("SetAssetTransferControl.limits must not contain holes");
+    }
+  }
+  return encodeInstructionEnvelope(
+    SET_ASSET_TRANSFER_CONTROL_WIRE_ID,
+    encodeStructValue([
+      [
+        encodeAccountIdValue(
+          value.account_id,
+          "SetAssetTransferControl.account_id",
+        ),
+      ],
+      [
+        encodeAssetDefinitionIdValue(
+          value.asset_definition_id,
+          "SetAssetTransferControl.asset_definition_id",
+        ),
+      ],
+      [
+        encodeNoritoVec(value.limits, (limit, index) =>
+          encodeAssetTransferLimitValue(
+            limit,
+            `SetAssetTransferControl.limits[${index}]`,
+          ),
+        ),
+      ],
+    ]),
+  );
+}
+
+function decodeSetAssetTransferControlInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_CONTROL_VARIANT, [
+    "account_id",
+    "asset_definition_id",
+    "limits",
+  ]);
+  return {
+    SetAssetTransferControl: {
+      account_id: decodeAccountIdValue(
+        fields.account_id,
+        "SetAssetTransferControl.account_id",
+      ),
+      asset_definition_id: decodeAssetDefinitionIdValue(
+        fields.asset_definition_id,
+        "SetAssetTransferControl.asset_definition_id",
+      ),
+      limits: decodeNoritoVec(
+        fields.limits,
+        (limit, index) =>
+          decodeAssetTransferLimitValue(
+            limit,
+            `SetAssetTransferControl.limits[${index}]`,
+          ),
+        "SetAssetTransferControl.limits",
+      ),
+    },
+  };
+}
+
 function decodeMintPayload(payload) {
   const reader = new BufferReader(payload, "Mint");
   const variantIndex = reader.readU32LE("variantIndex");
@@ -3788,30 +4085,6 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID: {
-      const fields = decodeStructFields(payload, "PersistCouncilForEpoch", [
-        "epoch",
-        "members",
-        "alternates",
-      ]);
-      return {
-        PersistCouncilForEpoch: {
-          epoch: decodeU64NumberValue(fields.epoch, "PersistCouncilForEpoch.epoch"),
-          members: decodeNoritoVec(
-            fields.members,
-            (entry, index) =>
-              decodeAccountIdValue(entry, `PersistCouncilForEpoch.members[${index}]`),
-            "PersistCouncilForEpoch.members",
-          ),
-          alternates: decodeNoritoVec(
-            fields.alternates,
-            (entry, index) =>
-              decodeAccountIdValue(entry, `PersistCouncilForEpoch.alternates[${index}]`),
-            "PersistCouncilForEpoch.alternates",
-          ),
-        },
-      };
-    }
     default:
       throw new Error(`unsupported governance wire id ${wireId}`);
   }
@@ -3883,6 +4156,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
     case DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
       const fields = decodeStructFields(payload, "DeactivateContractInstance", [
         "contract_address",
+        "expected_revision",
         "reason",
       ]);
       return {
@@ -3890,6 +4164,10 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
           contract_address: decodeStringValue(
             fields.contract_address,
             "DeactivateContractInstance.contract_address",
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "DeactivateContractInstance.expected_revision",
           ),
           reason: decodeOptionValue(
             fields.reason,
@@ -3902,6 +4180,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
     case ACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
       const fields = decodeStructFields(payload, "ActivateContractInstance", [
         "contract_address",
+        "expected_revision",
         "code_hash",
       ]);
       return {
@@ -3910,7 +4189,79 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
             fields.contract_address,
             "ActivateContractInstance.contract_address",
           ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "ActivateContractInstance.expected_revision",
+          ),
           code_hash: decodeHashValue(fields.code_hash, "ActivateContractInstance.code_hash"),
+        },
+      };
+    }
+    case SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID: {
+      const fields = decodeStructFields(payload, "SetContractParliamentDelegation", [
+        "contract_address",
+        "expected_revision",
+        "delegated",
+      ]);
+      return {
+        SetContractParliamentDelegation: {
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            "SetContractParliamentDelegation.contract_address",
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "SetContractParliamentDelegation.expected_revision",
+          ),
+          delegated: decodeBoolValue(
+            fields.delegated,
+            "SetContractParliamentDelegation.delegated",
+          ),
+        },
+      };
+    }
+    case OFFER_CONTRACT_OWNERSHIP_WIRE_ID: {
+      const fields = decodeStructFields(payload, "OfferContractOwnership", [
+        "contract_address",
+        "expected_revision",
+        "new_owner",
+      ]);
+      return {
+        OfferContractOwnership: {
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            "OfferContractOwnership.contract_address",
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "OfferContractOwnership.expected_revision",
+          ),
+          new_owner: decodeContractLifecycleOwnerValue(
+            fields.new_owner,
+            "OfferContractOwnership.new_owner",
+          ),
+        },
+      };
+    }
+    case ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID:
+    case CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID: {
+      const name = wireId === ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID
+        ? "AcceptContractOwnership"
+        : "CancelContractOwnershipOffer";
+      const fields = decodeStructFields(payload, name, [
+        "contract_address",
+        "expected_revision",
+      ]);
+      return {
+        [name]: {
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            `${name}.contract_address`,
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            `${name}.expected_revision`,
+          ),
         },
       };
     }
@@ -4724,8 +5075,8 @@ function decodeFixedByteArrayArchiveValue(payload, length, context) {
   return out;
 }
 
-function encodeByteVecValue(value, context) {
-  const bytes = Buffer.from(normalizeFlexibleBytes(value, context));
+function encodeByteVecValue(value, _context) {
+  const bytes = Buffer.from(normalizeFlexibleBytes(value));
   return Buffer.concat([u64ToLittleEndianBuffer(bytes.length), bytes]);
 }
 
@@ -4746,7 +5097,7 @@ function decodeByteVecAsBase64(payload, context) {
   return decodeByteVecValue(payload, context).toString(BASE64_ENCODING);
 }
 
-function normalizeFlexibleBytes(value, context) {
+function normalizeFlexibleBytes(value) {
   if (typeof value === JS_TYPE_STRING) {
     const base64 = tryDecodeBase64(value.trim());
     if (base64) {
@@ -4763,56 +5114,6 @@ function encodeU64NumberValue(value, context) {
 function decodeU64NumberValue(payload, context) {
   const value = BigInt(decodeU64Value(payload, context));
   return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString(10);
-}
-
-function encodeU128Value(value, context) {
-  const bigint = normalizeU128Input(value, context);
-  const buffer = Buffer.allocUnsafe(16);
-  let remaining = bigint;
-  for (let index = 0; index < 16; index += 1) {
-    buffer[index] = Number(remaining & 0xffn);
-    remaining >>= 8n;
-  }
-  return buffer;
-}
-
-function decodeU128StringValue(payload, context) {
-  return decodeU128BigInt(payload, context).toString();
-}
-
-function decodeU128SafeNumberValue(payload, context) {
-  return bigintToSafeNumber(decodeU128BigInt(payload, context), context);
-}
-
-function decodeU128BigInt(payload, context) {
-  if (payload.length !== 16) {
-    throw new Error(`${context} must contain exactly sixteen bytes`);
-  }
-  let value = 0n;
-  for (let index = 15; index >= 0; index -= 1) {
-    value = (value << 8n) | BigInt(payload[index]);
-  }
-  return value;
-}
-
-function normalizeU128Input(value, context) {
-  let parsed;
-  if (typeof value === JS_TYPE_BIGINT) {
-    parsed = value;
-  } else if (typeof value === JS_TYPE_NUMBER) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new TypeError(`${context} must be a non-negative safe integer, bigint, or string`);
-    }
-    parsed = BigInt(value);
-  } else if (typeof value === JS_TYPE_STRING && /^\d+$/.test(value.trim())) {
-    parsed = BigInt(value.trim());
-  } else {
-    throw new TypeError(`${context} must be a non-negative safe integer, bigint, or string`);
-  }
-  if (parsed < 0n || parsed > UINT128_MASK) {
-    throw new RangeError(`${context} must fit in an unsigned 128-bit integer`);
-  }
-  return parsed;
 }
 
 function encodeDomainIdValue(value, context) {
@@ -5944,12 +6245,6 @@ function encodeGovernanceInstruction(instruction) {
       encodeCastPlainBallotPayload(instruction.CastPlainBallot),
     );
   }
-  if (isPlainObject(instruction.PersistCouncilForEpoch)) {
-    return encodeInstructionEnvelope(
-      PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
-      encodePersistCouncilForEpochPayload(instruction.PersistCouncilForEpoch),
-    );
-  }
   throw new Error(
     `Internal Norito canonicalization does not support governance instruction ${describeInstructionShape(instruction)}`,
   );
@@ -5990,6 +6285,39 @@ function encodeSocialInstruction(instruction) {
   throw new Error(
     `Internal Norito canonicalization does not support social instruction ${describeInstructionShape(instruction)}`,
   );
+}
+
+function encodeContractLifecycleOwnerValue(value, context) {
+  assertExactObjectKeys(value, ["owner", "value"], context);
+  if (value.owner === "Account") {
+    return encodeEnumTagValue(0, () =>
+      encodeAccountIdValue(value.value, `${context}.value`));
+  }
+  if (value.owner === "Parliament") {
+    if (value.value !== null) {
+      throw new TypeError(`${context}.value must be null for Parliament`);
+    }
+    return encodeEnumTagValue(1);
+  }
+  throw new TypeError(`${context}.owner must be Account or Parliament`);
+}
+
+function decodeContractLifecycleOwnerValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("owner");
+  if (tag === 0) {
+    const account = decodeAccountIdValue(
+      readNoritoField(reader, "value"),
+      `${context}.value`,
+    );
+    reader.assertEof();
+    return { owner: "Account", value: account };
+  }
+  if (tag === 1) {
+    reader.assertEof();
+    return { owner: "Parliament", value: null };
+  }
+  throw new TypeError(`${context}.owner contains unsupported variant ${tag}`);
 }
 
 function encodeSmartContractInstruction(instruction) {
@@ -6035,6 +6363,10 @@ function encodeSmartContractInstructionCompact(instruction) {
             "DeactivateContractInstance.contract_address",
           ),
         )],
+        [encodeU64Value(
+          instruction.DeactivateContractInstance.expected_revision,
+          "DeactivateContractInstance.expected_revision",
+        )],
         [encodeOptionValue(
           instruction.DeactivateContractInstance.reason,
           encodeNoritoStringValue,
@@ -6053,12 +6385,74 @@ function encodeSmartContractInstructionCompact(instruction) {
             "ActivateContractInstance.contract_address",
           ),
         )],
+        [encodeU64Value(
+          instruction.ActivateContractInstance.expected_revision,
+          "ActivateContractInstance.expected_revision",
+        )],
         [encodeHashValue(
           instruction.ActivateContractInstance.code_hash,
           "ActivateContractInstance.code_hash",
         )],
       ]),
     );
+  }
+  if (isPlainObject(instruction.SetContractParliamentDelegation)) {
+    return encodeInstructionEnvelope(
+      SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID,
+      encodeStructValue([
+        [encodeNoritoStringValue(assertNonEmptyString(
+          instruction.SetContractParliamentDelegation.contract_address,
+          "SetContractParliamentDelegation.contract_address",
+        ))],
+        [encodeU64Value(
+          instruction.SetContractParliamentDelegation.expected_revision,
+          "SetContractParliamentDelegation.expected_revision",
+        )],
+        [encodeBoolValue(
+          instruction.SetContractParliamentDelegation.delegated,
+          "SetContractParliamentDelegation.delegated",
+        )],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.OfferContractOwnership)) {
+    return encodeInstructionEnvelope(
+      OFFER_CONTRACT_OWNERSHIP_WIRE_ID,
+      encodeStructValue([
+        [encodeNoritoStringValue(assertNonEmptyString(
+          instruction.OfferContractOwnership.contract_address,
+          "OfferContractOwnership.contract_address",
+        ))],
+        [encodeU64Value(
+          instruction.OfferContractOwnership.expected_revision,
+          "OfferContractOwnership.expected_revision",
+        )],
+        [encodeContractLifecycleOwnerValue(
+          instruction.OfferContractOwnership.new_owner,
+          "OfferContractOwnership.new_owner",
+        )],
+      ]),
+    );
+  }
+  for (const [name, wireId] of [
+    ["AcceptContractOwnership", ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID],
+    ["CancelContractOwnershipOffer", CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID],
+  ]) {
+    if (isPlainObject(instruction[name])) {
+      return encodeInstructionEnvelope(
+        wireId,
+        encodeStructValue([
+          [encodeNoritoStringValue(assertNonEmptyString(
+            instruction[name].contract_address,
+            `${name}.contract_address`,
+          ))],
+          [encodeU64Value(
+            instruction[name].expected_revision,
+            `${name}.expected_revision`,
+          )],
+        ]),
+      );
+    }
   }
   if (isPlainObject(instruction.CommitContractDeployment)) {
     return encodeInstructionEnvelope(
@@ -6256,18 +6650,6 @@ function encodeCastPlainBallotPayload(value) {
     [encodeQuantityValue(value.amount, "CastPlainBallot.amount")],
     [encodeU64NumberValue(value.duration_blocks, "CastPlainBallot.duration_blocks")],
     [encodeU8Value(value.direction, "CastPlainBallot.direction")],
-  ]);
-}
-
-function encodePersistCouncilForEpochPayload(value) {
-  return encodeStructValue([
-    [encodeU64NumberValue(value.epoch, "PersistCouncilForEpoch.epoch")],
-    [encodeNoritoVec(value.members ?? [], (member, index) =>
-      encodeAccountIdValue(member, `PersistCouncilForEpoch.members[${index}]`),
-    )],
-    [encodeNoritoVec(value.alternates ?? [], (member, index) =>
-      encodeAccountIdValue(member, `PersistCouncilForEpoch.alternates[${index}]`),
-    )],
   ]);
 }
 
@@ -7174,6 +7556,17 @@ export function encodeAccountIdNoritoValue(value, context = "AccountId") {
   return withNoritoCompactLengths(() =>
     Uint8Array.from(encodeAccountIdValue(value, context)),
   );
+}
+
+/** @internal Exact compact-length AccountId value decoding for typed policy codecs. */
+export function decodeAccountIdNoritoValue(payload, context = "AccountId") {
+  const bytes = Buffer.from(normalizeFlexibleBytes(payload, context));
+  return withNoritoCompactLengths(() => decodeAccountIdValue(bytes, context));
+}
+
+/** @internal Decode and re-encode one exact compact-length AccountId value. */
+export function _canonicalAccountIdNoritoValue(payload, context = "AccountId") {
+  return encodeAccountIdNoritoValue(decodeAccountIdNoritoValue(payload, context), context);
 }
 
 function decodeAccountIdValue(payload, context) {
@@ -8395,8 +8788,8 @@ function decodeLanePrivacyWitnessValue(payload, context) {
 const [
   encodeMerkleProofValue,
   decodeMerkleProofValue,
-  encodeConfidentialEncryptedPayloadValue,
-  decodeConfidentialEncryptedPayloadValue,
+  encodeConfidentialMemoEnvelopeV1Value,
+  decodeConfidentialMemoEnvelopeV1Value,
 ] = /* @__PURE__ */ createNoritoProofValueCodecs(
   BufferReader, LANE_PRIVACY_MERKLE_MAX_DEPTH, decodeHashValue,
   decodeNoritoVec, decodeOptionValue, decodeTupleFields,
@@ -8695,10 +9088,6 @@ function decodeNoritoVec(payload, decode, context, maxCount = null) {
   }
   reader.assertEof();
   return values;
-}
-
-function looksLikeNoritoFrame(buffer) {
-  return buffer.length >= 40 && buffer.subarray(0, 4).toString("ascii") === "NRT0";
 }
 
 function schemaHashForTypeName(typeName) {

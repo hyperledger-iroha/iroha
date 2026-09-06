@@ -254,6 +254,15 @@ impl ProductionV2Services {
         fallback
     }
 
+    /// Sample one bounded rotating batch from the current authenticated
+    /// configured-peer topology without adding a frozen-height fallback.
+    ///
+    /// Historical lane recovery owns its immutable CommitQC fallback and uses
+    /// this result only to choose mutable canonical-body destinations.
+    pub(crate) fn current_archive_targets(&self) -> Vec<PeerId> {
+        self.current_archive_targets_with_frozen_fallback(&[])
+    }
+
     fn queue_plan_effect_parts(
         &self,
         peer: &PeerId,

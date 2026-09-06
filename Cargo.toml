@@ -67,6 +67,7 @@ iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 # Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
 # request them locally so focused builds do not compile the broadest model.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
+iroha_service_model = { path = "crates/iroha_service_model" }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
 iroha_test_network = { path = "crates/iroha_test_network" }
@@ -79,6 +80,7 @@ sorafs_chunker = { path = "crates/sorafs_chunker" }
 sorafs_manifest = { path = "crates/sorafs_manifest" }
 sorafs_orchestrator = { path = "crates/sorafs_orchestrator" }
 soranet_pq = { path = "crates/soranet_pq" }
+soranet_incentives = { path = "crates/soranet_incentives" }
 
 # Note: remaining dependencies stay pinned until we resolve the outstanding
 # compatibility issues with their latest major releases.
@@ -386,7 +388,7 @@ codegen-units = 256
 codegen-units = 8
 
 # `iroha_data_model` is a very broad derive-heavy crate. LLVM `-O3` for this
-# one package exceeds the reviewed mobile/Kagemusha release-build memory
+# one package exceeds the reviewed mobile/KAGEMUSHA release-build memory
 # envelope even with a single job and hundreds of codegen units. Measured O2
 # also crossed the fixed 13 GiB soft ceiling before proof work began, so O1
 # avoids that optimizer-only peak. Halo2, core, and the bridge remain at O3.

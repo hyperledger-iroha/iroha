@@ -47,8 +47,9 @@ pub(crate) use fixture::{
 };
 pub(crate) use relation::{
     IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1, IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1,
-    PrivateNoteRelationProfileV1, derive_profiled_input_commitment_v1,
-    derive_profiled_output_commitment_v1, preflight_private_note_relation_with_profile_v1,
+    PrivateNoteRelationProfileV1, derive_private_note_input_openings_commitment_v1,
+    derive_profiled_input_commitment_v1, derive_profiled_output_commitment_v1,
+    preflight_private_note_relation_with_profile_v1,
 };
 pub use relation::{
     IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteRelationErrorV1,
@@ -64,12 +65,11 @@ pub(crate) use relation::{
 };
 pub use stark::IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1;
 pub(crate) use stark::{
-    IVM_PRIVATE_NOTE_STARK_KAT_PROOF_SHA256_V1, IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1,
-    IVM_PRIVATE_NOTE_STARK_PROFILE_DIGEST_V1, PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1,
-    PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1, PrivateNoteStarkRelationV1,
-    validate_ivm_private_note_stark_profile_v1, verify_private_note_stark_v1,
+    IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1, PRIVATE_NOTE_DOMAINS_V1,
+    PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1, PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1,
+    PrivateNoteStarkRelationV1, validate_ivm_private_note_stark_profile_v1,
+    verify_private_note_stark_v1,
 };
-#[cfg(test)]
 pub(crate) use wallet::encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1;
 pub(crate) use wallet::validate_ivm_private_wallet_encryption_opening_v1;
 pub use wallet::{

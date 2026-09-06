@@ -58,7 +58,6 @@ fn canonical_executed_block_recovery_rejects_drift_rotates_signers_and_caches_ex
         adapter.state.as_ref(),
         adapter.kura.as_ref(),
         adapter.limits,
-        &responder,
         &request,
         &requester,
     )

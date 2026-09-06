@@ -2,7 +2,6 @@
 use super::{
     JINDO_RING_DEGREE_V1,
     field::JindoFieldElementV1,
-    parameters::JINDO_PARAMETERS_V1,
     ring::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
@@ -15,17 +14,50 @@ use sha3::{
 use thiserror::Error;
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.transcript.v1";
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.challenge.v1";
-const TRANSCRIPT_VERSION_V1: u8 = 2;
+const TRANSCRIPT_VERSION_V1: u8 = 3;
 const MAX_DERIVATION_RETRIES_V1: u32 = 1 << 16;
 const MAX_RANGE_REJECTIONS_V1: usize = 4096;
-/// One uniformly sampled signed fixed-weight challenge in `S_35`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct JindoShortChallengeV1 {
-    coefficients: [i8; JINDO_RING_DEGREE_V1],
+/// Cardinality of the complete signed-monomial challenge set.
+pub const JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1: u16 = 2048;
+/// One uniformly sampled challenge in `{+X^i, -X^i | 0 <= i < 1024}`.
+///
+/// The canonical exponent is in `Z / 2048 Z`: exponents `0..1024` encode
+/// `+X^i`, while exponents `1024..2048` encode `-X^(i - 1024)` because
+/// `X^1024 = -1` in the application ring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JindoSignedMonomialChallengeV1 {
+    exponent_mod_2d: u16,
 }
-impl JindoShortChallengeV1 {
+impl JindoSignedMonomialChallengeV1 {
+    /// Construct a challenge from its canonical exponent modulo `2048`.
+    #[must_use]
+    pub const fn from_canonical_exponent(exponent_mod_2d: u16) -> Option<Self> {
+        if exponent_mod_2d < JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1 {
+            Some(Self { exponent_mod_2d })
+        } else {
+            None
+        }
+    }
+    /// Return the canonical exponent in `Z / 2048 Z`.
+    #[must_use]
+    pub const fn canonical_exponent(self) -> u16 {
+        self.exponent_mod_2d
+    }
+    /// Return the monomial coefficient index in `0..1024`.
+    #[must_use]
+    pub const fn coefficient_index(self) -> u16 {
+        self.exponent_mod_2d & 1023
+    }
+    /// Return whether the canonical representative is negative.
+    #[must_use]
+    pub const fn is_negative(self) -> bool {
+        self.exponent_mod_2d >= 1024
+    }
     pub(crate) fn polynomial(&self, moduli: [JindoPrimeModulusV1; 2]) -> JindoRnsPolynomialV1 {
-        JindoRnsPolynomialV1::from_balanced_coefficients(self.coefficients.map(i128::from), moduli)
+        let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
+        coefficients[usize::from(self.coefficient_index())] =
+            if self.is_negative() { -1 } else { 1 };
+        JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli)
     }
     pub(crate) fn inner_polynomial(&self) -> JindoRnsPolynomialV1 {
         self.polynomial(JINDO_INNER_MODULI_V1)
@@ -33,12 +65,8 @@ impl JindoShortChallengeV1 {
     pub(crate) fn outer_polynomial(&self) -> JindoRnsPolynomialV1 {
         self.polynomial(JINDO_OUTER_MODULI_V1)
     }
-    pub(crate) fn encoded(&self) -> [u8; JINDO_RING_DEGREE_V1] {
-        self.coefficients.map(|value| value as u8)
-    }
-    #[cfg(test)]
-    pub(crate) const fn coefficients(&self) -> &[i8; JINDO_RING_DEGREE_V1] {
-        &self.coefficients
+    pub(crate) const fn encoded(&self) -> [u8; 2] {
+        self.exponent_mod_2d.to_be_bytes()
     }
 }
 /// Append-only Jindo transcript state.
@@ -110,20 +138,21 @@ impl JindoTranscriptV1 {
         }
         Err(JindoTranscriptErrorV1::ChallengeExhausted)
     }
-    /// Derive one uniform member of the paper's complete signed fixed-weight
-    /// challenge set `S_35`.
+    /// Derive one uniform signed monomial.
     ///
-    /// Individual challenges are deliberately not conditioned on being
-    /// units. The revised paper's extraction argument uses well-spreadness of
-    /// the complete `S_35` distribution and the probability that the
-    /// difference of two challenges is invertible.
-    pub(crate) fn sparse_challenge(
+    /// The low eleven bits of a uniform 16-bit XOF word are exactly uniform
+    /// over the 2048 canonical exponents; no modulo bias or retry path exists.
+    pub(crate) fn monomial_challenge(
         &mut self,
         label: &[u8],
         ordinal: u32,
-    ) -> Result<JindoShortChallengeV1, JindoTranscriptErrorV1> {
+    ) -> Result<JindoSignedMonomialChallengeV1, JindoTranscriptErrorV1> {
         let mut reader = self.challenge_reader(label, ordinal, 0)?;
-        let challenge = sample_uniform_fixed_weight(&mut reader)?;
+        let mut bytes = [0_u8; 2];
+        reader.read(&mut bytes);
+        let exponent_mod_2d = signed_monomial_exponent_from_word_v1(bytes);
+        let challenge = JindoSignedMonomialChallengeV1::from_canonical_exponent(exponent_mod_2d)
+            .expect("eleven-bit mask is a canonical signed-monomial exponent");
         let encoded = challenge.encoded();
         drop(reader);
         self.bind_challenge(label, ordinal, 0, &encoded)?;
@@ -156,6 +185,9 @@ impl JindoTranscriptV1 {
         self.append_message(b"challenge_value", encoded)
     }
 }
+fn signed_monomial_exponent_from_word_v1(bytes: [u8; 2]) -> u16 {
+    u16::from_be_bytes(bytes) & (JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1 - 1)
+}
 fn decode_nonzero_field_challenge(bytes: [u8; 32]) -> Option<JindoFieldElementV1> {
     let value = JindoFieldElementV1::from_canonical_bytes(bytes)?;
     (!value.is_zero()).then_some(value)
@@ -165,38 +197,6 @@ fn absorb(hash: &mut Shake256, value: &[u8]) -> Result<(), JindoTranscriptErrorV
     hash.update(&len.to_be_bytes());
     hash.update(value);
     Ok(())
-}
-/// Partial Fisher--Yates: every ordered 35-tuple without replacement has the
-/// same probability, and each unordered support has exactly `35!` preimages.
-/// Independent sign bits then make all `2^35 * C(1024,35)` members equiprobable.
-fn sample_uniform_fixed_weight(
-    reader: &mut impl XofReader,
-) -> Result<JindoShortChallengeV1, JindoTranscriptErrorV1> {
-    let mut positions: [u16; JINDO_RING_DEGREE_V1] =
-        core::array::from_fn(|index| u16::try_from(index).expect("degree fits u16"));
-    let mut coefficients = [0_i8; JINDO_RING_DEGREE_V1];
-    for selected in 0..JINDO_PARAMETERS_V1.challenge_weight {
-        let remaining = JINDO_RING_DEGREE_V1 - selected;
-        let offset = usize::try_from(sample_bounded(reader, remaining as u64)?)
-            .map_err(|_| JindoTranscriptErrorV1::ChallengeExhausted)?;
-        positions.swap(selected, selected + offset);
-        let mut sign = [0_u8; 1];
-        reader.read(&mut sign);
-        coefficients[usize::from(positions[selected])] = if sign[0] & 1 == 0 { 1 } else { -1 };
-    }
-    Ok(JindoShortChallengeV1 { coefficients })
-}
-fn sample_bounded(reader: &mut impl XofReader, bound: u64) -> Result<u64, JindoTranscriptErrorV1> {
-    let acceptance_limit = u64::MAX - (u64::MAX % bound);
-    for _ in 0..MAX_RANGE_REJECTIONS_V1 {
-        let mut bytes = [0_u8; 8];
-        reader.read(&mut bytes);
-        let candidate = u64::from_be_bytes(bytes);
-        if candidate < acceptance_limit {
-            return Ok(candidate % bound);
-        }
-    }
-    Err(JindoTranscriptErrorV1::ChallengeExhausted)
 }
 /// Jindo transcript failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -232,31 +232,48 @@ mod tests {
         }
     }
     #[test]
-    fn sparse_challenge_has_exact_weight_and_signed_coefficients() {
+    fn monomial_challenge_is_canonical_and_has_exactly_one_signed_coefficient() {
         let mut transcript = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
-        let challenge = transcript.sparse_challenge(b"alpha", 0).unwrap();
-        assert_eq!(
-            challenge.coefficients().iter().filter(|v| **v != 0).count(),
-            35
-        );
-        assert!(
-            challenge
-                .coefficients()
-                .iter()
-                .all(|v| [-1, 0, 1].contains(v))
-        );
+        let challenge = transcript.monomial_challenge(b"alpha", 0).unwrap();
+        assert!(challenge.canonical_exponent() < 2048);
+        let polynomial = challenge.inner_polynomial();
+        let nonzero = polynomial.residues()[0]
+            .iter()
+            .filter(|value| **value != 0)
+            .count();
+        assert_eq!(nonzero, 1);
+    }
+    #[test]
+    fn signed_monomial_transcript_kat_is_frozen() {
+        let mut transcript = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
+        let exponents = core::array::from_fn::<_, 4, _>(|ordinal| {
+            transcript
+                .monomial_challenge(b"alpha", ordinal as u32)
+                .unwrap()
+                .canonical_exponent()
+        });
+        assert_eq!(exponents, [1631, 1367, 1928, 1267]);
+    }
+    #[test]
+    fn eleven_bit_projection_is_exactly_uniform_over_the_complete_set() {
+        let mut preimages = [0_u8; 2048];
+        for word in 0..=u16::MAX {
+            let exponent = usize::from(signed_monomial_exponent_from_word_v1(word.to_be_bytes()));
+            preimages[exponent] += 1;
+        }
+        assert!(preimages.into_iter().all(|count| count == 32));
     }
     #[test]
     fn challenge_is_replayable_and_binds_prior_messages() {
         let mut a = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
         a.append_message(b"phase", b"one").unwrap();
-        let ca = a.sparse_challenge(b"alpha", 0).unwrap();
+        let ca = a.monomial_challenge(b"alpha", 0).unwrap();
         let mut b = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
         b.append_message(b"phase", b"one").unwrap();
-        assert_eq!(ca, b.sparse_challenge(b"alpha", 0).unwrap());
+        assert_eq!(ca, b.monomial_challenge(b"alpha", 0).unwrap());
         let mut c = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
         c.append_message(b"phase", b"two").unwrap();
-        assert_ne!(ca, c.sparse_challenge(b"alpha", 0).unwrap());
+        assert_ne!(ca, c.monomial_challenge(b"alpha", 0).unwrap());
     }
     #[test]
     fn field_challenge_is_nonzero_and_bound() {

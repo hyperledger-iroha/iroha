@@ -76,7 +76,7 @@ Operators must:
 1. Determine if the deployment constitutes a “commercial cryptography product/service” (most enterprise networks do).
 2. File product/service with provincial SCA bureau; attach Iroha compliance statement, SBOM, test reports.
 3. Register blockchain system under MLPS 2.0, target Level 3 controls; integrate Iroha logs into security monitoring.
-4. Establish SM key lifecycle procedures (use approved KMS/HSM where required).
+4. Establish approved, isolated SM key lifecycle and custody procedures.
 5. Include cryptography compromise scenarios in incident response drills; set escalation contacts with Iroha maintainers.
 6. For cross-border data flow, confirm additional CAC (Cyberspace Administration) filings if personal data is exported.
 

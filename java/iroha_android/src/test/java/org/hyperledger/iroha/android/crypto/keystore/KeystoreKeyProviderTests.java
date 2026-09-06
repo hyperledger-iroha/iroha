@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.crypto.keystore;
 
 import java.io.ByteArrayInputStream;
 import java.security.KeyPair;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
@@ -90,6 +91,12 @@ public final class KeystoreKeyProviderTests {
     strongBoxRequiredRejectsNonStrongBoxBackend();
     requiredPoliciesRejectWeakerExistingAlias();
     generatedRouteUsesPerKeyMetadata();
+    strongBoxPreferredRetriesKeystoreWithoutStrongBox();
+    directAndroidBackendPolicyRetriesPreferredGenerationWithoutStrongBox();
+    directAndroidBackendPolicyRejectsWeakerRequiredResult();
+    preferredStrongBoxParametersRetryPlainGenerationWithoutStrongBox();
+    strongBoxPreferredDoesNotDowngradeUnrelatedGenerationFailure();
+    strongBoxRequiredRejectsGenerationFailureWithoutFallback();
     verifiedStrongBoxExistingAliasRemainsAccepted();
     genericProviderCapabilityIsNotPerKeyProof();
     withPreferenceRetainsHardwareRequired();
@@ -652,6 +659,146 @@ public final class KeystoreKeyProviderTests {
         : "Preferred generation must report the measured software route";
   }
 
+  private static void strongBoxPreferredRetriesKeystoreWithoutStrongBox() throws Exception {
+    final StrongBoxRequestFailingBackend backend =
+        new StrongBoxRequestFailingBackend(/* strongBoxUnavailable= */ true);
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
+
+    final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
+        provider.generateWithOutcome(
+            "preferred-keystore-fallback",
+            IrohaKeyManager.KeySecurityPreference.STRONGBOX_PREFERRED);
+
+    assert outcome.route()
+            == org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE
+        : "Preferred generation should accept the software-capable Android Keystore route";
+    assert backend.requests().size() == 2 : "Preferred generation should make two attempts";
+    assert backend.requests().get(0).preferStrongBox()
+        : "The first attempt should request StrongBox";
+    assert !backend.requests().get(0).requireStrongBox()
+        : "Preferred must not turn the first attempt into a requirement";
+    assert !backend.requests().get(1).preferStrongBox()
+        : "The fallback attempt must not request StrongBox";
+    assert !backend.requests().get(1).requireStrongBox()
+        : "The fallback attempt must not require StrongBox";
+  }
+
+  private static void directAndroidBackendPolicyRetriesPreferredGenerationWithoutStrongBox()
+      throws Exception {
+    final List<KeyGenParameters> requests = new ArrayList<>();
+    final KeyPair expected = new SoftwareKeyProvider().generateEphemeral();
+    final KeyGenParameters parameters =
+        KeyGenParameters.builder().setPreferStrongBox(true).build();
+
+    final KeyGenerationResult result =
+        SystemAndroidKeystoreBackend.generateWithPreferredStrongBoxFallback(
+            parameters,
+            request -> {
+              requests.add(request);
+              if (request.preferStrongBox()) {
+                throw new KeyManagementException(
+                    "fixture key generation failure",
+                    new StrongBoxUnavailableFailure("fixture StrongBox unavailable"));
+              }
+              return new KeyGenerationResult(expected, false);
+            });
+
+    assert result.keyPair() == expected : "The direct fallback must return the weaker key";
+    assert requests.size() == 2 : "Preferred direct generation should make two attempts";
+    assert requests.get(0).preferStrongBox() : "The first direct attempt should prefer StrongBox";
+    assert !requests.get(1).preferStrongBox()
+        : "The direct fallback must not request StrongBox";
+    assert !requests.get(1).requireStrongBox()
+        : "The direct fallback must not require StrongBox";
+  }
+
+  private static void directAndroidBackendPolicyRejectsWeakerRequiredResult() throws Exception {
+    final int[] attempts = {0};
+    final KeyGenParameters parameters =
+        KeyGenParameters.builder().setRequireStrongBox(true).setPreferStrongBox(true).build();
+
+    boolean threw = false;
+    try {
+      SystemAndroidKeystoreBackend.generateWithPreferredStrongBoxFallback(
+          parameters,
+          request -> {
+            attempts[0] += 1;
+            return new KeyGenerationResult(new SoftwareKeyProvider().generateEphemeral(), false);
+          });
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
+
+    assert threw : "Direct StrongBox-required generation must reject a weaker result";
+    assert attempts[0] == 1 : "Direct StrongBox-required generation must not retry";
+  }
+
+  private static void strongBoxPreferredDoesNotDowngradeUnrelatedGenerationFailure()
+      throws Exception {
+    final StrongBoxRequestFailingBackend backend =
+        new StrongBoxRequestFailingBackend(/* strongBoxUnavailable= */ false);
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
+
+    boolean threw = false;
+    try {
+      provider.generateWithOutcome(
+          "preferred-unrelated-failure",
+          IrohaKeyManager.KeySecurityPreference.STRONGBOX_PREFERRED);
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
+
+    assert threw : "Unrelated generation failures must remain fail-closed";
+    assert backend.requests().size() == 1
+        : "Unrelated generation failures must not trigger a weaker retry";
+  }
+
+  private static void preferredStrongBoxParametersRetryPlainGenerationWithoutStrongBox()
+      throws Exception {
+    final StrongBoxRequestFailingBackend backend =
+        new StrongBoxRequestFailingBackend(/* strongBoxUnavailable= */ true);
+    final KeyGenParameters parameters =
+        KeyGenParameters.builder().setPreferStrongBox(true).build();
+
+    new KeystoreKeyProvider(backend, parameters).generate("preferred-parameters-fallback");
+
+    assert backend.requests().size() == 2 : "Preferred generation should make two attempts";
+    assert backend.requests().get(0).preferStrongBox()
+        : "The first attempt should request StrongBox";
+    assert !backend.requests().get(1).preferStrongBox()
+        : "The fallback attempt must not request StrongBox";
+    assert !backend.requests().get(1).requireStrongBox()
+        : "The fallback attempt must not require StrongBox";
+  }
+
+  private static void strongBoxRequiredRejectsGenerationFailureWithoutFallback()
+      throws Exception {
+    final StrongBoxRequestFailingBackend backend =
+        new StrongBoxRequestFailingBackend(/* strongBoxUnavailable= */ true);
+    final IrohaKeyManager manager =
+        IrohaKeyManager.fromProviders(
+            List.of(
+                new KeystoreKeyProvider(backend, KeyGenParameters.builder().build()),
+                new SoftwareKeyProvider()));
+
+    boolean threw = false;
+    try {
+      manager.generateOrLoad(
+          "required-no-fallback", IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED);
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
+
+    assert threw : "StrongBox-required generation must remain fail-closed";
+    assert backend.requests().size() == 1 : "StrongBox-required generation must not retry";
+    assert backend.requests().get(0).requireStrongBox()
+        : "The required attempt must require StrongBox";
+    assert backend.requests().get(0).preferStrongBox()
+        : "The required attempt should select StrongBox without permitting fallback";
+  }
+
   private static void verifiedStrongBoxExistingAliasRemainsAccepted() throws Exception {
     final KeyProviderMetadata strongBox =
         KeyProviderMetadata.strongBox("mixed-keystore", false);
@@ -879,6 +1026,60 @@ public final class KeystoreKeyProviderTests {
 
     KeyGenParameters lastParameters() {
       return lastParameters;
+    }
+  }
+
+  private static final class StrongBoxRequestFailingBackend implements KeystoreBackend {
+    private final boolean strongBoxUnavailable;
+    private final List<KeyGenParameters> requests = new ArrayList<>();
+    private final SoftwareKeyProvider software = new SoftwareKeyProvider();
+
+    private StrongBoxRequestFailingBackend(final boolean strongBoxUnavailable) {
+      this.strongBoxUnavailable = strongBoxUnavailable;
+    }
+
+    @Override
+    public Optional<KeyPair> load(final String alias) {
+      return Optional.empty();
+    }
+
+    @Override
+    public KeyGenerationResult generate(
+        final String alias, final KeyGenParameters parameters) throws KeyManagementException {
+      requests.add(parameters);
+      if (parameters.requireStrongBox() || parameters.preferStrongBox()) {
+        final Throwable cause =
+            strongBoxUnavailable
+                ? new StrongBoxUnavailableFailure("fixture StrongBox unavailable")
+                : new IllegalStateException("fixture unrelated keystore failure");
+        throw new KeyManagementException("fixture key generation failure", cause);
+      }
+      return new KeyGenerationResult(software.generateEphemeral(), false);
+    }
+
+    @Override
+    public KeyPair generateEphemeral(final KeyGenParameters parameters)
+        throws KeyManagementException {
+      return software.generateEphemeral();
+    }
+
+    @Override
+    public KeyProviderMetadata metadata() {
+      return KeyProviderMetadata.strongBox("failing-strongbox-keystore", false);
+    }
+
+    @Override
+    public KeyProviderMetadata keyMetadata(final String alias, final KeyPair keyPair) {
+      return KeyProviderMetadata.software("failing-strongbox-keystore");
+    }
+
+    @Override
+    public String name() {
+      return "failing-strongbox-keystore";
+    }
+
+    private List<KeyGenParameters> requests() {
+      return requests;
     }
   }
 

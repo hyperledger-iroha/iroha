@@ -5,7 +5,7 @@ use http_body_util::{BodyExt as _, Full};
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::kura::{FastpqProofSnapshot, Kura, PipelineDagSnapshot, PipelineRecoverySidecar};
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
+use iroha_data_model::{block::BlockHeader, privacy::GoldilocksDigest384V1};
 use tower::ServiceExt as _; // for Router::oneshot
 #[tokio::test]
 async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
@@ -164,12 +164,13 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         block_hash,
         entry_hash: Hash::prehashed([0x11; 32]),
         batch_index: 0,
-        parameter: "fastpq-lane-balanced".to_string(),
+        parameter: "fastpq-state-transition-stark-v1".to_string(),
         transition_count: 0,
-        trace_commitment: Hash::new(b"trace-commitment"),
+        trace_commitment: GoldilocksDigest384V1::new([0x41; 6])
+            .expect("canonical test FASTPQ trace commitment"),
         proof_digest: Hash::new(&proof),
         batch: fastpq_prover::TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             fastpq_prover::PublicInputs::default(),
         ),
         proof,
@@ -193,7 +194,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     assert_eq!(proofs.len(), 1);
     assert_eq!(
         proofs[0].get("parameter").and_then(|x| x.as_str()),
-        Some("fastpq-lane-balanced")
+        Some("fastpq-state-transition-stark-v1")
     );
     // Query missing height
     let req_missing = http::Request::builder()

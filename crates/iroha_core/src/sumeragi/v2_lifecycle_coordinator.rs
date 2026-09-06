@@ -135,9 +135,10 @@ pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
 pub(in crate::sumeragi) use ledger::{
     AuthenticatedCompleteTipPredecessorStorageV1, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
-    CompleteTipPredecessorStorageErrorV1, LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
-    LifecycleLedgerError, LifecycleLedgerV1, PublishedFinalizedLifecycleRetainedFloorV1,
-    RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
+    CompleteTipPayloadStoreOpenTargetV1, CompleteTipPredecessorStorageErrorV1,
+    LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerError, LifecycleLedgerV1,
+    PublishedFinalizedLifecycleRetainedFloorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
+    open_complete_tip_predecessor_storage,
 };
 #[cfg(all(test, feature = "bls"))]
 /// Run the two release-bound CompleteTip disk-retirement regressions.
@@ -297,8 +298,8 @@ pub(crate) use selector::{
     certified_fetch_preledger_productive_ingress_token,
 };
 pub(in crate::sumeragi) use validate_sidecar::{
-    LifecycleValidateSidecarDriveV1, LifecycleValidateSidecarRegistrationIdentityV1,
-    RegisteredLifecycleValidateSidecarWaitV1,
+    CancelledLifecycleValidateSidecarV1, LifecycleValidateSidecarDriveV1,
+    LifecycleValidateSidecarRegistrationIdentityV1, RegisteredLifecycleValidateSidecarWaitV1,
 };
 #[cfg_attr(
     not(test),
@@ -334,9 +335,10 @@ pub(in crate::sumeragi) use work_registry::{
 };
 pub(in crate::sumeragi) use work_registry::{
     AttestedLifecycleDecisionApplySuccessorOutputsV1, DurableStoreTerminalRetrySealV1,
-    LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
-    PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
-    PreparedApplyTerminalDirectBroadcastV1, PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+    LifecycleDecisionApplySuccessorOutputModeV1, LifecycleOutputAdmissionKeyV1,
+    PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
+    PendingLiveWalSignAdmissionV1, PreparedApplyTerminalDirectBroadcastV1,
+    PreparedAuthenticatedGenesisFetchReplayPreAdmission,
     PreparedAuthenticatedGenesisStoreReplayPreAdmission,
     PreparedAuthenticatedGenesisStoredReplayPreAdmission,
     PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,

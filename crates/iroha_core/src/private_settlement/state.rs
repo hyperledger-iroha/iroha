@@ -6,16 +6,26 @@
 //! compact successor frontier needed for deterministic crash recovery and
 //! atomic global application.
 
-use crate::privacy_engines::{
-    atomic_private_settlement::{
-        atomic_private_settlement_program_id_v1, verify_atomic_private_settlement_v1,
-    },
-    proof_managed_accumulator::{
-        append_proof_managed_commitments_v1, build_proof_managed_frontier_v1,
-        validate_proof_managed_frontier_v1,
+use super::{
+    global_state::PrivateSettlementPoolKeyV1,
+    sidecar_store::{
+        PrivateSettlementAuditorSidecarViewV1, PrivateSettlementAuthenticatedAuditorViewV1,
+        PrivateSettlementFileSidecarStoreV1, PrivateSettlementSidecarStoreErrorV1,
     },
 };
-use iroha_crypto::Hash;
+use crate::{
+    privacy_engines::{
+        atomic_private_settlement::{
+            atomic_private_settlement_program_id_v1, verify_atomic_private_settlement_v1,
+        },
+        proof_managed_accumulator::{
+            append_proof_managed_commitments_v1, build_proof_managed_frontier_v1,
+            validate_proof_managed_frontier_v1,
+        },
+    },
+    state::StateView,
+};
+use iroha_crypto::{Hash, PublicKey};
 #[cfg(test)]
 use iroha_data_model::nexus::PrivateSettlementPoolGovernanceV1;
 use iroha_data_model::{
@@ -32,9 +42,10 @@ use iroha_data_model::{
         PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
     },
 };
+use mv::storage::StorageReadOnly as _;
 use norito::codec::{Decode, Encode};
 use norito::derive::{JsonDeserialize, JsonSerialize};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, convert::TryFrom as _};
 use thiserror::Error;
 
 const VERIFIED_LEG_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:verified-leg:v1\0";
@@ -78,12 +89,44 @@ fn settlement_namespace_v1(
     ))
 }
 
+/// One superseded public governance revision retained for snapshot validation.
+///
+/// The immutable route, pool, and asset-binding commitment live on the owning
+/// [`PrivateSettlementPoolGovernanceProjectionV1`]. Retaining the policy and
+/// lifecycle fields of every superseded revision lets recovery validate old
+/// finalized receipts against the policy that was effective when they committed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
+pub(crate) struct PrivateSettlementPoolGovernanceRevisionV1 {
+    pub(crate) audit_policy_digest: Hash,
+    pub(crate) audit_key_epoch: u64,
+    pub(crate) lifecycle: PrivateSettlementPoolGovernanceLifecycleV1,
+    pub(crate) governance_digest: Hash,
+}
+
+impl PrivateSettlementPoolGovernanceRevisionV1 {
+    fn validate_fields(&self) -> Result<(), PrivateSettlementStateErrorV1> {
+        if self.audit_policy_digest == zero_hash_v1()
+            || self.audit_key_epoch == 0
+            || self.lifecycle.governance_revision == 0
+            || self.lifecycle.activation_height == 0
+            || self
+                .lifecycle
+                .retirement_height
+                .is_some_and(|retirement| retirement <= self.lifecycle.activation_height)
+            || self.governance_digest == zero_hash_v1()
+        {
+            return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+        }
+        Ok(())
+    }
+}
+
 /// Public governance projection retained in globally replicated settlement state.
 ///
 /// The restricted asset identifier and asset-binding opening salt are deliberately
 /// absent. They remain in access-controlled governance/auditor material supplied
 /// when the pool is bootstrapped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub(crate) struct PrivateSettlementPoolGovernanceProjectionV1 {
     pub(crate) version: u8,
     pub(crate) route: PrivateSettlementRouteV1,
@@ -93,6 +136,8 @@ pub(crate) struct PrivateSettlementPoolGovernanceProjectionV1 {
     pub(crate) audit_key_epoch: u64,
     pub(crate) lifecycle: PrivateSettlementPoolGovernanceLifecycleV1,
     pub(crate) governance_digest: Hash,
+    /// Superseded revisions in exact ascending revision order.
+    pub(crate) prior_revisions: Vec<PrivateSettlementPoolGovernanceRevisionV1>,
 }
 
 impl PrivateSettlementPoolGovernanceProjectionV1 {
@@ -113,13 +158,14 @@ impl PrivateSettlementPoolGovernanceProjectionV1 {
             audit_key_epoch: governance.body.audit_key_epoch,
             lifecycle: governance.body.lifecycle,
             governance_digest: governance.governance_digest,
+            prior_revisions: Vec::new(),
         };
         projection.validate()?;
         Ok(projection)
     }
 
     /// Validate the complete public projection after snapshot recovery.
-    pub(crate) fn validate(&self) -> Result<(), PrivateSettlementStateErrorV1> {
+    pub(crate) fn validate_current_fields(&self) -> Result<(), PrivateSettlementStateErrorV1> {
         if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
             || self.route.dataspace_id == iroha_data_model::nexus::DataSpaceId::UNIVERSAL
             || self.route.lane_incarnation == zero_hash_v1()
@@ -138,6 +184,155 @@ impl PrivateSettlementPoolGovernanceProjectionV1 {
             return Err(PrivateSettlementStateErrorV1::PoolGovernance);
         }
         Ok(())
+    }
+
+    /// Validate the current projection and its complete, gap-free revision lineage.
+    pub(crate) fn validate(&self) -> Result<(), PrivateSettlementStateErrorV1> {
+        self.validate_current_fields()?;
+        let expected_prior_count = usize::try_from(
+            self.lifecycle
+                .governance_revision
+                .checked_sub(1)
+                .ok_or(PrivateSettlementStateErrorV1::PoolGovernance)?,
+        )
+        .map_err(|_| PrivateSettlementStateErrorV1::PoolGovernance)?;
+        if self.prior_revisions.len() != expected_prior_count {
+            return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+        }
+
+        let mut previous: Option<PrivateSettlementPoolGovernanceRevisionV1> = None;
+        for (index, revision) in self.prior_revisions.iter().copied().enumerate() {
+            revision.validate_fields()?;
+            let expected_revision = u64::try_from(index)
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or(PrivateSettlementStateErrorV1::PoolGovernance)?;
+            if revision.lifecycle.governance_revision != expected_revision
+                || previous.is_some_and(|prior| {
+                    prior.audit_policy_digest == revision.audit_policy_digest
+                        || prior.audit_key_epoch >= revision.audit_key_epoch
+                        || prior.governance_digest == revision.governance_digest
+                        || prior.lifecycle.activation_height >= revision.lifecycle.activation_height
+                        || !prior
+                            .lifecycle
+                            .is_active_at(revision.lifecycle.activation_height.saturating_sub(1))
+                })
+            {
+                return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+            }
+            previous = Some(revision);
+        }
+
+        if let Some(previous) = previous {
+            if previous.audit_policy_digest == self.audit_policy_digest
+                || previous.audit_key_epoch >= self.audit_key_epoch
+                || previous.governance_digest == self.governance_digest
+                || previous.lifecycle.activation_height >= self.lifecycle.activation_height
+                || !previous
+                    .lifecycle
+                    .is_active_at(self.lifecycle.activation_height.saturating_sub(1))
+            {
+                return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+            }
+        } else if self.lifecycle.governance_revision != 1 {
+            return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+        }
+        Ok(())
+    }
+
+    /// Return the compact current revision without duplicating immutable pool fields.
+    pub(crate) fn current_revision(&self) -> PrivateSettlementPoolGovernanceRevisionV1 {
+        PrivateSettlementPoolGovernanceRevisionV1 {
+            audit_policy_digest: self.audit_policy_digest,
+            audit_key_epoch: self.audit_key_epoch,
+            lifecycle: self.lifecycle,
+            governance_digest: self.governance_digest,
+        }
+    }
+
+    /// Return the exact effective revision at a height, respecting later activations.
+    pub(crate) fn revision_at(
+        &self,
+        height: u64,
+    ) -> Option<PrivateSettlementPoolGovernanceRevisionV1> {
+        if self.validate().is_err() {
+            return None;
+        }
+        for (index, revision) in self.prior_revisions.iter().copied().enumerate() {
+            let next_activation = self
+                .prior_revisions
+                .get(index + 1)
+                .map_or(self.lifecycle.activation_height, |next| {
+                    next.lifecycle.activation_height
+                });
+            if revision.lifecycle.is_active_at(height) && height < next_activation {
+                return Some(revision);
+            }
+        }
+        let current = self.current_revision();
+        current.lifecycle.is_active_at(height).then_some(current)
+    }
+
+    /// Bind one complete restricted policy to the exact governance revision
+    /// effective at `height`.
+    ///
+    /// Unlike [`Self::validate_against_policy_at`], this also accepts a
+    /// superseded revision retained in the public lineage. It is used only for
+    /// authorized retention reads, where the historical sidecar policy must be
+    /// proven against the revision that governed its authority context while a
+    /// separately supplied current policy controls present-day access.
+    fn policy_revision_at(
+        &self,
+        policy: &PrivateSettlementAuditPolicyV1,
+        height: u64,
+    ) -> Result<PrivateSettlementPoolGovernanceRevisionV1, PrivateSettlementStateErrorV1> {
+        policy
+            .validate()
+            .map_err(|_| PrivateSettlementStateErrorV1::PoolGovernance)?;
+        let policy_digest = policy
+            .computed_policy_digest()
+            .map_err(|_| PrivateSettlementStateErrorV1::CanonicalEncoding)?;
+        let revision = self
+            .revision_at(height)
+            .ok_or(PrivateSettlementStateErrorV1::PoolGovernance)?;
+        if self.route.dataspace_id != policy.body.dataspace_id
+            || revision.audit_policy_digest != policy.policy_digest
+            || revision.audit_policy_digest != policy_digest
+            || revision.audit_key_epoch != policy.body.key_epoch
+            || revision.lifecycle.activation_height < policy.body.activation_height
+            || !policy.is_active_at(height)
+        {
+            return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+        }
+        Ok(revision)
+    }
+
+    /// Materialize a replacement while preserving the complete prior lineage.
+    pub(crate) fn with_replacement(
+        &self,
+        mut replacement: Self,
+    ) -> Result<Self, PrivateSettlementStateErrorV1> {
+        self.validate()?;
+        replacement.validate_current_fields()?;
+        if !replacement.prior_revisions.is_empty() {
+            return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+        }
+        replacement.prior_revisions = self.prior_revisions.clone();
+        replacement.prior_revisions.push(self.current_revision());
+        replacement.validate()?;
+        Ok(replacement)
+    }
+
+    /// Compare only the externally supplied current revision fields.
+    pub(crate) fn current_fields_equal(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.route == other.route
+            && self.pool_id == other.pool_id
+            && self.asset_binding_commitment == other.asset_binding_commitment
+            && self.audit_policy_digest == other.audit_policy_digest
+            && self.audit_key_epoch == other.audit_key_epoch
+            && self.lifecycle == other.lifecycle
+            && self.governance_digest == other.governance_digest
     }
 
     /// Validate the public projection against the exact restricted auditor policy.
@@ -177,6 +372,113 @@ impl PrivateSettlementPoolGovernanceProjectionV1 {
         }
         Ok(())
     }
+}
+
+/// Authorize one retained capsule against an exact governance projection.
+pub(super) fn authorize_private_settlement_auditor_view_against_governance_v1(
+    governance: &PrivateSettlementPoolGovernanceProjectionV1,
+    network_id: &iroha_data_model::NetworkId,
+    access_policy: &PrivateSettlementAuditPolicyV1,
+    signing_key: &PublicKey,
+    authoritative_height: u64,
+    view: PrivateSettlementAuditorSidecarViewV1,
+) -> Result<PrivateSettlementAuthenticatedAuditorViewV1, PrivateSettlementSidecarStoreErrorV1> {
+    let unavailable = || PrivateSettlementSidecarStoreErrorV1::Unavailable;
+    if &view.manifest.network_id != network_id
+        || view.statement.network_id != *network_id
+        || governance.route != view.statement.route
+        || governance.pool_id != view.statement.pool_id
+    {
+        return Err(unavailable());
+    }
+    let historical_revision = governance
+        .policy_revision_at(&view.policy, view.manifest.authority_context_height)
+        .map_err(|_| unavailable())?;
+    let access_revision = governance
+        .policy_revision_at(access_policy, authoritative_height)
+        .map_err(|_| unavailable())?;
+    let same_revision = access_revision.lifecycle.governance_revision
+        == historical_revision.lifecycle.governance_revision
+        && access_policy == &view.policy;
+    let successor_revision = access_revision.lifecycle.governance_revision
+        > historical_revision.lifecycle.governance_revision
+        && access_policy.body.policy_id == view.policy.body.policy_id
+        && access_policy.body.revision > view.policy.body.revision
+        && access_policy.body.key_epoch > view.policy.body.key_epoch;
+    if !same_revision && !successor_revision {
+        return Err(unavailable());
+    }
+    let auditor = access_policy
+        .body
+        .auditors
+        .iter()
+        .find(|auditor| &auditor.signing_key == signing_key)
+        .ok_or_else(unavailable)?;
+    if view
+        .authority
+        .validators
+        .iter()
+        .any(|validator| validator.public_key() == signing_key)
+        || !view
+            .policy
+            .body
+            .auditors
+            .iter()
+            .any(|historical| historical.auditor_id == auditor.auditor_id)
+        || !view
+            .audit_capsule
+            .wrapped_deks
+            .iter()
+            .any(|wrapped| wrapped.auditor_id == auditor.auditor_id)
+    {
+        return Err(unavailable());
+    }
+    Ok(PrivateSettlementAuthenticatedAuditorViewV1 {
+        auditor_id: auditor.auditor_id.clone(),
+        access_policy: access_policy.clone(),
+        view,
+    })
+}
+
+/// Fetch one encrypted auditor capsule using only state-bound authorization.
+///
+/// The caller supplies the complete restricted policy as evidence, never as
+/// authority. This operation derives height and network from one committed
+/// [`StateView`], reads exactly one content-addressed sidecar, binds both its
+/// historical policy and the supplied current policy to the same WSV
+/// governance lineage, and maps the authenticated signing key to one stable
+/// auditor identity. Missing and unauthorized records intentionally share the
+/// same unavailable result.
+///
+/// # Errors
+///
+/// Returns unavailable for every authorization denial, or a redacted local
+/// sidecar corruption/backend error.
+pub fn fetch_private_settlement_auditor_view_v1(
+    state: &StateView<'_>,
+    store: &PrivateSettlementFileSidecarStoreV1,
+    digest: Hash,
+    access_policy: &PrivateSettlementAuditPolicyV1,
+    signing_key: &PublicKey,
+) -> Result<PrivateSettlementAuthenticatedAuditorViewV1, PrivateSettlementSidecarStoreErrorV1> {
+    let authoritative_height = u64::try_from(state.block_hashes.len())
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+    let view = store.auditor_material_v1(digest, authoritative_height)?;
+    let key = PrivateSettlementPoolKeyV1::new(view.statement.route, view.statement.pool_id)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+    let governance = state
+        .world
+        .private_settlement_governance
+        .get(&key)
+        .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+    authorize_private_settlement_auditor_view_against_governance_v1(
+        governance,
+        &state.network_id,
+        access_policy,
+        signing_key,
+        authoritative_height,
+        view,
+    )
 }
 
 /// Persisted compact frontier for one explicitly governed settlement pool.
@@ -263,6 +565,25 @@ impl PrivateSettlementPoolStateV1 {
     #[must_use]
     pub(crate) const fn restricted_pool_policy_digest(&self) -> Hash {
         self.restricted_pool_policy_digest
+    }
+
+    /// Rebind this unchanged frontier to an exact replacement governance record.
+    pub(crate) fn rotate_governance_digest(
+        &self,
+        expected_current_digest: Hash,
+        replacement_digest: Hash,
+    ) -> Result<Self, PrivateSettlementStateErrorV1> {
+        self.validate()?;
+        if self.restricted_pool_policy_digest != expected_current_digest
+            || replacement_digest == zero_hash_v1()
+            || replacement_digest == expected_current_digest
+        {
+            return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+        }
+        let mut rotated = self.clone();
+        rotated.restricted_pool_policy_digest = replacement_digest;
+        rotated.validate()?;
+        Ok(rotated)
     }
 
     /// Current root epoch.
@@ -785,7 +1106,11 @@ where
     }
 
     let successor = pool_state.successor(&payload.statement.output_commitments)?;
-    if payload.delta.new_root != successor.root || payload.delta.new_epoch != successor.epoch {
+    if payload.statement.new_root != successor.root
+        || payload.statement.new_epoch != successor.epoch
+        || payload.delta.new_root != successor.root
+        || payload.delta.new_epoch != successor.epoch
+    {
         return Err(PrivateSettlementStateErrorV1::CallerSelectedSuccessor);
     }
     let manifest_digest = manifest
@@ -820,8 +1145,9 @@ where
 #[allow(clippy::too_many_arguments)]
 /// Exercise every committee state gate except the independently tested STARK verifier.
 ///
-/// TODO: Replace this seam with a canonical proof-bearing restricted-sidecar
-/// fixture once that shared fixture is available to core committee tests.
+/// This test-only seam keeps the large state-gate matrix fast and diagnostic;
+/// the real proof-bearing owner bundle and committee path are covered by the
+/// private-settlement proof and sidecar integration tests.
 pub(crate) fn validate_private_settlement_leg_without_proof_for_test_v1(
     manifest: &AtomicPrivateSettlementV1,
     payload: &PrivateSettlementLegPayloadV1,

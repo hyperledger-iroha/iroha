@@ -4,10 +4,10 @@ The hardening helper captures security/privacy evidence before promoting
 Gateway builds.
 
 ## Command
-- `cargo xtask soranet-gateway-hardening --sbom <path> --vuln-report <path> --hsm-policy <path> --sandbox-profile <path> --data-retention-days 30 --log-retention-days 30 --out artifacts/soranet/gateway_hardening`
+- `cargo xtask soranet-gateway-hardening --sbom <path> --vuln-report <path> --signing-policy <path> --sandbox-profile <path> --data-retention-days 30 --log-retention-days 30 --out artifacts/soranet/gateway_hardening`
 
 ## Outputs
-- `gateway_hardening_summary.json` — status per input (SBOM, vuln report, HSM policy, sandbox profile) plus retention signal. Missing inputs show `warn` or `error`.
+- `gateway_hardening_summary.json` — status per input (SBOM, vulnerability report, signing policy, sandbox profile) plus retention signal. Missing inputs show `warn` or `error`.
 - `gateway_hardening_summary.md` — human-readable rollup for governance packets.
 
 ## Acceptance notes

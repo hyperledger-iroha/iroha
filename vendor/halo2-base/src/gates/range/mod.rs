@@ -1,6 +1,4 @@
 use crate::{
-    AssignedValue, Context,
-    QuantumCell::{self, Constant, Existing, Witness},
     gates::flex_gate::{FlexGateConfig, GateInstructions, MAX_PHASE},
     halo2_proofs::{
         circuit::{Layouter, Value},
@@ -10,10 +8,12 @@ use crate::{
         poly::Rotation,
     },
     utils::{
-        BigPrimeField, ScalarField, biguint_to_fe, bit_length, decompose_fe_to_u64_limbs,
-        fe_to_biguint, modulus,
+        biguint_to_fe, bit_length, decompose_fe_to_u64_limbs, fe_to_biguint, modulus,
+        BigPrimeField, ScalarField,
     },
     virtual_region::lookups::LookupAnyManager,
+    AssignedValue, Context,
+    QuantumCell::{self, Constant, Existing, Witness},
 };
 
 use super::flex_gate::{FlexGateConfigParams, GateChip};

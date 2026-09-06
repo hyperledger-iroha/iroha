@@ -46,12 +46,22 @@ release qualified.
    described below remains separate.
    Threshold key rotation is independent of that logical request identifier.
    Its exact-roster certificate compare-and-sets the expected active predecessor,
-   and a global key change in block `H` takes effect at `H + 1`. Consequently an
-   optional Parliament pulse or mandatory NPoS pulse produced from the parent
-   state is verified against the key session active at its own height, not the
-   successor pointer visible after the block's transactions execute. The
-   retired consensus VRF commit/reveal protocol and independent epoch-council
-   records are neither entropy sources nor fallbacks.
+   and a global key change in block `H` takes effect at `H + 1`. The certificate
+   roster fields and `2f + 1` signatures remain bound to the exact authenticated
+   block-`H` authorization roster. For a global-beacon install, the signed
+   canonical public state independently commits the target DKG roster and
+   committee size; the producer at `H + 1` accepts that key only when the target
+   exactly matches the authenticated `HeightContext` roster. This permits a
+   terminal epoch block to install the successor committee's key while a wrong
+   target fails closed, with no stale-key or alternate-entropy fallback.
+   Parliament TLE differs deliberately: its release-share roster is
+   session-fixed and is persisted as the exact certificate roster. Retirement
+   actions carry no public state and remain block-`H`-roster-authorized,
+   compare-and-set operations. Consequently a
+   mandatory requested Parliament or NPoS pulse produced from the parent state
+   is verified against the key session active at its own height, not the
+   successor pointer visible after the block's transactions execute. No
+   alternate entropy source or detached roster record is accepted as a fallback.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
    `BeginInvitationAcceptance` is permissionless and carries only the election
@@ -59,8 +69,10 @@ release qualified.
    window. After that fixed response window, either permissionless
    `SealBodyRoster` derives the nonempty accepted assignments, roster root, and
    body id, or permissionless `FailBodyElectionNoRoster` proves from the reducer
-   and finalized-pulse store that the pulse expired unavailable or the accepted
-   roster is empty. Neither trigger accepts a caller-selected window, failure
+   that the accepted roster is empty. A committed Parliament pulse request is
+   consensus-mandatory: block production remains on that exact slot until the
+   threshold pulse reconstructs, so a proposer cannot turn selective omission
+   into a redraw. Neither trigger accepts a caller-selected window, failure
    reason, assignment list, root, or body id. The
    `RecordAttemptAbsence` lets the same authority declare only its exact seated
    assignment absent. Absence is attempt-local and immutable, does not slash or
@@ -70,7 +82,6 @@ release qualified.
    authenticated absence makes the immutable original-seat public-finding
    quorum mathematically unreachable, Core sets that body to `NoResult` and
    rejects the governance attempt.
-   The independent epoch-council read is not a roster source or fallback.
    Every member of a frozen candidate snapshot retains its citizenship bond
    while its election is `AwaitingPulse`, `Drawing`, or
    `AcceptingInvitations`. `NoRoster` and superseded elections release unseated
@@ -79,6 +90,16 @@ release qualified.
    retains its one candidate until a later generation supersedes it or final
    exhaustion rejects the attempt. Eligibility therefore cannot be withdrawn
    after request intent but before retry, draw, or roster sealing.
+   The complete citizen registry is limited to 65,536 entries and each canonical
+   candidate-snapshot payload to 8 MiB. Crossing either limit fails the
+   transaction; snapshots are never truncated or sampled, and restore enforces
+   the same bounds before rebuilding derived Parliament indexes.
+   Compact casting-snapshot selection is likewise derived, not discovered by
+   scanning historical evidence. A snapshot-skipped ballot index retains only
+   the active hidden-ballot `Registration`, `SurvivorFreeze`, or
+   `TimedCommitment` row and its exact half-open phase window. Replacement,
+   terminalization, and restore update that row from validated attempt state;
+   an in-window row without its exact timed-OVN evidence fails closed.
 5. For a nonbinding body, `EndorsePublicFinding` lets each nonexcluded seated
    authority endorse exactly one root of the public evidence, deliberation, and
    dissent record. Core automatically finalizes only when one identical root
@@ -92,21 +113,25 @@ release qualified.
    narrowly approved result requires one, must use the mandatory private
    zero-knowledge timed-OVN ballot. A public finding is not a formal ballot and
    cannot replace a required private jury result. Hidden-ballot bodies and their
-   eligible candidate snapshots require at least two members. Before a narrow
+   eligible candidate snapshots require at least three members, the canonical
+   V1 exact-tally anonymity floor. Before a narrow
    Policy result is committed, Core removes every sealed Policy Jury member from
-   the current eligible-citizen snapshot. Fewer than two remaining candidates
+   the current eligible-citizen snapshot. Fewer than three remaining candidates
    terminalize the verified opening as
    `ConfirmationJuryCapacityUnavailable`; the Policy binding and unfillable
-   Confirmation requirement are not committed. With at least two, that same
-   finalization transaction freezes and registers the exact disjoint snapshot,
-   configured target, current request height, and deterministic future pulse
-   slot. The sequence-zero request height must equal the Policy result height,
-   and restore rejects a missing or differently timed initial request.
+   Confirmation requirement are not committed. At the proposal-wide redraw
+   ceiling, at least three candidates instead terminalize the same verified
+   opening as `RandomnessRedrawBudgetExhausted` before committing either the
+   Policy binding or a Confirmation draw. Otherwise, that same finalization
+   transaction freezes and registers the exact disjoint snapshot, configured
+   target, current request height, and deterministic future pulse slot. The
+   sequence-zero request height must equal the Policy result height, and restore
+   rejects a missing or differently timed initial request.
    Eligibility cannot race a separate initial Confirmation request. If
-   later invitation responses leave only one accepted hidden-ballot seat, Core
-   records an objective insufficient-roster election failure and follows the
-   bounded fresh-sortition retry path rather than sealing a cryptographically
-   unusable body.
+   later invitation responses leave fewer than three accepted hidden-ballot
+   seats, Core records an objective insufficient-roster election failure and
+   follows the bounded fresh-sortition retry path rather than sealing a
+   cryptographically unusable body.
    After each endorsement, Core derives `eligible = original roster -
    authenticated absences` and `remaining = eligible - immutable
    endorsements`. If the strongest existing root plus every remaining seat is
@@ -130,30 +155,37 @@ release qualified.
    the ordered registration corpus, survivor subset, and roots from those
    accepted records; a manager cannot submit replacement registration corpora
    or survivor subsets. The survivor set is immutable before ballots are
-   accepted. The complete survivor-ordered masked-ballot batch remains a
-   manager-authorized freeze payload because verifying as many as 1,000
-   attacker-controlled one-hot proofs is not a permissionless checkpoint. Core
-   performs that authorization before cryptographic work, then requires one
-   proof-valid record for every frozen survivor, so the manager cannot forge,
-   omit, reorder, or alter one member's ballot. Payload-minimal close, survivor
-   freeze, release, failure, and finalization triggers remain permissionless.
-   Before close or freeze replays a registration or ballot corpus, Core checks
+   accepted. A freeze with fewer than three survivors is rejected atomically;
+   no survivor, ballot, opening, or exact tally is persisted, and the ordinary
+   permissionless survivor-deadline transition then records deterministic
+   `NoResult` with the existing retry semantics. The complete accepted corpus
+   and every public tally are independently required to meet the same floor.
+   `FreezeTimedOvnCorpus` is a permissionless exact-next append. Core
+   derives the committed survivor offset and checks the active ballot, exact
+   phase and containing-height window, body and predecessor bindings, nonempty
+   chunk width, canonical record widths, capacity, and every one-hot proof
+   before advancing the replay-checkable prefix. A relayer therefore cannot
+   forge, omit, overlap, reorder, or alter one member's ballot, and only the
+   terminal prefix seals the complete survivor-ordered corpus. Payload-minimal
+   close, survivor freeze, release, failure, and finalization triggers remain
+   permissionless.
+   Before registration close, survivor freeze, or a corpus append, Core checks
    the reducer-owned active ballot, exact phase, body binding, predecessor
    checkpoint, and containing height using only bounded scalar state. Wrong-
    height and replayed checkpoint traffic therefore fails before proof work;
-   an exact-height transition still performs the complete replay. Aggregate
-   finalization similarly verifies the fixed-size public TLE/session/release
-   binding and final threshold signature before either corpus is replayed, then
-   retains the full replay and second signature verification before mutation.
-   Core replays the public aggregate transcript and persists no secret shares or
+   an exact-height append still verifies every new record. Aggregate
+   finalization first verifies the fixed-size public TLE/session/release binding
+   and final threshold signature, then verifies the committed public aggregate
+   transcript before mutation. Snapshot restore replays the complete raw
+   evidence instead of trusting the cache. Core persists no secret shares or
    individual openings. A finalized release pulse and verified threshold-BLS
    signature open only the aggregate Aye/Nay/Abstain tally.
 8. If a phase deadline is missed, Core derives the eligible `NoResult` reason
    and evidence commitment from persisted state and the containing block
-   height. `ReleasePulseUnavailable` is available only after the committed
-   release height, no later than the opening deadline, and when the exact
-   network/session/height pulse is absent from authoritative finalized-pulse
-   history. `OpeningDeadlineExpired` is available after the immutable opening
+   height. `ReleasePulseUnavailable` remains a fail-closed validation class for
+   malformed or restored state, but cannot be reached by a fresh-genesis chain:
+   the committed release-pulse slot is consensus-mandatory.
+   `OpeningDeadlineExpired` is available after the immutable opening
    deadline whether the ballot is still awaiting release or is opening. A
    finalized pulse therefore cannot be falsely
    classified as unavailable, and neither release consumption nor a result can
@@ -166,7 +198,8 @@ release qualified.
    manual-opening, public-ballot, or post-freeze recovery fallback.
    Committed audit events classify sortition retry exhaustion, both
    public-finding outcomes, the five phase/release private-ballot failures, and
-   insufficient fresh Confirmation capacity with the closed nine-variant
+   insufficient fresh Confirmation capacity or proposal-wide redraw exhaustion
+   with the closed ten-variant
    `ParliamentNoResultKindV1`; callers cannot supply that
    classification. `SortitionRetriesExhausted` is emitted when the final
    permitted body-election sequence fails before a body instance exists.
@@ -187,6 +220,22 @@ release qualified.
     transition. Core emits the terminal result as a separate canonical
     `ParliamentAutomaticExecutionOutcomeV1` audit payload with a
     domain-separated digest; that payload is not submit-able.
+
+An emergency contract hold is deliberately sticky after its exclusive expiry:
+expiry restores execution but does not erase the incident record or authorize a
+second hold. The append-only `ContractLifecycleGovernanceActionV1` variant
+`CompleteEmergencyHoldRetrospective` (Norito index 5) is the sole clear path.
+Its proposal binds the retained hold's proposal-content id, governance-attempt
+id, and incident digest, plus a non-zero retrospective finding root. A bonded
+citizen may submit that proposal only once the exclusive expiry height has been
+reached. Automatic certificate enactment repeats every binding and expiry
+check against the compare-and-set lifecycle head, clears only the matching
+hold, advances the lifecycle revision, and emits the prior hold, finding root,
+revision, and complete post-state. A zero finding, an early request, any
+substituted hold coordinate, a missing hold, or a replay fails closed. No direct
+instruction, timer sweep, owner shortcut, or expired-record fallback can clear
+the hold; a later independent emergency hold becomes possible only after the
+certified retrospective is committed.
 
 Validation-fee policy and payout-lifecycle proposals additionally bind their
 canonical `proposal_operator` into the proposal fingerprint. Their protected
@@ -213,13 +262,34 @@ Michalas's July 2026 SACMAT construction obtains coercion resistance through a
 specific anamorphic-encryption voting design. Timed OVN neither implements nor
 analyzes that construction, so its publication does not support a coercion-
 resistance claim for Parliament.
+The August 2026 `somewhat deniable voting` construction instead assumes a
+trusted teller and deliberately trades away part of individual verifiability
+to obtain its stated deniability boundary. The 2026 journal version of Yin et
+al.'s scalable blockchain construction likewise proves its claims for a
+different dummy-voting and liquid-democracy protocol. Timed OVN implements
+neither construction nor threat model, so those publications strengthen the
+requirement for a protocol-specific proof rather than extending their claims to
+Parliament.
+
+“Aggregate-only” is not “winner-only” and does not make participation
+unlinkable. V1 publishes the exact Aye/Nay/Abstain counts and the accepted
+corpus size, while the per-ballot participant hash is deterministically derived
+from the public account and ballot attempt. Small panels and auxiliary knowledge
+can therefore reveal individual choices. The V1 floor of three eliminates the
+reachable two-survivor exact-tally disclosure, but is not a general anonymity
+proof. Until a separately reviewed proof
+reveals only quorum, outcome, and the narrow-result predicate, release material
+must describe V1 as ballot-value confidentiality with an exact public tally and
+linkable participation, not as anonymous voting. Winner-only and cast-or-audit
+constructions published in 2026 are research inputs rather than compatible
+replacements for the current certificate and proof statement.
 
 The threshold-release profile implements the three-polynomial Das--Ren design
 with a proof on every non-key-unique partial. V1 fixes `n = 3f + 1`, threshold
 `f + 1`, and at most `f` distinct signing-share exposures over an unrefreshed
 key session. It has no proactive refresh; a cumulative exposure beyond that
 budget requires a fresh DKG and purpose-distinct session. Zeroizing Rust buffers
-are defense in depth, not a compiler, OS, HSM, or hardware erasure guarantee.
+are defense in depth, not a compiler, OS, or hardware erasure guarantee.
 The cited Das--Ren result is in the random-oracle model under DDH and co-CDH;
 code conformance and replay tests are not a proof that an implementation meets
 that theorem.
@@ -227,6 +297,20 @@ The ePrint 2025/943 key-uniqueness impossibility result does not directly cover
 this non-key-unique profile, but it makes the per-partial representation proof
 and a precise corruption model mandatory. “Adaptive” in a type name is not a
 generic standard-assumption security claim.
+
+The chain cannot observe a share compromise. V1 therefore persists separate
+consensus lifecycle metadata beside (and outside) the cryptographic transcript:
+an activation height, immutable expiry height, rotation-shortened inclusive
+selection deadline, committed fresh-ballot counter, and immutable use ceiling.
+An install or rotation committed at `H` leaves the predecessor selectable
+through `H` and makes the successor selectable at `H + 1`. Fresh ballot
+registration fails closed before activation, after expiry/cutover, and at the
+use ceiling; restart recounts committed ballot bindings and rejects mismatched
+counters or session/roster/lifecycle bindings. Already committed ballots retain
+their historical public session and custody requirement through their own
+inclusive opening deadline. These bounds limit exposure but cannot detect a
+compromise; proactive or silent refresh remains a separately specified protocol
+revision with explicit secure-erasure assumptions.
 
 RFC 9380 standardizes the hash-to-curve building block used by the fixed
 domain separators. It does not standardize the Das--Ren threshold composition,
@@ -265,6 +349,11 @@ Parliament instead freezes one network/session/height pulse slot before drawing,
 rejects an unavailable classification once the authoritative slot exists, and
 bounds retries. Release qualification must still exercise selective withholding
 and repeated-retry bias; single-round uniformity is not sufficient evidence.
+Independent per-stage retry caps likewise do not bound the conditional advantage
+of nested governance, roster, and fresh-ballot redraws. A release candidate must
+account for fresh entropy consumption with one proposal-level budget, keep
+idempotent transport retries outside that budget, and quantify the resulting
+capture bound under selective aborts.
 
 Ballot presentation is a separate governance-security boundary. A July 2026
 observational DAO study reports associations between voting-power share and an
@@ -287,6 +376,14 @@ domain; every partial and aggregate is independently verified before use. This
 does not claim an ElectionGuard-compatible voter-verification ceremony or close
 the endpoint and coercion boundaries above.
 
+Nor does an `AccountId` establish one-human-one-vote. Unless a separately
+governed uniqueness-assurance profile is bound into the eligibility snapshot
+and certificate, the accurate claim is equal weight per eligible account or
+pseudonym. The current formal model treats cryptographic verification as a
+trusted input and is not a composed proof of eligibility, beacon bias,
+adaptive corruption, abort/retry behavior, ballot secrecy, finality, and
+enactment.
+
 The BLS12-381 threshold release, pairing-based timed-OVN ballot, and classical
 beacon are not post-quantum. Versioned sessions and domain-separated algorithm
 identities provide a migration boundary, but using ML-DSA elsewhere in Iroha
@@ -295,17 +392,27 @@ separately specified, reviewed, consensus-enacted protocol revision and new
 fixtures; current lattice DKG/beacon proposals are research inputs, not
 standards or drop-in implementations.
 
-Research boundary reviewed through 2026-08-28:
+Research boundary reviewed through 2026-08-30:
 
 - Das and Ren, [*Adaptively Secure BLS Threshold Signatures from DDH and
   co-CDH*](https://eprint.iacr.org/2023/1553).
-- Ciampi, Crites, Komlo, and Maller, [*On the Adaptive Security of Threshold
-  Signatures*](https://eprint.iacr.org/2025/943).
-- Rønne, Finogina, and Herranz, [*Expanding the Toolbox: Coercion and
+- Ciampi, Crites, Komlo, and Maller, [*On the Adaptive Security of Key-Unique
+  Threshold Signatures*](https://eprint.iacr.org/2025/943).
+- Finogina, Herranz, and Rønne, [*Expanding the Toolbox: Coercion and
   Vote-Selling at Vote-Casting Revisited*](https://eprint.iacr.org/2024/1167).
 - Michalas, [*Coercion-Resistant Voting via Anamorphic
   Encryption*](https://doi.org/10.1145/3750555.3811888), ACM SACMAT 2026,
   published 8 July 2026.
+- Jia, Shi, Ye, Huang, and Peng, [*Somewhat Deniable Voting:
+  Coercion-Resistant Electronic Voting Scheme with Privacy Preservation
+  Property*](https://doi.org/10.32604/cmc.2026.084123), *Computers, Materials
+  & Continua* 89(1), published 13 August 2026. Its trusted-teller and reduced
+  individual-verifiability boundary is not the Timed OVN threat model.
+- Yin, Zhang, Nastenko, Oliynykov, and Ren, [*A Scalable Coercion-Resistant
+  Voting Scheme for Blockchain Decision-Making*](https://doi.org/10.1109/TDSC.2026.3651473),
+  *IEEE Transactions on Dependable and Secure Computing*, 2026. Its
+  construction and proof do not apply to Timed OVN without implementing and
+  analyzing that protocol.
 - IRTF, [RFC 9380: Hashing to Elliptic
   Curves](https://www.rfc-editor.org/rfc/rfc9380).
 - CFRG, [*BLS Signatures*, draft-irtf-cfrg-bls-signature-07
@@ -324,10 +431,43 @@ Research boundary reviewed through 2026-08-28:
 - Glaeser, Seres, Zhu, and Bonneau,
   [*Cicada: A Framework for Private Non-Interactive On-Chain Auctions and
   Voting*](https://eprint.iacr.org/2023/1473).
-- Shang and Chen, [*Economic Security of VDF-Based Randomness
-  Beacons*](https://arxiv.org/abs/2604.04744), 6 April 2026.
+- Shang and Chen, [*Economic Security of VDF-Based Randomness Beacons: Models,
+  Thresholds, and Design Guidelines*](https://arxiv.org/abs/2604.04744), 6
+  April 2026.
 - Gaži, Quader, and Russell, [*Taming Iterative Grinding Attacks on
   Blockchain Beacons*](https://eprint.iacr.org/2025/1974), ASIACRYPT 2025.
+- [*SoK: Distributed Randomness Beacons*](https://eprint.iacr.org/2023/728),
+  IEEE Symposium on Security and Privacy 2023.
+- [*Enforcing Winner-Only Disclosure: Verifiable Tally Hiding for Weighted DAO
+  Governance*](https://eprint.iacr.org/2026/1773),
+  revised 26 August 2026. Its honest-trustee assumptions do not establish the
+  malicious sub-threshold privacy required here.
+- [*PQKryvos: Post-Quantum Secure E-Voting With Flexible Ballot Formats and
+  Public Tally-Hiding*](https://eprint.iacr.org/2026/1004), PoPETs 2026.
+- [*Audit-or-Cast: Enforcing Honest Elections with Privacy-Preserving Public
+  Verification*](https://arxiv.org/abs/2604.18163), revised 21 April 2026.
+- [*Threshold Receipt-Free Voting with Server-Side Vote
+  Validation*](https://eprint.iacr.org/2025/1321),
+  E-Vote-ID 2025.
+- [*FiltrumVote: Scalable, Verifiable, and Coercion-Resistant Internet
+  Voting*](https://eprint.iacr.org/2026/1435), July 2026.
+- [*On the Necessity of Pre-agreed Secrets for Thwarting Last-minute Coercion:
+  Vulnerabilities and Lessons From the Loki E-voting
+  Protocol*](https://arxiv.org/abs/2604.00188),
+  CSF 2026 extended version.
+- [*Proactive Refresh for Accountable Threshold Signatures*](https://eprint.iacr.org/2022/1656).
+- [*Quadratic Asynchronous DKG from Plain Setup*](https://eprint.iacr.org/2026/1159),
+  June 2026.
+- [*Anchor-DKG: Distributed Key Generation with Repeating
+  Parties*](https://eprint.iacr.org/2026/1570), CCS 2026.
+- [*Practical Silent Threshold Signatures and Silent Threshold Encryption for
+  Dynamic Committees*](https://eprint.iacr.org/2026/1820),
+  CCS 2026.
+- [*Beyond Blockchain Ballots: UC-Secure Layer-2 Voting and
+  Governance*](https://eprint.iacr.org/2026/1521), CSF 2026.
+- [*Proof-of-Uniqueness: Sybil-Resistant Privacy-Preserving Decentralized
+  Identity through Threshold-OPRF and zk-SNARK
+  Registry*](https://eprint.iacr.org/2026/1725), August 2026.
 - Balietti, Saggese, and Strohmaier, [*Voting Biases in Decentralized
   Autonomous Organization (DAO) Governance*](https://arxiv.org/abs/2607.09435),
   10 July 2026.
@@ -336,8 +476,13 @@ Research boundary reviewed through 2026-08-28:
 - Cortier, Debant, and Gaudry, [*Breaking Verifiability and Vote
   Privacy in CHVote*](https://eprint.iacr.org/2025/080), ESORICS 2025.
 - NIST, [*Considerations for Achieving Crypto Agility: Strategies and
-  Practices*, CSWP 39 update
-  1](https://csrc.nist.gov/pubs/cswp/39/upd1/final), 29 June 2026.
+  Practices*, CSWP
+  39upd1](https://doi.org/10.6028/NIST.CSWP.39-upd1), 29 June 2026.
+
+As of 30 August 2026, the NIST Threshold Call remains in its three-round
+preview phase; package submissions are expected in November 2026. The BBDL
+tBLS document above is a preview writeup, not a completed package, NIST
+standard, or approval of Parliament's construction.
 
 # Standalone referendum boundary
 
@@ -345,20 +490,66 @@ The repository still contains a standalone referendum subsystem with public
 PLAIN and proof-backed ZK ballot routes, conviction locks, and tally reads.
 Those routes are not Parliament body ballots, cannot stand in for a timed-OVN
 jury result, and are not inputs to `GovernanceCertificateV1`. Independent epoch
-council records likewise remain readable but are not consulted by the attempt
-reducer. The first-release public contract contains no proposal approval
+council records and detached roster state do not exist in the first-release
+schema. The first-release public contract contains no proposal approval
 snapshot, equal Parliament stage ballot, caller-selected referendum window or
 mode, client finalization, or client enactment path.
 
+An exact 32-byte typed proposal fingerprint is reserved across this boundary in
+lower-, upper-, or mixed-case hexadecimal form, with or without an exact `0x`
+or `0X` prefix. Standalone ballot/state admission, typed-proposal admission, and
+snapshot restoration all reject such cross-subsystem aliases. Standalone
+closure emits `ReferendumDecided` with the original selector and exact tally;
+it never emits a proposal lifecycle event, and the Torii governance stream
+therefore publishes only referendum/lock/tally updates for that decision.
+
+PLAIN admission accepts only direction `0` (Aye), `1` (Nay), or `2`
+(Abstain), and rejects a replacement before mutation if its exact quadratic
+category tally or total turnout would exceed `u128`. Both conviction parameters
+must be nonzero, and the retained voter-lock corpus is capped at 1,000 so the
+exact scan is consensus-bounded. Restore rechecks the same PLAIN record shape
+and loaded conviction policy before execution resumes without applying the
+integer tally domain to fractional ZK bonds. Minimum
+turnout includes abstentions, while the approval fraction is
+`Aye / (Aye + Nay)`; an empty decisive tally rejects. Threshold products use an
+exact 192-bit comparison rather than saturation. For standalone ZK voting,
+closure without a finalized tally durably records `Closed` and emits no
+decision; a later verified finalization emits that deferred
+`ReferendumDecided` exactly once, while finalization before closure leaves the
+decision to the one-shot close transition.
+
+`CastPlainBallot` and `CastZkBallot` must be the sole direct instruction in a
+signed transaction; contracts, triggers, IVM programs, and mixed instruction
+lists receive no ballot entrypoint binding. A penalized ballot still returns
+its normal transaction error. If the rejected overlay prevalidated a nonzero slash,
+the block rejection corridor replays that exact amount in a fresh state
+transaction before rejected-fee settlement, committing `LockSlashed` and
+`BallotRejected` while emitting no `BallotAccepted`. A later fee failure cannot
+roll that penalty back. Rejections for which no slash was applied persist no
+penalty. Rejected ZK verification attempts still consume the block's
+confidential operation, verifier-call, proof-byte, confidential-gas, and
+ordinary gas budgets. The same exactly-once block accounting applies to
+ordinary prepared overlays, trigger work, detached fallback, and early
+mixed-batch rejection. Same-block trigger lifecycle changes execute in
+canonical order, so a newly registered trigger can affect a later transaction
+and a failing trigger rolls that transaction and its trigger effects back
+atomically. Every sealed reveal commits its outer carrier; only a reveal
+authenticated against pre-carrier pending-commitment state also commits the
+exact enclosed signed replay alias. Autonomous merge persists that decision in
+its certified execution transcript, and recovery does not reclassify it from
+post-state. Public transaction lookups accept either committed identity and
+project the canonical outer carrier.
+
 # Outstanding release gates
 
-- Settle the merge candidate and pass focused data-model/Core/Torii tests,
-  workspace tests, strict Clippy, formatting, and the source/model contract.
+- Re-run the already-green focused data-model/Core/Torii and source/model gates
+  from one clean immutable candidate, then pass workspace tests, strict Clippy,
+  formatting, and the remaining release matrix with archived provenance.
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
   peers, including missing/invalid shares, restart, idempotent retransmission,
-  mandatory NPoS boundary slots, optional Parliament demand slots, and key
+  mandatory NPoS boundary slots, mandatory Parliament demand slots, and key
   rotation.
 - Qualify canonical carrier publication and retirement on every nonproducer
   follower. Cover an `author = false` live follower retiring a losing carrier
@@ -371,8 +562,11 @@ mode, client finalization, or client enactment path.
   partial request, independently verifying multi-session custody/coordinator,
   canonical combine, ordinary `FinalizeOpenedBallot` submission tooling, and
   the bounded public broker projection/projected-signer validation boundary
-  against a genuine authenticated broker/HSM provider. The public projection is
-  not evidence of committed-state origin. Qualify the implemented consensus
+  against a qualified deployment-selected signer through the authenticated
+  external broker. Provider implementation details are outside the protocol and
+  are not compatibility modes. No provider permits a
+  plaintext ballot or manual-release fallback. The public projection is not
+  evidence of committed-state origin. Qualify the implemented consensus
   active-session cutover, immutable per-session ordered-roster persistence, and
   the custody rule that forbids retirement while a session remains selectable
   or any committed ballot deadline references it. Startup now scans the active
@@ -381,12 +575,12 @@ mode, client finalization, or client enactment path.
   return an exact non-signing key-session/transcript/seat capability
   attestation. The external broker path requalifies around that lookup and
   poisons substituted results. This is point-in-time readiness evidence, not a
-  proof of future availability, HSM provenance, or erasure. Demonstrate the
-  complete behavior with daemon-scoped broker admission,
-  old-share retention/zeroization,
+  proof of future availability or secure erasure. Demonstrate the complete
+  behavior with the selected provider, including daemon-scoped broker admission
+  when broker mode is used, old-share retention/zeroization,
   restart recovery, peer authentication/rate limits, and threshold collection
   on at least four peers. The source seam is not yet an operationally automatic
-  release service and does not prove secure erasure or HSM provisioning.
+  release service and does not prove secure erasure.
 - Qualify the Core-authorized pre-seal timed-OVN casting context and its
   four-mebibyte, header-framed canonical Norito archive. The archive validator
   replays the public TLE transcript, exact timed-OVN session, registration
@@ -399,36 +593,45 @@ mode, client finalization, or client enactment path.
   complete platform-keystore wrappers and archive refresh, and prove that no
   seed, registration secret, dropout set, masked ballot, share, or opening is
   returned by the read surface.
-- The feature-isolated four-validator corridor exercises two independently
-  validated global-beacon DKG transcripts. It installs the predecessor, applies
+- The feature-isolated four-validator target contains a corridor for two
+  independently validated global-beacon DKG transcripts. It installs the
+  predecessor, applies
   a `2f + 1` compare-and-set rotation in an epoch-boundary block, verifies that
   the same block's pre-boundary pulse still uses the parent session, and verifies
   that the next pre-boundary pulse and epoch seed use the activated successor.
   The same corridor covers proof-valid timed release, exact-height enactment,
-  and normal restart/restore; stale-head supersession and rollback-isolated
-  execution failure still require four-validator evidence.
-- The four-validator public-finding branch covers authority-bound self-absence,
+  and normal restart/restore. The target also contains stale-head supersession
+  and rollback-isolated execution-failure corridors; all require fresh
+  same-source four-validator evidence before promotion.
+- The four-validator public-finding target contains authority-bound self-absence,
   early impossible-quorum `NoResult`, a fresh governance retry, immutable
   competing roots, post-deadline endorsement rejection, permissionless
   `PublicFindingDeadlineExpired`, a second retry, four-peer state equality, and
   normal validator restore. Progress still assumes an eligible transaction
   eventually submits the deterministic deadline trigger.
-- Complete Torii, MCP, CLI, OpenAPI, Rust/JavaScript/Kotlin/Java/Swift SDK, and
-  shared-fixture coverage for the typed attempt and certificate surface; verify
-  the retired equal Parliament ballot stays absent and remove remaining
-  proposal-backed referendum surfaces.
-- Qualify the aggregate-only transition/failure counters and committed
-  status/stage gauges across restart and four-peer execution, then add reviewed
-  stuck-attempt/deadline alarms. Keep identifiers, roots, registrations,
+- Candidate-qualify the implemented Torii, MCP, CLI, OpenAPI,
+  Rust/JavaScript/Kotlin/Java/Swift SDK, and shared-fixture coverage for the
+  typed attempt and certificate surface. Regenerate signed OpenAPI provenance,
+  execute candidate-native SDK artifacts, verify canonical ballot rendering
+  across clients, and keep the already-retired equal Parliament ballot and
+  proposal-backed finalize/enact surfaces absent.
+- Candidate-qualify the implemented aggregate-only transition/failure counters,
+  committed status/stage gauges, and reviewed stuck-attempt/deadline alarms
+  across restart and four-peer execution. Keep identifiers, roots, registrations,
   ballots, shares, individual openings, and account labels out of metrics.
-- Add focused and four-peer evidence for automatic enactment, stale-head
-  supersession, and rollback-isolated `ExecutionFailed` recording, including
-  restart validation and rejection of every signed terminal-outcome draft.
+- Candidate-qualify the existing focused automatic-enactment, stale-head
+  supersession, and rollback-isolated `ExecutionFailed` coverage on four peers,
+  including restart validation and rejection of every signed terminal-outcome
+  draft.
 - Obtain an independent review of the exact timed-OVN arithmetic,
   Fiat--Shamir statements, constant-time/side-channel boundary, threshold-BLS
   corruption assumptions, implementation, build artifacts, and target matrix.
   The official publication manifest validator exists, but no external audit
   report or evidence archive is embedded or claimed by this repository.
-- Run the bounded model as counterexample search and archive its same-source
-  output. It is complementary evidence, not a replacement for proof review,
+- Run the bounded model as counterexample search, exhaustively check the
+  configured state space with pinned TLC 2.19, and archive both same-source
+  outputs. These are complementary evidence, not replacements for proof review,
   cryptographic test vectors, implementation tests, or multi-peer execution.
+- Complete the candidate-native ABI-23 Swift and Android replay, capacity/rekey/
+  validation-fee restore scenarios, same-source benchmark archive, strict TLAPS
+  and pinned-Verus gates, chaos/soak qualification, and external release signing.

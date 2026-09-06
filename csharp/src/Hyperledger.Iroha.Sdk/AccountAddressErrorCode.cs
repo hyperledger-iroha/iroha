@@ -19,5 +19,4 @@ public enum AccountAddressErrorCode
     UnknownControllerTag,
     UnknownCurve,
     UnsupportedAddressFormat,
-    UnsupportedAlgorithm,
 }

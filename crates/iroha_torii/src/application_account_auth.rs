@@ -5,6 +5,12 @@ macro_rules! authenticated_application_query {
         catalog_post($handler).authenticated_canonical_account_body($app_state, $max_body_bytes)
     };
 }
+macro_rules! optional_dataspace_application_query {
+    ($handler:expr, $app_state:expr, $max_body_bytes:expr) => {
+        catalog_post($handler)
+            .optionally_authenticated_canonical_account_body($app_state, $max_body_bytes)
+    };
+}
 macro_rules! define_authenticated_application_query_mount {
     ($name:ident, $route:ident, $handler:ident) => {
         #[cfg(feature = "app_api")]
@@ -16,31 +22,52 @@ macro_rules! define_authenticated_application_query_mount {
         }
     };
 }
-define_authenticated_application_query_mount!(
+macro_rules! define_optional_dataspace_application_query_mount {
+    ($name:ident, $route:ident, $handler:ident) => {
+        #[cfg(feature = "app_api")]
+        fn $name(builder: &mut RouterBuilder, app_state: SharedAppState, max_body_bytes: usize) {
+            builder.route(
+                &route_catalog::application_api::$route,
+                optional_dataspace_application_query!($handler, app_state, max_body_bytes),
+            );
+        }
+    };
+}
+define_optional_dataspace_application_query_mount!(
     mount_account_transactions_query,
     ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
     handler_account_transactions_query
 );
-define_authenticated_application_query_mount!(
+define_optional_dataspace_application_query_mount!(
     mount_account_assets_query,
     ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
     handler_account_assets_query
 );
-define_authenticated_application_query_mount!(
+define_optional_dataspace_application_query_mount!(
     mount_domains_query,
     DOMAINS_QUERY_POST,
     handler_domains_query
 );
-define_authenticated_application_query_mount!(
+define_optional_dataspace_application_query_mount!(
     mount_accounts_query,
     ACCOUNTS_QUERY_POST,
     handler_accounts_query
 );
-define_authenticated_application_query_mount!(
-    mount_transactions_query,
-    TRANSACTIONS_QUERY_POST,
-    handler_transactions_query
-);
+#[cfg(feature = "app_api")]
+fn mount_transactions_query(
+    builder: &mut RouterBuilder,
+    app_state: SharedAppState,
+    max_body_bytes: usize,
+) {
+    builder.route(
+        &route_catalog::application_api::TRANSACTIONS_QUERY_POST,
+        optional_dataspace_application_query!(
+            handler_transactions_query,
+            app_state,
+            max_body_bytes
+        ),
+    );
+}
 define_authenticated_application_query_mount!(
     mount_visible_transactions_query,
     TRANSACTIONS_VISIBLE_QUERY_POST,
@@ -51,17 +78,17 @@ define_authenticated_application_query_mount!(
     REPO_AGREEMENTS_QUERY_POST,
     handler_repo_agreements_query
 );
-define_authenticated_application_query_mount!(
+define_optional_dataspace_application_query_mount!(
     mount_asset_definitions_query,
     ASSETS_DEFINITIONS_QUERY_POST,
     handler_assets_definitions_query
 );
-define_authenticated_application_query_mount!(
+define_optional_dataspace_application_query_mount!(
     mount_nfts_query,
     NFTS_QUERY_POST,
     handler_nfts_query
 );
-define_authenticated_application_query_mount!(
+define_optional_dataspace_application_query_mount!(
     mount_rwas_query,
     RWAS_QUERY_POST,
     handler_rwas_query
@@ -77,15 +104,15 @@ fn mount_signed_proof_query(builder: &mut RouterBuilder) {
 #[cfg(feature = "app_api")]
 macro_rules! mount_authenticated_asset_holder_routes {
     ($torii:expr, $builder:expr) => {{
-        let max_body_bytes = usize::try_from($torii.transaction_max_content_len.get())
-            .expect("transaction content limit should fit usize");
+        let max_body_bytes = $torii.transaction_max_content_len;
         $builder.route(
             &route_catalog::telemetry::ASSET_HOLDERS,
-            catalog_get(handler_asset_holders),
+            catalog_get(handler_asset_holders)
+                .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature),
         );
         $builder.route(
             &route_catalog::telemetry::ASSET_HOLDERS_QUERY,
-            authenticated_application_query!(
+            optional_dataspace_application_query!(
                 handler_asset_holders_query,
                 $builder.state().clone(),
                 max_body_bytes
@@ -192,9 +219,9 @@ async fn handler_authenticated_identifier_claim_receipt(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod application_account_auth_tests {
+    use super::{Error, require_runtime_governance_account};
     use iroha_data_model::ValidationFail;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use super::{Error, require_runtime_governance_account};
     #[test]
     fn application_authority_binding_rejects_substitution() {
         require_runtime_governance_account(

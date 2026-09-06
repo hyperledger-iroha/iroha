@@ -58,6 +58,7 @@ exclude = [
 ]
 include = [
   "src/iroha_python/examples/connect_app_metadata.json",
+  "src/iroha_python/py.typed",
 ]
 
 [tool.ruff]

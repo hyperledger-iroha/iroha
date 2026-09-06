@@ -145,15 +145,20 @@ The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_has
 
 ## Security and governance
 
-- Manifest registration, bytecode registration, activation, deactivation, and
-  bytecode removal require the signing authority to hold
-  `CanRegisterSmartContractCode`. The sole first-release bootstrap exception is
-  an absent transaction authority whose transaction begins with the exact
-  ordered `Register<Account>(self)`,
+- Manifest registration, bytecode upload, and unreferenced bytecode removal
+  require `CanRegisterSmartContractCode`. The sole first-release bootstrap
+  exception is an absent transaction authority whose transaction begins with
+  the exact ordered `Register<Account>(self)`,
   `Grant<CanRegisterSmartContractCode>(self)`, then native upload (or manifest
-  registration when matching code is already stored) prefix.
-  Both executor paths reject that self-grant for a pre-existing account and
-  reject changed destinations, permission payloads, or instruction order.
+  registration when matching code is already stored) prefix. Both executor
+  paths reject that self-grant for a pre-existing account and reject changed
+  destinations, permission payloads, or instruction order.
+- Artifact registration does not confer address control. Direct deployment
+  creates an account-owned revisioned lifecycle and is rejected for protected
+  namespaces. Raw activation and deactivation require that current account
+  owner plus the exact `expected_revision`; Parliament-owned or delegated
+  lifecycle changes use the certified governance corridor. Raw activation
+  cannot create an address.
 - `ContractAddress` remains immutable per deployment, while `ContractAlias` is
   the stable public handle. Deployment and rotation use locally signed native
   instructions; governance-controlled namespace binding remains a consensus

@@ -65,6 +65,8 @@ macro_rules! impl_state_json_via_norito_bytes {
 }
 /// Metadata entry key for a Domain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::DomainMetadataKey")]
 pub struct DomainMetadataKey {
     /// Domain identifier this metadata entry belongs to.
     pub id: DomainId,
@@ -73,6 +75,8 @@ pub struct DomainMetadataKey {
 }
 /// Metadata entry key for an Account.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::AccountMetadataKey")]
 pub struct AccountMetadataKey {
     /// Account identifier owning the metadata entry.
     pub id: AccountId,
@@ -81,6 +85,8 @@ pub struct AccountMetadataKey {
 }
 /// Metadata entry key for an `AssetDefinition`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::AssetDefinitionMetadataKey")]
 pub struct AssetDefinitionMetadataKey {
     /// Asset definition identifier associated with the metadata entry.
     pub id: AssetDefinitionId,
@@ -89,6 +95,8 @@ pub struct AssetDefinitionMetadataKey {
 }
 /// Metadata entry key for an Asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::AssetMetadataKey")]
 pub struct AssetMetadataKey {
     /// Asset identifier (definition + account) associated with this metadata entry.
     pub id: AssetId,
@@ -97,6 +105,8 @@ pub struct AssetMetadataKey {
 }
 /// Metadata entry key for an NFT.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::NftMetadataKey")]
 pub struct NftMetadataKey {
     /// NFT identifier owning the metadata entry.
     pub id: NftId,
@@ -105,6 +115,8 @@ pub struct NftMetadataKey {
 }
 /// Metadata entry key for an RWA.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::RwaMetadataKey")]
 pub struct RwaMetadataKey {
     /// RWA identifier owning the metadata entry.
     pub id: RwaId,
@@ -113,6 +125,8 @@ pub struct RwaMetadataKey {
 }
 /// Metadata entry key for a Trigger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::TriggerMetadataKey")]
 pub struct TriggerMetadataKey {
     /// Trigger identifier associated with the metadata entry.
     pub id: TriggerId,
@@ -121,6 +135,8 @@ pub struct TriggerMetadataKey {
 }
 /// Role membership binding for an account.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::AccountRoleKey")]
 pub struct AccountRoleKey {
     /// Account identifier that holds the role.
     pub account: AccountId,
@@ -129,6 +145,8 @@ pub struct AccountRoleKey {
 }
 /// Pending or queued entrypoint identified by its canonical hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::TxQueueKey")]
 pub struct TxQueueKey {
     /// Canonical hash of the queued entrypoint.
     pub hash: HashOf<TransactionEntrypoint>,
@@ -139,6 +157,8 @@ pub struct TxQueueKey {
 /// for ordering, hashing and conflict detection. Variants are intentionally
 /// explicit to avoid collisions across namespaces.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::CanonicalStateKey")]
 pub enum CanonicalStateKey {
     /// Domain entity by id.
     Domain(DomainId),
@@ -192,6 +212,8 @@ impl CanonicalStateKey {
 /// reject or quarantine transactions that violate their declared sets per node
 /// policy. Producers SHOULD sort and deduplicate keys for compactness.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode, IntoSchema, Constructor)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::state::StateAccessSetAdvisory")]
 pub struct StateAccessSetAdvisory {
     /// Canonical keys that may be read during execution.
     pub reads: Vec<CanonicalStateKey>,
@@ -381,3 +403,6 @@ mod tests {
         assert_eq!(set.writes.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod captured_state_schema_tests;

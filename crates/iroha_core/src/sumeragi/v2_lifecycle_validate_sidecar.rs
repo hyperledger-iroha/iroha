@@ -4,7 +4,7 @@ use super::{
     CapacityClass, CausalRoot, LifecycleContext, LifecycleCoordinator, LifecycleDigest,
     LifecycleKey, LifecyclePhase, LifecycleStage, LifecycleStageKind, LifecycleState,
     LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalSlotId, PredecessorScope,
-    ReadyEvent, ReadyValidateSuccessorV1, WaitSource, WaitToken,
+    ReadyEvent, ReadyValidateSuccessorV1, TerminalOutcome, WaitSource, WaitToken,
     concrete_admission::LifecycleWorkRegistryHolder,
     ledger::{LifecycleLedgerError, LifecycleLedgerStoreV1},
 };
@@ -15,11 +15,6 @@ use crate::sumeragi::{
 use iroha_crypto::HashOf;
 use iroha_data_model::block::{CertifiedMergeLedgerReference, consensus_v2 as wire};
 use norito::codec::{Decode, Encode};
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    path::Path,
-};
 use thiserror::Error;
 
 const REGISTRATION_VERSION_V1: u8 = 1;
@@ -140,6 +135,66 @@ enum LifecycleValidateSidecarCustodyV1 {
     Recovered,
 }
 
+/// Exact executor cleanup authority minted after an unwoken sidecar wait is
+/// durably cancelled.
+///
+/// This is deliberately distinct from a [`ReadyValidateSuccessorV1`]. A
+/// missing-sidecar Validate has not published or woken its same-address
+/// successor, so no preliminary retransmit owner exists yet. The sealed round,
+/// subject, and dispatch key let the executor retire only the ordinal-bound
+/// retry authority that backed the cancelled Waiting row.
+#[must_use = "a durable sidecar cancellation must retire its exact executor retry authority"]
+#[derive(Debug)]
+pub(in crate::sumeragi) struct CancelledLifecycleValidateSidecarV1 {
+    dispatch_key: LifecycleValidateDispatchKeyV1,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+}
+
+impl CancelledLifecycleValidateSidecarV1 {
+    fn after_durable_cancellation(
+        identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+    ) -> Self {
+        debug_assert!(identity.is_structurally_exact());
+        Self {
+            dispatch_key: identity.dispatch_key(),
+            round: identity.round(),
+            subject: identity.subject(),
+        }
+    }
+
+    /// Return the exact cancelled lifecycle dispatch key.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleValidateDispatchKeyV1 {
+        self.dispatch_key
+    }
+
+    /// Return the immutable round of the cancelled Validate body.
+    pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
+        self.round
+    }
+
+    /// Return the immutable subject of the cancelled Validate body.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Construct an exact-shape cancellation authority for executor tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        dispatch_key: LifecycleValidateDispatchKeyV1,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Option<Self> {
+        dispatch_key
+            .matches_consensus_round(&round)
+            .then_some(Self {
+                dispatch_key,
+                round,
+                subject,
+            })
+    }
+}
+
 /// One fsynced sidecar registration retaining its live move-only dispatch, or
 /// the equivalent cold-open registration before the exact body is retried.
 #[must_use = "a registered Validate sidecar wait must remain parked or wake its exact row"]
@@ -155,6 +210,8 @@ pub(in crate::sumeragi) enum LifecycleValidateSidecarDriveV1 {
     Waiting(RegisteredLifecycleValidateSidecarWaitV1),
     /// The exact dependency became durable and the same row is Ready.
     Woken(ReadyValidateSuccessorV1),
+    /// A certified newer view cancelled this unprotected losing proposal.
+    Superseded(CancelledLifecycleValidateSidecarV1),
     /// The owner failed closed; dropping it arms the existing restart guard.
     RestartRequired(LifecycleValidateSidecarRegistrationErrorV1),
 }
@@ -199,11 +256,21 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
     /// before the live runner can select any Ready work.
     pub(in crate::sumeragi) fn recover_at_launch(
         coordinator: &mut LifecycleCoordinator,
-        registry: &LifecycleWorkRegistryHolder,
+        registry: &mut LifecycleWorkRegistryHolder,
     ) -> Result<Option<Self>, LifecycleValidateSidecarRegistrationErrorV1> {
         let Some(identity) = coordinator.load_validate_sidecar_registration()? else {
             return Ok(None);
         };
+        if coordinator.cancelled_validate_sidecar_registration_matches(&identity, registry) {
+            let store = coordinator.ledger_store.as_ref().ok_or_else(|| {
+                LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+                    "cancelled lifecycle Validate sidecar has no attached LedgerV1 store"
+                        .to_owned(),
+                )
+            })?;
+            clear_registration(store, &identity)?;
+            return Ok(None);
+        }
         coordinator.restore_validate_sidecar_wait(&identity, registry)?;
         Ok(Some(Self {
             identity,
@@ -216,13 +283,33 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
     pub(in crate::sumeragi) fn drive(
         self,
         coordinator: &mut LifecycleCoordinator,
-        registry: &LifecycleWorkRegistryHolder,
+        registry: &mut LifecycleWorkRegistryHolder,
         lane_work: &mut V2LaneWorkAdapter,
     ) -> LifecycleValidateSidecarDriveV1 {
         if !coordinator.validate_sidecar_wait_matches(&self.identity, registry) {
             return LifecycleValidateSidecarDriveV1::RestartRequired(
                 LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
             );
+        }
+        if lane_work
+            .lifecycle_validate_sidecar_is_superseded(self.identity.round, self.identity.subject)
+        {
+            let ordinal = self.identity.dispatch_key().lifecycle_ordinal();
+            if let Err(error) =
+                coordinator.cancel_validate_sidecar_registration(&self.identity, registry)
+            {
+                return LifecycleValidateSidecarDriveV1::RestartRequired(error);
+            }
+            let cancellation =
+                CancelledLifecycleValidateSidecarV1::after_durable_cancellation(&self.identity);
+            if let LifecycleValidateSidecarCustodyV1::Live(completion) = self.custody {
+                let (dispatch, ack) = completion.into_sidecar_wake_parts();
+                debug_assert!(dispatch.matches_dispatch_key(self.identity.dispatch_key()));
+                drop(dispatch);
+                ack.acknowledge_after_publication();
+            }
+            debug_assert_eq!(cancellation.dispatch_key().lifecycle_ordinal(), ordinal);
+            return LifecycleValidateSidecarDriveV1::Superseded(cancellation);
         }
         let disposition = lane_work.defer_missing_lifecycle_validate_sidecar(
             self.identity.round,
@@ -282,6 +369,34 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
 }
 
 impl LifecycleCoordinator {
+    fn cancelled_validate_sidecar_registration_matches(
+        &self,
+        identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+        registry: &LifecycleWorkRegistryHolder,
+    ) -> bool {
+        let key = identity.dispatch_key;
+        let Some(record) = self.records.get(&key.lifecycle_ordinal()) else {
+            return false;
+        };
+        identity.matches_context(self.active_context)
+            && self.fault.is_none()
+            && self.active_lease.is_none()
+            && record.ordinal == key.lifecycle_ordinal()
+            && record.owner == key.owner()
+            && record.key == identity.lifecycle_key
+            && record.stage == identity.lifecycle_stage
+            && record.work_class == LifecycleWorkClass::Validate
+            && record.state == LifecycleState::Terminal(TerminalOutcome::Cancelled)
+            && record.physical_slots.len() == 1
+            && record.physical_slots.get(&key.slot()) == Some(&key.digest())
+            && self.key_index.get(&record.key) == Some(&record.ordinal)
+            && self.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
+            && !self.ready_index.contains(&record.ordinal)
+            && registry
+                .registry()
+                .lacks_validate_sidecar_registration(identity)
+    }
+
     fn validate_sidecar_wait_matches(
         &self,
         identity: &LifecycleValidateSidecarRegistrationIdentityV1,
@@ -436,6 +551,42 @@ impl LifecycleCoordinator {
         clear_registration(store, identity)?;
         *self = next;
         Ok(())
+    }
+
+    fn cancel_validate_sidecar_registration(
+        &mut self,
+        identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+        registry: &mut LifecycleWorkRegistryHolder,
+    ) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
+        if !self.validate_sidecar_wait_matches(identity, registry) {
+            return Err(LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity);
+        }
+        let store = self.ledger_store.clone().ok_or_else(|| {
+            LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+                "live lifecycle owner has no attached LedgerV1 store".to_owned(),
+            )
+        })?;
+        let mut next = self.stage_durable_transaction();
+        next.finish_terminal(
+            identity.dispatch_key().lifecycle_ordinal(),
+            TerminalOutcome::Cancelled,
+        )
+        .map_err(|_| LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity)?;
+        self.persist_exact_staged_successor(&next)
+            .map_err(map_ledger_error)?;
+        let retired = registry
+            .registry_mut()
+            .retire_validate_sidecar_registration(identity);
+        debug_assert!(
+            retired,
+            "preflighted Validate sidecar carrier remains exact"
+        );
+        *self = next;
+        if !retired {
+            self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            return Err(LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity);
+        }
+        clear_registration(&store, identity)
     }
 }
 
@@ -615,40 +766,18 @@ fn persist_registration(
     {
         return Err(LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity);
     }
-    let path = registration_path(store)?;
-    cleanup_registration_temporary(&path)?;
-    if path_exists(&path)? {
-        let existing = read_frame(&path)?;
-        let expected = DurableValidateSidecarRegistrationFrameV1::new(identity);
-        return (existing == expected).then_some(()).ok_or(
-            LifecycleValidateSidecarRegistrationErrorV1::Persistence(
-                "a foreign Validate sidecar registration already owns this height".to_owned(),
-            ),
-        );
+    let expected = DurableValidateSidecarRegistrationFrameV1::new(identity);
+    let bytes = encode_registration_frame(&expected)?;
+    let incumbent = store
+        .publish_validate_sidecar_registration_bytes(&bytes, MAX_REGISTRATION_BYTES)
+        .map_err(map_ledger_error)?;
+    match incumbent {
+        None => Ok(()),
+        Some(bytes) if decode_registration_frame(&bytes)? == expected => Ok(()),
+        Some(_) => Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+            "a foreign Validate sidecar registration already owns this height".to_owned(),
+        )),
     }
-    let frame = DurableValidateSidecarRegistrationFrameV1::new(identity);
-    let bytes = norito::to_bytes(&frame).map_err(|error| {
-        LifecycleValidateSidecarRegistrationErrorV1::Persistence(error.to_string())
-    })?;
-    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_REGISTRATION_BYTES {
-        return Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
-            "Validate sidecar registration exceeds its byte bound".to_owned(),
-        ));
-    }
-    let temporary = registration_temporary_path(&path);
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .map_err(|error| persistence_io("create registration temporary", &temporary, error))?;
-    file.write_all(&bytes)
-        .and_then(|()| file.flush())
-        .and_then(|()| file.sync_all())
-        .map_err(|error| persistence_io("sync registration temporary", &temporary, error))?;
-    fs::rename(&temporary, &path)
-        .map_err(|error| persistence_io("publish registration", &path, error))?;
-    sync_parent(&path)?;
-    Ok(())
 }
 
 fn load_registration(
@@ -658,12 +787,13 @@ fn load_registration(
     Option<LifecycleValidateSidecarRegistrationIdentityV1>,
     LifecycleValidateSidecarRegistrationErrorV1,
 > {
-    let path = registration_path(store)?;
-    cleanup_registration_temporary(&path)?;
-    if !path_exists(&path)? {
+    let Some(bytes) = store
+        .load_validate_sidecar_registration_bytes(MAX_REGISTRATION_BYTES)
+        .map_err(map_ledger_error)?
+    else {
         return Ok(None);
-    }
-    let frame = read_frame(&path)?;
+    };
+    let frame = decode_registration_frame(&bytes)?;
     let identity = frame.into_identity(coordinator).ok_or(
         LifecycleValidateSidecarRegistrationErrorV1::Persistence(
             "Validate sidecar registration failed integrity or identity decoding".to_owned(),
@@ -681,115 +811,46 @@ fn clear_registration(
     store: &LifecycleLedgerStoreV1,
     identity: &LifecycleValidateSidecarRegistrationIdentityV1,
 ) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
-    let path = registration_path(store)?;
-    cleanup_registration_temporary(&path)?;
-    let existing = read_frame(&path)?;
-    if existing != DurableValidateSidecarRegistrationFrameV1::new(identity) {
-        return Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
-            "Validate sidecar wake cannot retire a foreign registration".to_owned(),
-        ));
-    }
-    fs::remove_file(&path).map_err(|error| persistence_io("remove registration", &path, error))?;
-    sync_parent(&path)
-}
-
-fn read_frame(
-    path: &Path,
-) -> Result<DurableValidateSidecarRegistrationFrameV1, LifecycleValidateSidecarRegistrationErrorV1>
-{
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| persistence_io("inspect registration", path, error))?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() == 0
-        || metadata.len() > MAX_REGISTRATION_BYTES
-    {
-        return Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
-            "Validate sidecar registration is not one bounded regular file".to_owned(),
-        ));
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    File::open(path)
-        .and_then(|file| {
-            file.take(MAX_REGISTRATION_BYTES.saturating_add(1))
-                .read_to_end(&mut bytes)
-        })
-        .map_err(|error| persistence_io("read registration", path, error))?;
-    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) != metadata.len() {
-        return Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
-            "Validate sidecar registration changed during bounded read".to_owned(),
-        ));
-    }
-    norito::decode_from_bytes(&bytes).map_err(|error| {
-        LifecycleValidateSidecarRegistrationErrorV1::Persistence(error.to_string())
-    })
-}
-
-fn registration_path(
-    store: &LifecycleLedgerStoreV1,
-) -> Result<std::path::PathBuf, LifecycleValidateSidecarRegistrationErrorV1> {
+    let expected = DurableValidateSidecarRegistrationFrameV1::new(identity);
+    let bytes = encode_registration_frame(&expected)?;
     store
-        .validate_sidecar_registration_path()
+        .clear_validate_sidecar_registration_bytes(&bytes, MAX_REGISTRATION_BYTES)
         .map_err(map_ledger_error)
 }
 
-fn registration_temporary_path(path: &Path) -> std::path::PathBuf {
-    path.with_extension("norito.tmp")
-}
-
-fn cleanup_registration_temporary(
-    path: &Path,
-) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
-    let temporary = registration_temporary_path(path);
-    match fs::symlink_metadata(&temporary) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
-                "Validate sidecar registration temporary is not a regular file".to_owned(),
-            ))
-        }
-        Ok(_) => {
-            fs::remove_file(&temporary).map_err(|error| {
-                persistence_io("remove registration temporary", &temporary, error)
-            })?;
-            sync_parent(path)
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(persistence_io(
-            "inspect registration temporary",
-            &temporary,
-            error,
-        )),
-    }
-}
-
-fn path_exists(path: &Path) -> Result<bool, LifecycleValidateSidecarRegistrationErrorV1> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(persistence_io("inspect registration path", path, error)),
-    }
-}
-
-fn sync_parent(path: &Path) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
-    let parent = path.parent().ok_or_else(|| {
-        LifecycleValidateSidecarRegistrationErrorV1::Persistence(
-            "Validate sidecar registration path has no parent".to_owned(),
-        )
+fn encode_registration_frame(
+    frame: &DurableValidateSidecarRegistrationFrameV1,
+) -> Result<Vec<u8>, LifecycleValidateSidecarRegistrationErrorV1> {
+    let bytes = norito::to_bytes(frame).map_err(|error| {
+        LifecycleValidateSidecarRegistrationErrorV1::Persistence(error.to_string())
     })?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| persistence_io("sync registration directory", parent, error))
+    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_REGISTRATION_BYTES {
+        return Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+            "Validate sidecar registration exceeds its byte bound".to_owned(),
+        ));
+    }
+    Ok(bytes)
 }
 
-fn persistence_io(
-    operation: &str,
-    path: &Path,
-    error: std::io::Error,
-) -> LifecycleValidateSidecarRegistrationErrorV1 {
-    LifecycleValidateSidecarRegistrationErrorV1::Persistence(format!(
-        "{operation} {}: {error}",
-        path.display()
-    ))
+fn decode_registration_frame(
+    bytes: &[u8],
+) -> Result<DurableValidateSidecarRegistrationFrameV1, LifecycleValidateSidecarRegistrationErrorV1>
+{
+    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_REGISTRATION_BYTES {
+        return Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+            "Validate sidecar registration is not one bounded frame".to_owned(),
+        ));
+    }
+    let frame: DurableValidateSidecarRegistrationFrameV1 = norito::decode_from_bytes(bytes)
+        .map_err(|error| {
+            LifecycleValidateSidecarRegistrationErrorV1::Persistence(error.to_string())
+        })?;
+    if encode_registration_frame(&frame)? != bytes {
+        return Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+            "Validate sidecar registration is not canonically encoded".to_owned(),
+        ));
+    }
+    Ok(frame)
 }
 
 fn map_ledger_error(error: LifecycleLedgerError) -> LifecycleValidateSidecarRegistrationErrorV1 {
@@ -821,6 +882,15 @@ pub(super) fn wake_registration_for_test(
     registry: &LifecycleWorkRegistryHolder,
 ) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
     coordinator.wake_validate_sidecar_registration(identity, registry)
+}
+
+#[cfg(test)]
+pub(super) fn cancel_registration_for_test(
+    coordinator: &mut LifecycleCoordinator,
+    identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+    registry: &mut LifecycleWorkRegistryHolder,
+) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
+    coordinator.cancel_validate_sidecar_registration(identity, registry)
 }
 
 #[cfg(test)]
@@ -979,6 +1049,59 @@ mod tests {
                 .validate_sidecar_registration_path()
                 .expect("registration path")
                 .exists()
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn durable_registration_rejects_hardlinked_final_and_temporary_without_mutation() {
+        let identity = identity_fixture();
+        let context =
+            LifecycleContext::new(identity.lifecycle_key.context(), identity.round.height);
+
+        let final_directory = TempDir::new().expect("hardlinked sidecar final directory");
+        let (final_store, _) = LifecycleLedgerStoreV1::open(final_directory.path(), context)
+            .expect("open final substitution store");
+        let final_path = final_store
+            .validate_sidecar_registration_path()
+            .expect("registration final path");
+        let final_sentinel = final_directory.path().join("final-sentinel");
+        std::fs::write(&final_sentinel, b"final sentinel").expect("write final sentinel");
+        std::fs::hard_link(&final_sentinel, &final_path)
+            .expect("install hardlinked registration final");
+        assert!(matches!(
+            persist_registration(&final_store, &identity),
+            Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(_))
+        ));
+        assert_eq!(
+            std::fs::read(&final_sentinel).expect("reread final sentinel"),
+            b"final sentinel"
+        );
+
+        let temporary_directory = TempDir::new().expect("hardlinked sidecar temp directory");
+        let (temporary_store, _) =
+            LifecycleLedgerStoreV1::open(temporary_directory.path(), context)
+                .expect("open temporary substitution store");
+        let temporary_path = temporary_store
+            .validate_sidecar_registration_path()
+            .expect("registration final path")
+            .with_extension("norito.tmp");
+        let temporary_sentinel = temporary_directory.path().join("temporary-sentinel");
+        std::fs::write(&temporary_sentinel, b"temporary sentinel")
+            .expect("write temporary sentinel");
+        std::fs::hard_link(&temporary_sentinel, &temporary_path)
+            .expect("install hardlinked registration temporary");
+        assert!(matches!(
+            persist_registration(&temporary_store, &identity),
+            Err(LifecycleValidateSidecarRegistrationErrorV1::Persistence(_))
+        ));
+        assert_eq!(
+            std::fs::read(&temporary_sentinel).expect("reread temporary sentinel"),
+            b"temporary sentinel"
+        );
+        assert!(
+            temporary_path.exists(),
+            "foreign hardlink must not be unlinked"
         );
     }
 }

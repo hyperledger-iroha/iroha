@@ -9,11 +9,6 @@ static H_GENERATOR: LazyLock<G1Projective> = LazyLock::new(|| {
     .expect("ABI V1 Pedersen H generator must be a canonical subgroup point");
     G1Projective::from(affine)
 });
-fn to_u64(bytes: &[u8]) -> u64 {
-    let mut arr = [0u8; 8];
-    arr.copy_from_slice(&bytes[..8]);
-    u64::from_le_bytes(arr)
-}
 /// Compute a Pedersen commitment C = value*G + blind*H on BLS12-381. Returns the full compressed G1
 /// bytes to preserve precision for callers that need the complete point.
 pub fn pedersen_commit(value: u64, blind: u64) -> [u8; 48] {
@@ -29,12 +24,6 @@ pub fn pedersen_commit_scalars(value: Scalar, blind: Scalar) -> [u8; 48] {
     let res = part1 + part2;
     res.to_affine().to_compressed()
 }
-/// Helper retaining the truncated representation used by VM registers.
-/// Encodes the compressed point and returns the low 64 bits.
-pub fn pedersen_commit_truncated(value: u64, blind: u64) -> u64 {
-    let bytes = pedersen_commit(value, blind);
-    to_u64(&bytes)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,8 +34,11 @@ mod tests {
     fn pedersen_commit_preserves_bytes() {
         let bytes = pedersen_commit(5, 7);
         assert_eq!(bytes.len(), 48);
-        let truncated = pedersen_commit_truncated(5, 7);
-        assert_eq!(truncated, to_u64(&bytes));
+        assert!(bool::from(G1Affine::from_compressed(&bytes).is_some()));
+        assert_eq!(
+            bytes,
+            pedersen_commit_scalars(Scalar::from(5_u64), Scalar::from(7_u64))
+        );
     }
     #[test]
     fn independent_generator_is_neither_identity_nor_g() {

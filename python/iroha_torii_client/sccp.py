@@ -1,8 +1,7 @@
-"""Closed first-release SCCP discovery, artifact, and submission helpers."""
+"""Closed first-release SCCP discovery and artifact helpers."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import re
@@ -10,19 +9,21 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Dict, Mapping, NoReturn, Optional, Sequence, Tuple, Union
 
-from .norito_frame import validate_norito_frame
+from ._account_id import decode_canonical_i105_account_id
 
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
-SCCP_DOMAIN_TON = 4
 SCCP_DOMAIN_TRON = 5
+SCCP_DOMAIN_TON = 4
 
 SCCP_CODEC_CANONICAL_TEXT = 1
 SCCP_CODEC_EVM_ADDRESS20 = 2
 SCCP_CODEC_TRON_ADDRESS21 = 5
 SCCP_CODEC_TON_ACCOUNT36 = 7
 _SCCP_JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
+SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1 = "ivm_proved_record_sccp_message_v1"
+SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1 = 1_000_000_000
 
 SCCP_CODEC_KEYS = MappingProxyType(
     {
@@ -56,26 +57,19 @@ _SORA_TAIRA_CHAIN_ID_HASH = bytes.fromhex(
 )
 _SORA_TAIRA_CHAIN_ID = bytes.fromhex("fc56984b2be7431d840e21514d1883f0")
 _MAX_WIRE_BYTES = 16 * 1024 * 1024
-_MAX_DESTINATION_ARTIFACT_BYTES = _MAX_WIRE_BYTES + 128 * 1024
-_MAX_DESTINATION_ARTIFACT_BASE64_BYTES = (
-    4 * ((_MAX_DESTINATION_ARTIFACT_BYTES + 2) // 3)
-)
-_MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
-_DESTINATION_ARTIFACT_TYPE_NAME = (
-    "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
-)
-_NATIVE_INBOUND_PROOF_TYPE_NAME = (
-    "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
-)
 _MAX_U64 = (1 << 64) - 1
 _MAX_U128 = (1 << 128) - 1
+_MAX_TON_COINS = (1 << 120) - 1
+_KECCAK256_EMPTY_BYTES = bytes.fromhex(
+    "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+)
 _CLOSED_DOMAINS = frozenset(
     {
         SCCP_DOMAIN_SORA,
         SCCP_DOMAIN_ETH,
         SCCP_DOMAIN_BSC,
-        SCCP_DOMAIN_TON,
         SCCP_DOMAIN_TRON,
+        SCCP_DOMAIN_TON,
     }
 )
 _BN254_BASE_FIELD_MODULUS = int(
@@ -119,16 +113,11 @@ _ROUTE_KEY = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
 
 _NETWORKS: Mapping[str, Tuple[int, int, bool]] = MappingProxyType(
     {
-        "sora-taira": (1, SCCP_DOMAIN_SORA, True),
-        "ethereum-mainnet": (2, SCCP_DOMAIN_ETH, False),
-        "ethereum-sepolia": (3, SCCP_DOMAIN_ETH, False),
-        "bsc-mainnet": (4, SCCP_DOMAIN_BSC, False),
-        "bsc-testnet": (5, SCCP_DOMAIN_BSC, False),
-        "tron-mainnet": (10, SCCP_DOMAIN_TRON, False),
-        "tron-nile": (11, SCCP_DOMAIN_TRON, False),
-        "tron-shasta": (12, SCCP_DOMAIN_TRON, False),
-        "ton-mainnet": (14, SCCP_DOMAIN_TON, False),
-        "ton-testnet": (15, SCCP_DOMAIN_TON, False),
+        "sora-taira": (0x40, SCCP_DOMAIN_SORA, True),
+        "ethereum-mainnet": (0x41, SCCP_DOMAIN_ETH, False),
+        "bsc-mainnet": (0x42, SCCP_DOMAIN_BSC, False),
+        "tron-mainnet": (0x43, SCCP_DOMAIN_TRON, False),
+        "ton-mainnet": (0x44, SCCP_DOMAIN_TON, False),
     }
 )
 SCCP_NETWORK_PROFILES = MappingProxyType(
@@ -144,10 +133,10 @@ _NETWORK_WIRE_NAMES = MappingProxyType(
 )
 _NATIVE_BACKENDS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
-        "ethereum_beacon_v1": frozenset({"ethereum-mainnet", "ethereum-sepolia"}),
-        "bsc_parlia_v1": frozenset({"bsc-mainnet", "bsc-testnet"}),
-        "tron_dpos_v1": frozenset({"tron-mainnet", "tron-nile", "tron-shasta"}),
-        "ton_masterchain_v1": frozenset({"ton-mainnet", "ton-testnet"}),
+        "ethereum_beacon_v1": frozenset({"ethereum-mainnet"}),
+        "bsc_parlia_v1": frozenset({"bsc-mainnet"}),
+        "tron_dpos_v1": frozenset({"tron-mainnet"}),
+        "ton_masterchain_v1": frozenset({"ton-mainnet"}),
     }
 )
 _DESTINATION_BACKENDS = MappingProxyType(
@@ -163,26 +152,9 @@ _CAPABILITY_PATHS = MappingProxyType(
         "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path": "/v1/sccp/messages/recent",
+        "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "proof_submit_path": "/v1/bridge/proofs/submit",
         "native_message_submit_path": "/v1/bridge/messages",
-    }
-)
-
-_BRIDGE_RESPONSE_FIELDS = frozenset(
-    {
-        "submitted",
-        "payload_kind",
-        "message_id_hex",
-        "backend",
-        "counterparty_domain",
-        "counterparty_chain",
-        "route_configuration_hash_hex",
-        "range_start_height",
-        "range_end_height",
-        "creation_time_ms",
-        "tx_hash_hex",
-        "transaction_payload_b64",
-        "signing_message_b64",
     }
 )
 
@@ -279,6 +251,7 @@ class SccpCapabilities:
     message_bundle_path: str
     proof_request_path: str
     recent_messages_path: str
+    sora_outbound_material_path: str
     registry_limits: SccpRegistryLimits
     resource_limits: SccpResourceLimits
     proof_submit_path: Optional[str]
@@ -291,6 +264,27 @@ class SccpRegistry:
 
     version: int
     lanes: Tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class SccpPortableVerifyingKeyRef:
+    """Strict portable reference to one governance-registered IVM key."""
+
+    backend: str
+    name: str
+    version: int
+    commitment: bytes
+
+
+@dataclass(frozen=True)
+class SccpSoraOutboundExecutionPolicy:
+    """Mandatory Taira-side execution policy for one outbound route."""
+
+    version: int
+    semantics: str
+    contract_artifact_sha256: bytes
+    vk_ref: SccpPortableVerifyingKeyRef
+    gas_limit: int
 
 
 @dataclass(frozen=True)
@@ -310,25 +304,6 @@ class SccpRecentMessages:
 
 
 @dataclass(frozen=True)
-class SccpBridgeSubmitResponse:
-    """Unified prepared-or-submitted SCCP transaction response."""
-
-    submitted: bool
-    payload_kind: str
-    message_id_hex: str
-    backend: str
-    counterparty_domain: int
-    counterparty_chain: str
-    route_configuration_hash_hex: str
-    range_start_height: int
-    range_end_height: int
-    creation_time_ms: int
-    tx_hash_hex: Optional[str]
-    transaction_payload_b64: Optional[str]
-    signing_message_b64: Optional[str]
-
-
-@dataclass(frozen=True)
 class _SccpDestinationDeployment:
     """Parsed destination roles and their exact first-release commitments."""
 
@@ -342,12 +317,17 @@ class _SccpDestinationDeployment:
     finality_anchor_hash: bytes
     route_address: bytes
     route_code_hash: bytes
+    replay_verifier_address: bytes
+    replay_verifier_code_hash: bytes
+    mint_breaker_address: bytes
+    mint_breaker_code_hash: bytes
     taira_to_token_multiplier: int
     max_wrapped_supply: int
     destination_binding_hash: bytes
     deployment_config_hash: bytes
     deployment_address_roles: Tuple[bytes, ...] = ()
     governed_hash_roles: Tuple[bytes, ...] = ()
+    execution_policy_hash_roles: Tuple[bytes, ...] = ()
 
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
@@ -396,10 +376,9 @@ def _integer(value: Any, label: str, minimum: int, maximum: int = (1 << 63) - 1)
 
 
 def _protocol_domain(value: Any, label: str) -> int:
-    domain = _integer(value, label, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TRON)
-    if domain not in _CLOSED_DOMAINS:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in _CLOSED_DOMAINS:
         raise ValueError(f"{label} is an unsupported or reserved SCCP domain")
-    return domain
+    return value
 
 
 def _unsigned_decimal(
@@ -435,6 +414,452 @@ def _binary(value: Any, label: str) -> bytes:
     return bytes(value)
 
 
+SCCP_REPLAY_SMT_DEPTH_V1 = 248
+SCCP_REPLAY_BOUNDARIES_V1 = MappingProxyType(
+    {
+        "sora_outbound_lock": 0x01,
+        "sora_inbound_release": 0x02,
+        "evm_source_burn": 0x10,
+        "evm_destination_mint": 0x11,
+        "tron_source_burn": 0x20,
+        "tron_destination_mint": 0x21,
+        "ton_bridge_inbound_mint": 0x30,
+        "ton_bridge_outbound_burn": 0x31,
+        "ton_master_mint": 0x32,
+        "ton_master_burn": 0x33,
+        "ton_wallet_mint_credit": 0x34,
+        "ton_wallet_burn_authorization": 0x35,
+        "ton_wallet_burn_lock": 0x36,
+        "ton_wallet_burn_refund": 0x37,
+    }
+)
+_SCCP_REPLAY_BOUNDARY_TAGS_V1 = frozenset(SCCP_REPLAY_BOUNDARIES_V1.values())
+_SCCP_REPLAY_MAGIC_V1 = b"SCCP-REPLAY-SMT-V1"
+
+
+@dataclass(frozen=True)
+class SccpReplayWitnessRootV1:
+    """One strictly reconstructed final-V1 replay witness root."""
+
+    root: bytes
+    expected_root: bytes
+    shard: int
+
+    @property
+    def matches_expected_root(self) -> bool:
+        """Return whether the reconstructed and claimed roots are identical."""
+
+        return self.root == self.expected_root
+
+
+def _replay_fixed_bytes(
+    value: Any, length: int, label: str, *, nonzero: bool = True
+) -> bytes:
+    if isinstance(value, str):
+        if re.fullmatch(rf"0x[0-9a-f]{{{length * 2}}}", value) is None:
+            raise ValueError(f"{label} must be canonical lowercase 0x-prefixed hex")
+        result = bytes.fromhex(value[2:])
+    else:
+        result = _binary(value, label)
+    if len(result) != length or (nonzero and not any(result)):
+        qualifier = "nonzero " if nonzero else ""
+        raise ValueError(f"{label} must be {qualifier}{length} bytes")
+    return result
+
+
+def _replay_boundary(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} must be an integer tag")
+    if value not in _SCCP_REPLAY_BOUNDARY_TAGS_V1:
+        raise ValueError(f"{label} is unsupported")
+    return value
+
+
+def _replay_profile(value: Any, label: str) -> str:
+    if not isinstance(value, str) or value not in _NETWORKS:
+        raise ValueError(f"{label} must name a final-V1 production network")
+    return value
+
+
+def _replay_actor(value: Any, label: str) -> Tuple[int, bytes]:
+    record = _mapping(value, label)
+    kind = record.get("kind")
+    if kind == "route":
+        _exact_fields(record, frozenset({"kind"}), label)
+        return 0, b""
+    if kind in ("evm", "tron"):
+        _exact_fields(record, frozenset({"kind", "address"}), label)
+        return (1 if kind == "evm" else 2), _replay_fixed_bytes(
+            record["address"], 20, f"{label}.address"
+        )
+    if kind == "ton":
+        _exact_fields(record, frozenset({"kind", "workchain", "account"}), label)
+        workchain = _integer(
+            record["workchain"], f"{label}.workchain", -(1 << 31), (1 << 31) - 1
+        )
+        return 3, workchain.to_bytes(4, "big", signed=True) + _replay_fixed_bytes(
+            record["account"], 32, f"{label}.account"
+        )
+    raise ValueError(f"{label} has a noncanonical actor shape")
+
+
+def _replay_principal(value: Any, label: str) -> Tuple[int, bytes]:
+    record = _mapping(value, label)
+    kind = record.get("kind")
+    if kind == "sora_account":
+        _exact_fields(record, frozenset({"kind", "canonical_bytes"}), label)
+        payload = _binary(record["canonical_bytes"], f"{label}.canonical_bytes")
+        if not payload or len(payload) > 0xFFFF:
+            raise ValueError(f"{label}.canonical_bytes has an invalid length")
+        return 0, payload
+    if kind in ("evm", "tron"):
+        _exact_fields(record, frozenset({"kind", "address"}), label)
+        return (1 if kind == "evm" else 2), _replay_fixed_bytes(
+            record["address"], 20, f"{label}.address"
+        )
+    if kind == "ton":
+        _exact_fields(record, frozenset({"kind", "workchain", "account"}), label)
+        workchain = _integer(
+            record["workchain"], f"{label}.workchain", -(1 << 31), (1 << 31) - 1
+        )
+        return 3, workchain.to_bytes(4, "big", signed=True) + _replay_fixed_bytes(
+            record["account"], 32, f"{label}.account"
+        )
+    raise ValueError(f"{label} has a noncanonical principal shape")
+
+
+def _replay_principal_kind(boundary: int) -> int:
+    if boundary in (0x01, 0x02):
+        return 0
+    if boundary in (0x10, 0x11):
+        return 1
+    if boundary in (0x20, 0x21):
+        return 2
+    if 0x30 <= boundary <= 0x37:
+        return 3
+    raise ValueError("unsupported SCCP replay boundary")
+
+
+def _replay_direction_is_valid(
+    source: str, target: str, boundary: int, actor_kind: int
+) -> bool:
+    if boundary == 0x01:
+        return source == "sora-taira" and target != source and actor_kind == 0
+    if boundary == 0x02:
+        return target == "sora-taira" and source != target and actor_kind == 0
+    if boundary in (0x10, 0x11):
+        destination = boundary == 0x11
+        external = target if destination else source
+        return (
+            actor_kind == 1
+            and external in ("ethereum-mainnet", "bsc-mainnet")
+            and (source if destination else target) == "sora-taira"
+        )
+    if boundary in (0x20, 0x21):
+        return actor_kind == 2 and (
+            (boundary == 0x21 and source == "sora-taira" and target == "tron-mainnet")
+            or (boundary == 0x20 and source == "tron-mainnet" and target == "sora-taira")
+        )
+    sora_to_ton = boundary in (0x30, 0x32, 0x34)
+    ton_to_sora = boundary in (0x31, 0x33, 0x35, 0x36, 0x37)
+    return actor_kind == 3 and (
+        (sora_to_ton and source == "sora-taira" and target == "ton-mainnet")
+        or (ton_to_sora and source == "ton-mainnet" and target == "sora-taira")
+    )
+
+
+def _replay_sha256(*parts: bytes) -> bytes:
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(part)
+    return digest.digest()
+
+
+def sccp_replay_domain_hash_v1(value: Any) -> bytes:
+    """Hash one exact final-V1 SCCP replay domain."""
+
+    record = _exact_fields(
+        value,
+        frozenset(
+            {
+                "source_profile",
+                "target_profile",
+                "boundary",
+                "route_revision",
+                "route_configuration_hash",
+                "actor",
+            }
+        ),
+        "SCCP replay domain",
+    )
+    source = _replay_profile(record["source_profile"], "SCCP replay source_profile")
+    target = _replay_profile(record["target_profile"], "SCCP replay target_profile")
+    boundary = _replay_boundary(record["boundary"], "SCCP replay boundary")
+    revision = _integer(record["route_revision"], "SCCP replay route_revision", 1, (1 << 32) - 1)
+    actor_kind, actor = _replay_actor(record["actor"], "SCCP replay actor")
+    if not _replay_direction_is_valid(source, target, boundary, actor_kind):
+        raise ValueError("SCCP replay domain has an invalid boundary, direction, or actor")
+    return _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        b"\x00",
+        _NETWORKS[source][0].to_bytes(4, "big"),
+        _NETWORKS[target][0].to_bytes(4, "big"),
+        bytes((boundary,)),
+        revision.to_bytes(4, "big"),
+        _replay_fixed_bytes(
+            record["route_configuration_hash"], 32, "SCCP replay route_configuration_hash"
+        ),
+        bytes((actor_kind,)),
+        len(actor).to_bytes(2, "big"),
+        actor,
+    )
+
+
+def sccp_replay_key_v1(domain_hash: Any, replay_id: Any) -> bytes:
+    """Derive the complete 256-bit replay key."""
+
+    return _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        b"\x01",
+        _replay_fixed_bytes(domain_hash, 32, "SCCP replay domain hash"),
+        _replay_fixed_bytes(replay_id, 32, "SCCP replay id"),
+    )
+
+
+def sccp_replay_record_digest_v1(value: Any) -> bytes:
+    """Hash one exact occupied final-V1 SCCP replay record."""
+
+    record = _exact_fields(
+        value,
+        frozenset(
+            {
+                "operation",
+                "replay_id",
+                "payload_sha256",
+                "amount",
+                "principal",
+                "auxiliary_identity_sha256",
+            }
+        ),
+        "SCCP replay record",
+    )
+    operation = _replay_boundary(record["operation"], "SCCP replay operation")
+    amount = _integer(record["amount"], "SCCP replay amount", 1, _MAX_U128)
+    principal_kind, principal = _replay_principal(
+        record["principal"], "SCCP replay principal"
+    )
+    if principal_kind != _replay_principal_kind(operation):
+        raise ValueError("SCCP replay operation and principal kind are inconsistent")
+    principal_digest = _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        bytes((0x03, principal_kind)),
+        len(principal).to_bytes(2, "big"),
+        principal,
+    )
+    auxiliary = _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        bytes((0x04, operation)),
+        _replay_fixed_bytes(
+            record["auxiliary_identity_sha256"],
+            32,
+            "SCCP replay auxiliary identity SHA-256",
+        ),
+    )
+    result = _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        bytes((0x02, operation)),
+        _replay_fixed_bytes(record["replay_id"], 32, "SCCP replay id"),
+        _replay_fixed_bytes(record["payload_sha256"], 32, "SCCP replay payload SHA-256"),
+        amount.to_bytes(16, "big"),
+        principal_digest,
+        auxiliary,
+    )
+    if not any(result):
+        raise ValueError("SCCP occupied replay record digest must be nonzero")
+    return result
+
+
+def _sccp_replay_parent_hash_v1(level: int, left: bytes, right: bytes) -> bytes:
+    return _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        b"\x12",
+        level.to_bytes(2, "big"),
+        left,
+        right,
+    )
+
+
+def sccp_replay_empty_hashes_v1() -> Tuple[bytes, ...]:
+    """Return all 249 canonical empty hashes in leaf-up order."""
+
+    hashes = [_replay_sha256(_SCCP_REPLAY_MAGIC_V1, b"\x10")]
+    for level in range(SCCP_REPLAY_SMT_DEPTH_V1):
+        hashes.append(_sccp_replay_parent_hash_v1(level, hashes[level], hashes[level]))
+    return tuple(hashes)
+
+
+def sccp_replay_root_from_witness_v1(
+    key_value: Any, record_digest: Any, witness_value: Any
+) -> SccpReplayWitnessRootV1:
+    """Strictly reconstruct one compressed membership or non-membership witness."""
+
+    key = _replay_fixed_bytes(key_value, 32, "SCCP replay key", nonzero=False)
+    witness = _exact_fields(
+        witness_value,
+        frozenset(
+            {"expected_shard_root", "prior_record_digest", "sibling_bitmap", "siblings"}
+        ),
+        "SCCP sparse-Merkle witness",
+    )
+    expected = _replay_fixed_bytes(
+        witness["expected_shard_root"],
+        32,
+        "SCCP witness expected shard root",
+        nonzero=False,
+    )
+    prior = _replay_fixed_bytes(
+        witness["prior_record_digest"],
+        32,
+        "SCCP witness prior record digest",
+        nonzero=False,
+    )
+    bitmap = _replay_fixed_bytes(
+        witness["sibling_bitmap"], 32, "SCCP witness sibling bitmap", nonzero=False
+    )
+    if bitmap[0] != 0:
+        raise ValueError("SCCP witness bitmap has reserved high bits")
+    siblings = tuple(
+        _replay_fixed_bytes(item, 32, f"SCCP witness sibling[{index}]", nonzero=False)
+        for index, item in enumerate(_list(witness["siblings"], "SCCP witness siblings"))
+    )
+    if sum(bin(byte).count("1") for byte in bitmap) != len(siblings) or len(siblings) > 248:
+        raise ValueError("SCCP witness sibling count does not match its bitmap")
+    empty = sccp_replay_empty_hashes_v1()
+    digest = _replay_fixed_bytes(
+        record_digest, 32, "SCCP prior record digest", nonzero=False
+    )
+    if digest != prior:
+        raise ValueError("SCCP witness prior record digest mismatch")
+    if not any(digest):
+        current = empty[0]
+    else:
+        current = _replay_sha256(_SCCP_REPLAY_MAGIC_V1, b"\x11", key, digest)
+    supplied = 0
+    for level in range(SCCP_REPLAY_SMT_DEPTH_V1):
+        bitmap_set = bitmap[31 - level // 8] & (1 << (level % 8)) != 0
+        sibling = siblings[supplied] if bitmap_set else empty[level]
+        if bitmap_set:
+            supplied += 1
+            if sibling == empty[level]:
+                raise ValueError("SCCP witness explicitly encodes a default sibling")
+        key_set = key[31 - level // 8] & (1 << (level % 8)) != 0
+        current = (
+            _sccp_replay_parent_hash_v1(level, sibling, current)
+            if key_set
+            else _sccp_replay_parent_hash_v1(level, current, sibling)
+        )
+    return SccpReplayWitnessRootV1(current, expected, key[0])
+
+
+def sccp_replay_verify_against_current_root_v1(
+    key_value: Any,
+    record_digest: Any,
+    witness_value: Any,
+    current_root_value: Any,
+) -> SccpReplayWitnessRootV1:
+    """Verify a replay witness against the exact current shard root."""
+
+    current = _replay_fixed_bytes(
+        current_root_value, 32, "SCCP current shard root", nonzero=False
+    )
+    result = sccp_replay_root_from_witness_v1(key_value, record_digest, witness_value)
+    if result.expected_root != current or result.root != current:
+        raise ValueError("SCCP replay witness does not match the current shard root")
+    return result
+
+
+def sccp_replay_accumulator_occupy_v1(
+    state_value: Any, domain_value: Any, record_value: Any, witness_value: Any
+) -> Mapping[str, Any]:
+    """Purely apply one final-V1 empty-to-occupied replay transition."""
+
+    state = _exact_fields(
+        state_value,
+        frozenset({"nonempty_shard_roots", "leaf_count", "update_sequence"}),
+        "SCCP replay accumulator",
+    )
+    roots = state["nonempty_shard_roots"]
+    if not isinstance(roots, Mapping):
+        raise TypeError("SCCP replay accumulator roots must be a mapping")
+    canonical_roots: Dict[int, bytes] = {}
+    empty_root = sccp_replay_empty_hashes_v1()[-1]
+    for shard, root in roots.items():
+        if isinstance(shard, bool) or not isinstance(shard, int) or not 0 <= shard <= 0xFF:
+            raise ValueError("SCCP replay accumulator shard must fit u8")
+        parsed = _replay_fixed_bytes(
+            root,
+            32,
+            "SCCP replay accumulator shard root",
+            nonzero=False,
+        )
+        if parsed == empty_root:
+            raise ValueError("SCCP replay accumulator must omit canonical empty roots")
+        canonical_roots[shard] = parsed
+    leaf_count = _integer(state["leaf_count"], "SCCP replay leaf_count", 0, _MAX_U64)
+    update_sequence = _integer(
+        state["update_sequence"], "SCCP replay update_sequence", 0, _MAX_U64
+    )
+    if (
+        (leaf_count == 0) != (not canonical_roots)
+        or leaf_count < len(canonical_roots)
+        or update_sequence != leaf_count
+        or leaf_count == _MAX_U64
+    ):
+        raise ValueError("invalid SCCP replay accumulator state")
+    domain = _mapping(domain_value, "SCCP replay domain")
+    record = _mapping(record_value, "SCCP replay record")
+    if record.get("operation") != domain.get("boundary"):
+        raise ValueError("SCCP replay operation does not match its forest boundary")
+    domain_hash = sccp_replay_domain_hash_v1(domain)
+    replay_id = _replay_fixed_bytes(record.get("replay_id"), 32, "SCCP replay id")
+    key = sccp_replay_key_v1(domain_hash, replay_id)
+    shard = key[0]
+    current_root = canonical_roots.get(shard, empty_root)
+    witness = _mapping(witness_value, "SCCP sparse-Merkle witness")
+    if any(_replay_fixed_bytes(
+        witness.get("prior_record_digest"), 32, "SCCP witness prior record digest", nonzero=False
+    )):
+        raise ValueError("SCCP replay leaf is already occupied")
+    old = sccp_replay_verify_against_current_root_v1(
+        key, bytes(32), witness, current_root
+    )
+    digest = sccp_replay_record_digest_v1(record)
+    occupied_witness = dict(witness)
+    occupied_witness["prior_record_digest"] = digest
+    occupied_witness["expected_shard_root"] = current_root
+    new_root = sccp_replay_root_from_witness_v1(key, digest, occupied_witness).root
+    canonical_roots[shard] = new_root
+    return MappingProxyType(
+        {
+            "nonempty_shard_roots": MappingProxyType(dict(sorted(canonical_roots.items()))),
+            "leaf_count": leaf_count + 1,
+            "update_sequence": update_sequence + 1,
+            "delta": MappingProxyType(
+                {
+                    "domain_hash": domain_hash,
+                    "shard": shard,
+                    "key": key,
+                    "record_digest": digest,
+                    "old_root": old.root,
+                    "new_root": new_root,
+                    "leaf_count": leaf_count + 1,
+                    "update_sequence": update_sequence + 1,
+                }
+            ),
+        }
+    )
+
+
 def _lower_hex(
     value: Any,
     label: str,
@@ -468,32 +893,6 @@ def _variable_hex(value: Any, label: str, *, maximum_bytes: int = _MAX_WIRE_BYTE
     ):
         raise ValueError(f"{label} must be canonical nonempty lowercase 0x-prefixed hex")
     return value
-
-
-def _canonical_base64(
-    value: Any, label: str, *, maximum_bytes: int = _MAX_WIRE_BYTES
-) -> bytes:
-    if (
-        not isinstance(value, str)
-        or not value
-        or len(value) > 4 * ((maximum_bytes + 2) // 3)
-        or len(value) % 4
-        or re.fullmatch(
-            r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?",
-            value,
-        )
-        is None
-    ):
-        raise ValueError(f"{label} must be canonical padded base64")
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"{label} must be canonical padded base64") from exc
-    if base64.b64encode(decoded).decode("ascii") != value:
-        raise ValueError(f"{label} must be canonical padded base64")
-    if not decoded or len(decoded) > maximum_bytes:
-        raise ValueError(f"{label} is outside its byte-size bound")
-    return decoded
 
 
 def _path(value: Any, label: str) -> str:
@@ -665,29 +1064,17 @@ def _canonical_network_bytes(network: Tuple[str, int, int, bool]) -> bytes:
         identity = _SORA_TAIRA_CHAIN_ID
     elif profile == "ethereum-mainnet":
         identity = (1).to_bytes(8, "little")
-    elif profile == "ethereum-sepolia":
-        identity = (11_155_111).to_bytes(8, "little")
     elif profile == "bsc-mainnet":
         identity = (56).to_bytes(8, "little")
-    elif profile == "bsc-testnet":
-        identity = (97).to_bytes(8, "little")
     elif profile == "tron-mainnet":
         identity = (0x2B66_53DC).to_bytes(4, "little")
-    elif profile == "tron-nile":
-        identity = (0xCD86_90DC).to_bytes(4, "little")
-    elif profile == "tron-shasta":
-        identity = (0x94A9_059E).to_bytes(4, "little")
-    elif profile in {"ton-mainnet", "ton-testnet"}:
-        global_id = -239 if profile == "ton-mainnet" else -3
+    elif profile == "ton-mainnet":
+        global_id = -239
         root_hash = bytes.fromhex(
             "17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569"
-            if profile == "ton-mainnet"
-            else "823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128"
         )
         file_hash = bytes.fromhex(
             "5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e"
-            if profile == "ton-mainnet"
-            else "67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8"
         )
         identity = b"".join(
             (
@@ -908,6 +1295,9 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
                 "source_network",
                 "protocol_version",
                 "chain_id_hash",
+                "epoch",
+                "epoch_end_height",
+                "roster_commitment",
                 "checkpoint_height",
                 "checkpoint_block_hash",
                 "checkpoint_context_id",
@@ -926,9 +1316,18 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
     chain_hash = bytes.fromhex(_upper_hex(record["chain_id_hash"], f"{label}.chain_id_hash", 32))
     if chain_hash != _SORA_TAIRA_CHAIN_ID_HASH:
         raise ValueError(f"{label}.chain_id_hash is not the Taira chain commitment")
+    epoch = _integer(record["epoch"], f"{label}.epoch", 1, _U64_MASK)
+    epoch_end_height = _integer(
+        record["epoch_end_height"], f"{label}.epoch_end_height", 0, _U64_MASK
+    )
+    roster_commitment = bytes.fromhex(
+        _upper_hex(record["roster_commitment"], f"{label}.roster_commitment", 32)
+    )
     checkpoint_height = _integer(
         record["checkpoint_height"], f"{label}.checkpoint_height", 1, _U64_MASK
     )
+    if checkpoint_height > epoch_end_height:
+        raise ValueError(f"{label}.checkpoint_height exceeds its epoch end height")
     checkpoint_hash = bytes.fromhex(
         _upper_hex(record["checkpoint_block_hash"], f"{label}.checkpoint_block_hash", 32)
     )
@@ -942,13 +1341,23 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
             32,
         )
     )
-    roles = (chain_hash, checkpoint_hash, context_id, finality_artifact_hash)
+    roles = (
+        chain_hash,
+        roster_commitment,
+        checkpoint_hash,
+        context_id,
+        finality_artifact_hash,
+    )
     if len(set(roles)) != len(roles):
         raise ValueError(f"{label} reuses a consensus hash role")
     canonical = (
-        b"\x01\x01"
+        b"\x01"
+        + bytes((source[1],))
         + protocol_version.to_bytes(2, "little")
         + chain_hash
+        + epoch.to_bytes(8, "little")
+        + epoch_end_height.to_bytes(8, "little")
+        + roster_commitment
         + checkpoint_height.to_bytes(8, "little")
         + checkpoint_hash
         + context_id
@@ -1008,10 +1417,8 @@ def normalize_sccp_codec_value(
         text = _text(value, "canonical_text", 256)
         encoded = text.encode("utf-8")
         if re.fullmatch(r"[\x21-\x7e]+", text) is None:
-            from .client import _decode_canonical_i105_string
-
             try:
-                _decode_canonical_i105_string(text)
+                decode_canonical_i105_account_id(text)
             except ValueError as exc:
                 raise ValueError(
                     "canonical_text must contain printable ASCII or an exact canonical I105 account address"
@@ -1201,6 +1608,7 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
             "proof_submit_path",
@@ -1215,6 +1623,7 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
         }
@@ -1246,6 +1655,10 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
         or "",
         recent_messages_path=_capability_path(
             record["recent_messages_path"], "recent_messages_path"
+        )
+        or "",
+        sora_outbound_material_path=_capability_path(
+            record["sora_outbound_material_path"], "sora_outbound_material_path"
         )
         or "",
         registry_limits=_normalize_registry_limits(record["registry_limits"]),
@@ -1365,11 +1778,7 @@ def _destination_binding_hash(
 ) -> bytes:
     profile, _, target_domain, _ = network
     if destination.family == "tron":
-        network_values = {
-            "tron-mainnet": 0x2B66_53DC,
-            "tron-nile": 0xCD86_90DC,
-            "tron-shasta": 0x94A9_059E,
-        }
+        network_values = {"tron-mainnet": 0x2B66_53DC}
         try:
             network_value = network_values[profile]
         except KeyError as exc:
@@ -1378,12 +1787,14 @@ def _destination_binding_hash(
         backend = _TRON_GROTH16_BACKEND
         verifier_address = _abi_tron_address(destination.verifier_address)
         route_address = _abi_tron_address(destination.route_address)
+        replay_verifier_address = _abi_tron_address(
+            destination.replay_verifier_address
+        )
+        mint_breaker_address = _abi_tron_address(destination.mint_breaker_address)
     else:
         network_values = {
             "ethereum-mainnet": 1,
-            "ethereum-sepolia": 11_155_111,
             "bsc-mainnet": 56,
-            "bsc-testnet": 97,
         }
         try:
             network_value = network_values[profile]
@@ -1393,6 +1804,8 @@ def _destination_binding_hash(
         backend = _EVM_GROTH16_BACKEND
         verifier_address = _abi_address(destination.verifier_address)
         route_address = _abi_address(destination.route_address)
+        replay_verifier_address = _abi_address(destination.replay_verifier_address)
+        mint_breaker_address = _abi_address(destination.mint_breaker_address)
     payload = b"".join(
         (
             _keccak_256(binding_prefix),
@@ -1406,6 +1819,10 @@ def _destination_binding_hash(
             destination.verifier_key_hash,
             destination.semantic_profile_hash,
             destination.finality_anchor_hash,
+            replay_verifier_address,
+            destination.replay_verifier_code_hash,
+            mint_breaker_address,
+            destination.mint_breaker_code_hash,
         )
     )
     return _keccak_256(payload)
@@ -1413,6 +1830,70 @@ def _destination_binding_hash(
 
 def _length_prefixed(value: bytes) -> bytes:
     return len(value).to_bytes(4, "little") + value
+
+
+def _portable_verifying_key_id_field(value: Any, label: str) -> str:
+    text = _text(value, label, 256)
+    if (
+        re.fullmatch(r"[a-z0-9](?:[a-z0-9_/:.\-]*[a-z0-9])?", text) is None
+        or any(
+            separator in text
+            for separator in ("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:")
+        )
+    ):
+        raise ValueError(f"{label} must use portable verification-key registry syntax")
+    return text
+
+
+def _sora_outbound_execution_policy(
+    value: Any, label: str
+) -> SccpSoraOutboundExecutionPolicy:
+    record = _exact_fields(
+        value,
+        frozenset(
+            {"version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"}
+        ),
+        label,
+    )
+    version = _integer(record["version"], f"{label}.version", 1, 1)
+    semantics = _text(record["semantics"], f"{label}.semantics", 64)
+    if semantics != SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1:
+        raise ValueError(f"{label}.semantics is unsupported or retired")
+    contract_artifact_sha256 = bytes.fromhex(
+        _upper_hex(
+            record["contract_artifact_sha256"],
+            f"{label}.contract_artifact_sha256",
+            32,
+        )
+    )
+    reference = _exact_fields(
+        record["vk_ref"],
+        frozenset({"backend", "name", "version", "commitment"}),
+        f"{label}.vk_ref",
+    )
+    vk_ref = SccpPortableVerifyingKeyRef(
+        _portable_verifying_key_id_field(
+            reference["backend"], f"{label}.vk_ref.backend"
+        ),
+        _portable_verifying_key_id_field(reference["name"], f"{label}.vk_ref.name"),
+        _integer(reference["version"], f"{label}.vk_ref.version", 1, 0xFFFF_FFFF),
+        bytes.fromhex(
+            _upper_hex(reference["commitment"], f"{label}.vk_ref.commitment", 32)
+        ),
+    )
+    gas_limit = _integer(
+        record["gas_limit"],
+        f"{label}.gas_limit",
+        1,
+        SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1,
+    )
+    return SccpSoraOutboundExecutionPolicy(
+        version,
+        semantics,
+        contract_artifact_sha256,
+        vk_ref,
+        gas_limit,
+    )
 
 
 def _ton_proof_profile_commitment() -> bytes:
@@ -1446,6 +1927,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
             "verifying_key",
             "verifier_key_hash",
             "proof_profile_commitment",
+            "mint_breaker_guardian_keys",
             "outbound_proof_policy",
             "taira_to_token_multiplier",
             "max_wrapped_supply",
@@ -1487,6 +1969,33 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         raise ValueError(f"{label}.verifier_circuit_hash does not match its semantic circuit")
     if hashes["proof_profile_commitment"] != _ton_proof_profile_commitment():
         raise ValueError(f"{label}.proof_profile_commitment is not canonical")
+    guardian_record = _exact_fields(
+        deployment["mint_breaker_guardian_keys"],
+        frozenset(
+            {
+                "guardian_0",
+                "guardian_1",
+                "guardian_2",
+                "guardian_3",
+                "guardian_4",
+            }
+        ),
+        f"{label}.mint_breaker_guardian_keys",
+    )
+    guardian_keys = tuple(
+        bytes.fromhex(
+            _upper_hex(
+                guardian_record[f"guardian_{index}"],
+                f"{label}.mint_breaker_guardian_keys.guardian_{index}",
+                32,
+            )
+        )
+        for index in range(5)
+    )
+    if any(left >= right for left, right in zip(guardian_keys, guardian_keys[1:])):
+        raise ValueError(
+            f"{label}.mint_breaker_guardian_keys must be strictly increasing"
+        )
     governed_hash_roles = tuple(hashes[field] for field in hash_fields) + (
         semantic_hash,
         anchor_hash,
@@ -1501,16 +2010,18 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         1,
         1,
     )
-    max_wrapped_supply = _integer(
-        deployment["max_wrapped_supply"],
-        f"{label}.max_wrapped_supply",
-        1,
-        _MAX_U128,
+    max_wrapped_supply = int(
+        _unsigned_decimal(
+            deployment["max_wrapped_supply"],
+            f"{label}.max_wrapped_supply",
+            _MAX_TON_COINS,
+            positive=True,
+        )
     )
     profile = lane[0][0]
-    if profile not in {"ton-mainnet", "ton-testnet"}:
+    if profile != "ton-mainnet":
         raise ValueError(f"{label} requires an exact TON source lane")
-    global_id = -239 if profile == "ton-mainnet" else -3
+    global_id = -239
     # Addresses and actual initial-data roots remain governed readback roles,
     # but D/R exclude them because both values are stored in the StateInit data.
     binding_payload = b"".join(
@@ -1529,6 +2040,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
             hashes["verifier_circuit_hash"],
             hashes["verifier_key_hash"],
             hashes["proof_profile_commitment"],
+            *guardian_keys,
             semantic_hash,
             anchor_hash,
         )
@@ -1544,6 +2056,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
                 hashes["verifier_circuit_hash"],
                 hashes["verifier_key_hash"],
                 hashes["proof_profile_commitment"],
+                *guardian_keys,
                 semantic_hash,
                 anchor_hash,
                 destination_binding_hash,
@@ -1561,12 +2074,20 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         finality_anchor_hash=anchor_hash,
         route_address=route_address,
         route_code_hash=hashes["route_code_hash"],
+        replay_verifier_address=b"",
+        replay_verifier_code_hash=b"",
+        mint_breaker_address=b"",
+        mint_breaker_code_hash=b"",
         taira_to_token_multiplier=multiplier,
         max_wrapped_supply=max_wrapped_supply,
         destination_binding_hash=destination_binding_hash,
         deployment_config_hash=deployment_config_hash,
         deployment_address_roles=(master_address, route_address),
         governed_hash_roles=governed_hash_roles,
+        execution_policy_hash_roles=(
+            hashes["jetton_master_initial_data_hash"],
+            hashes["route_initial_data_hash"],
+        ),
     )
 
 
@@ -1588,6 +2109,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
             "outbound_proof_policy",
             "route_address",
             "route_code_hash",
+            "replay_verifier_address",
+            "replay_verifier_code_hash",
+            "mint_breaker_address",
+            "mint_breaker_code_hash",
             "taira_to_token_multiplier",
             "max_wrapped_supply",
         }
@@ -1595,14 +2120,32 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
     deployment = _exact_fields(record["deployment"], fields, f"{label}.deployment")
     addresses = tuple(
         bytes.fromhex(_upper_hex(deployment[field], f"{label}.deployment.{field}", 20))
-        for field in ("token_address", "verifier_address", "route_address")
+        for field in (
+            "token_address",
+            "verifier_address",
+            "route_address",
+            "replay_verifier_address",
+            "mint_breaker_address",
+        )
     )
     hashes = tuple(
         bytes.fromhex(_upper_hex(deployment[field], f"{label}.deployment.{field}", 32))
-        for field in ("token_code_hash", "verifier_code_hash", "verifier_key_hash", "route_code_hash")
+        for field in (
+            "token_code_hash",
+            "verifier_code_hash",
+            "verifier_key_hash",
+            "route_code_hash",
+            "replay_verifier_code_hash",
+            "mint_breaker_code_hash",
+        )
     )
     if len(set(addresses)) != len(addresses) or len(set(hashes)) != len(hashes):
         raise ValueError(f"{label}.deployment reuses a role-separated address or hash")
+    for index in (0, 1, 3, 4, 5):
+        if hashes[index] == _KECCAK256_EMPTY_BYTES:
+            raise ValueError(
+                f"{label}.deployment runtime code hash must not identify empty bytecode"
+            )
     key_bytes = _verifying_key(deployment["verifying_key"], f"{label}.deployment.verifying_key")
     if _keccak_256(key_bytes) != hashes[2]:
         raise ValueError(f"{label}.deployment.verifier_key_hash does not match verifying_key")
@@ -1620,11 +2163,13 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         1_000_000_000,
         1_000_000_000,
     )
-    max_wrapped_supply = _integer(
-        deployment["max_wrapped_supply"],
-        f"{label}.deployment.max_wrapped_supply",
-        1,
-        _MAX_U128,
+    max_wrapped_supply = int(
+        _unsigned_decimal(
+            deployment["max_wrapped_supply"],
+            f"{label}.deployment.max_wrapped_supply",
+            _MAX_U128,
+            positive=True,
+        )
     )
     partial = _SccpDestinationDeployment(
         family=family,
@@ -1637,6 +2182,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         finality_anchor_hash=anchor_hash,
         route_address=addresses[2],
         route_code_hash=hashes[3],
+        replay_verifier_address=addresses[3],
+        replay_verifier_code_hash=hashes[4],
+        mint_breaker_address=addresses[4],
+        mint_breaker_code_hash=hashes[5],
         taira_to_token_multiplier=multiplier,
         max_wrapped_supply=max_wrapped_supply,
         destination_binding_hash=b"",
@@ -1653,6 +2202,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
             partial.semantic_profile_hash,
             partial.finality_anchor_hash,
             destination_binding_hash if family == "tron" else b"",
+            _abi_address(partial.replay_verifier_address),
+            partial.replay_verifier_code_hash,
+            _abi_address(partial.mint_breaker_address),
+            partial.mint_breaker_code_hash,
         )
     )
     return _SccpDestinationDeployment(
@@ -1666,6 +2219,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         finality_anchor_hash=partial.finality_anchor_hash,
         route_address=partial.route_address,
         route_code_hash=partial.route_code_hash,
+        replay_verifier_address=partial.replay_verifier_address,
+        replay_verifier_code_hash=partial.replay_verifier_code_hash,
+        mint_breaker_address=partial.mint_breaker_address,
+        mint_breaker_code_hash=partial.mint_breaker_code_hash,
         taira_to_token_multiplier=partial.taira_to_token_multiplier,
         max_wrapped_supply=partial.max_wrapped_supply,
         destination_binding_hash=destination_binding_hash,
@@ -1681,7 +2238,6 @@ def _settlement(value: Any, label: str) -> int:
         frozenset(
             {
                 "asset_definition_id",
-                "custody_owner",
                 "payload_amount_scale",
                 "max_outstanding_liability",
             }
@@ -1693,16 +2249,14 @@ def _settlement(value: Any, label: str) -> int:
     )
     if asset_definition_id != "6TEAJqbb8oEPmLncoNiMRbLEK6tw":
         raise ValueError(f"{label}.asset_definition_id must be canonical Taira XOR")
-    authority = _text(record["custody_owner"], f"{label}.custody_owner", 512)
-    from .client import _decode_canonical_i105_string
-
-    _decode_canonical_i105_string(authority)
     _integer(record["payload_amount_scale"], f"{label}.payload_amount_scale", 9, 9)
-    return _integer(
-        record["max_outstanding_liability"],
-        f"{label}.max_outstanding_liability",
-        1,
-        _MAX_U128,
+    return int(
+        _unsigned_decimal(
+            record["max_outstanding_liability"],
+            f"{label}.max_outstanding_liability",
+            _MAX_U128,
+            positive=True,
+        )
     )
 
 
@@ -1719,7 +2273,7 @@ def _route_configuration_hash(
     if destination.family == "ton":
         if route_id != "taira_ton_xor":
             raise ValueError("SCCP TON route id does not match its exact deployment")
-        global_id = -239 if profile == "ton-mainnet" else -3
+        global_id = -239
         source_lane_hash = _lane_hash(lane[0], lane[1])
         destination_lane_hash = _lane_hash(lane[1], lane[0])
         roles = (
@@ -1758,12 +2312,8 @@ def _route_configuration_hash(
         ).digest()
     network_values = {
         "ethereum-mainnet": ("taira_eth_xor", 1),
-        "ethereum-sepolia": ("taira_eth_xor", 11_155_111),
         "bsc-mainnet": ("taira_bsc_xor", 56),
-        "bsc-testnet": ("taira_bsc_xor", 97),
         "tron-mainnet": ("taira_tron_xor", 0x2B66_53DC),
-        "tron-nile": ("taira_tron_xor", 0xCD86_90DC),
-        "tron-shasta": ("taira_tron_xor", 0x94A9_059E),
     }
     try:
         expected_route_id, network_value = network_values[profile]
@@ -1779,6 +2329,9 @@ def _route_configuration_hash(
         destination_lane_hash,
         destination.token_code_hash,
         destination.verifier_code_hash,
+        destination.route_code_hash,
+        destination.replay_verifier_code_hash,
+        destination.mint_breaker_code_hash,
         destination.verifier_key_hash,
         destination.semantic_profile_hash,
         destination.finality_anchor_hash,
@@ -1826,6 +2379,7 @@ def _route(
             "inbound_finality_cutoff",
             "source_identity",
             "destination",
+            "sora_outbound_execution_policy",
             "settlement",
         }
     )
@@ -1846,16 +2400,22 @@ def _route(
         raise ValueError(f"{label} enables inbound settlement without a native trust anchor")
     source = _source_identity(record["source_identity"], lane, f"{label}.source_identity")
     destination = _destination(record["destination"], lane, f"{label}.destination")
+    execution_policy = _sora_outbound_execution_policy(
+        record["sora_outbound_execution_policy"],
+        f"{label}.sora_outbound_execution_policy",
+    )
     max_outstanding_liability = _settlement(
         record["settlement"], f"{label}.settlement"
     )
+    expected_wrapped_supply = (
+        max_outstanding_liability * destination.taira_to_token_multiplier
+    )
     if (
-        destination.max_wrapped_supply
-        != max_outstanding_liability * destination.taira_to_token_multiplier
+        expected_wrapped_supply > _MAX_U128
+        or expected_wrapped_supply != destination.max_wrapped_supply
     ):
         raise ValueError(
-            f"{label}.destination.max_wrapped_supply must equal "
-            "settlement.max_outstanding_liability multiplied by the destination multiplier"
+            f"{label} destination wrapped-supply cap does not match the settlement liability cap"
         )
     source_roles_match = source[0] == destination.family
     if source[0] == "ton":
@@ -1875,6 +2435,22 @@ def _route(
     route_configuration_hash = _route_configuration_hash(
         lane, record["route_id"], record["asset_key"], revision, destination
     )
+    execution_policy_roles = (
+        execution_policy.contract_artifact_sha256,
+        execution_policy.vk_ref.commitment,
+        route_configuration_hash,
+        destination.destination_binding_hash,
+        destination.verifier_key_hash,
+        destination.semantic_profile_hash,
+        destination.finality_anchor_hash,
+        *destination.execution_policy_hash_roles,
+    )
+    if any(not any(role) for role in execution_policy_roles) or len(
+        set(execution_policy_roles)
+    ) != len(execution_policy_roles):
+        raise ValueError(
+            f"{label}.sora_outbound_execution_policy reuses a governed hash role"
+        )
     if source[3] != route_configuration_hash:
         raise ValueError(
             f"{label} source route_config_hash does not match the immutable deployment"
@@ -2091,8 +2667,8 @@ def _payload_projection(value: Any, expected_domain: int, label: str) -> Any:
     expected_route = {
         SCCP_DOMAIN_ETH: "taira_eth_xor",
         SCCP_DOMAIN_BSC: "taira_bsc_xor",
-        SCCP_DOMAIN_TON: "taira_ton_xor",
         SCCP_DOMAIN_TRON: "taira_tron_xor",
+        SCCP_DOMAIN_TON: "taira_ton_xor",
     }[domain]
     if route_id != expected_route:
         raise ValueError(f"{label}.Transfer.route_id does not match its destination domain")
@@ -2170,7 +2746,7 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
             != expected_request
         ):
             raise ValueError(f"{label}.links do not identify this exact message")
-        if _integer(record["target_domain"], f"{label}.target_domain", 1, 5) != target[2]:
+        if _protocol_domain(record["target_domain"], f"{label}.target_domain") != target[2]:
             raise ValueError(f"{label} profile and domain fields disagree")
 
         amount = _unsigned_decimal(record["amount"], f"{label}.amount", _MAX_U128, positive=True)
@@ -2296,11 +2872,15 @@ def _validate_codec_value(
         record[value_field], f"SCCP transfer.{value_field}", maximum_bytes=256
     )
     value = bytes.fromhex(encoded[2:])
-    valid = (
-        codec == SCCP_CODEC_CANONICAL_TEXT
-        and len(value) <= 256
-        and all(0x21 <= byte <= 0x7E for byte in value)
-    ) or (
+    if codec == SCCP_CODEC_CANONICAL_TEXT:
+        try:
+            text = value.decode("utf-8")
+            valid = normalize_sccp_codec_value(codec, text) == value
+        except (UnicodeDecodeError, TypeError, ValueError):
+            valid = False
+    else:
+        valid = False
+    valid = valid or (
         codec == SCCP_CODEC_EVM_ADDRESS20 and len(value) == 20 and any(value)
     ) or (
         codec == SCCP_CODEC_TRON_ADDRESS21
@@ -2315,6 +2895,17 @@ def _validate_codec_value(
     )
     if not valid:
         raise ValueError(f"SCCP transfer.{value_field} does not match its codec")
+
+
+def _validate_sora_sender(value: Any) -> None:
+    encoded = _variable_hex(value, "SCCP transfer.sender", maximum_bytes=256)
+    try:
+        sender = bytes.fromhex(encoded[2:]).decode("utf-8")
+        decode_canonical_i105_account_id(sender)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(
+            "SCCP transfer.sender must contain an exact canonical I105 account"
+        ) from exc
 
 
 def _validate_transfer(
@@ -2352,6 +2943,7 @@ def _validate_transfer(
     _validate_codec_value(record, "asset_id_codec", "asset_id")
     _unsigned_decimal(record["amount"], "SCCP transfer.amount", _MAX_U128, positive=True)
     _validate_codec_value(record, "sender_codec", "sender", source_domain)
+    _validate_sora_sender(record["sender"])
     _validate_codec_value(record, "recipient_codec", "recipient", destination_domain)
     _validate_codec_value(record, "route_id_codec", "route_id")
 
@@ -2449,7 +3041,7 @@ def _public_inputs(value: Any, label: str) -> Mapping[str, Any]:
     _integer(record["version"], f"{label}.version", 1, 1)
     for field in ("message_id", "payload_hash", "commitment_root", "finality_block_hash"):
         _lower_hex(record[field], f"{label}.{field}", 32, prefix=True)
-    _integer(record["target_domain"], f"{label}.target_domain", 1, 5)
+    _protocol_domain(record["target_domain"], f"{label}.target_domain")
     height = record["finality_height"]
     if not isinstance(height, str) or re.fullmatch(r"[1-9][0-9]*", height) is None:
         raise ValueError(f"{label}.finality_height must be a positive canonical u64 string")
@@ -2620,231 +3212,6 @@ def normalize_sccp_proof_request(value: Any) -> Mapping[str, Any]:
     return _deep_freeze(record)
 
 
-def _authority(value: Any, label: str) -> str:
-    authority = _text(value, label, 512)
-    from .client import _decode_canonical_i105_string
-
-    _decode_canonical_i105_string(authority)
-    return authority
-
-
-def _fee_payment(value: Any, label: str) -> Dict[str, Any]:
-    # Import lazily because the public client owns the shared typed fee-intent
-    # normalizer and imports this SCCP module for its route codecs.
-    from .client import ToriiClient
-
-    return ToriiClient._normalize_fee_payment_intent(value, context=label)
-
-
-def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
-    """Build the sole supported destination-proof submission body."""
-
-    record = _exact_fields(
-        value,
-        frozenset(
-            {
-                "authority",
-                "fee_payment",
-                "signature_b64",
-                "transaction_payload_b64",
-                "destination_proof_b64",
-                "creation_time_ms",
-            }
-        ),
-        "bridge proof submit",
-        frozenset({"authority", "fee_payment", "destination_proof_b64"}),
-    )
-    destination_proof = _canonical_base64(
-        record["destination_proof_b64"],
-        "bridge proof submit.destination_proof_b64",
-        maximum_bytes=_MAX_DESTINATION_ARTIFACT_BYTES,
-    )
-    validate_norito_frame(
-        destination_proof,
-        context="bridge proof submit.destination_proof_b64",
-        expected_type_name=_DESTINATION_ARTIFACT_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    creation_time = (
-        None
-        if "creation_time_ms" not in record
-        else _integer(record["creation_time_ms"], "bridge proof submit.creation_time_ms", 1)
-    )
-    result: Dict[str, Any] = {
-        "authority": _authority(record["authority"], "bridge proof submit.authority"),
-        "fee_payment": _fee_payment(
-            record["fee_payment"], "bridge proof submit.fee_payment"
-        ),
-        **_detached_signing_state(record, "bridge proof submit", creation_time),
-        "destination_proof_b64": record["destination_proof_b64"],
-    }
-    if creation_time is not None:
-        result["creation_time_ms"] = creation_time
-    return result
-
-
-def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
-    """Build the sole supported native inbound message submission body."""
-
-    record = _exact_fields(
-        value,
-        frozenset(
-            {
-                "authority",
-                "fee_payment",
-                "signature_b64",
-                "transaction_payload_b64",
-                "native_proof_b64",
-                "creation_time_ms",
-            }
-        ),
-        "bridge message submit",
-        frozenset({"authority", "fee_payment", "native_proof_b64"}),
-    )
-    native_proof = _canonical_base64(
-        record["native_proof_b64"], "bridge message submit.native_proof_b64"
-    )
-    validate_norito_frame(
-        native_proof,
-        context="bridge message submit.native_proof_b64",
-        expected_type_name=_NATIVE_INBOUND_PROOF_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    creation_time = (
-        None
-        if "creation_time_ms" not in record
-        else _integer(record["creation_time_ms"], "bridge message submit.creation_time_ms", 1)
-    )
-    result: Dict[str, Any] = {
-        "authority": _authority(record["authority"], "bridge message submit.authority"),
-        "fee_payment": _fee_payment(
-            record["fee_payment"], "bridge message submit.fee_payment"
-        ),
-        **_detached_signing_state(record, "bridge message submit", creation_time),
-        "native_proof_b64": record["native_proof_b64"],
-    }
-    if creation_time is not None:
-        result["creation_time_ms"] = creation_time
-    return result
-
-
-def _detached_signing_state(
-    record: Mapping[str, Any], label: str, creation_time: Optional[int]
-) -> Dict[str, str]:
-    has_signature = "signature_b64" in record
-    has_transaction_payload = "transaction_payload_b64" in record
-    if has_signature != has_transaction_payload:
-        raise ValueError(
-            f"{label} must omit both signature_b64 and transaction_payload_b64 for preparation "
-            "or provide both for signed submission"
-        )
-    if not has_signature:
-        return {}
-    if creation_time is None:
-        raise ValueError(f"{label}.creation_time_ms is required for signed submission")
-    _canonical_base64(
-        record["signature_b64"],
-        f"{label}.signature_b64",
-        maximum_bytes=_MAX_DETACHED_SIGNATURE_BYTES,
-    )
-    _canonical_base64(
-        record["transaction_payload_b64"], f"{label}.transaction_payload_b64"
-    )
-    return {
-        "signature_b64": record["signature_b64"],
-        "transaction_payload_b64": record["transaction_payload_b64"],
-    }
-
-
-def _iroha_prehash(payload: bytes) -> bytes:
-    digest = bytearray(hashlib.blake2b(payload, digest_size=32).digest())
-    digest[-1] |= 1
-    return bytes(digest)
-
-
-def normalize_sccp_bridge_submit_response(
-    value: Any, expectations: Optional[Mapping[str, Any]] = None
-) -> SccpBridgeSubmitResponse:
-    """Validate the unified exact prepared-or-submitted bridge response."""
-
-    record = _exact_fields(value, _BRIDGE_RESPONSE_FIELDS, "bridge submit response")
-    submitted = _boolean(record["submitted"], "bridge submit response.submitted")
-    if record["payload_kind"] != "transfer":
-        raise ValueError("bridge submit response.payload_kind must be transfer")
-    counterparty = _profile(record["counterparty_chain"], "counterparty_chain")
-    domain = _integer(record["counterparty_domain"], "counterparty_domain", 1, 5)
-    if counterparty[3] or counterparty[2] != domain:
-        raise ValueError("bridge submit response counterparty profile/domain disagree")
-    backend = _text(record["backend"], "backend", 128)
-    if re.fullmatch(r"bridge/[a-z0-9/_-]+", backend) is None:
-        raise ValueError("bridge submit response.backend is not canonical")
-    range_start = _integer(record["range_start_height"], "range_start_height", 1)
-    range_end = _integer(record["range_end_height"], "range_end_height", range_start)
-    creation_time = _integer(record["creation_time_ms"], "creation_time_ms", 1)
-    tx_hash = (
-        None
-        if record["tx_hash_hex"] is None
-        else _lower_hex(record["tx_hash_hex"], "tx_hash_hex", 32)
-    )
-    transaction = (
-        None
-        if record["transaction_payload_b64"] is None
-        else _canonical_base64(record["transaction_payload_b64"], "transaction_payload_b64")
-    )
-    signing = (
-        None
-        if record["signing_message_b64"] is None
-        else _canonical_base64(
-            record["signing_message_b64"], "signing_message_b64", maximum_bytes=32
-        )
-    )
-    if signing is not None and len(signing) != 32:
-        raise ValueError("signing_message_b64 must contain exactly 32 bytes")
-    if submitted:
-        if tx_hash is None or transaction is not None or signing is not None:
-            raise ValueError("submitted response must contain only tx_hash_hex signing state")
-    elif tx_hash is not None or transaction is None or signing is None:
-        raise ValueError("prepared response requires transaction payload and signing message")
-    elif _iroha_prehash(transaction) != signing:
-        raise ValueError("signing_message_b64 is not the transaction-payload prehash")
-    response = SccpBridgeSubmitResponse(
-        submitted=submitted,
-        payload_kind="transfer",
-        message_id_hex=_lower_hex(record["message_id_hex"], "message_id_hex", 32),
-        backend=backend,
-        counterparty_domain=domain,
-        counterparty_chain=counterparty[0],
-        route_configuration_hash_hex=_lower_hex(
-            record["route_configuration_hash_hex"], "route_configuration_hash_hex", 32
-        ),
-        range_start_height=range_start,
-        range_end_height=range_end,
-        creation_time_ms=creation_time,
-        tx_hash_hex=tx_hash,
-        transaction_payload_b64=record["transaction_payload_b64"],
-        signing_message_b64=record["signing_message_b64"],
-    )
-    expected = {} if expectations is None else dict(_mapping(expectations, "bridge expectations"))
-    _exact_fields(
-        expected,
-        frozenset({"submitted", "creation_time_ms"}),
-        "bridge expectations",
-        frozenset(),
-    )
-    if (
-        expected.get("creation_time_ms") is not None
-        and expected["creation_time_ms"] != creation_time
-    ):
-        raise ValueError("bridge submit response.creation_time_ms does not match the request")
-    if "submitted" in expected:
-        expected_submitted = _boolean(expected["submitted"], "bridge expectations.submitted")
-        if expected_submitted != submitted:
-            raise ValueError(
-                "bridge submit response.submitted does not match the request signing state"
-            )
-    return response
-
-
 def parse_sccp_json_object(
     payload: Union[str, bytes, bytearray, memoryview], label: str = "SCCP response"
 ) -> Mapping[str, Any]:
@@ -2889,23 +3256,12 @@ def parse_sccp_json_object(
     return _mapping(value, label)
 
 
-def parse_sccp_bridge_submit_response_json(
-    payload: Union[str, bytes, bytearray, memoryview],
-    expectations: Optional[Mapping[str, Any]] = None,
-) -> SccpBridgeSubmitResponse:
-    """Parse and validate a strict SCCP bridge response."""
-
-    return normalize_sccp_bridge_submit_response(
-        parse_sccp_json_object(payload, "bridge submit response"), expectations
-    )
-
-
 __all__ = [
     "SCCP_DOMAIN_SORA",
     "SCCP_DOMAIN_ETH",
     "SCCP_DOMAIN_BSC",
-    "SCCP_DOMAIN_TON",
     "SCCP_DOMAIN_TRON",
+    "SCCP_DOMAIN_TON",
     "SCCP_CODEC_CANONICAL_TEXT",
     "SCCP_CODEC_EVM_ADDRESS20",
     "SCCP_CODEC_TRON_ADDRESS21",
@@ -2913,23 +3269,32 @@ __all__ = [
     "SCCP_CODEC_KEYS",
     "SCCP_PAYLOAD_KINDS",
     "SCCP_NETWORK_PROFILES",
+    "SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1",
+    "SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1",
+    "SCCP_REPLAY_SMT_DEPTH_V1",
+    "SCCP_REPLAY_BOUNDARIES_V1",
     "SccpRegistryLimits",
     "SccpResourceLimits",
     "SccpCapabilities",
     "SccpRegistry",
+    "SccpPortableVerifyingKeyRef",
+    "SccpSoraOutboundExecutionPolicy",
     "SccpRecentMessages",
     "SccpRecentCursor",
-    "SccpBridgeSubmitResponse",
+    "SccpReplayWitnessRootV1",
     "normalize_sccp_codec_value",
     "sccp_source_event_digest",
+    "sccp_replay_domain_hash_v1",
+    "sccp_replay_key_v1",
+    "sccp_replay_record_digest_v1",
+    "sccp_replay_empty_hashes_v1",
+    "sccp_replay_root_from_witness_v1",
+    "sccp_replay_verify_against_current_root_v1",
+    "sccp_replay_accumulator_occupy_v1",
     "normalize_sccp_capabilities",
     "normalize_sccp_registry",
     "normalize_sccp_recent_messages",
     "normalize_sccp_message_bundle",
     "normalize_sccp_proof_request",
-    "normalize_bridge_proof_submit_payload",
-    "normalize_bridge_message_submit_payload",
-    "normalize_sccp_bridge_submit_response",
     "parse_sccp_json_object",
-    "parse_sccp_bridge_submit_response_json",
 ]

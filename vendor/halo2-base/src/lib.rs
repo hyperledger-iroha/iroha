@@ -451,6 +451,43 @@ impl SegmentedBits {
             / PACKED_BITS_SEGMENT_BYTES
     }
 
+    /// Checks the shape metadata needed by the hot mutation paths without
+    /// walking every backing segment.
+    fn debug_assert_shape(&self) {
+        let required_bytes = packed_bits_byte_len(self.len);
+        let required_segments = Self::required_segment_count(self.len);
+        debug_assert_eq!(self.segments.len(), required_segments);
+        if required_segments == 0 {
+            return;
+        }
+        let tail_bytes = required_bytes
+            .checked_sub((required_segments - 1) * PACKED_BITS_SEGMENT_BYTES)
+            .expect("SegmentedBits tail length underflow");
+        debug_assert_eq!(
+            self.segments
+                .last()
+                .expect("SegmentedBits lost its live tail segment")
+                .len(),
+            tail_bytes
+        );
+    }
+
+    #[cfg(test)]
+    fn assert_storage_consistent(&self) {
+        self.debug_assert_shape();
+        assert_eq!(
+            self.segments.iter().map(Vec::len).sum::<usize>(),
+            packed_bits_byte_len(self.len)
+        );
+        for segment in self
+            .segments
+            .iter()
+            .take(self.segments.len().saturating_sub(1))
+        {
+            assert_eq!(segment.len(), PACKED_BITS_SEGMENT_BYTES);
+        }
+    }
+
     fn prepare_push(&mut self) -> Option<Vec<u8>> {
         let _ = self
             .len
@@ -496,14 +533,11 @@ impl SegmentedBits {
                 .expect("SegmentedBits prepared bit is unavailable") |= bit;
         }
         self.len = new_len;
+        self.debug_assert_shape();
     }
 
     /// Returns the number of logical bits.
     pub fn len(&self) -> usize {
-        debug_assert_eq!(
-            self.segments.iter().map(Vec::len).sum::<usize>(),
-            packed_bits_byte_len(self.len)
-        );
         self.len
     }
 
@@ -587,6 +621,7 @@ impl SegmentedBits {
                 }
             }
             self.len = new_len;
+            self.debug_assert_shape();
             return;
         }
 
@@ -627,6 +662,7 @@ impl SegmentedBits {
                 self.set(index, true);
             }
         }
+        self.debug_assert_shape();
     }
 
     /// Iterates over logical bits in insertion order.
@@ -1102,9 +1138,9 @@ impl<F: ScalarField> std::iter::FusedIterator for CompactAdviceIter<'_, F> {}
 #[cfg(test)]
 mod compact_advice_tests {
     use super::{
-        AssignedValue, COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, CompactAdvice, Context,
-        FIRST_PHASE_CELL_TYPE_ID, PACKED_BITS_SEGMENT_LEN, SegmentedBits, compact_advice_position,
-        compact_advice_zero_mask_len,
+        compact_advice_position, compact_advice_zero_mask_len, AssignedValue, CompactAdvice,
+        Context, SegmentedBits, COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, FIRST_PHASE_CELL_TYPE_ID,
+        PACKED_BITS_SEGMENT_LEN,
     };
     use crate::ff::Field as _;
     use crate::gates::flex_gate::threads::SinglePhaseCoreManager;
@@ -1492,6 +1528,7 @@ mod compact_advice_tests {
         }
 
         assert_eq!(bits.len(), len);
+        bits.assert_storage_consistent();
         assert_eq!(bits.segment_count(), 2);
         assert_eq!(bits.used_bytes_len(), compact_advice_zero_mask_len(len));
         let capacity = bits
@@ -1549,6 +1586,7 @@ mod compact_advice_tests {
         clone.fill(false);
         assert!(clone.iter().all(|selected| !*selected));
         assert_eq!(clone.len(), len);
+        clone.assert_storage_consistent();
     }
 
     #[test]
@@ -1579,6 +1617,8 @@ mod compact_advice_tests {
         let expected = vec![true, false, true, false, true];
         assert_eq!(debug_fixture.iter().copied().collect::<Vec<_>>(), expected);
         assert_eq!(format!("{debug_fixture:?}"), format!("{expected:?}"));
+        bits.assert_storage_consistent();
+        debug_fixture.assert_storage_consistent();
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -1595,14 +1635,13 @@ mod compact_advice_tests {
         let prepared = bits.prepare_push();
         assert_eq!(bits.len(), 0);
         assert!(bits.segments.is_empty());
-        assert!(
-            prepared
-                .as_ref()
-                .is_some_and(|segment| segment.capacity() >= super::PACKED_BITS_SEGMENT_BYTES)
-        );
+        assert!(prepared
+            .as_ref()
+            .is_some_and(|segment| segment.capacity() >= super::PACKED_BITS_SEGMENT_BYTES));
         bits.push_prepared(true, prepared);
         assert_eq!(bits.len(), 1);
         assert!(bits[0]);
+        bits.assert_storage_consistent();
 
         bits.resize(PACKED_BITS_SEGMENT_LEN, false);
         let prepared = bits.prepare_push();
@@ -1611,6 +1650,7 @@ mod compact_advice_tests {
         bits.push_prepared(false, prepared);
         assert_eq!(bits.segment_count(), 2);
         assert!(!bits[PACKED_BITS_SEGMENT_LEN]);
+        bits.assert_storage_consistent();
     }
 
     #[test]

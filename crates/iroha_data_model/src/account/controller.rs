@@ -6,7 +6,7 @@ use blake2::{
     digest::{Mac, consts::U32},
 };
 use core::fmt;
-use iroha_crypto::{Algorithm, PublicKey};
+use iroha_crypto::{Algorithm, PublicKey, zeroize_value_for_confidential_discard};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::vec::Vec;
@@ -18,6 +18,8 @@ use thiserror::Error;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "kind", content = "payload", no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::AccountController")]
 pub enum AccountController {
     /// Single public key controls the account.
     Single(PublicKey),
@@ -57,6 +59,17 @@ impl AccountController {
             Self::Multisig(policy) => Some(policy),
         }
     }
+    /// Wipe controller material before discarding a confidential account copy.
+    ///
+    /// The controller intentionally becomes invalid and must not be used after
+    /// this call. Ordinary ledger account identifiers never call this method;
+    /// it exists for decrypted restricted payload containers.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        match self {
+            Self::Single(public_key) => public_key.zeroize_for_confidential_discard(),
+            Self::Multisig(policy) => policy.zeroize_for_confidential_discard(),
+        }
+    }
 }
 impl fmt::Display for AccountController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,6 +91,8 @@ impl fmt::Display for AccountController {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::MultisigPolicy")]
 pub struct MultisigPolicy {
     version: u8,
     threshold: u16,
@@ -93,6 +108,20 @@ impl MultisigPolicy {
     /// Returns [`MultisigPolicyError`] if the supplied configuration is invalid.
     pub fn new(threshold: u16, members: Vec<MultisigMember>) -> Result<Self, MultisigPolicyError> {
         Self::validate(Self::CURRENT_VERSION, threshold, members)
+    }
+    /// Wipe every member key, weight, and policy threshold before discard.
+    ///
+    /// The policy intentionally becomes invalid and must not be used after
+    /// this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        for member in &mut self.members {
+            member.zeroize_for_confidential_discard();
+        }
+        zeroize_value_for_confidential_discard(&mut self.version);
+        zeroize_value_for_confidential_discard(&mut self.threshold);
+        self.members.clear();
+        zeroize_value_for_confidential_discard(self.members.spare_capacity_mut());
+        drop(core::mem::take(&mut self.members));
     }
     /// Construct a policy from serialized components.
     ///
@@ -263,6 +292,8 @@ impl MultisigPolicy {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::MultisigMember")]
 pub struct MultisigMember {
     public_key: PublicKey,
     weight: u16,
@@ -283,6 +314,10 @@ impl MultisigMember {
         CurveId::try_from_algorithm(algorithm)
             .map_err(|_| MultisigPolicyError::UnsupportedCurve(algorithm))?;
         Ok(Self { public_key, weight })
+    }
+    fn zeroize_for_confidential_discard(&mut self) {
+        self.public_key.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.weight);
     }
     /// Borrow the member public key.
     #[must_use]
@@ -481,6 +516,33 @@ mod tests {
         assert_eq!(policy.threshold(), 2);
         assert_eq!(policy.total_weight(), 3);
         assert_eq!(policy.version(), MultisigPolicy::CURRENT_VERSION);
+    }
+    #[test]
+    fn multisig_member_confidential_discard_is_idempotent() {
+        let mut member = MultisigMember::new(checked_random_public_key(), 7).expect("member");
+
+        for _ in 0..2 {
+            member.zeroize_for_confidential_discard();
+            assert_eq!(member.weight, 0);
+            assert!(member.public_key.try_to_bytes().is_err());
+        }
+    }
+    #[test]
+    fn multisig_policy_confidential_discard_wipes_members_and_allocation_idempotently() {
+        let members = vec![
+            MultisigMember::new(checked_random_public_key(), 2).expect("member"),
+            MultisigMember::new(checked_random_public_key(), 3).expect("member"),
+        ];
+        let mut policy = MultisigPolicy::new(4, members).expect("policy");
+        assert!(policy.members.capacity() >= 2);
+
+        for _ in 0..2 {
+            policy.zeroize_for_confidential_discard();
+            assert_eq!(policy.version, 0);
+            assert_eq!(policy.threshold, 0);
+            assert!(policy.members.is_empty());
+            assert_eq!(policy.members.capacity(), 0);
+        }
     }
     #[test]
     fn multisig_policy_rejects_duplicates() {

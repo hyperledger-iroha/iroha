@@ -1,5 +1,7 @@
 //! Grouped Iroha Core integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "../private_settlement_responder_attestation.rs"]
+mod private_settlement_responder_attestation;
 #[path = "../zk_roots_get_cap.rs"]
 mod zk_roots_get_cap;
 #[path = "../zk_stark.rs"]

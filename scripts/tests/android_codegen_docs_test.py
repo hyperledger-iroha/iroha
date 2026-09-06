@@ -14,6 +14,41 @@ docs_mod = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(docs_mod)  # type: ignore[misc]
 
 
+def test_exporter_covers_revisioned_contract_lifecycle_surface() -> None:
+    """Android descriptors include every first-release lifecycle instruction."""
+
+    exporter = (
+        MODULE_PATH.parents[1] / "tools/norito_codegen_exporter/src/main.rs"
+    ).read_text(encoding="utf-8")
+    lifecycle_types = {
+        "ActivateContractInstance",
+        "DeactivateContractInstance",
+        "SetContractParliamentDelegation",
+        "OfferContractOwnership",
+        "AcceptContractOwnership",
+        "CancelContractOwnershipOffer",
+        "CommitContractDeployment",
+    }
+
+    for type_name in lifecycle_types:
+        assert (
+            f"iroha_data_model::isi::smart_contract_code::{type_name}" in exporter
+        ), type_name
+
+    for type_name in (
+        "ProposeContractLifecycleGovernance",
+        "ProposeContractEmergencyHold",
+        "ProposeGlobalDataTriggerPermissionGovernance",
+    ):
+        assert f"iroha_data_model::isi::governance::{type_name}" in exporter
+
+    documented_notes = {
+        type_name.rsplit("::", 1)[-1]
+        for type_name in docs_mod.SMART_CONTRACT_NOTES
+    }
+    assert lifecycle_types <= documented_notes
+
+
 def test_render_instructions_renders_tables(tmp_path: Path) -> None:
     out_path = tmp_path / "instructions.md"
     instructions = [

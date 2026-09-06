@@ -135,6 +135,18 @@ public sealed class NoritoCodecTests
         Assert.Equal("00112233445566778899aabbccddeeff", Convert.ToHexString(updated.Encode().AsSpan(6, 16)).ToLowerInvariant());
     }
 
+    [Fact]
+    public void NoritoHeaderEqualityUsesSchemaHashContents()
+    {
+        var first = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, 5);
+        var second = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, 5);
+
+        Assert.Equal(first, second);
+        Assert.True(first == second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+        Assert.Single(new HashSet<NoritoHeader> { first, second });
+    }
+
     private static void AssertRejects(byte[] archive)
     {
         Assert.Throws<ArgumentException>(() => NoritoCodec.Decode(TestTypeName, archive));

@@ -24,7 +24,7 @@ iroha_core = { workspace = true, default-features = false, features = ["node"] }
 iroha_version = { workspace = true, features = ["json"] }
 iroha_futures.workspace = true
 iroha_test_samples.workspace = true
-iroha_telemetry.workspace = true
+iroha_torii_shared.workspace = true
 base64.workspace = true
 url.workspace = true
 
@@ -37,7 +37,7 @@ futures = { workspace = true, features = ["std", "async-await"] }
 toml = { workspace = true }
 fslock = "0.2.1"
 derive_more = { workspace = true }
-nix = { version = "0.30.1", features = ["signal", "resource", "fs"] }
+nix = { version = "0.30.1", features = ["signal", "resource", "fs", "user"] }
 petname = "2.0.2"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

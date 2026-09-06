@@ -1,5 +1,9 @@
 use super::*;
 use rand::{SeedableRng as _, rngs::StdRng};
+const DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 = TransparentStarkDigestContextV1::new(
+    PrivacyProtocolIdV1::PqMaspStarkV1,
+    b"retained-polynomial-test-v1",
+);
 #[test]
 fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
     let native_columns = (0_u64..17)
@@ -18,6 +22,7 @@ fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
             .install(|| {
                 let mut rng = StdRng::from_seed([0xD7; 32]);
                 let (commitment, polynomials) = commit_masked_trace_polynomial_columns_v1(
+                    DIGEST_CONTEXT_V1,
                     b"aggregate-retained-batch-leaf",
                     b"aggregate-retained-batch-node",
                     4,
@@ -31,6 +36,7 @@ fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
                 )
                 .expect("batched retained commitment");
                 let replay = replay_masked_trace_polynomial_columns_v1(
+                    DIGEST_CONTEXT_V1,
                     b"aggregate-retained-batch-leaf",
                     b"aggregate-retained-batch-node",
                     4,
@@ -62,6 +68,7 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
         let mut rng = StdRng::from_seed([0xD2; 32]);
         assert_eq!(
             commit_masked_trace_polynomial_columns_v1(
+                DIGEST_CONTEXT_V1,
                 leaf_domain,
                 node_domain,
                 group,
@@ -99,6 +106,7 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
     let mut rng = StdRng::from_seed([0xD3; 32]);
     assert_eq!(
         commit_masked_trace_polynomial_columns_v1(
+            DIGEST_CONTEXT_V1,
             b"leaf",
             b"node",
             0,

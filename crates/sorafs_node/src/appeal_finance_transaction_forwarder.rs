@@ -102,7 +102,7 @@ impl AppealFinanceTransactionForwarderPolicyV1 {
         Ok(())
     }
 }
-/// Configured public identity of the runtime checkpoint HSM/KMS provider.
+/// Configured public identity of the runtime checkpoint provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppealFinanceCheckpointAuthenticationPolicyV1 {
     /// Schema version.
@@ -191,7 +191,7 @@ pub struct AppealFinanceCheckpointRuntimeIdentityV1 {
 /// Fixed external failure classes without provider diagnostics or credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppealFinanceCheckpointExternalError {
-    /// The HSM/KMS or sealed store is temporarily unavailable.
+    /// The signing provider or sealed store is temporarily unavailable.
     Unavailable,
     /// The provider rejected the exact request.
     Rejected,
@@ -307,7 +307,7 @@ impl AppealFinanceSealedCheckpointRecordV1 {
         Ok(record)
     }
 }
-/// Runtime-only HSM/KMS signer plus monotonic sealed checkpoint head.
+/// Runtime-only signer plus monotonic sealed checkpoint head.
 ///
 /// Implementations must keep signing material and credentials out of process configuration, make
 /// the head compare-and-swap linearizable, preserve the exact latest record across restarts, and
@@ -798,7 +798,7 @@ impl AppealFinanceTransactionForwarder {
     }
     /// Open or create a private, authenticated, single-writer durable checkpoint.
     ///
-    /// The HSM/KMS-backed runtime signs every exact checkpoint and owns a monotonic sealed head.
+    /// The qualified runtime provider signs every exact checkpoint and owns a monotonic sealed head.
     /// The sealed record is committed before the local atomic rename so a crash can recover the
     /// exact newer checkpoint without accepting rollback or substitution.
     ///
@@ -2600,7 +2600,7 @@ pub enum AppealFinanceTransactionForwarderError {
     /// Runtime provider revision or public-policy digest is malformed.
     #[error("appeal-finance runtime provider qualification is invalid")]
     InvalidRuntimeProviderQualification,
-    /// The runtime HSM/KMS identity differs from the configured identity.
+    /// The runtime provider identity differs from the configured identity.
     #[error("appeal-finance checkpoint runtime identity does not match configuration")]
     CheckpointRuntimeIdentityMismatch,
     /// The signed checkpoint envelope is malformed, noncanonical, or untrusted.
@@ -2615,10 +2615,10 @@ pub enum AppealFinanceTransactionForwarderError {
     /// Local and sealed checkpoint histories conflict.
     #[error("appeal-finance checkpoint fork was detected")]
     CheckpointFork,
-    /// The runtime HSM/KMS or sealed store is unavailable.
+    /// The runtime provider or sealed store is unavailable.
     #[error("appeal-finance checkpoint authentication is unavailable")]
     CheckpointAuthenticationUnavailable,
-    /// The runtime HSM/KMS or sealed store rejected the request.
+    /// The runtime provider or sealed store rejected the request.
     #[error("appeal-finance checkpoint authentication request was rejected")]
     CheckpointAuthenticationRejected,
     /// The sealed checkpoint outcome cannot be established safely.
@@ -2713,7 +2713,7 @@ mod tests {
     impl TestCheckpointRuntime {
         fn new(seed: u8) -> Self {
             Self {
-                provider_handle: format!("appeal-finance-hsm-{seed}"),
+                provider_handle: format!("appeal-finance-provider-{seed}"),
                 key: SigningKey::from_bytes(&[seed; 32]),
                 qualification: Mutex::new(AppealFinanceRuntimeProviderQualificationV1::new(
                     1, [seed; 32],
@@ -3611,7 +3611,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(50));
         let mut authentication_policy = runtime.authentication_policy();
-        authentication_policy.provider_handle = "hsm:dummy:appeal-finance".to_owned();
+        authentication_policy.provider_handle = "provider:dummy:appeal-finance".to_owned();
         assert!(matches!(
             AppealFinanceTransactionForwarder::open(
                 dir.path(),
@@ -3628,7 +3628,7 @@ mod tests {
         let runtime = TestCheckpointRuntime::new(49);
         let mut authentication_policy = runtime.authentication_policy();
         authentication_policy.provider_handle =
-            "hsm://appeal-finance/checkpoint.primary-v1_slot-a".to_owned();
+            "provider://appeal-finance/checkpoint.primary-v1_slot-a".to_owned();
         authentication_policy
             .validate()
             .expect("canonical production provider handle");
@@ -3636,8 +3636,8 @@ mod tests {
             "https://operator:secret@checkpoint",
             "https://checkpoint/path?credential=secret",
             "https://checkpoint/path#fragment",
-            "hsm://appeal-finance/%63heckpoint",
-            "hsm:\\appeal-finance\\checkpoint",
+            "provider://appeal-finance/%63heckpoint",
+            "provider:\\appeal-finance\\checkpoint",
         ] {
             authentication_policy.provider_handle = handle.to_owned();
             assert!(matches!(

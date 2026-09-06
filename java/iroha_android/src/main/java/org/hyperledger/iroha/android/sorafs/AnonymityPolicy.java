@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.sorafs;
 /**
  * Staged anonymity roll-out policy for SoraNet fetches.
  *
- * <p>This mirrors {@code sorafs_orchestrator::AnonymityPolicy} and is used when serialising gateway
+ * <p>This mirrors {@code iroha_service_model::soranet::AnonymityPolicy} and is used when serialising gateway
  * fetch requests or telemetry overrides.
  */
 public enum AnonymityPolicy {

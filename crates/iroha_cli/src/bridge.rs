@@ -75,6 +75,9 @@ pub struct SubmitNativeMessageArgs {
     /// File containing one canonical Norito protocol-native SCCP inbound proof.
     #[arg(long, value_name = "PATH")]
     proof: PathBuf,
+    /// File containing one canonical Norito sparse replay non-membership witness.
+    #[arg(long, value_name = "PATH")]
+    replay_witness: PathBuf,
     #[command(flatten)]
     detached: DetachedSubmitArgs,
 }
@@ -538,6 +541,11 @@ fn sccp_submit_native_message(
         iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_V1,
         "SCCP native proof",
     )?;
+    let replay_witness = read_bounded_binary_artifact(
+        &args.replay_witness,
+        iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1,
+        "SCCP sparse replay witness",
+    )?;
     let detached = load_detached_submit_material(&args.detached, &authority)?;
     let request = SccpNativeMessageSubmitRequest {
         authority,
@@ -545,6 +553,7 @@ fn sccp_submit_native_message(
         signature_b64: detached.signature_b64,
         transaction_payload_b64: detached.transaction_payload_b64,
         native_proof_b64: base64::engine::general_purpose::STANDARD.encode(proof),
+        replay_witness_b64: base64::engine::general_purpose::STANDARD.encode(replay_witness),
         creation_time_ms: detached.creation_time_ms,
     };
     let client = ctx.client_from_config();
@@ -555,13 +564,14 @@ fn sccp_submit_native_message(
 }
 fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
     format!(
-        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} ed25519_sigs_tx/block={}/{} ed25519_keys_tx/block={}/{} bn254_tx/block={}/{} bls12381_tx/block={}/{}",
+        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} sora_outbound_material={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} ed25519_sigs_tx/block={}/{} ed25519_keys_tx/block={}/{} bn254_tx/block={}/{} bls12381_tx/block={}/{}",
         capabilities.version,
         capabilities.registry_revision,
         capabilities.registry_path,
         capabilities.message_bundle_path,
         capabilities.proof_request_path,
         capabilities.recent_messages_path,
+        capabilities.sora_outbound_material_path,
         capabilities
             .proof_submit_path
             .as_deref()
@@ -780,26 +790,22 @@ fn render_sccp_payload_projection_summary(
     )
 }
 fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> String {
-    match value {
-        iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => {
-            format!("canonical_text:{value}")
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } => {
-            format!("evm_address20:0x{}", hex::encode(bytes))
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } => {
-            format!("tron_address21:0x{}", hex::encode(bytes))
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes } => {
-            format!("solana_pubkey32:0x{}", hex::encode(bytes))
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } => {
-            let mut bytes = [0_u8; 36];
-            bytes[..4].copy_from_slice(&workchain.to_be_bytes());
-            bytes[4..].copy_from_slice(account);
-            format!("ton_account36:0x{}", hex::encode(bytes))
-        }
+    if let iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } = value {
+        return format!("canonical_text:{value}");
     }
+    if let iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } = value {
+        return format!("evm_address20:0x{}", hex::encode(bytes));
+    }
+    if let iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } = value {
+        return format!("tron_address21:0x{}", hex::encode(bytes));
+    }
+    if let iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } = value {
+        let mut bytes = [0_u8; 36];
+        bytes[..4].copy_from_slice(&workchain.to_be_bytes());
+        bytes[4..].copy_from_slice(account);
+        return format!("ton_account36:0x{}", hex::encode(bytes));
+    }
+    "unsupported_codec".to_owned()
 }
 #[cfg(test)]
 mod tests {
@@ -1174,6 +1180,9 @@ mod tests {
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
             recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
+            sora_outbound_material_path:
+                "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+                    .to_owned(),
             registry_limits: SccpRegistryLimits {
                 governed_lanes: 16,
                 live_governed_routes: 64,
@@ -1215,7 +1224,13 @@ mod tests {
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
         });
-        for required in ["registry=", "bundle=", "proof_request=", "proof_submit="] {
+        for required in [
+            "registry=",
+            "bundle=",
+            "proof_request=",
+            "sora_outbound_material=/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+            "proof_submit=",
+        ] {
             assert!(summary.contains(required));
         }
         for required in [
@@ -1228,14 +1243,6 @@ mod tests {
         for retired in ["manifest", "artifact", "job", "solana", "ton-"] {
             assert!(!summary.contains(retired));
         }
-    }
-    #[test]
-    fn normalized_codec_summary_renders_solana_pubkey_bytes() {
-        let value = iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x13; 32] };
-        assert_eq!(
-            render_sccp_normalized_codec_value(&value),
-            format!("solana_pubkey32:0x{}", "13".repeat(32))
-        );
     }
     #[test]
     fn normalized_codec_summary_renders_ton_account_bytes() {
@@ -1315,7 +1322,7 @@ mod tests {
                 message_id_hex: "11".repeat(32),
                 kind: "transfer".to_owned(),
                 source_profile: "sora-taira".to_owned(),
-                target_profile: "ethereum-sepolia".to_owned(),
+                target_profile: "ethereum-mainnet".to_owned(),
                 destination_binding_hash: format!("0x{}", "22".repeat(32)),
                 route_configuration_hash: format!("0x{}", "33".repeat(32)),
                 target_domain: 1,

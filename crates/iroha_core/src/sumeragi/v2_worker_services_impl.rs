@@ -56,6 +56,109 @@ struct LifecycleIoQueuedCommandKindsV1 {
 }
 
 impl ProductionV2Services {
+    /// Linearize one Runtime step after the physical Completion prefix.
+    ///
+    /// `RetryCompletion` leaves Runtime untouched and sends the outer driver
+    /// back to Completion rank. The I/O worker and this census use the same mutex, so
+    /// an asynchronously completed Validate cannot appear between an empty
+    /// census and a timeout step while still claiming the earlier ordering.
+    /// When an ordinary completion is blocked solely by a full runtime FIFO,
+    /// the returned capacity cut instead permits one exact Completion-class
+    /// step linearized at that completion's retention time, after which the
+    /// physical Completion rank must be retried.
+    pub(in crate::sumeragi) fn prepare_completion_runtime_cut(
+        &self,
+        runtime_capacity_available: bool,
+    ) -> Result<V2CompletionRuntimeCutDecisionV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let runtime_cut = |cut_at| {
+            V2CompletionRuntimeCutDecisionV1::Runtime(V2CompletionRuntimeCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+            ))
+        };
+        let capacity_relief_cut = |cut_at, blocked_completion_lifecycle_ordinal| {
+            V2CompletionCapacityReliefCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+                blocked_completion_lifecycle_ordinal,
+            )
+            .map(V2CompletionRuntimeCutDecisionV1::CapacityRelief)
+            .ok_or_else(|| {
+                "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
+            })
+        };
+
+        if let Some(completion) = self.held_io_completion.as_ref() {
+            if runtime_capacity_available
+                || completion.is_dedicated_lifecycle_completion()
+                || !completion.requires_runtime_capacity()
+            {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let Some(io) = self.io.as_ref() else {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            };
+            let V2IoCompletionRuntimeCutObservationV1::Pending(owner) =
+                io.admission.completion_runtime_cut_observation()
+            else {
+                return Err("held runtime completion lost its physical ownership record".to_owned());
+            };
+            if !owner.requires_runtime_capacity || owner.is_dedicated_lifecycle() {
+                return Err(
+                    "held runtime completion changed its physical ownership class".to_owned(),
+                );
+            }
+            let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                "held runtime completion lost its actor-global lifecycle ordinal".to_owned()
+            })?;
+            return capacity_relief_cut(owner.retained_at, blocked_ordinal);
+        }
+
+        // Local reconstruction completions have no worker-side timestamp, but
+        // they are already retained on this serialized service. A full FIFO
+        // therefore permits one relief step at the present cut; otherwise the
+        // next Completion turn can consume them directly.
+        if !self.local_completions.is_empty() {
+            if runtime_capacity_available {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let blocked_ordinal = self
+                .local_completions
+                .front()
+                .expect("non-empty local completion queue has a head")
+                .runtime_lifecycle_ordinal();
+            return capacity_relief_cut(Instant::now(), blocked_ordinal);
+        }
+
+        let Some(io) = self.io.as_ref() else {
+            return Ok(runtime_cut(Instant::now()));
+        };
+        // Worker retention samples its timestamp inside this same mutex.
+        match io.admission.completion_runtime_cut_observation() {
+            V2IoCompletionRuntimeCutObservationV1::Empty { cut_at } => Ok(runtime_cut(cut_at)),
+            V2IoCompletionRuntimeCutObservationV1::Pending(owner)
+                if !runtime_capacity_available
+                    && owner.requires_runtime_capacity
+                    && !owner.is_dedicated_lifecycle() =>
+            {
+                let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                    "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
+                })?;
+                capacity_relief_cut(owner.retained_at, blocked_ordinal)
+            }
+            V2IoCompletionRuntimeCutObservationV1::Pending(_) => {
+                Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion)
+            }
+        }
+    }
+
     /// Whether Phase B reparked a certified-Fetch result behind the service boundary.
     #[cfg(test)]
     pub(in crate::sumeragi) fn has_reparked_certified_fetch_completion_for_test(&self) -> bool {
@@ -63,6 +166,47 @@ impl ProductionV2Services {
             self.held_io_completion.as_ref(),
             Some(V2IoCompletion::CertifiedFetchBodyPersisted(_))
         )
+    }
+    fn sign_payload_chunks(
+        &self,
+        payload: EncodedV2Payload,
+        sender: wire::ValidatorIndex,
+    ) -> Result<(wire::ValidatedPayloadManifest, Vec<wire::PayloadChunk>), String> {
+        // `EncodedV2Payload` is the private canonical-encoder capability. Its
+        // manifest hashes already commit these exact bytes, so signing can
+        // safely reuse them instead of hashing every chunk again.
+        let (manifest, chunks) = payload.into_parts();
+        let validated = wire::ValidatedPayloadManifest::new(&self.context, manifest)
+            .map_err(|error| error.to_string())?;
+        if chunks.len() != validated.manifest().chunk_hashes.len() {
+            return Err("encoded Sumeragi v2 chunk count differs from its manifest".to_owned());
+        }
+        let manifest_hash = validated.manifest_hash();
+        let signed = chunks
+            .into_iter()
+            .enumerate()
+            .map(|(index, bytes)| {
+                let index = u32::try_from(index)
+                    .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?;
+                let mut chunk = wire::PayloadChunk {
+                    manifest_hash,
+                    index,
+                    bytes,
+                    sender,
+                    signature: Vec::new(),
+                };
+                let preimage = validated
+                    .committed_chunk_signature_payload(index, sender)
+                    .map_err(|error| error.to_string())?
+                    .signature_preimage();
+                chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+                    .map_err(|error| error.to_string())?
+                    .payload()
+                    .to_vec();
+                Ok::<wire::PayloadChunk, String>(chunk)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((validated, signed))
     }
     /// Reserve output after a recovered Broadcast rejoins its LedgerV1 row,
     /// retaining that durable row as crash-recovery debt.
@@ -179,33 +323,17 @@ impl ProductionV2Services {
         proposal
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
-        let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
         let sender = proposal.proposer;
-        let mut chunk_messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "cold recovered Proposal chunk index overflowed".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            chunk_messages.push(Self::preencode_v2_network_message(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
-            )?);
-        }
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        let manifest = validated.into_manifest();
+        let chunk_messages = signed_chunks
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -314,33 +442,17 @@ impl ProductionV2Services {
             .ok_or_else(|| {
                 "recovered Proposal output could not retain its exact retry authority".to_owned()
             })?;
-        let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
         let sender = proposal.proposer;
-        let mut chunk_messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "recovered Proposal chunk index overflowed".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            chunk_messages.push(Self::preencode_v2_network_message(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
-            )?);
-        }
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        let manifest = validated.into_manifest();
+        let chunk_messages = signed_chunks
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -474,12 +586,9 @@ impl ProductionV2Services {
                 owner.authenticated.request().clone(),
             ));
         let encoded = Self::preencode_v2_network_message(message)?;
-        let peers = owner
-            .sources
-            .iter()
-            .filter(|peer| *peer != &self.local_peer)
-            .cloned()
-            .collect::<Vec<_>>();
+        // Only delivery destinations follow authenticated topology churn. The
+        // WAL-owned signed request, QC, context, and response verifier remain exact.
+        let peers = self.current_archive_targets_with_frozen_fallback(&owner.sources);
         PendingExactFanout::claimed(
             vec![encoded],
             peers,
@@ -507,6 +616,7 @@ impl ProductionV2Services {
             operation.complete();
             return Ok(true);
         };
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
         let ownership = {
             let mut pending = self.lock_pending_exact_output()?;
             if self.exact_output_handoff_owner.is_sealed() {
@@ -516,10 +626,17 @@ impl ProductionV2Services {
             }
             let ownership = pending.enqueue(fanout)?;
             if ownership == ExactFanoutOwnership::Owned {
-                let _ = self.drive_pending_exact_output(&mut pending)?;
+                self.drive_pending_exact_output(
+                    &mut pending,
+                    &mut released_kura_replica_advert_heights,
+                )
+                .map(|_| ownership)
+            } else {
+                Ok(ownership)
             }
-            ownership
         };
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let ownership = ownership?;
         if ownership == ExactFanoutOwnership::SourceRetained {
             iroha_logger::debug!(
                 request_hash = %owner.request_hash(),
@@ -1028,7 +1145,6 @@ impl ProductionV2Services {
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
@@ -1070,9 +1186,9 @@ impl ProductionV2Services {
             validator_set_pops,
             local_peer,
             local_validator,
+            None,
             key_pair,
             network,
-            chunk_root,
             body_store,
             None,
             state,
@@ -1099,9 +1215,11 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
+        >,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         payload_store_identity: CertifiedServePayloadStoreInstanceIdentity,
         state: Arc<crate::state::State>,
@@ -1132,9 +1250,9 @@ impl ProductionV2Services {
             validator_set_pops,
             local_peer,
             local_validator,
+            kagemusha_mint_finality_authority,
             key_pair,
             network,
-            chunk_root,
             body_store,
             Some(payload_store_identity),
             state,
@@ -1158,9 +1276,11 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
+        >,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
         state: Arc<crate::state::State>,
@@ -1188,9 +1308,6 @@ impl ProductionV2Services {
                 "Sumeragi v2 service tag is outside its immutable height context".to_owned(),
             );
         }
-        let context_chunk_root = chunk_root
-            .as_ref()
-            .join(hex::encode(context.id().0.as_ref()));
         let max_orphan_chunk_bytes = maximum_orphan_chunk_bytes(context.da_layout);
         let max_messages_per_fanout = usize::try_from(context.da_layout.max_chunk_count)
             .map_err(|_| "Sumeragi v2 outbound chunk count is not representable".to_owned())?
@@ -1233,7 +1350,6 @@ impl ProductionV2Services {
             max_peers_per_fanout,
             &frozen_semantic_targets,
         )?;
-        std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
@@ -1244,6 +1360,7 @@ impl ProductionV2Services {
             context.clone(),
             key_pair.clone(),
             local_validator,
+            kagemusha_mint_finality_authority,
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,
@@ -1259,7 +1376,6 @@ impl ProductionV2Services {
             network,
             archive_peer_cursor: AtomicUsize::new(0),
             kura: durable_history,
-            chunk_root: context_chunk_root,
             io: Some(io),
             lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
             lifecycle_payload_store_identity,
@@ -1321,62 +1437,51 @@ impl ProductionV2Services {
         let sender = self
             .local_validator
             .ok_or_else(|| "observer cannot disperse a Sumeragi v2 proposal".to_owned())?;
-        let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
         let expected_round = wire::ConsensusRound {
             context_id: self.context.id(),
             height: self.context.height,
             view: owner.view(),
         };
-        if owner != self.active_tag || manifest.round != expected_round {
+        if owner != self.active_tag || payload.manifest().round != expected_round {
             return Err(
                 "Sumeragi v2 outbound payload is not owned by the active reducer incarnation"
                     .to_owned(),
             );
         }
-        let manifest_hash = HashOf::new(&manifest);
-        let mut messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            messages.push(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
-            ));
+        let manifest_hash = HashOf::new(payload.manifest());
+        if let Some(existing) = self.outbound_chunks.get(&manifest_hash) {
+            if !existing.owns_manifest(owner, payload.manifest()) {
+                return Err("conflicting local Sumeragi v2 payload manifest".to_owned());
+            }
+            let manifest = payload.manifest().clone();
+            self.outbound_chunks
+                .retain(|hash, _| *hash == manifest_hash);
+            operation.complete();
+            return Ok(manifest);
         }
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        debug_assert_eq!(validated.manifest_hash(), manifest_hash);
+        let manifest = validated.into_manifest();
+        let messages = signed_chunks
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let retained = RetainedOutboundPayload {
             owner,
             round: manifest.round,
             subject: manifest.subject,
+            manifest: manifest.clone(),
             messages,
         };
-        if let Some(existing) = self.outbound_chunks.get(&manifest_hash) {
-            if existing != &retained {
-                return Err("conflicting local Sumeragi v2 payload manifest".to_owned());
-            }
-            self.outbound_chunks
-                .retain(|hash, _| *hash == manifest_hash);
-        } else {
-            // There is one local proposal intent for an exact reducer owner.
-            // A deterministic fallback or a higher same-tag lock supersedes
-            // its old chunks before the replacement can enter signing.
-            self.outbound_chunks.clear();
-            self.outbound_chunks.insert(manifest_hash, retained);
-        }
+        // There is one local proposal intent for an exact reducer owner. A
+        // deterministic fallback or a higher same-tag lock supersedes its old
+        // chunks before the replacement can enter signing.
+        self.outbound_chunks.clear();
+        self.outbound_chunks.insert(manifest_hash, retained);
         operation.complete();
         Ok(manifest)
     }
@@ -1440,7 +1545,7 @@ impl ProductionV2Services {
         if let Some(fetch) = live {
             match (fetch.task.manifest(), fetch.chunks.as_ref()) {
                 (Some(manifest), Some(session)) => {
-                    let expected_hash = HashOf::new(manifest);
+                    let expected_hash = session.validated_manifest().manifest_hash();
                     if session.manifest() != manifest
                         || indexed_manifests.len() != 1
                         || indexed_manifests.first() != Some(&expected_hash)
@@ -1960,7 +2065,7 @@ impl ProductionV2Services {
         ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<PayloadChunkDisposition, String> {
         let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
         ));
         if !ingress_ownership.validate_exact()
             || !ingress_ownership.matches_message(&chunk_message)
@@ -1968,6 +2073,13 @@ impl ProductionV2Services {
         {
             return Err("payload chunk carried altered fair-ingress ownership".to_owned());
         }
+        let chunk = match chunk_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ..
+            }) => chunk,
+            _ => return Err("payload chunk ownership envelope changed variant".to_owned()),
+        };
         let manifest_hash = chunk.manifest_hash;
         if let Some(work_id) = self.fetch_work_for_manifest(manifest_hash) {
             return self.deliver_payload_chunk(executor, work_id, sender, chunk, ingress_ownership);
@@ -3402,7 +3514,6 @@ impl ProductionV2Services {
             let mut command = V2IoCommand::Retire(V2RetireCommand {
                 receipt,
                 cleanup: supervisor.submission(),
-                chunk_root: self.chunk_root.clone(),
             });
             let retirement_guard = Arc::clone(&self.output_guard);
             'enqueue: loop {
@@ -3874,7 +3985,11 @@ impl ProductionV2Services {
             }
         }
     }
-    fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
+    fn drive_pending_exact_output(
+        &self,
+        pending: &mut PendingExactOutput,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
+    ) -> Result<bool, String> {
         if pending.applied_height_finality.is_none()
             && u64::try_from(self.state.committed_height())
                 .is_ok_and(|height| height >= self.context.height)
@@ -3901,33 +4016,47 @@ impl ProductionV2Services {
                     let mut hook = hook.lock().map_err(|_| {
                         "Sumeragi v2 exact-output admission hook was poisoned".to_owned()
                     })?;
-                    pending.drive_bounded_with_ack(|post, ticket, route, _timeout_attempt| {
-                        hook(post, ticket).map(|outcome| match outcome {
-                            ExactOutputTestAdmission::Admitted
-                                if matches!(route, ExactTargetRoute::Reply(_)) =>
-                            {
-                                ExactOutputAttemptOutcome::TestReplyFlushed
-                            }
-                            ExactOutputTestAdmission::Admitted => {
-                                ExactOutputAttemptOutcome::Admitted
-                            }
-                            ExactOutputTestAdmission::SidecarFlush(flush_ack) => {
-                                ExactOutputAttemptOutcome::SidecarFlush(flush_ack)
-                            }
-                            ExactOutputTestAdmission::Retired => ExactOutputAttemptOutcome::Retired,
-                        })
-                    })?
+                    pending.drive_bounded_with_ack(
+                        self.kura.as_ref(),
+                        released_kura_replica_advert_heights,
+                        |post, ticket, route, _timeout_attempt| {
+                            hook(post, ticket).map(|outcome| match outcome {
+                                ExactOutputTestAdmission::Admitted
+                                    if matches!(route, ExactTargetRoute::Reply(_)) =>
+                                {
+                                    ExactOutputAttemptOutcome::TestReplyFlushed
+                                }
+                                ExactOutputTestAdmission::Admitted => {
+                                    ExactOutputAttemptOutcome::Admitted
+                                }
+                                ExactOutputTestAdmission::SidecarFlush(flush_ack) => {
+                                    ExactOutputAttemptOutcome::SidecarFlush(flush_ack)
+                                }
+                                ExactOutputTestAdmission::Retired => {
+                                    ExactOutputAttemptOutcome::Retired
+                                }
+                            })
+                        },
+                    )?
                 } else {
-                    pending.drive_bounded_with_ack(|post, ticket, route, timeout_attempt| {
-                        self.admit_network_exact_output(post, ticket, route, timeout_attempt)
-                    })?
+                    pending.drive_bounded_with_ack(
+                        self.kura.as_ref(),
+                        released_kura_replica_advert_heights,
+                        |post, ticket, route, timeout_attempt| {
+                            self.admit_network_exact_output(post, ticket, route, timeout_attempt)
+                        },
+                    )?
                 }
             }
             #[cfg(not(test))]
             {
-                pending.drive_bounded_with_ack(|post, ticket, route, timeout_attempt| {
-                    self.admit_network_exact_output(post, ticket, route, timeout_attempt)
-                })?
+                pending.drive_bounded_with_ack(
+                    self.kura.as_ref(),
+                    released_kura_replica_advert_heights,
+                    |post, ticket, route, timeout_attempt| {
+                        self.admit_network_exact_output(post, ticket, route, timeout_attempt)
+                    },
+                )?
             }
         };
         pending.poll_reply_flushes()?;
@@ -3961,27 +4090,62 @@ impl ProductionV2Services {
         }
         Ok(pending.is_pending())
     }
+    fn schedule_released_kura_replica_advert_heights(
+        &self,
+        heights: BTreeSet<u64>,
+    ) -> Result<(), String> {
+        if heights.is_empty() {
+            return Ok(());
+        }
+        let _ = self
+            .kura_replica_advert_refresh
+            .schedule_retired_exact_output_heights(heights, Instant::now())?;
+        Ok(())
+    }
     fn enqueue_exact_fanout_while_guarded(
         &self,
         messages: Vec<NetworkMessage>,
         peers: Vec<PeerId>,
         rollover_claim: ExactOutputRolloverClaim,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let ownership = self.enqueue_exact_fanout_while_guarded_collecting_released_adverts(
+            messages,
+            peers,
+            rollover_claim,
+            permit,
+            &mut released_kura_replica_advert_heights,
+        );
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        ownership
+    }
+    fn enqueue_exact_fanout_while_guarded_collecting_released_adverts(
+        &self,
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        rollover_claim: ExactOutputRolloverClaim,
         _permit: &ConsensusOutputPermit<'_>,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
     ) -> Result<ExactFanoutOwnership, String> {
         let Some(fanout) = PendingExactFanout::claimed(messages, peers, rollover_claim)? else {
             return Ok(ExactFanoutOwnership::Owned);
         };
-        let mut pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err(
-                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
-            );
+        {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+                );
+            }
+            let ownership = pending.enqueue(fanout)?;
+            if ownership == ExactFanoutOwnership::Owned {
+                self.drive_pending_exact_output(&mut pending, released_kura_replica_advert_heights)
+                    .map(|_| ownership)
+            } else {
+                Ok(ownership)
+            }
         }
-        let ownership = pending.enqueue(fanout)?;
-        if ownership == ExactFanoutOwnership::Owned {
-            let _ = self.drive_pending_exact_output(&mut pending)?;
-        }
-        Ok(ownership)
     }
     /// Transfer an inseparable topology batch after same-lock bound/capacity/FIFO
     /// checks, returning it whole when full.
@@ -3990,17 +4154,22 @@ impl ProductionV2Services {
         fanouts: Vec<PendingExactFanout>,
         _permit: &ConsensusOutputPermit<'_>,
     ) -> Result<ExactFanoutOwnership, String> {
-        let mut pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err(
-                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
-            );
-        }
-        let Some(batch) = pending.prepare_atomic_fanout_batch(fanouts)? else {
-            return Ok(ExactFanoutOwnership::SourceRetained);
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let drive_result = {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+                );
+            }
+            let Some(batch) = pending.prepare_atomic_fanout_batch(fanouts)? else {
+                return Ok(ExactFanoutOwnership::SourceRetained);
+            };
+            pending.commit_atomic_fanout_batch(batch);
+            self.drive_pending_exact_output(&mut pending, &mut released_kura_replica_advert_heights)
         };
-        pending.commit_atomic_fanout_batch(batch);
-        let _ = self.drive_pending_exact_output(&mut pending)?;
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let _ = drive_result?;
         Ok(ExactFanoutOwnership::Owned)
     }
     fn enqueue_owned_exact_reply_routes_while_guarded(
@@ -4027,17 +4196,27 @@ impl ProductionV2Services {
         else {
             return Ok(ExactFanoutOwnership::Owned);
         };
-        let mut pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err(
-                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
-            );
-        }
-        let ownership = pending.enqueue_owned_reply_transfer(fanout)?;
-        if ownership == ExactFanoutOwnership::Owned {
-            let _ = self.drive_pending_exact_output(&mut pending)?;
-        }
-        Ok(ownership)
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let ownership = {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+                );
+            }
+            let ownership = pending.enqueue_owned_reply_transfer(fanout)?;
+            if ownership == ExactFanoutOwnership::Owned {
+                self.drive_pending_exact_output(
+                    &mut pending,
+                    &mut released_kura_replica_advert_heights,
+                )
+                .map(|_| ownership)
+            } else {
+                Ok(ownership)
+            }
+        };
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        ownership
     }
     fn exact_output_scope(&self) -> ExactOutputCreationScope {
         ExactOutputCreationScope {
@@ -4065,6 +4244,7 @@ impl ProductionV2Services {
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
         let outcome = self.kura_replica_advert_refresh.drive_turn(
             now,
             |source_height| {
@@ -4072,8 +4252,16 @@ impl ProductionV2Services {
                     .probe_kura_replica_advert_source(source_height, &self.key_pair)
                     .map_err(|error| error.to_string())
             },
-            |source| self.post_kura_replica_advert_while_guarded(source, operation.permit()),
-        )?;
+            |source| {
+                self.post_kura_replica_advert_while_guarded(
+                    source,
+                    operation.permit(),
+                    &mut released_kura_replica_advert_heights,
+                )
+            },
+        );
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let outcome = outcome?;
         operation.complete();
         Ok(outcome)
     }
@@ -4085,6 +4273,7 @@ impl ProductionV2Services {
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
         let pending_remains = {
             let mut pending = self.lock_pending_exact_output()?;
             if self.exact_output_handoff_owner.is_sealed() {
@@ -4092,8 +4281,10 @@ impl ProductionV2Services {
                 operation.complete();
                 return Ok(false);
             }
-            self.drive_pending_exact_output(&mut pending)?
+            self.drive_pending_exact_output(&mut pending, &mut released_kura_replica_advert_heights)
         };
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let pending_remains = pending_remains?;
         operation.complete();
         Ok(pending_remains)
     }
@@ -4610,6 +4801,7 @@ impl ProductionV2Services {
         &self,
         source: &KuraReplicaAdvertSourceV1,
         permit: &ConsensusOutputPermit<'_>,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
     ) -> Result<ExactFanoutOwnership, String> {
         let source_height = source.height();
         if source_height == 0 || source_height > self.context.height {
@@ -4635,11 +4827,12 @@ impl ProductionV2Services {
         // authority available under validator rotation. Historical departed
         // validators are not guessed or contacted; Kura pins bodies outside
         // the configured proactive horizon fail-closed.
-        self.enqueue_exact_fanout_while_guarded(
+        self.enqueue_exact_fanout_while_guarded_collecting_released_adverts(
             vec![NetworkMessage::SumeragiBlock(Arc::new(wire))],
             self.remote_voters(),
             rollover_claim,
             permit,
+            released_kura_replica_advert_heights,
         )
     }
     fn committee_for_round(&self, round: wire::ConsensusRound) -> Result<Committee, String> {
@@ -4785,6 +4978,66 @@ impl ProductionV2Services {
             permit,
         )
     }
+    /// Enqueue one worker-prepared historical body without actor-side body work.
+    pub(crate) fn post_prepared_historical_body_response_on_reply_routes_with_permit(
+        &self,
+        prepared: super::v2_block_sync::PreparedHistoricalBodyOutput,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<super::v2_block_sync::PreparedHistoricalBodyPostOutcome, String> {
+        let retry = prepared.clone_for_exact_output_retry();
+        let (peer, reply_routes, ingress_ownership, message, proof) = prepared.into_post_parts();
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+            || reply_routes.semantic_target() != &peer
+            || proof.network_id() != self.context.network_id
+            || proof.source_round().height > self.context.height
+            || proof.responder() != &self.local_peer
+            || !proof.covers_message_in_network(&self.context.network_id, &message)
+        {
+            return Err(
+                "prepared historical body changed its worker-sealed output identity".to_owned(),
+            );
+        }
+        let rollover_claim = ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
+            scope: self.exact_output_scope(),
+            target: peer.clone(),
+            network_id: self.context.network_id,
+            proof,
+        };
+        let messages = vec![message];
+        let peers = vec![peer];
+        rollover_claim.validate_fanout(&messages, &peers)?;
+        durable_history_source_covers(
+            &messages,
+            &rollover_claim,
+            &self.context.network_id,
+            self.context.height,
+            self.kura.as_ref(),
+        )?;
+        let ownership = self.enqueue_owned_exact_reply_routes_while_guarded(
+            messages
+                .into_iter()
+                .next()
+                .expect("prepared historical body is a singleton"),
+            peers
+                .into_iter()
+                .next()
+                .expect("prepared historical body has one target"),
+            reply_routes,
+            Some(ingress_ownership),
+            rollover_claim,
+            permit,
+        )?;
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            iroha_logger::debug!(
+                "retained prepared historical Sumeragi v2 body for exact-output retry"
+            );
+            return Ok(
+                super::v2_block_sync::PreparedHistoricalBodyPostOutcome::SourceRetained(retry),
+            );
+        }
+        Ok(super::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted)
+    }
     fn post_durable_history_response_with_routes(
         &self,
         peer: PeerId,
@@ -4823,17 +5076,10 @@ impl ProductionV2Services {
                     response_hash: HashOf::new(response),
                 }
             }
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)
-                if response.manifest.round.height <= self.context.height =>
-            {
-                ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
-                    scope: self.exact_output_scope(),
-                    target: peer.clone(),
-                    responder: self.local_peer.clone(),
-                    source_round: response.manifest.round,
-                    source_subject: response.manifest.subject,
-                    response_hash: HashOf::new(response),
-                }
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                return Err(
+                    "historical body output must cross the bounded prepared-worker seam".to_owned(),
+                );
             }
             _ => {
                 return Err(

@@ -3,13 +3,14 @@ import test from "node:test";
 import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
+import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
 import {
   VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES,
   VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
-  encodeValidationFeeHijiriQuoteRequestV1,
-  verifyValidationFeeHijiriQuoteResponseV1,
+  createValidationFeeHijiriQuoteApi,
 } from "../src/validationFeeHijiriQuote.js";
 
 const ACCOUNT_ID = AccountAddress.fromAccount({
@@ -65,17 +66,10 @@ function projection() {
 }
 
 async function withNativeBinding(native, body) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = native;
-  try {
-    return await body();
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
-  }
+  return body(
+    createValidationFeeHijiriQuoteApi(createNativeRuntime(native)),
+    Object.freeze({ [TORII_TEST_NATIVE_BINDING]: native }),
+  );
 }
 
 function quoteNative(overrides = {}) {
@@ -97,14 +91,39 @@ function quoteNative(overrides = {}) {
   };
 }
 
+test("Hijiri quote factories isolate immutable native runtimes", async () => {
+  const bindingA = {
+    connectNoritoBridgeAbiVersion: () => 23,
+    validationFeeHijiriQuoteRequestV1: () => Buffer.from([0xa1]),
+    validationFeeVerifyHijiriQuoteResponseV1() {},
+  };
+  const apiA = createValidationFeeHijiriQuoteApi(createNativeRuntime(bindingA));
+  const apiB = createValidationFeeHijiriQuoteApi(createNativeRuntime({
+    connectNoritoBridgeAbiVersion: () => 23,
+    validationFeeHijiriQuoteRequestV1: () => Buffer.from([0xb2]),
+    validationFeeVerifyHijiriQuoteResponseV1() {},
+  }));
+  bindingA.validationFeeHijiriQuoteRequestV1 = () => Buffer.from([0xff]);
+
+  const [requestA, requestB] = await Promise.all([
+    Promise.resolve().then(() =>
+      apiA.encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, 2)),
+    Promise.resolve().then(() =>
+      apiB.encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, 2)),
+  ]);
+  assert.equal(Object.isFrozen(apiA), true);
+  assert.deepEqual(requestA, Buffer.from([0xa1]));
+  assert.deepEqual(requestB, Buffer.from([0xb2]));
+});
+
 test("Hijiri quote codec delegates exclusively to the ABI-23 native bridge", async () => {
-  await withNativeBinding(quoteNative(), () => {
+  await withNativeBinding(quoteNative(), (api) => {
     assert.deepEqual(
-      encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, 2),
+      api.encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, 2),
       REQUEST_NORITO,
     );
     assert.deepEqual(
-      verifyValidationFeeHijiriQuoteResponseV1(
+      api.verifyValidationFeeHijiriQuoteResponseV1(
         RESPONSE_NORITO,
         REQUEST_NORITO,
       ),
@@ -118,14 +137,14 @@ test("Hijiri quote codec delegates exclusively to the ABI-23 native bridge", asy
         return 23;
       },
     },
-    () => {
+    (api) => {
       assert.throws(
-        () => encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, 2),
+        () => api.encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, 2),
         /native binding lacks/u,
       );
       assert.throws(
         () =>
-          verifyValidationFeeHijiriQuoteResponseV1(
+          api.verifyValidationFeeHijiriQuoteResponseV1(
             RESPONSE_NORITO,
             REQUEST_NORITO,
           ),
@@ -136,16 +155,16 @@ test("Hijiri quote codec delegates exclusively to the ABI-23 native bridge", asy
 });
 
 test("Hijiri quote codec enforces request, response, and transfer bounds", async () => {
-  await withNativeBinding(quoteNative(), () => {
+  await withNativeBinding(quoteNative(), (api) => {
     for (const count of [0, 100_001, -1, 1.5]) {
       assert.throws(
-        () => encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, count),
+        () => api.encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, count),
         /qualifyingTransferCount/u,
       );
     }
     assert.throws(
       () =>
-        verifyValidationFeeHijiriQuoteResponseV1(
+        api.verifyValidationFeeHijiriQuoteResponseV1(
           Buffer.alloc(VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES + 1),
           REQUEST_NORITO,
         ),
@@ -153,7 +172,7 @@ test("Hijiri quote codec enforces request, response, and transfer bounds", async
     );
     assert.throws(
       () =>
-        verifyValidationFeeHijiriQuoteResponseV1(
+        api.verifyValidationFeeHijiriQuoteResponseV1(
           RESPONSE_NORITO,
           Buffer.alloc(VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES + 1),
         ),
@@ -181,7 +200,7 @@ test("Hijiri quote codec enforces request, response, and transfer bounds", async
     try {
       assert.throws(
         () =>
-          verifyValidationFeeHijiriQuoteResponseV1(
+          api.verifyValidationFeeHijiriQuoteResponseV1(
             oversizedResponse,
             REQUEST_NORITO,
           ),
@@ -189,7 +208,7 @@ test("Hijiri quote codec enforces request, response, and transfer bounds", async
       );
       assert.throws(
         () =>
-          verifyValidationFeeHijiriQuoteResponseV1(
+          api.verifyValidationFeeHijiriQuoteResponseV1(
             validResponse,
             oversizedRequest,
           ),
@@ -214,9 +233,9 @@ test("Hijiri quote codec closes the native projection shape", async () => {
         return JSON.stringify(validRiskProjection);
       },
     }),
-    () => {
+    (api) => {
       assert.deepEqual(
-        verifyValidationFeeHijiriQuoteResponseV1(
+        api.verifyValidationFeeHijiriQuoteResponseV1(
           RESPONSE_NORITO,
           REQUEST_NORITO,
         ),
@@ -250,10 +269,10 @@ test("Hijiri quote codec closes the native projection shape", async () => {
           return JSON.stringify(invalidProjection);
         },
       }),
-      () => {
+      (api) => {
         assert.throws(
           () =>
-            verifyValidationFeeHijiriQuoteResponseV1(
+            api.verifyValidationFeeHijiriQuoteResponseV1(
               RESPONSE_NORITO,
               REQUEST_NORITO,
             ),
@@ -265,9 +284,10 @@ test("Hijiri quote codec closes the native projection shape", async () => {
 });
 
 test("Torii Hijiri quote is authenticated native Norito, bounded, and private", async () => {
-  await withNativeBinding(quoteNative(), async () => {
+  await withNativeBinding(quoteNative(), async (_api, nativeOptions) => {
     let observed = null;
     const client = new ToriiClient("https://example.test", {
+      ...nativeOptions,
       fetchImpl: async () => {
         throw new Error("overridden request path should be used");
       },
@@ -307,7 +327,7 @@ test("Torii Hijiri quote is authenticated native Norito, bounded, and private", 
 });
 
 test("Torii Hijiri quote rejects cacheable or non-Norito success responses", async () => {
-  await withNativeBinding(quoteNative(), async () => {
+  await withNativeBinding(quoteNative(), async (_api, nativeOptions) => {
     for (const headers of [
       { "Content-Type": "application/x-norito" },
       {
@@ -368,6 +388,7 @@ test("Torii Hijiri quote rejects cacheable or non-Norito success responses", asy
       },
     ]) {
       const client = new ToriiClient("https://example.test", {
+        ...nativeOptions,
         fetchImpl: async () => {
           throw new Error("overridden request path should be used");
         },
@@ -389,8 +410,9 @@ test("Torii Hijiri quote rejects cacheable or non-Norito success responses", asy
 });
 
 test("Torii Hijiri quote permits commas and directive names inside a quoted extension", async () => {
-  await withNativeBinding(quoteNative(), async () => {
+  await withNativeBinding(quoteNative(), async (_api, nativeOptions) => {
     const client = new ToriiClient("https://example.test", {
+      ...nativeOptions,
       fetchImpl: async () => {
         throw new Error("overridden request path should be used");
       },
@@ -418,7 +440,7 @@ test("Torii Hijiri quote permits commas and directive names inside a quoted exte
 });
 
 test("Torii Hijiri quote signs the exact URL and denies redirects", async () => {
-  await withNativeBinding(quoteNative(), async () => {
+  await withNativeBinding(quoteNative(), async (_api, nativeOptions) => {
     let observed = null;
     let fetchResponse = quoteResponse(RESPONSE_NORITO, {
       status: 200,
@@ -428,6 +450,7 @@ test("Torii Hijiri quote signs the exact URL and denies redirects", async () => 
       },
     });
     const client = new ToriiClient("https://example.test/base", {
+      ...nativeOptions,
       defaultHeaders: { "Content-Encoding": "gzip" },
       localSigningContext: new LocalSigningContext(NETWORK_ID),
       fetchImpl: async (url, init) => {
@@ -498,7 +521,7 @@ test("Torii Hijiri quote validates every error response before status failure", 
         assert.fail("non-200 response reached native verification");
       },
     }),
-    async () => {
+    async (_api, nativeOptions) => {
       for (const [response, pattern] of [
         [
           quoteResponse(RESPONSE_NORITO, {
@@ -560,6 +583,7 @@ test("Torii Hijiri quote validates every error response before status failure", 
         ],
       ]) {
         const client = new ToriiClient("https://example.test", {
+          ...nativeOptions,
           fetchImpl: async () => {
             throw new Error("overridden request path should be used");
           },
@@ -587,8 +611,9 @@ test("Torii Hijiri quote requires HTTPS before native encoding", async () => {
         assert.fail("insecure quote reached native encoding");
       },
     }),
-    async () => {
+    async (_api, nativeOptions) => {
       const client = new ToriiClient("http://example.test", {
+        ...nativeOptions,
         allowInsecure: true,
         fetchImpl: async () => assert.fail("insecure quote reached fetch"),
       });

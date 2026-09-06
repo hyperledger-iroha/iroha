@@ -18,7 +18,10 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 #[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 /// Messages used by peers to communicate during the consensus process.
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
@@ -28,7 +31,7 @@ pub enum BlockMessage {
     KuraReplicaAdvert(#[skip_try_from] KuraReplicaAdvertV1),
     /// Standalone lane-local block proposal.
     #[codec(index = 1)]
-    LaneBlockProposal(#[skip_try_from] super::consensus::LaneBlockProposalV1),
+    LaneBlockProposal(#[skip_try_from] LaneBlockProposalV1),
     /// Producer-authenticated executable payload for a standalone lane block.
     #[codec(index = 2)]
     LaneExecutablePayload(#[skip_try_from] crate::lane_consensus::LaneExecutablePayloadV1),
@@ -45,10 +48,10 @@ pub enum BlockMessage {
     LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
     /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
     #[codec(index = 6)]
-    LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
+    LaneBlockQc(#[skip_try_from] LaneBlockQcV1),
     /// Complete Kura-backed lane certificate returned for exact proposal recovery.
     #[codec(index = 7)]
-    LaneBlockCertificate(#[skip_try_from] Box<super::consensus::LaneBlockCertificateV1>),
+    LaneBlockCertificate(#[skip_try_from] Box<LaneBlockCertificateV1>),
     /// Exact authenticated request for a missing historical canonical body or autonomous payload.
     #[codec(index = 8)]
     LaneHistoricalRecoveryRequest(#[skip_try_from] Box<LaneHistoricalRecoveryRequestV1>),
@@ -142,10 +145,22 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
 ///
 /// A network consumer must pair the decoded payload with its transport-authenticated peer
 /// through one of the identity-requiring `SumeragiHandle` entry points.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BlockMessageWire {
     message: Arc<BlockMessage>,
     encoded: Option<Arc<Vec<u8>>>,
+    /// Hash of the immutable outer `NetworkMessage::SumeragiBlock` frame.
+    /// Exact-output integrity checks revisit this identity frequently.
+    exact_output_hash: OnceLock<HashOf<crate::NetworkMessage>>,
+}
+impl std::fmt::Debug for BlockMessageWire {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BlockMessageWire")
+            .field("message", &self.message)
+            .field("encoded", &self.encoded)
+            .finish()
+    }
 }
 impl BlockMessageWire {
     /// Wrap a consensus message without cached bytes.
@@ -153,6 +168,7 @@ impl BlockMessageWire {
         Self {
             message: Arc::new(message),
             encoded: None,
+            exact_output_hash: OnceLock::new(),
         }
     }
     /// Wrap an `Arc`-backed live message and cache its canonical full-frame bytes.
@@ -166,15 +182,24 @@ impl BlockMessageWire {
         Ok(Self {
             message,
             encoded: Some(encoded),
+            exact_output_hash: OnceLock::new(),
         })
+    }
+    /// Return the allocated capacity of the retained canonical frame.
+    ///
+    /// Cache accounting uses capacity rather than length so spare `Vec`
+    /// allocation cannot escape the configured retained-heap bound.
+    pub(crate) fn encoded_capacity(&self) -> Option<usize> {
+        self.encoded.as_ref().map(|encoded| encoded.capacity())
     }
     /// Borrow the underlying consensus message.
     pub fn as_message(&self) -> &BlockMessage {
         self.message.as_ref()
     }
-    /// Acquire a mutable reference, clearing cached encoded bytes.
+    /// Acquire a mutable reference, clearing cached encoded bytes and identity.
     pub fn make_mut(&mut self) -> &mut BlockMessage {
         self.encoded = None;
+        let _ = self.exact_output_hash.take();
         Arc::make_mut(&mut self.message)
     }
     /// Consume the wrapper and return the consensus message.
@@ -283,6 +308,7 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
         Ok(Self {
             message: Arc::new(message),
             encoded: Some(encoded),
+            exact_output_hash: OnceLock::new(),
         })
     }
 }
@@ -297,9 +323,35 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
             Self {
                 message: Arc::new(message),
                 encoded: Some(encoded),
+                exact_output_hash: OnceLock::new(),
             },
             consumed,
         ))
+    }
+}
+impl crate::NetworkMessage {
+    /// Return a previously computed exact-output identity without scanning the frame.
+    ///
+    /// Prepared historical-body output uses this fail-closed accessor on the
+    /// serialized actor: only its dedicated worker may pay the full-frame hash.
+    pub(crate) fn cached_exact_output_hash(&self) -> Option<HashOf<Self>> {
+        match self {
+            Self::SumeragiBlock(envelope) => envelope.exact_output_hash.get().copied(),
+            _ => None,
+        }
+    }
+    /// Return the immutable exact-output identity, caching large Sumeragi frames.
+    ///
+    /// `BlockMessageWire::make_mut` clears this cache together with the encoded
+    /// frame, so adversarial test mutation and any future in-place rewrite must
+    /// recompute the identity before it can re-enter exact output.
+    pub(crate) fn exact_output_hash(&self) -> HashOf<Self> {
+        match self {
+            Self::SumeragiBlock(envelope) => {
+                *envelope.exact_output_hash.get_or_init(|| HashOf::new(self))
+            }
+            _ => HashOf::new(self),
+        }
     }
 }
 /// First-release layout for lane, Native, and canonical executed-block
@@ -558,9 +610,9 @@ impl KuraReplicaAdvertV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sumeragi::consensus;
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
+        block::consensus::{CertPhase, LaneBlockDescriptorV1},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         nexus::{DataSpaceId, LaneId},
     };
@@ -575,15 +627,15 @@ mod tests {
     fn sample_lane_block_messages(
         seed: u8,
     ) -> (
-        consensus::LaneBlockProposalV1,
+        LaneBlockProposalV1,
         crate::lane_consensus::LaneBlockVoteV1,
-        consensus::LaneBlockQcV1,
+        LaneBlockQcV1,
     ) {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
             .expect("derive lane-block fixture key");
         let validator = PeerId::from(keypair.public_key().clone());
         let validator_set = vec![validator.clone()];
-        let mut descriptor = consensus::LaneBlockDescriptorV1 {
+        let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(u32::from(seed % 11) + 1),
             dataspace_id: DataSpaceId::new(u64::from(seed % 13) + 1),
             lane_incarnation: Hash::new(format!("message-lane-incarnation-{seed}").as_bytes()),
@@ -608,13 +660,13 @@ mod tests {
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
         descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-        let mut proposal = consensus::LaneBlockProposalV1 {
+        let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
             payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
-        let body = proposal.vote_body(consensus::Phase::Prepare);
+        let body = proposal.vote_body(CertPhase::Prepare);
         let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
             .expect("sign lane-block fixture vote");
         let vote = crate::lane_consensus::LaneBlockVoteV1 {
@@ -623,7 +675,7 @@ mod tests {
             signer: validator,
             bls_signature: signature.payload().to_vec(),
         };
-        let qc = consensus::LaneBlockQcV1 {
+        let qc = LaneBlockQcV1 {
             body,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
@@ -737,13 +789,14 @@ mod tests {
                     finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
                         b"first-release historical executed finality tag",
                     )),
-                    execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                        Hash::new(b"first-release historical parent state"),
-                        Hash::new(b"first-release historical post state"),
-                        Hash::new(b"first-release historical writes"),
-                        1,
-                        Hash::new(b"first-release historical executed wire"),
-                    ),
+                    execution_commitment:
+                        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                            Hash::new(b"first-release historical parent state"),
+                            Hash::new(b"first-release historical post state"),
+                            Hash::new(b"first-release historical writes"),
+                            1,
+                            Hash::new(b"first-release historical executed wire"),
+                        ),
                     executed_block_wire_len: 1,
                     executed_block_wire_hash: Hash::new(
                         b"first-release historical executed wire tag",
@@ -793,6 +846,53 @@ mod tests {
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
         assert!(matches!(wire.as_ref(), BlockMessage::V2(_)));
         assert_eq!(wire.encode(), encoded);
+    }
+    #[test]
+    fn exact_output_hash_is_cached_and_invalidated_with_the_wire_frame() {
+        let wire = BlockMessageWire::try_preencoded(Arc::new(sample_v2_message()))
+            .expect("preencode exact-output fixture");
+        let network = crate::NetworkMessage::SumeragiBlock(Arc::new(wire));
+        let crate::NetworkMessage::SumeragiBlock(envelope) = &network else {
+            unreachable!()
+        };
+        assert!(envelope.exact_output_hash.get().is_none());
+        assert_eq!(network.cached_exact_output_hash(), None);
+        let debug_before_hash = format!("{network:?}");
+
+        let first = network.exact_output_hash();
+        assert_eq!(first, HashOf::new(&network));
+        assert_eq!(format!("{network:?}"), debug_before_hash);
+        let crate::NetworkMessage::SumeragiBlock(envelope) = &network else {
+            unreachable!()
+        };
+        assert_eq!(envelope.exact_output_hash.get(), Some(&first));
+        assert_eq!(network.cached_exact_output_hash(), Some(first));
+
+        let mut mutated = network.clone();
+        let crate::NetworkMessage::SumeragiBlock(envelope) = &mut mutated else {
+            unreachable!()
+        };
+        let BlockMessage::V2(message) = Arc::make_mut(envelope).make_mut() else {
+            unreachable!()
+        };
+        let iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::PayloadChunk(chunk) =
+            &mut message.payload
+        else {
+            unreachable!()
+        };
+        chunk.signature.push(0x73);
+        assert!(envelope.exact_output_hash.get().is_none());
+        assert_eq!(envelope.as_ref().encoded_len(), None);
+
+        let second = mutated.exact_output_hash();
+        assert_ne!(second, first);
+        assert_eq!(second, HashOf::new(&mutated));
+        assert_eq!(network.exact_output_hash(), first);
+        let crate::NetworkMessage::SumeragiBlock(original) = &network else {
+            unreachable!()
+        };
+        assert_eq!(original.exact_output_hash.get(), Some(&first));
+        assert!(original.as_ref().encoded_len().is_some());
     }
     #[test]
     fn noncanonical_v2_protocol_version_is_not_live_encodable() {
@@ -936,7 +1036,7 @@ mod tests {
     #[test]
     fn block_message_wire_network_roundtrip_cached_lane_block_messages() {
         let (proposal, vote, qc) = sample_lane_block_messages(0x71);
-        let certificate = consensus::LaneBlockCertificateV1 {
+        let certificate = LaneBlockCertificateV1 {
             proposal: proposal.clone(),
             prepare_qc: qc.clone(),
             commit_qc: qc.clone(),

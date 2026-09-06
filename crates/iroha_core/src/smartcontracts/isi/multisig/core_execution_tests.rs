@@ -113,9 +113,14 @@ fn install_trigger_contract(
         state_transaction,
     )
     .expect("register trigger contract manifest");
+    state_transaction.world.bind_inactive_contract_subject_for_testing(
+        contract_address.clone(),
+        authority.clone(),
+    );
     crate::smartcontracts::code::activate_instance(
         authority,
         contract_address.clone(),
+        1,
         code_hash,
         state_transaction,
     )

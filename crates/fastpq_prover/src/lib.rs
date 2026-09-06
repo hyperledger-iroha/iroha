@@ -26,6 +26,7 @@ mod error;
 #[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 mod fastpq_cuda;
 mod fft;
+mod field;
 pub mod gadgets;
 #[cfg(feature = "fastpq-gpu")]
 #[path = "gpu.rs"]
@@ -63,7 +64,9 @@ pub use backend::{
 };
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
-pub use backend::{hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries};
+pub use backend::{
+    compute_lookup_grand_product, hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries,
+};
 pub use batch::{
     OperationKind, PublicInputs, StateTransition, TRANSITION_BATCH_SCHEMA_NAME, TransitionBatch,
 };
@@ -76,7 +79,10 @@ pub use error::{Error, Result};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
 pub use fastpq_cuda::{CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde};
+/// Canonical FASTPQ parameter and six-lane native-STARK digest API.
+pub use fastpq_isi as fastpq_isi_v1;
 pub use fft::Planner;
+pub use field::{GOLDILOCKS_MODULUS_V1, GoldilocksFp4V1};
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 pub use metal::{
     AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, ColumnStagingPhase, ColumnStagingPhaseStats,
@@ -97,7 +103,7 @@ pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes};
 pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
 #[cfg(any(test, feature = "dev-tools"))]
-pub use proof::verify_raw_statement;
+pub use proof::{verify_raw_statement, verify_raw_statement_with_limits};
 pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use semantics::{ProofSemantics, validate_batch_semantics};
 #[cfg(feature = "dev-tools")]

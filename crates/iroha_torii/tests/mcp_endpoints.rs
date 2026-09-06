@@ -2,7 +2,7 @@
 //! Integration coverage for Torii MCP endpoints.
 use axum::{
     body::{Body, Bytes},
-    http::{Request, StatusCode, header},
+    http::{HeaderName, HeaderValue, Request, StatusCode, header},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use http_body_util::BodyExt as _;
@@ -14,17 +14,28 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{
+    account::AccountId,
     isi::musubi::SetMusubiReleaseYankV1,
     musubi::{MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1},
     nexus::DataSpaceId,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use iroha_torii_shared::mcp::{
+    LEGACY_PROTOCOL_VERSION as LEGACY_MCP_PROTOCOL_VERSION,
+    MODERN_PROTOCOL_VERSION as MODERN_MCP_PROTOCOL_VERSION,
+};
 use norito::json::Value;
-use std::{collections::BTreeSet, net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::SocketAddr,
+    num::{NonZeroU8, NonZeroU32, NonZeroU64},
+    sync::Arc,
+    time::Duration,
+};
 use tower::ServiceExt as _;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TOOL_LIST_PAGE_LIMIT: usize = 128;
-fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
+fn build_router(cfg: iroha_config::parameters::actual::Root) -> iroha_torii::TestApiRouterRuntime {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
@@ -52,8 +63,11 @@ fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
-    );
-    torii.api_router_for_tests()
+    )
+    .expect("valid Torii MCP fixture");
+    torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes")
 }
 async fn read_json_body(response: axum::response::Response) -> Value {
     let bytes = response
@@ -147,6 +161,31 @@ async fn post_mcp_with_headers(
     let body = read_json_body(response).await;
     (status, body)
 }
+async fn post_mcp_with_exact_headers(
+    app: &axum::Router,
+    payload: Value,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/mcp")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .body(Body::from(
+            norito::json::to_vec(&payload).expect("serialize payload"),
+        ))
+        .expect("valid request");
+    for (name, value) in headers {
+        request.headers_mut().append(
+            HeaderName::from_bytes(name.as_bytes()).expect("valid MCP header name"),
+            HeaderValue::from_bytes(value.as_bytes()).expect("valid MCP header value"),
+        );
+    }
+    let response = call_app(app, request).await;
+    let status = response.status();
+    let body = read_json_body(response).await;
+    (status, body)
+}
 fn initialize_params() -> Value {
     norito::json!({
         "protocolVersion": "2025-06-18",
@@ -164,6 +203,92 @@ fn initialize_request(id: u64) -> Value {
         "method": "initialize",
         "params": (initialize_params())
     })
+}
+fn enable_test_faucet(cfg: &mut iroha_config::parameters::actual::Root) {
+    let signer = cfg.common.key_pair.clone();
+    cfg.torii.faucet = Some(iroha_config::parameters::actual::ToriiFaucet {
+        authority: AccountId::new(signer.public_key().clone()),
+        private_key_file: "/runtime-only/mcp-discovery-faucet.key".into(),
+        signer,
+        asset_definition_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
+        amount: 1_u32.into(),
+        pow_difficulty_bits: NonZeroU8::new(1).expect("nonzero difficulty"),
+        pow_scrypt_log_n: 1,
+        pow_scrypt_r: 1,
+        pow_scrypt_p: 1,
+        pow_max_anchor_age_blocks: NonZeroU64::new(1).expect("nonzero anchor age"),
+        pow_adaptive_lookback_blocks: 1,
+        pow_adaptive_claims_per_extra_bit: 1,
+        pow_adaptive_max_extra_bits: 1,
+        pow_beacon_seed_enabled: false,
+    });
+}
+fn modern_request(id: &str, method: &str, params: Value) -> Value {
+    let Value::Object(mut params) = params else {
+        panic!("modern MCP params must be an object");
+    };
+    params.insert(
+        "_meta".into(),
+        norito::json!({
+            "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "iroha-torii-mcp-integration-tests",
+                "version": "1.0.0"
+            }
+        }),
+    );
+    norito::json!({
+        "jsonrpc": "2.0",
+        "id": (id),
+        "method": (method),
+        "params": (Value::Object(params))
+    })
+}
+fn assert_jsonrpc_error_code(body: &Value, expected: i64) {
+    assert_eq!(
+        body.get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_i64),
+        Some(expected),
+        "unexpected JSON-RPC response: {body:?}"
+    );
+}
+fn assert_modern_success_metadata(body: &Value, cacheable: bool) {
+    let result = body
+        .get("result")
+        .and_then(Value::as_object)
+        .expect("modern result object");
+    assert_eq!(
+        result.get("resultType").and_then(Value::as_str),
+        Some("complete")
+    );
+    let server_info = result
+        .get("_meta")
+        .and_then(|meta| meta.get("io.modelcontextprotocol/serverInfo"))
+        .and_then(Value::as_object)
+        .expect("modern serverInfo metadata");
+    assert_eq!(
+        server_info.get("name").and_then(Value::as_str),
+        Some("iroha-torii-mcp")
+    );
+    assert!(
+        server_info
+            .get("version")
+            .and_then(Value::as_str)
+            .is_some_and(|version| !version.is_empty()),
+        "serverInfo.version must be non-empty"
+    );
+    if cacheable {
+        assert_eq!(result.get("ttlMs").and_then(Value::as_u64), Some(30_000));
+        assert_eq!(
+            result.get("cacheScope").and_then(Value::as_str),
+            Some("private")
+        );
+    } else {
+        assert!(!result.contains_key("ttlMs"));
+        assert!(!result.contains_key("cacheScope"));
+    }
 }
 fn assert_single_invalid_request(body: &Value) {
     assert!(
@@ -468,6 +593,7 @@ async fn assert_mcp_alias_dispatch(case: McpAliasDispatchCase) {
             assert_tool_schema_error(&call, context);
         }
     }
+    app.shutdown().await;
 }
 macro_rules! mcp_alias_dispatch_test {
     (
@@ -588,6 +714,7 @@ async fn mcp_get_streamable_http_endpoint_returns_method_not_allowed() {
         .await
         .expect("mcp capability response");
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_accepts_only_one_canonical_json_content_type() {
@@ -688,6 +815,7 @@ async fn mcp_jsonrpc_accepts_only_one_canonical_json_content_type() {
         body.get("code").and_then(Value::as_str),
         Some("request_content_type_invalid")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_hostile_origin() {
@@ -730,6 +858,7 @@ async fn mcp_jsonrpc_rejects_hostile_origin() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.get("result").is_some());
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_connect_session_delete_tools_publish_openai_compatible_schema() {
@@ -776,6 +905,7 @@ async fn mcp_connect_session_delete_tools_publish_openai_compatible_schema() {
             Some("^[A-Za-z0-9_-]{43}$")
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_connect_ticket_tools_publish_openai_compatible_schema() {
@@ -834,6 +964,7 @@ async fn mcp_connect_ticket_tools_publish_openai_compatible_schema() {
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_vpn_session_detail_tools_publish_openai_compatible_schema() {
@@ -858,6 +989,7 @@ async fn mcp_vpn_session_detail_tools_publish_openai_compatible_schema() {
     assert!(properties.contains_key("session_id"));
     assert!(!properties.contains_key("id"));
     assert!(!properties.contains_key("path"));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_all_published_tool_schemas_are_top_level_objects() {
@@ -881,7 +1013,10 @@ async fn mcp_all_published_tool_schemas_are_top_level_objects() {
             .expect("inputSchema object");
         assert_top_level_object_input_schema(name, schema);
     }
+    app.shutdown().await;
 }
+include!("mcp_endpoints/native_protocol_tests.rs");
+include!("mcp_endpoints/admission_and_cancellation_tests.rs");
 #[tokio::test]
 async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
     let _data_dir = test_utils::TestDataDirGuard::new();
@@ -990,6 +1125,7 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
             .and_then(Value::as_str),
         Some("iroha-connect.token.v1.QVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRQ")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_initialized_notification_returns_accepted_without_body() {
@@ -1018,6 +1154,7 @@ async fn mcp_jsonrpc_initialized_notification_returns_accepted_without_body() {
         body.is_empty(),
         "initialized notification should return 202 with no response body"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_generic_notifications_return_accepted_without_body() {
@@ -1045,110 +1182,9 @@ async fn mcp_jsonrpc_generic_notifications_return_accepted_without_body() {
         assert_eq!(status, StatusCode::ACCEPTED, "{method}");
         assert!(body.is_empty(), "{method} must not receive a response body");
     }
+    app.shutdown().await;
 }
 
-#[tokio::test]
-async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
-    cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec!["cancellation-client".to_owned()];
-    let app = build_router(cfg);
-
-    let call_request = Request::builder()
-        .method("POST")
-        .uri("/v1/mcp")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .header("MCP-Protocol-Version", "2025-06-18")
-        .header("x-api-token", "cancellation-client")
-        .body(Body::from(
-            norito::json::to_vec(&norito::json!({
-                "jsonrpc": "2.0",
-                "id": "cancel-me",
-                "method": "tools/call",
-                "params": {
-                    "name": "iroha.transactions.wait",
-                    "arguments": {
-                        "query": { "hash": ("ab".repeat(32)) },
-                        "timeout_ms": 600_000,
-                        "poll_interval_ms": 100
-                    }
-                }
-            }))
-            .expect("serialize call"),
-        ))
-        .expect("valid call request");
-    let call_app_clone = app.clone();
-    let live_call = tokio::spawn(async move { call_app(&call_app_clone, call_request).await });
-
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let (status, duplicate) = post_mcp_with_headers(
-                &app,
-                norito::json!({
-                    "jsonrpc": "2.0",
-                    "id": "cancel-me",
-                    "method": "tools/call",
-                    "params": { "name": "iroha.health", "arguments": {} }
-                }),
-                &[("x-api-token", "cancellation-client")],
-            )
-            .await;
-            assert_eq!(status, StatusCode::OK);
-            if duplicate
-                .pointer("/error/data/error_code")
-                .and_then(Value::as_str)
-                == Some("request_id_in_use")
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("live request registers before cancellation");
-    let cancellation_request = Request::builder()
-        .method("POST")
-        .uri("/v1/mcp")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .header("MCP-Protocol-Version", "2025-06-18")
-        .header("x-api-token", "cancellation-client")
-        .body(Body::from(
-            norito::json::to_vec(&norito::json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/cancelled",
-                "params": {
-                    "requestId": "cancel-me",
-                    "reason": "integration test"
-                }
-            }))
-            .expect("serialize cancellation"),
-        ))
-        .expect("valid cancellation request");
-    let cancellation = call_app(&app, cancellation_request).await;
-    assert_eq!(cancellation.status(), StatusCode::ACCEPTED);
-    assert!(read_body_bytes(cancellation).await.is_empty());
-
-    let cancelled = tokio::time::timeout(Duration::from_secs(2), live_call)
-        .await
-        .expect("cancelled request completes promptly")
-        .expect("live request task joins");
-    assert_eq!(cancelled.status(), StatusCode::NO_CONTENT);
-    assert_eq!(
-        cancelled
-            .headers()
-            .get(header::CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok()),
-        Some("private, no-store")
-    );
-    assert!(read_body_bytes(cancelled).await.is_empty());
-}
 #[tokio::test]
 async fn mcp_jsonrpc_response_messages_return_accepted_without_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
@@ -1180,6 +1216,7 @@ async fn mcp_jsonrpc_response_messages_return_accepted_without_body() {
         assert_eq!(status, StatusCode::ACCEPTED, "{label}");
         assert!(body.is_empty(), "{label} must not receive a response body");
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_ping_returns_empty_result_object() {
@@ -1201,6 +1238,7 @@ async fn mcp_jsonrpc_ping_returns_empty_result_object() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(ping.get("id").and_then(Value::as_u64), Some(7));
     assert_eq!(ping.get("result"), Some(&norito::json!({})));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
@@ -1210,7 +1248,16 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
     cfg.torii.mcp.allow_tool_prefixes = vec!["iroha.".to_owned()];
     let app = build_router(cfg);
-    let names = list_all_tool_names(&app).await;
+    let tools = list_all_tools(&app).await;
+    let names = tools
+        .iter()
+        .map(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .expect("tool descriptor name")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
     assert!(
         !names.is_empty(),
         "writer+allowlist policy should expose tools"
@@ -1229,13 +1276,13 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
             "expected `{required}` in visible tool list, got {names:?}"
         );
     }
-    for required in [
+    for unavailable in [
         "iroha.accounts.faucet.prepare",
         "iroha.accounts.faucet.submit",
     ] {
         assert!(
-            names.iter().any(|name| name == required),
-            "consensus consume-once faucet tool `{required}` must be exposed to writers"
+            names.iter().all(|name| name != unavailable),
+            "disabled faucet tool `{unavailable}` leaked into writer discovery"
         );
     }
     for operator_only in [
@@ -1259,6 +1306,12 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
         );
     }
     assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("torii.post_v1_accounts_faucet")),
+        "generic OpenAPI faucet aliases must never be projected"
+    );
+    assert!(
         !names.iter().any(|name| name.starts_with("torii.")),
         "raw torii.* tools must be hidden by the public allowlist"
     );
@@ -1266,6 +1319,7 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
         !names.iter().any(|name| name.starts_with("connect.")),
         "connect.* tools must be hidden when the allowlist only permits iroha.*"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_writer_prefix_policy_rejects_hidden_raw_tool_calls() {
@@ -1299,6 +1353,7 @@ async fn mcp_writer_prefix_policy_rejects_hidden_raw_tool_calls() {
             .and_then(Value::as_str),
         Some("tool_not_allowed")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_invalid_json_payload() {
@@ -1326,6 +1381,7 @@ async fn mcp_jsonrpc_rejects_invalid_json_payload() {
             .and_then(Value::as_i64),
         Some(-32700)
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_non_object_request() {
@@ -1354,6 +1410,7 @@ async fn mcp_jsonrpc_rejects_non_object_request() {
             .and_then(Value::as_i64),
         Some(-32600)
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_invalid_request_ids() {
@@ -1379,6 +1436,7 @@ async fn mcp_jsonrpc_rejects_invalid_request_ids() {
         assert_eq!(status, StatusCode::OK, "{label}");
         assert_single_invalid_request(&body);
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_preserves_fractional_numeric_request_id() {
@@ -1398,6 +1456,7 @@ async fn mcp_jsonrpc_preserves_fractional_numeric_request_id() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.get("id"), Some(&norito::json!(1.5)));
     assert_eq!(body.get("result"), Some(&norito::json!({})));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_requires_exact_string_version() {
@@ -1452,6 +1511,7 @@ async fn mcp_jsonrpc_requires_exact_string_version() {
             "{label}"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_unsupported_protocol_version_header() {
@@ -1484,6 +1544,7 @@ async fn mcp_jsonrpc_rejects_unsupported_protocol_version_header() {
             .and_then(Value::as_str),
         Some("2025-06-18")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_requires_protocol_header_after_initialize() {
@@ -1513,143 +1574,7 @@ async fn mcp_jsonrpc_requires_protocol_header_after_initialize() {
         let response = call_app(&app, request).await;
         assert_eq!(response.status(), expected_status);
     }
-}
-#[tokio::test]
-async fn mcp_jsonrpc_enforces_rate_limit() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(1).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(1).expect("nonzero burst"));
-    let app = build_router(cfg);
-    let request = initialize_request(1);
-    let (status, _) = post_mcp(&app, request.clone()).await;
-    assert_eq!(status, StatusCode::OK);
-    let (status, body) = post_mcp(&app, request).await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32029)
-    );
-}
-#[tokio::test]
-async fn mcp_jsonrpc_charges_each_inner_tool_batch_dispatch() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(1).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(2).expect("nonzero burst"));
-    let app = build_router(cfg);
-    let (status, body) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": "two-inner-dispatches",
-            "method": "tools/call_batch",
-            "params": {
-                "calls": [
-                    { "name": "iroha.health", "arguments": {} },
-                    { "name": "iroha.health", "arguments": {} }
-                ]
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        body.get("result").is_some(),
-        "batch should consume its two-token budget"
-    );
-
-    let (status, body) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": "after-inner-dispatches",
-            "method": "ping"
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32029)
-    );
-}
-#[tokio::test]
-async fn mcp_one_per_minute_rate_does_not_round_up_to_one_per_second() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(1).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(1).expect("nonzero burst"));
-    let app = build_router(cfg);
-    let request = norito::json!({
-        "jsonrpc": "2.0",
-        "id": "one-per-minute",
-        "method": "ping"
-    });
-    let (status, _) = post_mcp(&app, request.clone()).await;
-    assert_eq!(status, StatusCode::OK);
-
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
-
-    let (status, body) = post_mcp(&app, request).await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32029)
-    );
-}
-#[tokio::test]
-async fn mcp_jsonrpc_rejects_oversized_payload() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.max_request_bytes = 32;
-    let app = build_router(cfg);
-    let request_body =
-        norito::json::to_vec(&initialize_request(1)).expect("serialize initialize request");
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mcp")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(request_body))
-                .expect("valid request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let body = read_json_body(response).await;
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32600)
-    );
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("data"))
-            .and_then(|value| value.get("max_request_bytes"))
-            .and_then(Value::as_u64),
-        Some(32)
-    );
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("data"))
-            .and_then(|value| value.get("error_code"))
-            .and_then(Value::as_str),
-        Some("request_payload_too_large")
-    );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_bounds_the_complete_response_envelope() {
@@ -1673,6 +1598,7 @@ async fn mcp_jsonrpc_bounds_the_complete_response_envelope() {
             .and_then(Value::as_str),
         Some("response_too_large")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_oversized_outer_array_as_one_invalid_request() {
@@ -1694,6 +1620,7 @@ async fn mcp_jsonrpc_rejects_oversized_outer_array_as_one_invalid_request() {
     let (status, body) = post_mcp(&app, payload).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_single_invalid_request(&body);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_tool_batch_above_dispatch_ceiling() {
@@ -1733,6 +1660,7 @@ async fn mcp_jsonrpc_rejects_tool_batch_above_dispatch_ceiling() {
             .and_then(Value::as_str),
         Some("batch_too_large")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_empty_batch() {
@@ -1755,6 +1683,7 @@ async fn mcp_jsonrpc_rejects_empty_batch() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = read_json_body(response).await;
     assert_single_invalid_request(&body);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_valid_outer_array_as_one_invalid_request() {
@@ -1781,6 +1710,7 @@ async fn mcp_jsonrpc_rejects_valid_outer_array_as_one_invalid_request() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = read_json_body(response).await;
     assert_single_invalid_request(&body);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_unknown_tool_returns_invalid_params() {
@@ -1807,6 +1737,7 @@ async fn mcp_jsonrpc_tools_call_unknown_tool_returns_invalid_params() {
             .and_then(Value::as_i64),
         Some(-32602)
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_every_unlisted_tool_alias() {
@@ -1873,9 +1804,10 @@ async fn mcp_jsonrpc_rejects_every_unlisted_tool_alias() {
             "unlisted alias must not reach dispatch: {alias}"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
-async fn mcp_jsonrpc_includes_universal_offline_operations_for_operator_profile() {
+async fn mcp_jsonrpc_includes_universal_kagemusha_operations_for_operator_profile() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1884,20 +1816,20 @@ async fn mcp_jsonrpc_includes_universal_offline_operations_for_operator_profile(
     let app = build_router(cfg);
     let names = list_all_tool_names(&app).await;
     let expected = [
-        "torii.get_v1_offline_readiness",
-        "torii.post_v1_offline_receiver_lineage",
-        "torii.post_v1_offline_top_up",
-        "torii.post_v1_offline_redeem",
-        "torii.get_v1_offline_operations_operation_id",
+        "torii.get_v1_kagemusha_readiness",
+        "torii.post_v1_kagemusha_top_up",
+        "torii.post_v1_kagemusha_redeem",
+        "torii.get_v1_kagemusha_operations_operation_id",
     ];
     for name in expected {
         assert!(
             names.iter().any(|candidate| candidate == name),
-            "universal offline operation is missing from tools/list: {name}"
+            "universal KAGEMUSHA operation is missing from tools/list: {name}"
         );
     }
     assert!(names.iter().any(|name| name == "iroha.health"));
     assert!(names.iter().any(|name| name == "iroha.transactions.submit"));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_uncataloged_openapi_operation_fails_closed() {
@@ -1935,6 +1867,7 @@ async fn mcp_jsonrpc_uncataloged_openapi_operation_fails_closed() {
         Some("tool_not_found"),
         "uncataloged OpenAPI operations must be rejected before dispatch"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_rejects_manual_tools_without_catalog_projection() {
@@ -1987,6 +1920,7 @@ async fn mcp_jsonrpc_rejects_manual_tools_without_catalog_projection() {
     assert!(names.iter().any(|name| name == "iroha.health"));
     assert!(names.iter().any(|name| name == "iroha.queries.submit"));
     assert!(names.iter().any(|name| name == "iroha.transactions.submit"));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_openapi_healthcheck_dispatches_route() {
@@ -2028,14 +1962,16 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_dispatches_route() {
             .is_some_and(|content_type| content_type.contains("text/plain")),
         "expected text/plain content type"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_openapi_healthcheck_requires_token_when_enabled() {
+    const API_TOKEN: &str = "mcp-token-00000000000000000000000";
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec!["mcp-token".to_owned()];
+    cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
     let app = build_router(cfg);
     let response = app
         .clone()
@@ -2061,6 +1997,7 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_requires_token_when_enabled(
         .expect("response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(response.headers().contains_key(header::WWW_AUTHENTICATE));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn retired_transaction_status_alias_is_not_mounted() {
@@ -2075,14 +2012,16 @@ async fn retired_transaction_status_alias_is_not_mounted() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_openapi_healthcheck_accepts_token_from_mcp_request_headers() {
+    const API_TOKEN: &str = "mcp-token-00000000000000000000000";
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec!["mcp-token".to_owned()];
+    cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
     let app = build_router(cfg);
     let (status, call) = post_mcp_with_headers(
         &app,
@@ -2094,7 +2033,7 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_accepts_token_from_mcp_reque
                 "name": "torii.get_health"
             }
         }),
-        &[("x-api-token", "mcp-token")],
+        &[("x-api-token", API_TOKEN)],
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -2108,6 +2047,7 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_accepts_token_from_mcp_reque
         structured.get("body").and_then(Value::as_str),
         Some("Healthy")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_projected_node_operational_endpoints_dispatch() {
@@ -2146,6 +2086,7 @@ async fn mcp_jsonrpc_tools_call_projected_node_operational_endpoints_dispatch() 
             "projected operational tool `{tool_name}` should return HTTP 200 in test harness"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_da_read_endpoints_dispatch() {
@@ -2197,6 +2138,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_read_endpoints_dispatch() {
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_da_ingest_accepts_body() {
@@ -2238,6 +2180,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_ingest_accepts_body() {
             "successful DA ingest alias calls should return HTTP 200"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_da_commitments_endpoints_accept_body() {
@@ -2285,6 +2228,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_commitments_endpoints_accept_body
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_da_pin_intents_endpoints_accept_body() {
@@ -2332,6 +2276,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_pin_intents_endpoints_accept_body
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_runtime_endpoints_dispatch() {
@@ -2377,6 +2322,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_endpoints_dispatch() {
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_dispatch() {
@@ -2440,6 +2386,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_d
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_finality_endpoints_accept_canonical_height_path() {
@@ -2486,6 +2433,7 @@ async fn mcp_jsonrpc_tools_call_finality_endpoints_accept_canonical_height_path(
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_uncataloged_proof_query_dispatches() {
@@ -2528,6 +2476,7 @@ async fn mcp_jsonrpc_tools_call_uncataloged_proof_query_dispatches() {
             "successful proof queries should return HTTP 200"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
@@ -2616,7 +2565,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             }),
         ),
         (10332, "iroha.gov.unlocks.stats", norito::json!({})),
-        (10333, "iroha.gov.council.current", norito::json!({})),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -2657,6 +2605,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             );
         }
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_dispatches() {
@@ -2693,6 +2642,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_dispatches() {
             "contract alias `{tool_name}` should dispatch and return an HTTP status"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_submit_error() {
@@ -2732,6 +2682,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_subm
             .is_some_and(|status| status >= 400),
         "expected contract call-and-wait alias to surface submit HTTP error"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_contracts_code_get_accepts_canonical_code_hash_path() {
@@ -2767,6 +2718,7 @@ async fn mcp_jsonrpc_tools_call_contracts_code_get_accepts_canonical_code_hash_p
             .is_some_and(|status| status >= 400),
         "expected invalid code hash to be rejected by contract code detail alias"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_contracts_code_bytes_get_accepts_canonical_code_hash_path() {
@@ -2794,6 +2746,7 @@ async fn mcp_jsonrpc_tools_call_contracts_code_bytes_get_accepts_canonical_code_
         &call,
         "invalid code hash must fail contract code-bytes advertised-schema validation",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn retired_server_contract_deploy_mcp_tools_are_not_callable() {
@@ -2824,6 +2777,7 @@ async fn retired_server_contract_deploy_mcp_tools_are_not_callable() {
             "retired tool remained callable: {name}"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contracts_state_get_accepts_flat_query_fields() {
@@ -2852,6 +2806,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_state_get_accepts_flat_que
         structured.get("status").and_then(Value::as_u64).is_some(),
         "contract state alias should dispatch and return an HTTP status"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
@@ -2861,8 +2816,14 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     cfg.torii.mcp.max_tools_per_list = 5;
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     cfg.torii.mcp.expose_operator_routes = true;
+    enable_test_faucet(&mut cfg);
     let app = build_router(cfg);
-    let names = list_all_tool_names(&app).await;
+    let tools = list_all_tools(&app).await;
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     assert!(
         names.iter().any(|name| name == "iroha.accounts.list"),
         "expected explicitly allowlisted account listing tool"
@@ -2877,6 +2838,35 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.accounts.history"),
         "expected explicitly allowlisted account history tool"
     );
+    for (name, stable_route_id) in [
+        (
+            "iroha.accounts.transactions",
+            "application.accounts_by_account_id_transactions_get",
+        ),
+        (
+            "iroha.accounts.history",
+            "application.accounts_by_account_id_history_get",
+        ),
+    ] {
+        let descriptor = tools
+            .iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            .unwrap_or_else(|| panic!("missing real tools/list descriptor `{name}`"));
+        let route_auth = descriptor
+            .get("_meta")
+            .and_then(Value::as_object)
+            .and_then(|meta| meta.get("iroha/routeAuth"));
+        assert_eq!(
+            route_auth,
+            Some(&norito::json!({
+                "schemaVersion": 1,
+                "stableRouteId": stable_route_id,
+                "authentication": "optional_canonical_account_signature",
+                "admission": "dataspace_visible"
+            })),
+            "unexpected routeAuth metadata for `{name}`"
+        );
+    }
     assert!(
         names.iter().all(|name| {
             !matches!(
@@ -3130,9 +3120,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.gov.unlocks.stats"),
         "expected agent-friendly governance unlocks-stats MCP tool"
     );
+    let retired_current_council_tool = ["iroha.gov.", "council.", "current"].concat();
     assert!(
-        names.iter().any(|name| name == "iroha.gov.council.current"),
-        "expected agent-friendly governance council snapshot MCP tool"
+        names
+            .iter()
+            .all(|name| name != retired_current_council_tool.as_str()),
+        "retired current-council MCP tool must remain absent"
     );
     assert!(
         !names.iter().any(|name| name == "iroha.gov.council.persist"),
@@ -3233,6 +3226,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         name.as_str(),
         "iroha.accounts.onboard" | "iroha.accounts.faucet"
     )));
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("torii.post_v1_accounts_faucet")),
+        "generic OpenAPI faucet aliases must never be projected"
+    );
     assert!(
         names
             .iter()
@@ -3543,6 +3542,7 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .any(|name| name == "iroha.connect.session.delete"),
         "expected agent-friendly connect session delete MCP tool"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_arguments() {
@@ -3587,6 +3587,7 @@ async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_argumen
             .is_some_and(|status| status >= 400),
         "expected invalid `limit=0` query argument to be rejected"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_history_uses_path_and_query_arguments() {
@@ -3627,6 +3628,7 @@ async fn mcp_jsonrpc_tools_call_account_history_uses_path_and_query_arguments() 
             .is_some_and(|status| status >= 400),
         "expected invalid `limit=0` account history query argument to be rejected"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_accounts_list_dispatches_route() {
@@ -3649,6 +3651,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_list_dispatches_route() {
     assert_eq!(status, StatusCode::OK);
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
@@ -3698,6 +3701,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_validates_query()
         &call,
         "invalid transaction-status hash must fail advertised-schema validation",
     );
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
@@ -3736,6 +3740,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_rejects_retired_fla
         &call,
         "retired flat transaction-wait hash must fail advertised-schema validation",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_rejects_query_transaction_hash_alias()
@@ -3768,6 +3773,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_rejects_query_trans
         &call,
         "retired query.transaction_hash must fail advertised-schema validation",
     );
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
@@ -3820,13 +3826,14 @@ async fn mcp_jsonrpc_tools_call_transactions_get_rejects_retired_path_transactio
         message.contains("transaction_hash"),
         "retired nested transaction_hash must be rejected before dispatch"
     );
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query_fields => success(
         10613,
         "iroha.instructions.list",
-        PageOne,
+        LimitTwo,
         "instructions list alias with flat query fields should dispatch successfully",
     )
 }
@@ -3867,6 +3874,7 @@ async fn mcp_jsonrpc_tools_call_instructions_get_accepts_canonical_path() {
             .is_some_and(|status| status >= 400),
         "expected invalid instruction hash to be rejected by explorer detail alias"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_flat_aliases() {
@@ -3899,6 +3907,7 @@ async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_flat_aliases() 
         message.contains("transaction_hash"),
         "retired flat instruction aliases must be rejected before dispatch"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_path_transaction_hash() {
@@ -3933,6 +3942,7 @@ async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_path_transactio
         message.contains("transaction_hash"),
         "retired nested transaction_hash must be rejected before dispatch"
     );
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
@@ -3991,6 +4001,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
             "successful nft chain-list alias should return HTTP 200"
         );
     }
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
@@ -4058,6 +4069,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
             "successful rwa chain-list alias should return HTTP 200"
         );
     }
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
@@ -4092,7 +4104,7 @@ mcp_alias_dispatch_test! {
     async fn mcp_jsonrpc_tools_call_agent_alias_blocks_list_accepts_flat_query_fields => success(
         10616,
         "iroha.blocks.list",
-        PageOne,
+        LimitTwo,
         "blocks list alias with flat query fields should dispatch successfully",
     )
 }
@@ -4130,6 +4142,7 @@ async fn mcp_jsonrpc_tools_call_blocks_get_accepts_canonical_identifier_path() {
             .is_some_and(|status| status >= 400),
         "expected invalid block-height alias to be rejected by explorer block detail alias"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_rejects_retired_flat_arguments() {
@@ -4158,6 +4171,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_rejects_retired
         &call,
         "retired flat account-transactions arguments must fail advertised-schema validation",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_history_rejects_retired_flat_arguments() {
@@ -4186,6 +4200,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_history_rejects_retired_flat
         &call,
         "retired flat account-history arguments must fail advertised-schema validation",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope_fields() {
@@ -4216,6 +4231,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_rejects_retired_one_shot_onboarding_tool() {
@@ -4247,6 +4263,7 @@ async fn mcp_jsonrpc_tools_call_rejects_retired_one_shot_onboarding_tool() {
         Some("tool_not_found"),
         "retired one-shot onboarding tool must be rejected before dispatch"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_transactions_query_accepts_canonical_path() {
@@ -4277,6 +4294,7 @@ async fn mcp_jsonrpc_tools_call_account_transactions_query_accepts_canonical_pat
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_assets_accepts_canonical_path() {
@@ -4313,6 +4331,7 @@ async fn mcp_jsonrpc_tools_call_account_assets_accepts_canonical_path() {
             .is_some_and(|status| status >= 400),
         "expected invalid flat asset limit to be rejected"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_assets_query_accepts_canonical_path() {
@@ -4343,6 +4362,7 @@ async fn mcp_jsonrpc_tools_call_account_assets_query_accepts_canonical_path() {
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_permissions_accepts_canonical_path() {
@@ -4372,6 +4392,7 @@ async fn mcp_jsonrpc_tools_call_account_permissions_accepts_canonical_path() {
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_portfolio_accepts_canonical_path() {
@@ -4403,6 +4424,7 @@ async fn mcp_jsonrpc_tools_call_account_portfolio_accepts_canonical_path() {
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fields() {
@@ -4438,6 +4460,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
             .is_some_and(|status| status >= 400),
         "expected invalid flat domain-list limit to be rejected"
     );
+    app.shutdown().await;
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
@@ -4486,6 +4509,7 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_query_requires_typed_body() {
         message.contains("body"),
         "missing typed request body should produce a focused error"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_musubi_v1_rejects_signing_fields() {
@@ -4514,6 +4538,7 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_rejects_signing_fields() {
         &call,
         "Musubi V1 MCP tools must reject signing material before dispatch",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_payload() {
@@ -4590,6 +4615,7 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_paylo
         !body_object.contains_key("private_key"),
         "instruction builders must not accept or return private keys"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
@@ -4624,6 +4650,7 @@ async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
         let schema = tool.get("inputSchema").expect("input schema");
         assert_schema_omits_exact_properties(schema, &["private_key", "authority"], tool_name);
     }
+    app.shutdown().await;
 }
 include!("mcp_endpoints/extended_tool_dispatch_tests.rs");
 #[tokio::test]
@@ -4663,6 +4690,7 @@ async fn mcp_jsonrpc_rejects_retired_connect_aliases_without_dispatch() {
             "retired tool `{tool_name}` must fail before dispatch"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn mcp_jsonrpc_connect_session_create_derives_sid_from_exact_identity() {
@@ -4712,6 +4740,7 @@ async fn mcp_jsonrpc_connect_session_create_derives_sid_from_exact_identity() {
         let sid_bytes = B64.decode(sid).expect("base64url sid");
         assert_eq!(sid_bytes.len(), 32, "sid should be 32 bytes");
     }
+    app.shutdown().await;
 }
 include!("mcp_endpoints/connect_session_lifecycle_test.rs");
 include!("mcp_endpoints/connect_and_registration_tests.rs");

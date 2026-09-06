@@ -14,6 +14,26 @@ pub mod const_vec;
 #[cfg(not(feature = "ffi_import"))]
 pub mod conststr;
 pub mod erasure;
+#[cfg(any(
+    target_os = "linux",
+    all(
+        target_os = "android",
+        any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "riscv64",
+            target_arch = "x86",
+            target_arch = "x86_64"
+        )
+    ),
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+pub mod fs;
 pub mod json;
 pub mod must_use;
 pub mod numeric;
@@ -61,3 +81,6 @@ mod ffi {
     }
     pub(crate) use ffi_item;
 }
+
+#[cfg(test)]
+mod schema_identity;

@@ -144,6 +144,11 @@ data-centre deployments stay on the higher-duty-cycle plan unless explicitly rec
 is a staging/dogfood preset; stage it only when exercising the SNNet‑17A capability rollout plan after
 the Quinn dependency gate has been cleared.
 
+The V1 capability TLV does not carry a tick duration, and the V1 VPN helper's
+strict scheduler is fixed at the `core` profile's 5 ms tick. Relay validation
+therefore rejects `strict=true` with `home` or `null`; those combinations must
+not be activated until a future version binds the timing profile on the wire.
+
 ## MTU and padding guidance
 
 - A constant-rate QUIC DATAGRAM carries one exact 1,024 B strict cell (up to 970 logical payload
@@ -187,7 +192,8 @@ the Quinn dependency gate has been cleared.
 - At the wire-protocol level, clients that set the strict flag require every hop to expose the same
   TLV; capability negotiation rejects a strict request when a server advertises best-effort or no
   constant-rate support. The dormant handshake preflight also rejects an otherwise matching strict
-  result before responding; it never accepts strict as best-effort instead.
+  result before responding; it never accepts strict as best-effort instead. Configuration also
+  requires the shared `core` 5 ms profile before strict mode can reach dependency qualification.
 - Defaults keep the capability disabled. The current relay and Sora VPN helper reject all QUIC
   endpoint creation before binding while the lockfile resolves vulnerable Quinn 0.11.9 /
   quinn-proto 0.11.15, so neither best-effort nor strict constant-rate operation is a shipping path.
@@ -212,7 +218,7 @@ auditable. Recommended actions:
 4. Track the new cover-traffic gauges and alerts:
    - `soranet_constant_rate_queue_depth_class{class}` exposes the scheduler's internal per-class
      queues. The dormant strict implementation binds these to authenticated application queues;
-     currently reachable best-effort mode normally leaves them empty.
+     the dormant best-effort mode normally leaves them empty.
      `soranet_constant_rate_queue_depth` remains the aggregate view.
    - `soranet_constant_rate_low_dummy_events_total` increments whenever the live dummy ratio falls
      below 20 % in the scheduler loop. With no production payload producer, this ratio should stay
@@ -220,8 +226,8 @@ auditable. Recommended actions:
    - `soranet_constant_rate_dummy_ratio` reflects cover cells divided by all cells emitted by the
      DATAGRAM scheduler. Once strict activation is qualified, all post-handshake payload must use
      that scheduler; current production negotiation cannot enter that mode.
-   - Best-effort negotiation still runs the legacy cover-only DATAGRAM loop. Dashboards must retain
-     the negotiated mode label when interpreting those metrics.
+   - After dependency requalification, best-effort negotiation will run the legacy cover-only
+     DATAGRAM loop. Dashboards must retain the negotiated mode label when interpreting those metrics.
 5. Observability assets: Grafana board `dashboards/grafana/soranet_constant_rate.json` charts
    queue depth per class, dummy ratio, live neighbor count, and degraded-state markers; the
    companion alert bundle `dashboards/alerts/soranet_constant_rate_rules.yml` fires when dummy

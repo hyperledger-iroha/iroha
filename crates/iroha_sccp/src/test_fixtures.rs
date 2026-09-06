@@ -7,6 +7,7 @@ use halo2curves::{
     bn256::{Fq, Fr, G1Affine},
     ff::PrimeField as _,
     group::{Curve, GroupEncoding},
+    pasta::{Fp as PastaFp, Fq as PastaFq, PallasAffine, VestaAffine},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature, SignatureOf};
 use iroha_data_model::{
@@ -46,7 +47,6 @@ use norito::to_bytes;
 use std::collections::BTreeSet;
 
 const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
-
 const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
     TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
 }
@@ -100,6 +100,48 @@ pub struct SccpFinalizedBlockTestFixtureV1 {
     block: SignedBlock,
     proof: TairaBridgeFinalityProofV1,
 }
+
+fn sccp_mint_finality_roster_test_fixture_v1(
+    network_id: iroha_data_model::NetworkId,
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
+    };
+
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                let scalar = u64::try_from(index + 1).expect("small SCCP fixture roster");
+                let eq_encoded = (<PallasAffine as CurveAffine>::CurveExt::generator()
+                    * PastaFq::from(scalar))
+                .to_affine()
+                .to_bytes();
+                let ep_encoded = (<VestaAffine as CurveAffine>::CurveExt::generator()
+                    * PastaFp::from(scalar))
+                .to_affine()
+                .to_bytes();
+                let mut eq_proof_public_key = [0_u8; 32];
+                eq_proof_public_key.copy_from_slice(eq_encoded.as_ref());
+                let mut ep_proof_public_key = [0_u8; 32];
+                ep_proof_public_key.copy_from_slice(ep_encoded.as_ref());
+                KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key,
+                    ep_proof_public_key,
+                }
+            })
+            .collect(),
+    }
+}
+
 impl SccpFinalizedBlockTestFixtureV1 {
     /// Return the complete signed block authenticated by this fixture.
     #[must_use]
@@ -113,6 +155,24 @@ impl SccpFinalizedBlockTestFixtureV1 {
     }
 }
 impl SccpExactOutboundTestFixtureV1 {
+    /// Rebuild this fixture at height two with its exact height-one finality as parent.
+    ///
+    /// This produces ordinary authenticated finality with a parent `CommitQC`,
+    /// rather than a genesis or snapshot-bootstrap boundary.
+    #[must_use]
+    pub fn with_exact_finalized_successor(&self) -> Self {
+        let parent = &self.finalized_block;
+        assert_eq!(parent.block().header().height().get(), 1);
+        let block = exact_sccp_fixture_block(
+            self.bundle.commitment.context,
+            &self.bundle.payload,
+            Some(self.bundle.commitment_root),
+            2,
+            Some(parent.block().hash()),
+        );
+        self.with_finalized_block(&block, Some(parent))
+    }
+
     /// Rebuild this exact fixture around one complete finalized signed block.
     ///
     /// The caller must first attach the block's transactions and results so
@@ -357,6 +417,9 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
             source_network: SccpNetworkV1::SoraTaira,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+            epoch: 1,
+            epoch_end_height: 10,
+            roster_commitment: [0x78; 32],
             checkpoint_height: 5,
             checkpoint_block_hash: [0x73; 32],
             checkpoint_context_id: [0x74; 32],
@@ -378,7 +441,7 @@ fn ton_outbound_policy() -> SccpOutboundProofPolicyV1 {
         sora_finality_anchor: outbound_policy().sora_finality_anchor,
     }
 }
-/// Build the deterministic proved burn-and-record policy used by SCCP tests.
+/// Build the deterministic contract burn-and-record policy used by SCCP tests.
 #[must_use]
 pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutboundExecutionPolicyV1 {
     SccpSoraOutboundExecutionPolicyV1 {
@@ -406,10 +469,8 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
     activation: SccpRouteActivationV1,
 ) -> SccpGovernedRouteV1 {
     let route_id = match network {
-        SccpNetworkV1::EthereumMainnet | SccpNetworkV1::EthereumSepolia => {
-            SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
-        }
-        SccpNetworkV1::BscMainnet | SccpNetworkV1::BscTestnet => SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+        SccpNetworkV1::EthereumMainnet => SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1,
+        SccpNetworkV1::BscMainnet => SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
         _ => panic!("exact EVM SCCP fixture requires an Ethereum or BSC profile"),
     };
     let lane_id = SccpLaneIdV1 {
@@ -428,6 +489,10 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         outbound_proof_policy: outbound_policy(),
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],
+        replay_verifier_address: [0x71; 20],
+        replay_verifier_code_hash: [0x72; 32],
+        mint_breaker_address: [0x81; 20],
+        mint_breaker_code_hash: [0x82; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
@@ -441,10 +506,6 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
             SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
         )
         .expect("exact SCCP fixture route configuration is valid");
-    let custody = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519)
-        .expect("exact SCCP custody fixture key")
-        .public_key()
-        .clone();
     let route = SccpGovernedRouteV1 {
         lane_id,
         route_id: route_id.to_owned(),
@@ -464,7 +525,6 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-            custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
         },
@@ -493,10 +553,7 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
     activation: SccpRouteActivationV1,
 ) -> SccpGovernedRouteV1 {
     assert!(
-        matches!(
-            network,
-            SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-        ),
+        matches!(network, SccpNetworkV1::TonMainnet),
         "exact TON SCCP fixture requires a TON profile"
     );
     let lane_id = SccpLaneIdV1 {
@@ -522,6 +579,8 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
         verifier_key_hash: sccp_groth16_bls12381_verifying_key_hash_v1(&verifying_key)
             .expect("exact SCCP TON verification key is curve-valid"),
         proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
+        mint_breaker_guardian_keys: [[0xa1; 32], [0xa2; 32], [0xa3; 32], [0xa4; 32], [0xa5; 32]]
+            .into(),
         outbound_proof_policy: ton_outbound_policy(),
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
         max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
@@ -536,10 +595,6 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
             SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
         )
         .expect("exact SCCP TON route configuration is valid");
-    let custody = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::Ed25519)
-        .expect("exact SCCP TON custody fixture key")
-        .public_key()
-        .clone();
     let route = SccpGovernedRouteV1 {
         lane_id,
         route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
@@ -559,7 +614,6 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
         sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-            custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
         },
@@ -881,12 +935,19 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         max_payload_size_bytes: 4096,
         max_chunk_count: 8,
     };
+    let network_id = sccp_taira_finality_network_id_v1();
+    let epoch = 1;
+    let kagemusha_mint_finality_epoch_roster =
+        sccp_mint_finality_roster_test_fixture_v1(network_id, epoch, &roster);
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .expect("valid deterministic SCCP mint-finality roster");
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => HeightContext {
-            network_id: sccp_taira_finality_network_id_v1(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height,
-            epoch: 0,
+            epoch,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -898,6 +959,8 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             execution_policy_hash: Hash::new(b"exact SCCP fixture execution policy"),
             da_layout,
             leader_seed: [0x5a; 32],
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
         },
         (2, Some(parent_hash), Some(parent)) => {
             assert_exact_finalized_block_fixture(parent);
@@ -930,6 +993,10 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                 execution_policy_hash: parent_context.execution_policy_hash,
                 da_layout: parent_context.da_layout,
                 leader_seed: parent_context.leader_seed,
+                kagemusha_mint_finality_epoch_id: parent_context.kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster: parent_context
+                    .kagemusha_mint_finality_epoch_roster
+                    .clone(),
             }
         }
         _ => panic!(
@@ -953,7 +1020,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
-        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),
@@ -1024,6 +1091,7 @@ fn exact_sccp_fixture_block(
             overlay: vec![InstructionBox::from(RecordSccpMessage::new(
                 context,
                 payload_bytes,
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
             ))]
             .into(),
             events_commitment: Hash::new(b"exact SCCP fixture events"),
@@ -1054,7 +1122,7 @@ fn exact_sccp_fixture_block(
         v2_evidence_admissions: Vec::new(),
         penalty_actions: vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
             NposMarkConsensusEvidenceAppliedAction {
-                evidence_key: b"exact-sccp-fixture".to_vec(),
+                evidence_key: Hash::new(b"exact-sccp-fixture"),
                 height,
             },
         )],
@@ -1301,6 +1369,7 @@ mod tests {
         let default_finality = decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
             .expect("default exact finality decodes");
         assert_eq!(default_finality.finality_artifact.height, 1);
+        assert_eq!(default_finality.finality_artifact.height_context.epoch, 1);
         assert_eq!(
             default_finality
                 .finality_artifact
@@ -1314,6 +1383,34 @@ mod tests {
                 .height_context
                 .parent_commit_qc
                 .is_none()
+        );
+        let context = &default_finality.finality_artifact.height_context;
+        assert_eq!(
+            context.kagemusha_mint_finality_epoch_roster.network_id, context.network_id,
+            "the mint-finality roster must bind the consensus network"
+        );
+        assert_eq!(
+            context.kagemusha_mint_finality_epoch_roster.epoch, context.epoch,
+            "the mint-finality roster must bind the consensus epoch"
+        );
+        assert_eq!(
+            context
+                .kagemusha_mint_finality_epoch_roster
+                .finality_epoch_id(),
+            Ok(context.kagemusha_mint_finality_epoch_id),
+            "the SCCP fixture must carry a self-authenticating KAGEMUSHA mint-finality roster"
+        );
+        assert!(
+            context
+                .roster
+                .iter()
+                .map(|validator| &validator.validator)
+                .eq(context
+                    .kagemusha_mint_finality_epoch_roster
+                    .validators
+                    .iter()
+                    .map(|validator| &validator.validator)),
+            "the Pasta fixture authority must exactly match consensus roster order"
         );
         let block = fixture.finalized_block.block().clone();
         let header = block.header();
@@ -1386,6 +1483,30 @@ mod tests {
             finality.finality_artifact.height_context.epoch,
             parent.proof().finality_artifact.height_context.epoch,
             "an in-epoch successor must inherit its parent's epoch"
+        );
+        assert_eq!(
+            finality
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_id,
+            parent
+                .proof()
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_id,
+            "an in-epoch successor must inherit the exact Pasta authority identifier"
+        );
+        assert_eq!(
+            finality
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_roster,
+            parent
+                .proof()
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_roster,
+            "an in-epoch successor must inherit the exact Pasta authority roster"
         );
         assert_eq!(
             finality.finality_artifact.height_context.epoch_end_height,

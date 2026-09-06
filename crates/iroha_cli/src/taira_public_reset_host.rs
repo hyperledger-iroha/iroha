@@ -16940,7 +16940,7 @@ mod tests {
             )),
             payload_hash: Hash::new(b"public reset committed payload"),
         };
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"public reset parent state"),
             Hash::new(b"public reset post state"),
             Hash::new(b"public reset writes"),

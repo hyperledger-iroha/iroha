@@ -1,8 +1,7 @@
 //! Crypto opcode and helper regression tests.
 use ivm::{
-    AccelerationConfig, ByteMerkleTree, IVM, SimdChoice, acceleration_runtime_status,
-    ec::{ec_add_truncated, ec_mul_truncated},
-    encoding, field, instruction, pairing_check_truncated, poseidon2, poseidon6, vector_supported,
+    AccelerationConfig, ByteMerkleTree, IVM, SimdChoice, acceleration_runtime_status, encoding,
+    instruction, poseidon2, poseidon6, vector_supported,
 };
 mod common;
 use common::assemble;
@@ -237,7 +236,9 @@ fn merkle_roots_match_across_simd_modes() {
     let simd_status = acceleration_runtime_status();
     assert!(simd_status.simd.configured);
     assert_eq!(simd_status.simd.available, vector_supported());
-    let simd_root = ByteMerkleTree::from_bytes_accel(&payload, 32).root();
+    let simd_root = ByteMerkleTree::from_bytes_accel(&payload, 32)
+        .unwrap()
+        .root();
     ivm::set_acceleration_config(AccelerationConfig {
         enable_simd: false,
         enable_cuda: false,
@@ -248,48 +249,8 @@ fn merkle_roots_match_across_simd_modes() {
     assert!(!scalar_status.simd.configured);
     assert_eq!(ivm::simd_choice(), SimdChoice::Scalar);
     assert!(!scalar_status.simd.available);
-    let scalar_root = ByteMerkleTree::from_bytes_accel(&payload, 32).root();
+    let scalar_root = ByteMerkleTree::from_bytes_accel(&payload, 32)
+        .unwrap()
+        .root();
     assert_eq!(scalar_root, simd_root);
-}
-#[test]
-fn test_pubkgen_valcom_ecops() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_register(1, 9); // scalar/value
-    vm.set_register(2, 4); // random
-    // PUBKGEN r3, r1
-    let pubk = encoding::wide::encode_rr(instruction::wide::crypto::PUBKGEN, 3, 1, 0);
-    // VALCOM r4, r1, r2
-    let valcom = encoding::wide::encode_rr(instruction::wide::crypto::VALCOM, 4, 1, 2);
-    // ECADD r5, r3, r4
-    let ecadd = encoding::wide::encode_rr(instruction::wide::crypto::ECADD, 5, 3, 4);
-    // ECMUL_VAR r6, r3, r1
-    let ecmul = encoding::wide::encode_rr(instruction::wide::crypto::ECMUL_VAR, 6, 3, 1);
-    let mut seq = Vec::new();
-    for ins in [pubk, valcom, ecadd, ecmul] {
-        seq.extend_from_slice(&ins.to_le_bytes());
-    }
-    seq.extend_from_slice(&HALT_WORD.to_le_bytes());
-    let prog = assemble(&seq);
-    vm.load_program(&prog).unwrap();
-    vm.run().unwrap();
-    let expected_pubk = field::mul(9, 2);
-    assert_eq!(vm.register(3), expected_pubk);
-    let expected_valcom = ivm::pedersen_commit_truncated(9, 4);
-    assert_eq!(vm.register(4), expected_valcom);
-    let expected_ecadd = ec_add_truncated(expected_pubk, expected_valcom);
-    assert_eq!(vm.register(5), expected_ecadd);
-    let expected_ecmul = ec_mul_truncated(expected_pubk, 9);
-    assert_eq!(vm.register(6), expected_ecmul);
-}
-#[test]
-fn test_pairing_opcode() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_register(1, 2);
-    vm.set_register(2, 3);
-    let instr = encoding::wide::encode_rr(instruction::wide::crypto::PAIRING, 3, 1, 2);
-    let prog = assemble(&words(&[instr, HALT_WORD]));
-    vm.load_program(&prog).unwrap();
-    vm.run().unwrap();
-    let expected = pairing_check_truncated(2, 3);
-    assert_eq!(vm.register(3), expected);
 }

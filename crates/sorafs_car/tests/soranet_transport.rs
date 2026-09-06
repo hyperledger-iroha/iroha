@@ -1,3 +1,4 @@
+use iroha_service_model::soranet::AnonymityPolicy;
 use sorafs_car::{
     CarBuildPlan, CarWriteStats, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3,
     compute_por_root,
@@ -9,8 +10,8 @@ use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, GovernanceProofs, ManifestBuilder, PinPolicy,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, FetchSession, ManifestVerificationContext, ManifestVerificationError,
-    PolicyReport, PolicyStatus,
+    FetchSession, ManifestVerificationContext, ManifestVerificationError, PolicyReport,
+    PolicyStatus,
 };
 use std::sync::Arc;
 struct FetchFixture {

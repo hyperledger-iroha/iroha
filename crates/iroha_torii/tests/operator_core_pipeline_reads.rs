@@ -139,6 +139,7 @@ async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_
         .await
         .expect("query-mismatch response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn core_operator_read_rejects_an_exact_signature_replay() {
@@ -166,12 +167,13 @@ async fn core_operator_read_rejects_an_exact_signature_replay() {
         .await
         .expect("replayed response");
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn operator_reads_do_not_become_api_token_routes_when_legacy_tokens_are_enabled() {
     let harness = NoritoRpcHarness::new(|cfg| {
         cfg.torii.require_api_token = true;
-        cfg.torii.api_tokens = vec!["legacy-token-must-not-be-needed".to_owned()];
+        cfg.torii.api_tokens = vec!["legacy-token-must-not-be-needed-00".to_owned()].into();
     });
     for path in [
         "/v1/configuration",
@@ -204,4 +206,5 @@ async fn operator_reads_do_not_become_api_token_routes_when_legacy_tokens_are_en
         assert_ne!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         assert_ne!(response.status(), StatusCode::FORBIDDEN, "{path}");
     }
+    harness.shutdown().await;
 }

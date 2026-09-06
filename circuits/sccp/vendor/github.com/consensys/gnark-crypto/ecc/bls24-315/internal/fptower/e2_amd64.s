@@ -1,0 +1,963 @@
+// Copyright 2020-2026 Consensys Software Inc.
+// Licensed under the Apache License, Version 2.0. See the LICENSE file for details.
+
+#include "textflag.h"
+#include "funcdata.h"
+#include "go_asm.h"
+
+#define REDUCE(ra0, ra1, ra2, ra3, ra4, rb0, rb1, rb2, rb3, rb4, q0, q1, q2, q3, q4) \
+	MOVQ    ra0, rb0; \
+	SUBQ    q0, ra0;  \
+	MOVQ    ra1, rb1; \
+	SBBQ    q1, ra1;  \
+	MOVQ    ra2, rb2; \
+	SBBQ    q2, ra2;  \
+	MOVQ    ra3, rb3; \
+	SBBQ    q3, ra3;  \
+	MOVQ    ra4, rb4; \
+	SBBQ    q4, ra4;  \
+	CMOVQCS rb0, ra0; \
+	CMOVQCS rb1, ra1; \
+	CMOVQCS rb2, ra2; \
+	CMOVQCS rb3, ra3; \
+	CMOVQCS rb4, ra4; \
+
+#define REDUCE_NOGLOBAL(ra0, ra1, ra2, ra3, ra4, rb0, rb1, rb2, rb3, rb4, scratch0) \
+	MOVQ    ra0, rb0;            \
+	MOVQ    $const_q0, scratch0; \
+	SUBQ    scratch0, ra0;       \
+	MOVQ    ra1, rb1;            \
+	MOVQ    $const_q1, scratch0; \
+	SBBQ    scratch0, ra1;       \
+	MOVQ    ra2, rb2;            \
+	MOVQ    $const_q2, scratch0; \
+	SBBQ    scratch0, ra2;       \
+	MOVQ    ra3, rb3;            \
+	MOVQ    $const_q3, scratch0; \
+	SBBQ    scratch0, ra3;       \
+	MOVQ    ra4, rb4;            \
+	MOVQ    $const_q4, scratch0; \
+	SBBQ    scratch0, ra4;       \
+	CMOVQCS rb0, ra0;            \
+	CMOVQCS rb1, ra1;            \
+	CMOVQCS rb2, ra2;            \
+	CMOVQCS rb3, ra3;            \
+	CMOVQCS rb4, ra4;            \
+
+TEXT ·addE2(SB), NOSPLIT, $0-24
+	MOVQ x+8(FP), AX
+	MOVQ 0(AX), CX
+	MOVQ 8(AX), BX
+	MOVQ 16(AX), SI
+	MOVQ 24(AX), DI
+	MOVQ 32(AX), R8
+	MOVQ y+16(FP), DX
+	ADDQ 0(DX), CX
+	ADCQ 8(DX), BX
+	ADCQ 16(DX), SI
+	ADCQ 24(DX), DI
+	ADCQ 32(DX), R8
+
+	// reduce element(CX,BX,SI,DI,R8,) using temp registers (R10,R11,R12,R13,R14,R9)
+	REDUCE_NOGLOBAL(CX,BX,SI,DI,R8,R10,R11,R12,R13,R14,R9)
+
+	MOVQ res+0(FP), R15
+	MOVQ CX, 0(R15)
+	MOVQ BX, 8(R15)
+	MOVQ SI, 16(R15)
+	MOVQ DI, 24(R15)
+	MOVQ R8, 32(R15)
+	MOVQ 40(AX), CX
+	MOVQ 48(AX), BX
+	MOVQ 56(AX), SI
+	MOVQ 64(AX), DI
+	MOVQ 72(AX), R8
+	ADDQ 40(DX), CX
+	ADCQ 48(DX), BX
+	ADCQ 56(DX), SI
+	ADCQ 64(DX), DI
+	ADCQ 72(DX), R8
+
+	// reduce element(CX,BX,SI,DI,R8,) using temp registers (R11,R12,R13,R14,R9,R10)
+	REDUCE_NOGLOBAL(CX,BX,SI,DI,R8,R11,R12,R13,R14,R9,R10)
+
+	MOVQ CX, 40(R15)
+	MOVQ BX, 48(R15)
+	MOVQ SI, 56(R15)
+	MOVQ DI, 64(R15)
+	MOVQ R8, 72(R15)
+	RET
+
+TEXT ·doubleE2(SB), NOSPLIT, $0-16
+	MOVQ res+0(FP), DX
+	MOVQ x+8(FP), AX
+	MOVQ 0(AX), CX
+	MOVQ 8(AX), BX
+	MOVQ 16(AX), SI
+	MOVQ 24(AX), DI
+	MOVQ 32(AX), R8
+	ADDQ CX, CX
+	ADCQ BX, BX
+	ADCQ SI, SI
+	ADCQ DI, DI
+	ADCQ R8, R8
+
+	// reduce element(CX,BX,SI,DI,R8,) using temp registers (R10,R11,R12,R13,R14,R9)
+	REDUCE_NOGLOBAL(CX,BX,SI,DI,R8,R10,R11,R12,R13,R14,R9)
+
+	MOVQ CX, 0(DX)
+	MOVQ BX, 8(DX)
+	MOVQ SI, 16(DX)
+	MOVQ DI, 24(DX)
+	MOVQ R8, 32(DX)
+	MOVQ 40(AX), CX
+	MOVQ 48(AX), BX
+	MOVQ 56(AX), SI
+	MOVQ 64(AX), DI
+	MOVQ 72(AX), R8
+	ADDQ CX, CX
+	ADCQ BX, BX
+	ADCQ SI, SI
+	ADCQ DI, DI
+	ADCQ R8, R8
+
+	// reduce element(CX,BX,SI,DI,R8,) using temp registers (R10,R11,R12,R13,R14,R15)
+	REDUCE_NOGLOBAL(CX,BX,SI,DI,R8,R10,R11,R12,R13,R14,R15)
+
+	MOVQ CX, 40(DX)
+	MOVQ BX, 48(DX)
+	MOVQ SI, 56(DX)
+	MOVQ DI, 64(DX)
+	MOVQ R8, 72(DX)
+	RET
+
+TEXT ·subE2(SB), NOSPLIT, $0-24
+	XORQ    R15, R15
+	MOVQ    x+8(FP), DI
+	MOVQ    0(DI), AX
+	MOVQ    8(DI), DX
+	MOVQ    16(DI), CX
+	MOVQ    24(DI), BX
+	MOVQ    32(DI), SI
+	MOVQ    y+16(FP), DI
+	SUBQ    0(DI), AX
+	SBBQ    8(DI), DX
+	SBBQ    16(DI), CX
+	SBBQ    24(DI), BX
+	SBBQ    32(DI), SI
+	MOVQ    x+8(FP), DI
+	MOVQ    $0x6fe802ff40300001, R8
+	MOVQ    $0x421ee5da52bde502, R9
+	MOVQ    $0xdec1d01aa27a1ae0, R10
+	MOVQ    $0xd3f7498be97c5eaf, R11
+	MOVQ    $0x04c23a02b586d650, R12
+	CMOVQCC R15, R8
+	CMOVQCC R15, R9
+	CMOVQCC R15, R10
+	CMOVQCC R15, R11
+	CMOVQCC R15, R12
+	ADDQ    R8, AX
+	ADCQ    R9, DX
+	ADCQ    R10, CX
+	ADCQ    R11, BX
+	ADCQ    R12, SI
+	MOVQ    res+0(FP), R13
+	MOVQ    AX, 0(R13)
+	MOVQ    DX, 8(R13)
+	MOVQ    CX, 16(R13)
+	MOVQ    BX, 24(R13)
+	MOVQ    SI, 32(R13)
+	MOVQ    40(DI), AX
+	MOVQ    48(DI), DX
+	MOVQ    56(DI), CX
+	MOVQ    64(DI), BX
+	MOVQ    72(DI), SI
+	MOVQ    y+16(FP), DI
+	SUBQ    40(DI), AX
+	SBBQ    48(DI), DX
+	SBBQ    56(DI), CX
+	SBBQ    64(DI), BX
+	SBBQ    72(DI), SI
+	MOVQ    $0x6fe802ff40300001, R14
+	MOVQ    $0x421ee5da52bde502, R8
+	MOVQ    $0xdec1d01aa27a1ae0, R9
+	MOVQ    $0xd3f7498be97c5eaf, R10
+	MOVQ    $0x04c23a02b586d650, R11
+	CMOVQCC R15, R14
+	CMOVQCC R15, R8
+	CMOVQCC R15, R9
+	CMOVQCC R15, R10
+	CMOVQCC R15, R11
+	ADDQ    R14, AX
+	ADCQ    R8, DX
+	ADCQ    R9, CX
+	ADCQ    R10, BX
+	ADCQ    R11, SI
+	MOVQ    res+0(FP), DI
+	MOVQ    AX, 40(DI)
+	MOVQ    DX, 48(DI)
+	MOVQ    CX, 56(DI)
+	MOVQ    BX, 64(DI)
+	MOVQ    SI, 72(DI)
+	RET
+
+TEXT ·negE2(SB), NOSPLIT, $0-16
+	MOVQ  res+0(FP), DX
+	MOVQ  x+8(FP), AX
+	MOVQ  0(AX), BX
+	MOVQ  8(AX), SI
+	MOVQ  16(AX), DI
+	MOVQ  24(AX), R8
+	MOVQ  32(AX), R9
+	MOVQ  BX, AX
+	ORQ   SI, AX
+	ORQ   DI, AX
+	ORQ   R8, AX
+	ORQ   R9, AX
+	TESTQ AX, AX
+	JNE   l1
+	MOVQ  AX, 0(DX)
+	MOVQ  AX, 8(DX)
+	MOVQ  AX, 16(DX)
+	MOVQ  AX, 24(DX)
+	MOVQ  AX, 32(DX)
+	JMP   l3
+
+l1:
+	MOVQ $0x6fe802ff40300001, CX
+	SUBQ BX, CX
+	MOVQ CX, 0(DX)
+	MOVQ $0x421ee5da52bde502, CX
+	SBBQ SI, CX
+	MOVQ CX, 8(DX)
+	MOVQ $0xdec1d01aa27a1ae0, CX
+	SBBQ DI, CX
+	MOVQ CX, 16(DX)
+	MOVQ $0xd3f7498be97c5eaf, CX
+	SBBQ R8, CX
+	MOVQ CX, 24(DX)
+	MOVQ $0x04c23a02b586d650, CX
+	SBBQ R9, CX
+	MOVQ CX, 32(DX)
+
+l3:
+	MOVQ  x+8(FP), AX
+	MOVQ  40(AX), BX
+	MOVQ  48(AX), SI
+	MOVQ  56(AX), DI
+	MOVQ  64(AX), R8
+	MOVQ  72(AX), R9
+	MOVQ  BX, AX
+	ORQ   SI, AX
+	ORQ   DI, AX
+	ORQ   R8, AX
+	ORQ   R9, AX
+	TESTQ AX, AX
+	JNE   l2
+	MOVQ  AX, 40(DX)
+	MOVQ  AX, 48(DX)
+	MOVQ  AX, 56(DX)
+	MOVQ  AX, 64(DX)
+	MOVQ  AX, 72(DX)
+	RET
+
+l2:
+	MOVQ $0x6fe802ff40300001, CX
+	SUBQ BX, CX
+	MOVQ CX, 40(DX)
+	MOVQ $0x421ee5da52bde502, CX
+	SBBQ SI, CX
+	MOVQ CX, 48(DX)
+	MOVQ $0xdec1d01aa27a1ae0, CX
+	SBBQ DI, CX
+	MOVQ CX, 56(DX)
+	MOVQ $0xd3f7498be97c5eaf, CX
+	SBBQ R8, CX
+	MOVQ CX, 64(DX)
+	MOVQ $0x04c23a02b586d650, CX
+	SBBQ R9, CX
+	MOVQ CX, 72(DX)
+	RET
+
+TEXT ·mulNonResE2(SB), NOSPLIT, $0-16
+	MOVQ x+8(FP), R12
+	MOVQ 40(R12), AX
+	MOVQ 48(R12), DX
+	MOVQ 56(R12), CX
+	MOVQ 64(R12), BX
+	MOVQ 72(R12), SI
+
+	// a = 13 * x.A1 (double-and-add, reduced at each step)
+	ADDQ AX, AX
+	ADCQ DX, DX
+	ADCQ CX, CX
+	ADCQ BX, BX
+	ADCQ SI, SI
+
+	// reduce element(AX,DX,CX,BX,SI,) using temp registers (DI,R8,R9,R10,R11,R15)
+	REDUCE_NOGLOBAL(AX,DX,CX,BX,SI,DI,R8,R9,R10,R11,R15)
+
+	ADDQ 40(R12), AX
+	ADCQ 48(R12), DX
+	ADCQ 56(R12), CX
+	ADCQ 64(R12), BX
+	ADCQ 72(R12), SI
+
+	// reduce element(AX,DX,CX,BX,SI,) using temp registers (DI,R8,R9,R10,R11,R15)
+	REDUCE_NOGLOBAL(AX,DX,CX,BX,SI,DI,R8,R9,R10,R11,R15)
+
+	ADDQ AX, AX
+	ADCQ DX, DX
+	ADCQ CX, CX
+	ADCQ BX, BX
+	ADCQ SI, SI
+
+	// reduce element(AX,DX,CX,BX,SI,) using temp registers (DI,R8,R9,R10,R11,R15)
+	REDUCE_NOGLOBAL(AX,DX,CX,BX,SI,DI,R8,R9,R10,R11,R15)
+
+	ADDQ AX, AX
+	ADCQ DX, DX
+	ADCQ CX, CX
+	ADCQ BX, BX
+	ADCQ SI, SI
+
+	// reduce element(AX,DX,CX,BX,SI,) using temp registers (DI,R8,R9,R10,R11,R15)
+	REDUCE_NOGLOBAL(AX,DX,CX,BX,SI,DI,R8,R9,R10,R11,R15)
+
+	ADDQ 40(R12), AX
+	ADCQ 48(R12), DX
+	ADCQ 56(R12), CX
+	ADCQ 64(R12), BX
+	ADCQ 72(R12), SI
+
+	// reduce element(AX,DX,CX,BX,SI,) using temp registers (DI,R8,R9,R10,R11,R15)
+	REDUCE_NOGLOBAL(AX,DX,CX,BX,SI,DI,R8,R9,R10,R11,R15)
+
+	MOVQ 0(R12), DI
+	MOVQ 8(R12), R8
+	MOVQ 16(R12), R9
+	MOVQ 24(R12), R10
+	MOVQ 32(R12), R11
+	MOVQ res+0(FP), R12
+	MOVQ AX, 0(R12)
+	MOVQ DX, 8(R12)
+	MOVQ CX, 16(R12)
+	MOVQ BX, 24(R12)
+	MOVQ SI, 32(R12)
+	MOVQ DI, 40(R12)
+	MOVQ R8, 48(R12)
+	MOVQ R9, 56(R12)
+	MOVQ R10, 64(R12)
+	MOVQ R11, 72(R12)
+	RET
+
+TEXT ·mulAdxE2(SB), $360-24
+	NO_LOCAL_POINTERS
+	CMPB ·supportAdx(SB), $1
+	JNE  l4
+
+	// 𝔽p2 = 𝔽p[u]/(u² - (13)), lazy reduction:
+	// t0 = x.A0 * y.A0                     (unreduced)
+	// t1 = x.A1 * y.A1                     (unreduced)
+	// t2 = (x.A0 + x.A1) * (y.A0 + y.A1)   (unreduced)
+	// z.A1 = REDC(t2 - t0 - t1)
+	// z.A0 = REDC(t0 + 13·t1)
+
+#define MACC(in0, in1, in2) \
+	ADCXQ in0, in1     \
+	MULXQ in2, AX, in0 \
+	ADOXQ AX, in1      \
+
+#define FOLD_CARRIES() \
+	MOVQ  $0, AX \
+	ADCXQ AX, BP \
+	ADOXQ AX, BP \
+
+	MOVQ $const_q0, AX
+	MOVQ AX, s0-8(SP)
+	MOVQ $const_q1, AX
+	MOVQ AX, s1-16(SP)
+	MOVQ $const_q2, AX
+	MOVQ AX, s2-24(SP)
+	MOVQ $const_q3, AX
+	MOVQ AX, s3-32(SP)
+	MOVQ $const_q4, AX
+	MOVQ AX, s4-40(SP)
+
+	// aSum = x.A0 + x.A1 (no reduction)
+	MOVQ x+8(FP), AX
+	MOVQ 0(AX), R13
+	MOVQ 8(AX), R14
+	MOVQ 16(AX), CX
+	MOVQ 24(AX), BX
+	MOVQ 32(AX), SI
+	ADDQ 40(AX), R13
+	ADCQ 48(AX), R14
+	ADCQ 56(AX), CX
+	ADCQ 64(AX), BX
+	ADCQ 72(AX), SI
+	MOVQ R13, s35-288(SP)
+	MOVQ R14, s36-296(SP)
+	MOVQ CX, s37-304(SP)
+	MOVQ BX, s38-312(SP)
+	MOVQ SI, s39-320(SP)
+
+	// bSum = y.A0 + y.A1 (no reduction)
+	MOVQ y+16(FP), AX
+	MOVQ 0(AX), R13
+	MOVQ 8(AX), R14
+	MOVQ 16(AX), CX
+	MOVQ 24(AX), BX
+	MOVQ 32(AX), SI
+	ADDQ 40(AX), R13
+	ADCQ 48(AX), R14
+	ADCQ 56(AX), CX
+	ADCQ 64(AX), BX
+	ADCQ 72(AX), SI
+	MOVQ R13, s40-328(SP)
+	MOVQ R14, s41-336(SP)
+	MOVQ CX, s42-344(SP)
+	MOVQ BX, s43-352(SP)
+	MOVQ SI, s44-360(SP)
+	MOVQ x+8(FP), DI
+	MOVQ y+16(FP), R8
+
+	// t0 = x.A0 * y.A0 (unreduced)
+	MOVQ  0(R8), DX
+	MULXQ 0(DI), R9, R10
+	MULXQ 8(DI), AX, R11
+	ADDQ  AX, R10
+	MULXQ 16(DI), AX, R12
+	ADCQ  AX, R11
+	MULXQ 24(DI), AX, R15
+	ADCQ  AX, R12
+	MULXQ 32(DI), AX, R13
+	ADCQ  AX, R15
+	ADCQ  $0, R13
+	MOVQ  R9, s5-48(SP)
+	MOVQ  8(R8), DX
+	XORQ  R9, R9
+	MULXQ 0(DI), AX, BP
+	ADOXQ AX, R10
+	MACC(BP, R11, 8(DI))
+	MACC(BP, R12, 16(DI))
+	MACC(BP, R15, 24(DI))
+	MACC(BP, R13, 32(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, R9
+	MOVQ  R10, s6-56(SP)
+	MOVQ  16(R8), DX
+	XORQ  R10, R10
+	MULXQ 0(DI), AX, BP
+	ADOXQ AX, R11
+	MACC(BP, R12, 8(DI))
+	MACC(BP, R15, 16(DI))
+	MACC(BP, R13, 24(DI))
+	MACC(BP, R9, 32(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, R10
+	MOVQ  R11, s7-64(SP)
+	MOVQ  24(R8), DX
+	XORQ  R11, R11
+	MULXQ 0(DI), AX, BP
+	ADOXQ AX, R12
+	MACC(BP, R15, 8(DI))
+	MACC(BP, R13, 16(DI))
+	MACC(BP, R9, 24(DI))
+	MACC(BP, R10, 32(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, R11
+	MOVQ  R12, s8-72(SP)
+	MOVQ  32(R8), DX
+	XORQ  R12, R12
+	MULXQ 0(DI), AX, BP
+	ADOXQ AX, R15
+	MACC(BP, R13, 8(DI))
+	MACC(BP, R9, 16(DI))
+	MACC(BP, R10, 24(DI))
+	MACC(BP, R11, 32(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, R12
+	MOVQ  R15, s9-80(SP)
+	MOVQ  R13, s10-88(SP)
+	MOVQ  R9, s11-96(SP)
+	MOVQ  R10, s12-104(SP)
+	MOVQ  R11, s13-112(SP)
+	MOVQ  R12, s14-120(SP)
+
+	// t1 = x.A1 * y.A1 (unreduced)
+	MOVQ  40(R8), DX
+	MULXQ 40(DI), R14, CX
+	MULXQ 48(DI), AX, BX
+	ADDQ  AX, CX
+	MULXQ 56(DI), AX, SI
+	ADCQ  AX, BX
+	MULXQ 64(DI), AX, R13
+	ADCQ  AX, SI
+	MULXQ 72(DI), AX, R9
+	ADCQ  AX, R13
+	ADCQ  $0, R9
+	MOVQ  R14, s15-128(SP)
+	MOVQ  48(R8), DX
+	XORQ  R14, R14
+	MULXQ 40(DI), AX, BP
+	ADOXQ AX, CX
+	MACC(BP, BX, 48(DI))
+	MACC(BP, SI, 56(DI))
+	MACC(BP, R13, 64(DI))
+	MACC(BP, R9, 72(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, R14
+	MOVQ  CX, s16-136(SP)
+	MOVQ  56(R8), DX
+	XORQ  CX, CX
+	MULXQ 40(DI), AX, BP
+	ADOXQ AX, BX
+	MACC(BP, SI, 48(DI))
+	MACC(BP, R13, 56(DI))
+	MACC(BP, R9, 64(DI))
+	MACC(BP, R14, 72(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, CX
+	MOVQ  BX, s17-144(SP)
+	MOVQ  64(R8), DX
+	XORQ  BX, BX
+	MULXQ 40(DI), AX, BP
+	ADOXQ AX, SI
+	MACC(BP, R13, 48(DI))
+	MACC(BP, R9, 56(DI))
+	MACC(BP, R14, 64(DI))
+	MACC(BP, CX, 72(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, BX
+	MOVQ  SI, s18-152(SP)
+	MOVQ  72(R8), DX
+	XORQ  SI, SI
+	MULXQ 40(DI), AX, BP
+	ADOXQ AX, R13
+	MACC(BP, R9, 48(DI))
+	MACC(BP, R14, 56(DI))
+	MACC(BP, CX, 64(DI))
+	MACC(BP, BX, 72(DI))
+	FOLD_CARRIES()
+	MOVQ  BP, SI
+	MOVQ  R13, s19-160(SP)
+	MOVQ  R9, s20-168(SP)
+	MOVQ  R14, s21-176(SP)
+	MOVQ  CX, s22-184(SP)
+	MOVQ  BX, s23-192(SP)
+	MOVQ  SI, s24-200(SP)
+
+	// t2 = aSum * bSum (unreduced)
+	MOVQ  s40-328(SP), DX
+	MULXQ s35-288(SP), R10, R11
+	MULXQ s36-296(SP), AX, R12
+	ADDQ  AX, R11
+	MULXQ s37-304(SP), AX, R15
+	ADCQ  AX, R12
+	MULXQ s38-312(SP), AX, R9
+	ADCQ  AX, R15
+	MULXQ s39-320(SP), AX, R14
+	ADCQ  AX, R9
+	ADCQ  $0, R14
+	MOVQ  R10, s25-208(SP)
+	MOVQ  s41-336(SP), DX
+	XORQ  R10, R10
+	MULXQ s35-288(SP), AX, BP
+	ADOXQ AX, R11
+	MACC(BP, R12, s36-296(SP))
+	MACC(BP, R15, s37-304(SP))
+	MACC(BP, R9, s38-312(SP))
+	MACC(BP, R14, s39-320(SP))
+	FOLD_CARRIES()
+	MOVQ  BP, R10
+	MOVQ  R11, s26-216(SP)
+	MOVQ  s42-344(SP), DX
+	XORQ  R11, R11
+	MULXQ s35-288(SP), AX, BP
+	ADOXQ AX, R12
+	MACC(BP, R15, s36-296(SP))
+	MACC(BP, R9, s37-304(SP))
+	MACC(BP, R14, s38-312(SP))
+	MACC(BP, R10, s39-320(SP))
+	FOLD_CARRIES()
+	MOVQ  BP, R11
+	MOVQ  R12, s27-224(SP)
+	MOVQ  s43-352(SP), DX
+	XORQ  R12, R12
+	MULXQ s35-288(SP), AX, BP
+	ADOXQ AX, R15
+	MACC(BP, R9, s36-296(SP))
+	MACC(BP, R14, s37-304(SP))
+	MACC(BP, R10, s38-312(SP))
+	MACC(BP, R11, s39-320(SP))
+	FOLD_CARRIES()
+	MOVQ  BP, R12
+	MOVQ  R15, s28-232(SP)
+	MOVQ  s44-360(SP), DX
+	XORQ  R15, R15
+	MULXQ s35-288(SP), AX, BP
+	ADOXQ AX, R9
+	MACC(BP, R14, s36-296(SP))
+	MACC(BP, R10, s37-304(SP))
+	MACC(BP, R11, s38-312(SP))
+	MACC(BP, R12, s39-320(SP))
+	FOLD_CARRIES()
+	MOVQ  BP, R15
+	MOVQ  R9, s29-240(SP)
+	MOVQ  R14, s30-248(SP)
+	MOVQ  R10, s31-256(SP)
+	MOVQ  R11, s32-264(SP)
+	MOVQ  R12, s33-272(SP)
+	MOVQ  R15, s34-280(SP)
+
+	// t2 = t2 - t0 - t1 = x.A0*y.A1 + x.A1*y.A0 (non-negative)
+	MOVQ s25-208(SP), AX
+	SUBQ s5-48(SP), AX
+	MOVQ AX, s25-208(SP)
+	MOVQ s26-216(SP), AX
+	SBBQ s6-56(SP), AX
+	MOVQ AX, s26-216(SP)
+	MOVQ s27-224(SP), AX
+	SBBQ s7-64(SP), AX
+	MOVQ AX, s27-224(SP)
+	MOVQ s28-232(SP), AX
+	SBBQ s8-72(SP), AX
+	MOVQ AX, s28-232(SP)
+	MOVQ s29-240(SP), AX
+	SBBQ s9-80(SP), AX
+	MOVQ AX, s29-240(SP)
+	MOVQ s30-248(SP), AX
+	SBBQ s10-88(SP), AX
+	MOVQ AX, s30-248(SP)
+	MOVQ s31-256(SP), AX
+	SBBQ s11-96(SP), AX
+	MOVQ AX, s31-256(SP)
+	MOVQ s32-264(SP), AX
+	SBBQ s12-104(SP), AX
+	MOVQ AX, s32-264(SP)
+	MOVQ s33-272(SP), AX
+	SBBQ s13-112(SP), AX
+	MOVQ AX, s33-272(SP)
+	MOVQ s34-280(SP), AX
+	SBBQ s14-120(SP), AX
+	MOVQ AX, s34-280(SP)
+	MOVQ s25-208(SP), AX
+	SUBQ s15-128(SP), AX
+	MOVQ AX, s25-208(SP)
+	MOVQ s26-216(SP), AX
+	SBBQ s16-136(SP), AX
+	MOVQ AX, s26-216(SP)
+	MOVQ s27-224(SP), AX
+	SBBQ s17-144(SP), AX
+	MOVQ AX, s27-224(SP)
+	MOVQ s28-232(SP), AX
+	SBBQ s18-152(SP), AX
+	MOVQ AX, s28-232(SP)
+	MOVQ s29-240(SP), AX
+	SBBQ s19-160(SP), AX
+	MOVQ AX, s29-240(SP)
+	MOVQ s30-248(SP), AX
+	SBBQ s20-168(SP), AX
+	MOVQ AX, s30-248(SP)
+	MOVQ s31-256(SP), AX
+	SBBQ s21-176(SP), AX
+	MOVQ AX, s31-256(SP)
+	MOVQ s32-264(SP), AX
+	SBBQ s22-184(SP), AX
+	MOVQ AX, s32-264(SP)
+	MOVQ s33-272(SP), AX
+	SBBQ s23-192(SP), AX
+	MOVQ AX, s33-272(SP)
+	MOVQ s34-280(SP), AX
+	SBBQ s24-200(SP), AX
+	MOVQ AX, s34-280(SP)
+
+	// t0 = t0 + 13·t1 (non-negative, no offset needed)
+	MOVQ  $0x000000000000000d, DX
+	MULXQ s15-128(SP), AX, CX
+	MOVQ  AX, s15-128(SP)
+	MULXQ s16-136(SP), AX, BX
+	ADDQ  CX, AX
+	MOVQ  AX, s16-136(SP)
+	MULXQ s17-144(SP), AX, CX
+	ADCQ  BX, AX
+	MOVQ  AX, s17-144(SP)
+	MULXQ s18-152(SP), AX, BX
+	ADCQ  CX, AX
+	MOVQ  AX, s18-152(SP)
+	MULXQ s19-160(SP), AX, CX
+	ADCQ  BX, AX
+	MOVQ  AX, s19-160(SP)
+	MULXQ s20-168(SP), AX, BX
+	ADCQ  CX, AX
+	MOVQ  AX, s20-168(SP)
+	MULXQ s21-176(SP), AX, CX
+	ADCQ  BX, AX
+	MOVQ  AX, s21-176(SP)
+	MULXQ s22-184(SP), AX, BX
+	ADCQ  CX, AX
+	MOVQ  AX, s22-184(SP)
+	MULXQ s23-192(SP), AX, CX
+	ADCQ  BX, AX
+	MOVQ  AX, s23-192(SP)
+	MULXQ s24-200(SP), AX, BX
+	ADCQ  CX, AX
+	MOVQ  AX, s24-200(SP)
+	MOVQ  s5-48(SP), AX
+	ADDQ  s15-128(SP), AX
+	MOVQ  AX, s5-48(SP)
+	MOVQ  s6-56(SP), AX
+	ADCQ  s16-136(SP), AX
+	MOVQ  AX, s6-56(SP)
+	MOVQ  s7-64(SP), AX
+	ADCQ  s17-144(SP), AX
+	MOVQ  AX, s7-64(SP)
+	MOVQ  s8-72(SP), AX
+	ADCQ  s18-152(SP), AX
+	MOVQ  AX, s8-72(SP)
+	MOVQ  s9-80(SP), AX
+	ADCQ  s19-160(SP), AX
+	MOVQ  AX, s9-80(SP)
+	MOVQ  s10-88(SP), AX
+	ADCQ  s20-168(SP), AX
+	MOVQ  AX, s10-88(SP)
+	MOVQ  s11-96(SP), AX
+	ADCQ  s21-176(SP), AX
+	MOVQ  AX, s11-96(SP)
+	MOVQ  s12-104(SP), AX
+	ADCQ  s22-184(SP), AX
+	MOVQ  AX, s12-104(SP)
+	MOVQ  s13-112(SP), AX
+	ADCQ  s23-192(SP), AX
+	MOVQ  AX, s13-112(SP)
+	MOVQ  s14-120(SP), AX
+	ADCQ  s24-200(SP), AX
+	MOVQ  AX, s14-120(SP)
+
+	// z.A1 = REDC(t2)
+	MOVQ s25-208(SP), SI
+	MOVQ s26-216(SP), R13
+	MOVQ s27-224(SP), DI
+	MOVQ s28-232(SP), R8
+	MOVQ s29-240(SP), R14
+	MOVQ s30-248(SP), R10
+	XORQ R11, R11
+
+	// REDC round 0
+	MOVQ  $const_qInvNeg, DX
+	IMULQ SI, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, SI
+	MACC(BP, R13, s1-16(SP))
+	MACC(BP, DI, s2-24(SP))
+	MACC(BP, R8, s3-32(SP))
+	MACC(BP, R14, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  R11, R10
+	MOVQ  $0, R11
+	ADCQ  $0, R11
+	ADDQ  BP, R10
+	ADCQ  $0, R11
+	MOVQ  s31-256(SP), SI
+
+	// REDC round 1
+	MOVQ  $const_qInvNeg, DX
+	IMULQ R13, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, R13
+	MACC(BP, DI, s1-16(SP))
+	MACC(BP, R8, s2-24(SP))
+	MACC(BP, R14, s3-32(SP))
+	MACC(BP, R10, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  R11, SI
+	MOVQ  $0, R11
+	ADCQ  $0, R11
+	ADDQ  BP, SI
+	ADCQ  $0, R11
+	MOVQ  s32-264(SP), R13
+
+	// REDC round 2
+	MOVQ  $const_qInvNeg, DX
+	IMULQ DI, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, DI
+	MACC(BP, R8, s1-16(SP))
+	MACC(BP, R14, s2-24(SP))
+	MACC(BP, R10, s3-32(SP))
+	MACC(BP, SI, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  R11, R13
+	MOVQ  $0, R11
+	ADCQ  $0, R11
+	ADDQ  BP, R13
+	ADCQ  $0, R11
+	MOVQ  s33-272(SP), DI
+
+	// REDC round 3
+	MOVQ  $const_qInvNeg, DX
+	IMULQ R8, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, R8
+	MACC(BP, R14, s1-16(SP))
+	MACC(BP, R10, s2-24(SP))
+	MACC(BP, SI, s3-32(SP))
+	MACC(BP, R13, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  R11, DI
+	MOVQ  $0, R11
+	ADCQ  $0, R11
+	ADDQ  BP, DI
+	ADCQ  $0, R11
+	MOVQ  s34-280(SP), R8
+
+	// REDC round 4
+	MOVQ  $const_qInvNeg, DX
+	IMULQ R14, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, R14
+	MACC(BP, R10, s1-16(SP))
+	MACC(BP, SI, s2-24(SP))
+	MACC(BP, R13, s3-32(SP))
+	MACC(BP, DI, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  R11, R8
+	MOVQ  $0, R11
+	ADCQ  $0, R11
+	ADDQ  BP, R8
+	ADCQ  $0, R11
+
+	// reduce element(R10,SI,R13,DI,R8) using temp registers (R14,R11,R12,R15,R9)
+	REDUCE(R10,SI,R13,DI,R8,R14,R11,R12,R15,R9,s0-8(SP),s1-16(SP),s2-24(SP),s3-32(SP),s4-40(SP))
+
+	MOVQ res+0(FP), CX
+	MOVQ R10, 40(CX)
+	MOVQ SI, 48(CX)
+	MOVQ R13, 56(CX)
+	MOVQ DI, 64(CX)
+	MOVQ R8, 72(CX)
+
+	// z.A0 = REDC(t0)
+	MOVQ s5-48(SP), R12
+	MOVQ s6-56(SP), R15
+	MOVQ s7-64(SP), R9
+	MOVQ s8-72(SP), BX
+	MOVQ s9-80(SP), R14
+	MOVQ s10-88(SP), R11
+	XORQ CX, CX
+
+	// REDC round 0
+	MOVQ  $const_qInvNeg, DX
+	IMULQ R12, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, R12
+	MACC(BP, R15, s1-16(SP))
+	MACC(BP, R9, s2-24(SP))
+	MACC(BP, BX, s3-32(SP))
+	MACC(BP, R14, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  CX, R11
+	MOVQ  $0, CX
+	ADCQ  $0, CX
+	ADDQ  BP, R11
+	ADCQ  $0, CX
+	MOVQ  s11-96(SP), R12
+
+	// REDC round 1
+	MOVQ  $const_qInvNeg, DX
+	IMULQ R15, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, R15
+	MACC(BP, R9, s1-16(SP))
+	MACC(BP, BX, s2-24(SP))
+	MACC(BP, R14, s3-32(SP))
+	MACC(BP, R11, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  CX, R12
+	MOVQ  $0, CX
+	ADCQ  $0, CX
+	ADDQ  BP, R12
+	ADCQ  $0, CX
+	MOVQ  s12-104(SP), R15
+
+	// REDC round 2
+	MOVQ  $const_qInvNeg, DX
+	IMULQ R9, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, R9
+	MACC(BP, BX, s1-16(SP))
+	MACC(BP, R14, s2-24(SP))
+	MACC(BP, R11, s3-32(SP))
+	MACC(BP, R12, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  CX, R15
+	MOVQ  $0, CX
+	ADCQ  $0, CX
+	ADDQ  BP, R15
+	ADCQ  $0, CX
+	MOVQ  s13-112(SP), R9
+
+	// REDC round 3
+	MOVQ  $const_qInvNeg, DX
+	IMULQ BX, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, BX
+	MACC(BP, R14, s1-16(SP))
+	MACC(BP, R11, s2-24(SP))
+	MACC(BP, R12, s3-32(SP))
+	MACC(BP, R15, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  CX, R9
+	MOVQ  $0, CX
+	ADCQ  $0, CX
+	ADDQ  BP, R9
+	ADCQ  $0, CX
+	MOVQ  s14-120(SP), BX
+
+	// REDC round 4
+	MOVQ  $const_qInvNeg, DX
+	IMULQ R14, DX
+	XORQ  AX, AX
+	MULXQ s0-8(SP), AX, BP
+	ADOXQ AX, R14
+	MACC(BP, R11, s1-16(SP))
+	MACC(BP, R12, s2-24(SP))
+	MACC(BP, R15, s3-32(SP))
+	MACC(BP, R9, s4-40(SP))
+	FOLD_CARRIES()
+	ADDQ  CX, BX
+	MOVQ  $0, CX
+	ADCQ  $0, CX
+	ADDQ  BP, BX
+	ADCQ  $0, CX
+
+	// reduce element(R11,R12,R15,R9,BX) using temp registers (R14,CX,R10,SI,R13)
+	REDUCE(R11,R12,R15,R9,BX,R14,CX,R10,SI,R13,s0-8(SP),s1-16(SP),s2-24(SP),s3-32(SP),s4-40(SP))
+
+	MOVQ res+0(FP), R8
+	MOVQ R11, 0(R8)
+	MOVQ R12, 8(R8)
+	MOVQ R15, 16(R8)
+	MOVQ R9, 24(R8)
+	MOVQ BX, 32(R8)
+	RET
+
+l4:
+	MOVQ res+0(FP), AX
+	MOVQ AX, (SP)
+	MOVQ x+8(FP), AX
+	MOVQ AX, 8(SP)
+	MOVQ y+16(FP), AX
+	MOVQ AX, 16(SP)
+	CALL ·mulGenericE2(SB)
+	RET

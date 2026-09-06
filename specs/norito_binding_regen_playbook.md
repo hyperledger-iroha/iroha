@@ -130,29 +130,15 @@ canonical `.norito` blobs must not be copied into this directory.
 3. Run the Swift parity suite with the required native bridge according to the
    Swift SDK playbook.
 
-## Java (`norito_java`)
+## Kotlin/JVM and Java consumers (`kotlin/core-jvm`)
 
-Java is the second pure-language implementation of Norito. Changes typically
-require codec edits under `java/norito_java` plus the Android library. Fixture
-resources under `java/iroha_android/src/test/resources/` are generated outputs:
-the canonical owner publishes both descriptors and canonical `.norito` blobs
-there. Never use this directory as a regeneration input.
-
-1. Apply any schema or codec updates to `java/norito_java/src/main/java`.
-2. Run the bundled test harness with assertions enabled:
-   ```bash
-   (cd java/norito_java && ./run_tests.sh)
-   ```
-   The script re-compiles the codec and executes round-trip tests covering the
-   new schema hash.
-3. If the change also touches the Android bindings, re-run
-   `make android-tests` after the canonical fixture regeneration step so
-   `ci/run_android_tests.sh` exercises the keystore, HTTP client, and Norito
-   serializer together.
-4. Update `java/norito_java/CHANGELOG.md` with a short note describing the sync
-   point so `scripts/check_norito_bindings_sync.py` records the refresh.
-
-## Kotlin/JVM (`kotlin/core-jvm`)
+Kotlin owns the JVM codec. The Java-source `NoritoJavaConsumerTest` runs the
+complete migrated Norito harness against Kotlin classes; it covers frames,
+checksums, packed containers, transparent adapters, compression, streaming
+records and state snapshots. Java and Kotlin sources compile against JDK 8 APIs.
+Run `./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*'`
+from `kotlin/` for the codec and Java-consumer suite. The binding CI gate selects
+that suite and the Kotlin transaction fixtures through one strict JVM lane.
 
 Kotlin keeps no local transaction-fixture copy. `AndroidFixtureSupport` resolves
 the descriptors and all 27 canonical `.norito` blobs from

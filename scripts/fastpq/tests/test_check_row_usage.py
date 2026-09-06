@@ -10,7 +10,7 @@ def snapshot(row_usage):
         "fastpq_batches": [
             {
                 "entry_hash": "batch-a",
-                "parameter": "fastpq-lane-balanced",
+                "parameter": "fastpq-state-transition-stark-v1",
                 "row_usage": row_usage,
             }
         ]

@@ -252,7 +252,7 @@ class NexusAppClientTest {
     }
 
     @Test
-    fun `finalizeAndSubmit accepts exact zero signature algorithm alias`() {
+    fun `finalizeAndSubmit accepts canonical ed25519 algorithm`() {
         val torii = FakeToriiClient()
         val client = NexusAppClient(
             config = NexusAppConfig(
@@ -266,12 +266,12 @@ class NexusAppClientTest {
             toriiClient = torii,
         )
         val draft = client.buildTransferDraft(sampleInput())
-        val signable = draft.signable.copy(signatureAlgorithm = "0")
+        val signable = draft.signable
         val walletSignature = signPayload(signable.payloadBytes)
 
         val receipt = client.finalizeAndSubmit(
             signable,
-            NexusWalletSignature(walletSignature, "0"),
+            NexusWalletSignature(walletSignature),
             NexusFinalizeOptions(waitForFinalStatus = false),
         )
 
@@ -307,6 +307,7 @@ class NexusAppClientTest {
             "\ted25519",
             "ed25519\n",
             "ed25519\u00A0",
+            "0",
             "0 ",
             " 0",
             "\t0",
@@ -339,6 +340,7 @@ class NexusAppClientTest {
             " ",
             "ed25519 ",
             " ed25519",
+            "0",
             "0 ",
             " 0",
             "00",
@@ -349,7 +351,12 @@ class NexusAppClientTest {
         )) {
             val signableError = assertFailsWith<NexusAppError> {
                 client.finalizeAndSubmit(
-                    draft.signable.copy(signatureAlgorithm = algorithm),
+                    NexusSignableTransaction(
+                        draft.signable.payloadBytes,
+                        draft.signable.authority,
+                        draft.signable.signingPublicKey,
+                        algorithm,
+                    ),
                     NexusWalletSignature(WALLET_SIGNATURE),
                 )
             }
@@ -367,12 +374,11 @@ class NexusAppClientTest {
         )
         val signable = NexusSignableTransaction(
             payloadBytes = byteArrayOf(0x01, 0x02, 0x03),
-            payloadHashHex = "0".repeat(64),
             authority = ACCOUNT_ID,
             signingPublicKey = PUBLIC_KEY,
         )
 
-        for (algorithm in listOf("", "ed25519 ", " 0", "ED25519", "ed\u200B25519")) {
+        for (algorithm in listOf("", "0", "ed25519 ", " 0", "ED25519", "ed\u200B25519")) {
             val connect = SignatureConnect(WALLET_SIGNATURE)
             val client = NexusAppClient(
                 config = NexusAppConfig(
@@ -385,14 +391,22 @@ class NexusAppClientTest {
             )
 
             val error = assertFailsWith<NexusAppError> {
-                client.requestSignature(session, signable.copy(signatureAlgorithm = algorithm))
+                client.requestSignature(
+                    session,
+                    NexusSignableTransaction(
+                        signable.payloadBytes,
+                        signable.authority,
+                        signable.signingPublicKey,
+                        algorithm,
+                    ),
+                )
             }
 
             assertEquals("unsupported_signature_algorithm", error.code, algorithm)
             assertEquals(null, connect.lastSignable)
         }
 
-        for (algorithm in listOf("ed25519 ", " 0", "\uFF10", "ed\u000025519", "\u0435d25519")) {
+        for (algorithm in listOf("0", "ed25519 ", " 0", "\uFF10", "ed\u000025519", "\u0435d25519")) {
             val connect = SignatureConnect(WALLET_SIGNATURE, algorithm)
             val client = NexusAppClient(
                 config = NexusAppConfig(
@@ -560,7 +574,7 @@ class NexusAppClientTest {
         val error = assertFailsWith<NexusAppError> {
             client.transferWithWallet(
                 session,
-                sampleInput().copy(authority = DESTINATION_ACCOUNT_ID),
+                sampleInput(authority = DESTINATION_ACCOUNT_ID),
             )
         }
 
@@ -699,7 +713,11 @@ class NexusAppClientTest {
 
         val error = assertFailsWith<NexusAppError> {
             client.finalizeAndSubmit(
-                draft.signable.copy(payloadBytes = tamperedPayload),
+                NexusSignableTransaction(
+                    tamperedPayload,
+                    draft.signable.authority,
+                    draft.signable.signingPublicKey,
+                ),
                 NexusWalletSignature(signature),
             )
         }
@@ -935,7 +953,8 @@ class NexusAppClientTest {
         )
         private val TEST_FEE_PAYMENT = FeePaymentIntent.authority(emptyList())
 
-        private fun sampleInput(): NexusTransferInput = NexusTransferInput(
+        private fun sampleInput(authority: String? = null): NexusTransferInput = NexusTransferInput(
+            authority = authority,
             sourceAssetId = "$ASSET_DEFINITION_ID#$ACCOUNT_ID",
             quantity = "12.34",
             destinationAccountId = DESTINATION_ACCOUNT_ID,

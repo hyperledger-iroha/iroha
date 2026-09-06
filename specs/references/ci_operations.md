@@ -33,13 +33,17 @@
 
 Swift CI on-call rotates through a weekly verification of the XCFramework smoke harness to ensure
 StrongBox devices stay healthy and telemetry continues to surface lane metadata. Run the checklist
-every Monday (or after returning from PTO) and record the outcome in the on-call notes.
+every Monday (or after returning from PTO) and record the outcome in the on-call
+notes. This maintains an optional hardware integration; a missing or unhealthy
+StrongBox lane does not block the software/simulator build or release corridor.
 
 1. **Review the latest Buildkite run.**
    - Open `https://buildkite.com/sora/xcframework-smoke` and inspect the most recent run.
-   - Confirm that the `iphone-sim`, `ipad-sim`, and `strongbox` lanes are present. Each job exposes
-     a `device_tag` annotation and emits Buildkite metadata
-     `ci/xcframework-smoke:<lane>:device_tag`. If a lane is missing or red, file/assign an incident.
+   - Confirm that the required `iphone-sim` and `ipad-sim` lanes are present. If
+     an optional hardware drill was requested, also confirm the `strongbox`
+     lane. Each job exposes a `device_tag` annotation and emits Buildkite
+     metadata `ci/xcframework-smoke:<lane>:device_tag`. File hardware-lane
+     incidents separately from baseline release failures.
 2. **Kick an explicit StrongBox run.**
    - From the pipeline page, click **New Build**, select branch `master`, and set the environment
      variable `FORCE_DEVICE=ios14p-strongbox`. This forces the harness to acquire one of the
@@ -59,8 +63,14 @@ every Monday (or after returning from PTO) and record the outcome in the on-call
 
 ## Android StrongBox attestation sweep
 
-Run this workflow whenever new attestation bundles land (at minimum, prior to AND2/AND6 reviews and
-before partner pilots).
+This workflow applies only when a team explicitly selects the optional
+StrongBox qualification profile. It is not an ordinary build, test, governance,
+deployment, or release gate; the software-backed baseline remains valid without
+attestation bundles or physical hardware.
+
+Run this workflow whenever new attestation bundles land for that selected
+profile, at minimum before hardware-specific AND2/AND6 reviews and partner
+pilots that claim the profile.
 
 1. **Ensure evidence and governed expectations exist.**
    - Sync the latest device captures under `artifacts/android/attestation/<fleet-tag>/<date>/`.

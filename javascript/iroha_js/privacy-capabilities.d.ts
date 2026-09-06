@@ -1,18 +1,20 @@
+import type { CanonicalRequestAuth } from "./index.js";
+
 export type PrivacyProtocolIdV1 =
-  | "zk-ace-pq-authorization-v0"
+  | "zk-ace-pq-authorization-v1"
   | "anonymous-pgc-k-out-of-n-v1"
   | "verange-transparent-range-v1"
   | "iroha-zk-ams-v1"
-  | "vega-existing-credential-zk-v0"
-  | "iroha-zk-x509-stark-p256-v0"
-  | "iroha-jindo-polynomial-commitment-v0"
+  | "vega-existing-credential-zk-v1"
+  | "iroha-zk-x509-stark-p256-v1"
+  | "iroha-jindo-polynomial-commitment-v1"
   | "iroha-bootle-lantern-anoncred-v1"
   | "orchard-halo2-actions-v1"
   | "monero-fcmp-plus-plus-v1"
   | "iroha-ivm-private-note-stark-v1"
-  | "pq-masp-stark-v0";
+  | "pq-masp-stark-v1";
 export type PrivacyProofSystemIdV1 =
-  | "stark-fri-sha256-goldilocks"
+  | "stark-fri-poseidon-x7-goldilocks-6x64-v1"
   | "anonymous-pgc-p256"
   | "iroha-verange-p256"
   | "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"
@@ -22,7 +24,7 @@ export type PrivacyProofSystemIdV1 =
   | "halo2-ipa-pasta"
   | "fcmp-plus-plus-curve-tree-bulletproofs";
 export type PrivacyEngineIdV1 =
-  | "native-goldilocks-stark-fri"
+  | "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"
   | "native-anonymous-pgc-p256"
   | "native-verange-p256"
   | "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"
@@ -49,6 +51,7 @@ export type PrivacyEngineTagV1 = PrivacyTaggedUnitV1<
   PrivacyEngineIdV1
 >;
 export type PrivacyFixed32BytesV1 = readonly number[];
+export type PrivacyFixed48BytesV1 = readonly number[];
 /** Exact unsigned 64-bit protocol integer decoded without IEEE-754 rounding. */
 export type PrivacyU64V1 = bigint;
 export interface PrivacyConsensusLimitsV1 {
@@ -142,77 +145,90 @@ export interface PrivacyProtocolActivationRecordV1
     effective_at_height: PrivacyU64V1;
     next_limits: PrivacyProtocolLimitsV1;
   }> | null;
-  readonly assurance: Readonly<{ assurance: "experimental"; value: null }>;
 }
-export interface PrivacyCapabilityRowV1 {
+export type PrivacySecurityModelV1 = "pq-qrom" | "classical-rom";
+export type PrivacySecurityModelTagV1 = PrivacyTaggedUnitV1<
+  "security_model",
+  PrivacySecurityModelV1
+>;
+export interface PrivacySecurityClaimV1 {
+  readonly catalog_commitment: PrivacyFixed48BytesV1;
   readonly protocol_id: PrivacyProtocolTagV1;
-  readonly compiled_profile: PrivacyCompiledProfileResultV1;
-  readonly activation: PrivacyProtocolActivationRecordV1 | null;
+  readonly security_model: PrivacySecurityModelTagV1;
+  readonly target_security_bits: 128;
+  readonly achieved_security_bits: number;
+  readonly parameter_digest: PrivacyFixed32BytesV1;
+  readonly verifier_digest: PrivacyFixed32BytesV1;
+  readonly reduction_digest: PrivacyFixed32BytesV1;
+  readonly audit_bundle_digest: PrivacyFixed32BytesV1;
 }
-export interface PrivacyCapabilitySnapshotV1 {
+export interface PrivacyReleaseProtocolBindingV1
+  extends PrivacyCompiledProfileBindingsV1 {
+  readonly security_claim: PrivacySecurityClaimV1;
+  readonly security_claim_digest: PrivacyFixed32BytesV1;
+}
+export interface PrivacyExact12ReleaseManifestV1 {
   readonly version: 1;
-  readonly committed_height: PrivacyU64V1;
-  readonly consensus_policy: PrivacyConsensusPolicyV1;
-  readonly protocols: readonly PrivacyCapabilityRowV1[];
+  readonly catalog_id: string;
+  readonly catalog_commitment: PrivacyFixed48BytesV1;
+  readonly source: Readonly<Record<string, unknown>>;
+  readonly abi_version: 1;
+  readonly abi_hash: PrivacyFixed32BytesV1;
+  readonly syscall_list_digest: PrivacyFixed32BytesV1;
+  readonly executables: readonly Readonly<Record<string, unknown>>[];
+  readonly protocols: readonly PrivacyReleaseProtocolBindingV1[];
+  readonly stage_receipts: readonly Readonly<Record<string, unknown>>[];
+  readonly proof_artifacts: readonly Readonly<Record<string, unknown>>[];
+  readonly sdk_packages: readonly Readonly<Record<string, unknown>>[];
+  readonly hardware_results: readonly Readonly<Record<string, unknown>>[];
+  readonly release_artifact_set_digest: PrivacyFixed32BytesV1;
+  readonly audits: readonly Readonly<Record<string, unknown>>[];
+  readonly audit_bundle_digest: PrivacyFixed32BytesV1;
+  readonly release_signatures: readonly Readonly<Record<string, unknown>>[];
+  readonly manifest_digest: PrivacyFixed32BytesV1;
+}
+export interface PrivacyDeploymentActivationV1 {
+  readonly protocol_id: PrivacyProtocolTagV1;
+  readonly activation_height: PrivacyU64V1;
+}
+export interface PrivacyExact12DeploymentQualificationV1 {
+  readonly version: 1;
+  readonly chain_id: unknown;
+  readonly network_id: unknown;
+  readonly genesis_hash: PrivacyFixed32BytesV1;
+  readonly release_manifest_digest: PrivacyFixed32BytesV1;
+  readonly activation_transaction_digest: PrivacyFixed32BytesV1;
+  readonly activations: readonly PrivacyDeploymentActivationV1[];
+  readonly validator_roster_digest: PrivacyFixed32BytesV1;
+  readonly endpoint_version: string;
+  readonly convergence_height: PrivacyU64V1;
+  readonly converged_state_digest: PrivacyFixed32BytesV1;
+  readonly validator_canaries: readonly Readonly<Record<string, unknown>>[];
+  readonly validator_signatures: readonly Readonly<Record<string, unknown>>[];
+  readonly qualification_digest: PrivacyFixed32BytesV1;
+}
+export interface PrivacyExact12QualificationRecordV1 {
+  readonly release_manifest: PrivacyExact12ReleaseManifestV1;
+  readonly deployment_qualification: PrivacyExact12DeploymentQualificationV1;
 }
 
-/** The only accepted authoritative privacy-capability snapshot version. */
-export const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1: 1;
-/** Closed canonical order required for `PrivacyCapabilitySnapshotV1.protocols`. */
+/** Closed canonical order required for the Exact12 manifest rows. */
 export const PRIVACY_PROTOCOL_IDS_V1: readonly PrivacyProtocolIdV1[];
 
-/** Error raised when a privacy-capability response cannot be trusted. */
-export declare class PrivacyCapabilitySnapshotError extends TypeError {
-  readonly path: string;
-}
-
-/** Parse the exact, fail-closed Torii `PrivacyCapabilitySnapshotV1` JSON shape. */
-export function parsePrivacyCapabilitySnapshotV1(
-  payload: unknown,
-): PrivacyCapabilitySnapshotV1;
-
-export interface PrivacyCapabilitiesNodeRequestOptions {
+export interface PrivacyExact12CapabilityManifestRequestOptions {
   signal?: AbortSignal;
   canonicalAuth: CanonicalRequestAuth;
 }
 
-export interface PrivacyCapabilitiesBrowserRequestOptions {
-  signal?: AbortSignal;
-  headers?: Record<string, string>;
-  successStatuses?: ReadonlyArray<number>;
-  authAccountId: string;
-  sign: (input: CanonicalJsonRequestSignerInput) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
-  timestampMs?: number;
-  nonce?: string;
-}
-
 /**
- * Minimal public shape shared by configured package clients. Runtime admission
- * additionally requires the package-private transport capability.
+ * Minimal public shape for the Node/N-API Torii client. Runtime admission also
+ * requires the package-private canonical archive transport capability.
  */
-export interface PrivacyCapabilitiesNodeClientV1 {
-  getNodeCapabilities(options: PrivacyCapabilitiesNodeRequestOptions): Promise<unknown>;
-}
-
-export interface PrivacyCapabilitiesBrowserClientV1 {
-  readonly baseUrl: string;
+export interface PrivacyExact12CapabilityManifestNodeClientV1 {
   getNodeCapabilities(
-    options: PrivacyCapabilitiesBrowserRequestOptions,
+    options: PrivacyExact12CapabilityManifestRequestOptions,
   ): Promise<unknown>;
 }
-
-/**
- * Fetch and validate the committed snapshot through the supplied configured
- * package client. The privacy policy parser remains outside base entry graphs.
- */
-export function getPrivacyCapabilitiesV1(
-  client: PrivacyCapabilitiesBrowserClientV1,
-  options: PrivacyCapabilitiesBrowserRequestOptions,
-): Promise<PrivacyCapabilitySnapshotV1>;
-export function getPrivacyCapabilitiesV1(
-  client: PrivacyCapabilitiesNodeClientV1,
-  options: PrivacyCapabilitiesNodeRequestOptions,
-): Promise<PrivacyCapabilitySnapshotV1>;
 
 export type PrivacyOperationSchemaV1 =
   | "zk_ace_authorization_action_v1"
@@ -235,25 +251,30 @@ export type PrivacyExecutionModeV1 =
   | "presentation_action"
   | "note_action";
 export type PrivacyCapabilityReadinessV1 =
-  | Readonly<{ readiness: "available" | "available-experimental"; detail: null }>
+  | Readonly<{ readiness: "production-qualified"; detail: null }>
   | Readonly<{
       readiness: "unavailable";
-      detail: Extract<PrivacyCompiledProfileResultV1, { status: "unavailable" }>["value"];
+      detail:
+        | Readonly<{
+            reason: "compiled-profile";
+            detail: Extract<
+              PrivacyCompiledProfileResultV1,
+              { status: "unavailable" }
+            >["value"];
+          }>
+        | Readonly<{
+            reason:
+              | "not-registered"
+              | "proposed"
+              | "suspended"
+              | "retired"
+              | "missing-production-qualification"
+              | "invalid-production-qualification";
+            detail: null;
+          }>;
     }>;
-export type PrivacyCapabilityActivationStateV1 = Readonly<{
-  activation_state:
-    | "not-registered"
-    | "proposed"
-    | "active"
-    | "suspended"
-    | "retired";
-  detail: null;
-}>;
-export type PrivacyCapabilityLimitationV1 = Readonly<{
-  limitation: "missing-distribution-wide-knowledge-soundness-evidence";
-  detail: null;
-}>;
-export interface PrivacyExact12CapabilityRowV1 extends PrivacyCapabilityRowV1 {
+export interface PrivacyExact12CapabilityRowV1 {
+  readonly protocol_id: PrivacyProtocolTagV1;
   readonly operation_schema: Readonly<{
     operation_schema: PrivacyOperationSchemaV1;
     value: null;
@@ -263,9 +284,9 @@ export interface PrivacyExact12CapabilityRowV1 extends PrivacyCapabilityRowV1 {
     value: null;
   }>;
   readonly privacy_feature_mask: number;
+  readonly compiled_profile: PrivacyCompiledProfileResultV1;
   readonly readiness: PrivacyCapabilityReadinessV1;
-  readonly activation_state: PrivacyCapabilityActivationStateV1;
-  readonly limitation: PrivacyCapabilityLimitationV1 | null;
+  readonly activation: PrivacyProtocolActivationRecordV1 | null;
 }
 
 /** Native-validated immutable view of Torii's canonical Exact12 bytes. */
@@ -274,6 +295,7 @@ export declare class PrivacyExact12CapabilityManifestV1 {
   readonly version: 1;
   readonly committed_height: PrivacyU64V1;
   readonly consensus_policy: PrivacyConsensusPolicyV1;
+  readonly qualification: PrivacyExact12QualificationRecordV1 | null;
   readonly protocols: readonly PrivacyExact12CapabilityRowV1[];
   readonly manifest_digest: PrivacyFixed32BytesV1;
   canonicalBytes(): Uint8Array;
@@ -286,9 +308,7 @@ export interface PrivacyExact12CapabilityAdmissionV1 {
   readonly operation_schema: PrivacyOperationSchemaV1;
   readonly execution_mode: PrivacyExecutionModeV1;
   readonly privacy_feature_mask: number;
-  readonly readiness: "available" | "available-experimental";
-  readonly activation_state: "active";
-  readonly limitation: "missing-distribution-wide-knowledge-soundness-evidence" | null;
+  readonly readiness: "production-qualified";
   readonly compiled_profile: PrivacyCompiledProfileBindingsV1 &
     Readonly<{ protocol_limits: PrivacyProtocolLimitsV1 }>;
 }
@@ -302,8 +322,8 @@ export function decodePrivacyExact12CapabilityManifestV1(
   canonicalArchive: ArrayBufferView | ArrayBuffer,
 ): PrivacyExact12CapabilityManifestV1;
 export function getPrivacyExact12CapabilityManifestV1(
-  client: PrivacyCapabilitiesNodeClientV1,
-  options: PrivacyCapabilitiesNodeRequestOptions,
+  client: PrivacyExact12CapabilityManifestNodeClientV1,
+  options: PrivacyExact12CapabilityManifestRequestOptions,
 ): Promise<PrivacyExact12CapabilityManifestV1>;
 export function requirePrivacyExact12CapabilityTupleV1(
   manifest: PrivacyExact12CapabilityManifestV1,
@@ -317,4 +337,3 @@ export function requirePrivacyExact12CapabilityAdmissionV1(
 export declare class PrivacyExact12CapabilityManifestError extends TypeError {
   readonly path: string;
 }
-import type { CanonicalJsonRequestSignature, CanonicalJsonRequestSignerInput, CanonicalRequestAuth } from "./index.js";

@@ -132,7 +132,10 @@ fn recover_pending_canonical_bodies(
                     }
                     let now = Instant::now();
                     if body_recovery.has_pending() && now >= next_retry {
-                        let request_queued = body_recovery.service_next()?;
+                        let request_queued = service_canonical_executed_block_recovery(
+                            &mut body_recovery,
+                            services,
+                        )?;
                         let serviced_at = Instant::now();
                         refresh_canonical_recovery_retry_deadline(
                             &mut next_retry,
@@ -151,7 +154,10 @@ fn recover_pending_canonical_bodies(
                         CanonicalRecoveryIngressDrain::default()
                     };
                     if ingress.exact_response_progress && body_recovery.has_pending() {
-                        let request_queued = body_recovery.service_next()?;
+                        let request_queued = service_canonical_executed_block_recovery(
+                            &mut body_recovery,
+                            services,
+                        )?;
                         let serviced_at = Instant::now();
                         refresh_canonical_recovery_retry_deadline_after_progress(
                             &mut next_retry,
@@ -438,10 +444,10 @@ fn run_pending_active_height(
     mut activated: PendingKuraActivatedProductionLifecycleV1,
     mut active_runner: ProductionLifecycleActiveRunnerBorrowV1,
     context: &wire::HeightContext,
+    proofs_of_possession: &[Vec<u8>],
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
     state: &Arc<State>,
     kura: &Arc<Kura>,
-    common_config: &iroha_config::parameters::actual::Common,
     receiver: &Arc<FairV2Ingress>,
     lane_relay_rx: &std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
     wake_rx: &std::sync::mpsc::Receiver<()>,
@@ -454,7 +460,8 @@ fn run_pending_active_height(
     control_queue_capacity: usize,
     round_timeout: Duration,
     retransmit_interval: Duration,
-) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
+) -> Result<HeightRunOutcome<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError>
+{
     let mut next_recovered_decision_fetch_retransmit =
         deadline_after(Instant::now(), retransmit_interval);
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
@@ -466,9 +473,21 @@ fn run_pending_active_height(
         }
         if shutdown_signal.is_sent() {
             activated.into_clean_shutdown(&mut active_runner)?;
-            return Ok(None);
+            return Ok(HeightRunOutcome::Shutdown);
         }
         liveness_watchdog.poll(Instant::now());
+        activated.with_runner_runtime(
+            &mut active_runner,
+            |_executor, services, _lane_work| -> Result<_, V2RunnerError> {
+                let _ = settle_historical_body_serve_completion(
+                    receiver,
+                    block_sync_server,
+                    services,
+                    output_guard.as_ref(),
+                )?;
+                Ok(())
+            },
+        )?;
         if let Err(error) =
             activated.settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)
         {
@@ -477,12 +496,12 @@ fn run_pending_active_height(
         }
         activated.with_runner_runtime(
             &mut active_runner,
-            |executor, _services, lane_work| -> Result<_, V2RunnerError> {
+            |executor, services, lane_work| -> Result<_, V2RunnerError> {
                 drain_lane_relay_ingress(
                     lane_relay_rx,
                     lane_work,
+                    services,
                     executor.current_tag().view(),
-                    control_queue_capacity,
                 )
                 .map_err(V2RunnerError::LaneWork)
             },
@@ -549,22 +568,20 @@ fn run_pending_active_height(
                     services,
                     lane_work,
                     executor.current_tag().view(),
-                    output_guard.as_ref(),
                     kura.as_ref(),
-                    &common_config.key_pair,
                     block_sync_server,
                     DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
                 drain_lane_relay_ingress(
                     lane_relay_rx,
                     lane_work,
+                    services,
                     executor.current_tag().view(),
-                    control_queue_capacity,
                 )?;
                 drive_merge_sidecar_recovery(executor, services, lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
-                    let _ = service_historical_recovery_tick(lane_work)?;
+                    let _ = service_historical_recovery_tick(lane_work, services)?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -590,7 +607,9 @@ fn run_pending_active_height(
                 return Err(error);
             }
         };
-        let ready = ready_to_finish && !terminal_exact_output_pending;
+        let ready = ready_to_finish
+            && !terminal_exact_output_pending
+            && !block_sync_server.has_pending_historical_body_serve();
         if let Some(claimed) = producer_turn {
             let attempted =
                 claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
@@ -614,9 +633,10 @@ fn run_pending_active_height(
         let rollover_ready = if finalization_ready {
             let rollover_ready = activated.with_runner_runtime(
                 &mut active_runner,
-                |executor, _services, lane_work| {
+                |executor, services, lane_work| {
                     super::preflight_finalized_lane_rollover(
                         executor,
+                        services,
                         lane_work,
                         &mut canonical_lane_body_recovered,
                     )
@@ -644,20 +664,24 @@ fn run_pending_active_height(
             }
             if shutdown_signal.is_sent() {
                 activated.into_clean_shutdown(&mut active_runner)?;
-                return Ok(None);
+                return Ok(HeightRunOutcome::Shutdown);
             }
             liveness_watchdog.poll(Instant::now());
             let (drained_terminal_ingress, drained_terminal_relay) = activated
                 .with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
+                    let _ = settle_historical_body_serve_completion(
+                        receiver,
+                        block_sync_server,
+                        services,
+                        output_guard.as_ref(),
+                    )?;
                     let drained = drain_decided_lane_recovery_ingress(
                         receiver,
                         executor,
                         services,
                         lane_work,
                         executor.current_tag().view(),
-                        output_guard.as_ref(),
                         kura.as_ref(),
-                        &common_config.key_pair,
                         block_sync_server,
                         DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
                     )?;
@@ -680,6 +704,10 @@ fn run_pending_active_height(
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             }
+            if block_sync_server.has_pending_historical_body_serve() {
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
+            }
             if !drained_terminal_ingress && !drained_terminal_relay {
                 break;
             }
@@ -687,6 +715,30 @@ fn run_pending_active_height(
         receiver
             .ensure_closed_drained_cut()
             .map_err(V2RunnerError::Service)?;
+        if context.height == u64::MAX {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |executor, _services, _lane_work| {
+                    let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+                        V2RunnerError::Service(
+                            "terminal pending-Kura lifecycle lost its durable finality owner"
+                                .to_owned(),
+                        )
+                    })?;
+                    authenticate_terminal_complete_tip(
+                        state.as_ref(),
+                        kura.as_ref(),
+                        context,
+                        proofs_of_possession,
+                        artifact,
+                        receipt,
+                    )?;
+                    Ok::<_, V2RunnerError>(())
+                },
+            )?;
+            activated.into_clean_shutdown(&mut active_runner)?;
+            return Ok(HeightRunOutcome::Terminal);
+        }
         let (finalized, lane_work) = activated.into_finalized_rollover(&mut active_runner)?;
         let prepared_successor = {
             let (receipt, artifact) = finalized.finality();
@@ -796,7 +848,10 @@ fn run_pending_active_height(
                 "pending Kura lifecycle finalized with retained local cleanup state"
             );
         }
-        return Ok(Some((prepared_successor, retained_merge_sidecars)));
+        return Ok(HeightRunOutcome::Successor((
+            prepared_successor,
+            retained_merge_sidecars,
+        )));
     }
 }
 
@@ -817,6 +872,9 @@ pub(super) fn run_pending_kura_lifecycle_height(
     >,
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    >,
+    kagemusha_mint_finality_authority: Option<
+        Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
     >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
@@ -910,9 +968,16 @@ pub(super) fn run_pending_kura_lifecycle_height(
         local_validator_index(&context, &local_peer, config.role)?
     };
     if block_sync_server.is_none() {
-        block_sync_server = Some(V2BlockSyncServer::new(
+        let limits = HistoricalBodyServeLimits::first_release(
+            certified_request_capacity,
+            network.reply_route_source_capacity(),
+        )?;
+        block_sync_server = Some(V2BlockSyncServer::new_with_historical_body_service(
             context.network_id,
             certified_request_capacity,
+            Arc::clone(&kura),
+            common_config.key_pair.clone(),
+            limits,
         )?);
     }
     let consensus_key_hash: [u8; 32] =
@@ -933,8 +998,12 @@ pub(super) fn run_pending_kura_lifecycle_height(
             signature_policy,
         )
     } else {
-        V2BodyStore::open_with_policy_and_capacity(
-            storage_root.join("bodies"),
+        let body_store_authority = kura
+            .mint_v2_body_store_directory_authority()
+            .map_err(|error| V2RunnerError::Service(error.to_string()))?;
+        V2BodyStore::open_with_kura_authority_and_capacity(
+            kura.as_ref(),
+            body_store_authority,
             context.clone(),
             signature_policy,
             body_store_capacity,
@@ -1009,7 +1078,8 @@ pub(super) fn run_pending_kura_lifecycle_height(
         Arc::clone(&block_rx),
         Arc::clone(&kura_replica_advert_refresh),
         exact_output_service_owner,
-    );
+    )
+    .with_kagemusha_mint_finality_authority(kagemusha_mint_finality_authority.clone());
     let launched = owner.launch(launch_inputs)?;
     let mut setup_runner =
         ProductionLifecyclePreActivationRunnerBorrowV1::mint_for_recovered_runner();
@@ -1079,10 +1149,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         attempts = recovery_attempts,
         "finished lifecycle-owned interrupted-tip local Apply recovery"
     );
-    state
-        .require_committed_kagemusha_runtime_effective_config()
-        .map_err(V2RunnerError::Service)?;
-
     let (pending, control) = if emergency_fast {
         iroha_logger::warn!(
             "emergency Fast startup completed interrupted-tip Apply but deferred historical lane repair and reservation reconciliation until a Strict restart"
@@ -1155,14 +1221,14 @@ pub(super) fn run_pending_kura_lifecycle_height(
     )?;
     let activated = prepared.activate_no_clock(activation)?;
     let active_runner = ProductionLifecycleActiveRunnerBorrowV1::mint_for_recovered_runner();
-    let Some((successor, retained_merge_sidecars)) = run_pending_active_height(
+    let completed = run_pending_active_height(
         activated,
         active_runner,
         &context,
+        verified_context.proofs_of_possession(),
         &context_store,
         &state,
         &kura,
-        &common_config,
         &block_rx,
         &lane_relay_rx,
         &wake_rx,
@@ -1177,9 +1243,21 @@ pub(super) fn run_pending_kura_lifecycle_height(
         control_queue_capacity,
         round_timeout,
         retransmit_interval,
-    )?
-    else {
-        return Ok(());
+    )?;
+    let (successor, retained_merge_sidecars) = match completed {
+        HeightRunOutcome::Successor(successor) => successor,
+        HeightRunOutcome::Terminal => {
+            wait_for_terminal_shutdown(
+                context.height,
+                context.id(),
+                &ingress_ready,
+                &block_rx,
+                &wake_rx,
+                &shutdown_signal,
+            );
+            return Ok(());
+        }
+        HeightRunOutcome::Shutdown => return Ok(()),
     };
 
     super::lifecycle_run_inner::run_non_pending_lifecycle_loop(
@@ -1192,6 +1270,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
         global_beacon_partial_signer,
+        kagemusha_mint_finality_authority,
         network,
         block_rx,
         lane_relay_rx,

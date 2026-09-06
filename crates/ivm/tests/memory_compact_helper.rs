@@ -28,7 +28,7 @@ fn memory_compact_helper_matches_syscall() {
     let root_s =
         HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(bundle.root));
     // Reference proof after syscall (OUTPUT writes affect the Merkle root)
-    let (proof_h, root_h) = vm.memory.merkle_compact(addr, Some(16));
+    let (proof_h, root_h) = vm.memory.merkle_compact(addr, Some(16)).unwrap();
     assert_eq!(proof_h.depth(), proof_s.depth());
     assert_eq!(proof_h.dirs(), proof_s.dirs());
     assert_eq!(root_h.as_ref(), root_s.as_ref());

@@ -7,9 +7,11 @@
 
 use super::{
     committee::prepare_private_settlement_leg_v1,
+    global_state::validate_private_settlement_prepare_lock_registration_v1,
     protocol::{
         aggregate_private_settlement_phase_votes_v1, private_settlement_prepare_barrier_v1,
-        sign_private_settlement_phase_vote_v1, validate_private_settlement_prepare_barrier_v1,
+        sign_private_settlement_phase_vote_v1, validate_private_settlement_committee_authority_v1,
+        validate_private_settlement_prepare_barrier_v1,
         verify_private_settlement_phase_certificate_v1,
     },
     sidecar_store::PrivateSettlementFileSidecarStoreV1,
@@ -94,7 +96,7 @@ impl PrivateSettlementPhaseSignerV1 {
         {
             return Err(PrivateSettlementPhaseErrorV1);
         }
-        store
+        let (_, authority) = store
             .validate_phase_manifest(
                 payload_digest,
                 &self.peer_id,
@@ -102,6 +104,12 @@ impl PrivateSettlementPhaseSignerV1 {
                 authoritative_height,
             )
             .map_err(|_| PrivateSettlementPhaseErrorV1)?;
+        validate_private_settlement_committee_authority_v1(
+            state,
+            manifest.authority_context_height,
+            &authority,
+        )
+        .map_err(|_| PrivateSettlementPhaseErrorV1)?;
         let body = prepare_private_settlement_leg_v1(
             state,
             store,
@@ -123,7 +131,7 @@ impl PrivateSettlementPhaseSignerV1 {
         self.sign(body)
     }
 
-    /// Verify the exact all-Prepare barrier and local durable Prepare QC before Commit.
+    /// Verify the all-Prepare certified-body identity and local durable Prepare QC before Commit.
     ///
     /// This method only reads the restricted journal and cannot mutate the WSV.
     ///
@@ -133,6 +141,7 @@ impl PrivateSettlementPhaseSignerV1 {
     /// locally unprepared material.
     pub fn commit_vote(
         &self,
+        state: &StateView<'_>,
         store: &PrivateSettlementFileSidecarStoreV1,
         payload_digest: Hash,
         barrier: &PrivateSettlementPrepareBarrierV1,
@@ -140,6 +149,17 @@ impl PrivateSettlementPhaseSignerV1 {
     ) -> Result<PrivateSettlementPhaseVoteV1, PrivateSettlementPhaseErrorV1> {
         validate_private_settlement_prepare_barrier_v1(barrier)
             .map_err(|_| PrivateSettlementPhaseErrorV1)?;
+        let state_height =
+            u64::try_from(state.height()).map_err(|_| PrivateSettlementPhaseErrorV1)?;
+        if state_height != authoritative_height || barrier.manifest.network_id != state.network_id {
+            return Err(PrivateSettlementPhaseErrorV1);
+        }
+        validate_private_settlement_prepare_lock_registration_v1(
+            &state.world.private_settlement_staged_locks,
+            barrier,
+            authoritative_height,
+        )
+        .map_err(|_| PrivateSettlementPhaseErrorV1)?;
         let body = store
             .commit_phase_body(payload_digest, &self.peer_id, barrier, authoritative_height)
             .map_err(|_| PrivateSettlementPhaseErrorV1)?;

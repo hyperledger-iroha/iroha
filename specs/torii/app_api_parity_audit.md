@@ -106,7 +106,7 @@ Map<String, String> headers = CanonicalRequestSigner.buildHeaders(
     timestampMs,
     "request-20260814-0001");
 ```
-The Java `signatureProvider` is supplied by the application keystore or HSM and
+The Java `signatureProvider` is supplied by the application's signing provider and
 must return a non-empty, non-zero detached signature no larger than the V1
 3,309-byte ceiling.
 

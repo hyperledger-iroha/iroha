@@ -1990,7 +1990,7 @@ pub trait ProviderIngestCompletionPayloadBuilderV1: Send + Sync + 'static {
 /// Isolated signer failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestCompletionSignerErrorV1 {
-    /// HSM/KMS signing is temporarily unavailable.
+    /// Runtime-provider signing is temporarily unavailable.
     Unavailable,
     /// The signer rejected an otherwise exact prepared operation.
     Rejected,
@@ -2098,7 +2098,7 @@ impl ProviderIngestCompletionSignerQualificationV1 {
 /// Independently configured public binding for one completion signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletionSignerBindingV1 {
-    /// Stable opaque HSM/KMS signer or key handle.
+    /// Stable opaque signing-provider or key handle.
     pub runtime_handle: String,
     /// Exact payload-free signer qualification.
     pub qualification: ProviderIngestCompletionSignerQualificationV1,
@@ -2139,7 +2139,7 @@ pub enum ProviderIngestCompletionSignerBindingErrorV1 {
 }
 /// Isolated runtime signer that has no queue or outbox access.
 pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
-    /// Stable public HSM/KMS signer or key handle.
+    /// Stable public signing-provider or key handle.
     fn runtime_handle(&self) -> &str;
     /// Account controlled by this signer.
     fn authority(&self) -> &AccountId;
@@ -2160,10 +2160,10 @@ pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
     /// signer and return its exact current policy identity.
     ///
     /// This method runs on the async worker thread and therefore must be a bounded, non-blocking
-    /// read of a locally maintained eligibility snapshot; it must never perform HSM/KMS, network,
-    /// filesystem, or other blocking I/O. Implementations must update that snapshot on
+    /// read of a locally maintained eligibility snapshot; it must never perform signing-provider,
+    /// network, filesystem, or other blocking I/O. Implementations must update that snapshot on
     /// revocation/rotation and fail closed when it is stale or unavailable. The timed
-    /// [`Self::sign`] operation remains responsible for the HSM/KMS-side atomic check.
+    /// [`Self::sign`] operation remains responsible for the provider-side atomic check.
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerErrorV1>;
@@ -3038,7 +3038,7 @@ where
             binding.is_valid() && row.provider_owner.as_ref() == Some(&binding.provider_owner)
         });
         // Bytes that may already have crossed the queue boundary are always
-        // reconciled by exact hash before any signer/HSM dependency is queried.
+        // reconciled by exact hash before any signing-provider dependency is queried.
         match &completion {
             ProviderIngestCompletionStateV1::Ambiguous {
                 baseline_finalized_cursor,

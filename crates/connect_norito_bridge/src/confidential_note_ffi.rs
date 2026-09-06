@@ -711,6 +711,7 @@ mod jni_exports {
             JNI_FALSE
         }
     }
+
     macro_rules! revision_export {
         ($name:ident) => {
             #[allow(clippy::missing_safety_doc)]

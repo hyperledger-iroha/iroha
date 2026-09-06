@@ -22,11 +22,11 @@ use iroha_data_model::{
     metadata::Metadata,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
-        PrivacyConsensusLimitsV1, PrivacyNullifierV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
-        PrivacyZkAcePolicyRecordValidationErrorV1, ZkAcePqAuthorizationStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
+        PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyZkAcePolicyLifecycleV1,
+        PrivacyZkAcePolicyRecordV1, PrivacyZkAcePolicyRecordValidationErrorV1,
+        PrivacyZkAceReplayNullifierV1, ZkAcePqAuthorizationStatementV1,
     },
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
@@ -155,7 +155,7 @@ pub struct ZkAcePrivacyTransferEffectV1 {
     /// Atomic amount.
     pub amount: u128,
     /// Replay marker consumed atomically with the transfer.
-    pub replay_nullifier: PrivacyNullifierV1,
+    pub replay_nullifier: PrivacyZkAceReplayNullifierV1,
 }
 /// Candidate proving output ready for exact-authority signing.
 ///
@@ -530,6 +530,8 @@ fn placeholder_envelope_v1(
     statement: PrivacyStatementV1,
 ) -> PrivacyProofEnvelopeV1 {
     PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -540,7 +542,7 @@ fn placeholder_envelope_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest: PrivacyStatementDigestV1::new([0; 32]),
         statement,
-        proof: PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(Vec::new())),
+        proof: PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(Vec::new())),
     }
 }
 #[expect(clippy::too_many_lines, reason = "ordered fail-closed proof assembly")]
@@ -574,7 +576,7 @@ where
     if witness.identity_commitment_v1() != transfer.policy.identity_commitment {
         return Err(ZkAcePrivacyActionBuildErrorV1::IdentityCommitmentMismatch);
     }
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
+    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1)
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     let native_statement = ZkAcePqAuthorizationStatementV1 {
         context: PrivacyStatementContextV1 {
@@ -596,9 +598,9 @@ where
         public_balance_scope: transfer.public_balance_scope,
         amount: transfer.amount,
         authorization_epoch: transfer.policy.authorization_epoch,
-        replay_nullifier: PrivacyNullifierV1::new([0; 32]),
+        replay_nullifier: Default::default(),
     };
-    let draft_statement = PrivacyStatementV1::ZkAcePqAuthorizationV0(native_statement.clone());
+    let draft_statement = PrivacyStatementV1::ZkAcePqAuthorizationV1(native_statement.clone());
     let draft_payload =
         transaction_payload_v1(context, placeholder_envelope_v1(profile, draft_statement))?;
     let transaction_intent_digest = draft_payload
@@ -612,7 +614,7 @@ where
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::AuthorizationDigest)?;
     final_statement.replay_nullifier =
         witness.replay_nullifier_v1(&authorization_digest, &context.network_id);
-    let typed_statement = PrivacyStatementV1::ZkAcePqAuthorizationV0(final_statement.clone());
+    let typed_statement = PrivacyStatementV1::ZkAcePqAuthorizationV1(final_statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::StatementDigest)?;
@@ -631,6 +633,8 @@ where
         return Err(ZkAcePrivacyActionBuildErrorV1::EnvelopeValidation);
     }
     let final_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -641,7 +645,7 @@ where
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement: typed_statement,
-        proof: PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(proof)),
+        proof: PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(proof)),
     };
     final_envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
@@ -835,8 +839,8 @@ mod tests {
         domain::DomainId,
         name::Name,
         privacy::{
-            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyCommitmentV1, PrivacyPolicyDigestV1,
-            PrivacyZkAcePolicyRecordDigestV1,
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyDigestV1,
+            PrivacyZkAceIdentityCommitmentV1, PrivacyZkAcePolicyRecordDigestV1,
         },
     };
     use std::str::FromStr as _;
@@ -1093,7 +1097,7 @@ mod tests {
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)
         ));
-        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         assert!(matches!(
             compiled_privacy_profile_v1(protocol_id),
             Err(iroha_core::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
@@ -1112,7 +1116,7 @@ mod tests {
     #[test]
     fn explicit_policy_commitment_fixture_is_nonzero() {
         let witness = witness(0x21);
-        let commitment: PrivacyCommitmentV1 = witness.identity_commitment_v1();
+        let commitment: PrivacyZkAceIdentityCommitmentV1 = witness.identity_commitment_v1();
         assert!(!commitment.is_zero());
     }
 }

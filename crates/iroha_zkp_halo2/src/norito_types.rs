@@ -16,7 +16,7 @@ pub enum ZkCurveId {
     Unknown = 0,
     /// Halo2 Pasta/Pallas backend (transparent IPA over Pasta).
     Pallas = 1,
-    /// Goldilocks (64-bit field) backend with multiplicative commitments.
+    /// Goldilocks field identity; it is not an IPA commitment group.
     Goldilocks = 2,
     /// Pasta (Vesta) placeholder for future backends.
     Pasta = 10,

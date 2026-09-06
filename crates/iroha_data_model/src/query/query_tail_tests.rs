@@ -461,13 +461,8 @@ mod tests {
                 25,
             )
             .into(),
-            sorafs::prelude::FindSorafsPopIssuerPolicy.into(),
-            sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest::new([0x21; 32]).into(),
-            sorafs::prelude::FindSorafsPopCommitmentRootByVersion::new(2).into(),
-            sorafs::prelude::FindSorafsPopRevocationPublicationByVersion::new(3).into(),
-            sorafs::prelude::FindSorafsPopRevocationByNonceCommitment::new([0x22; 32]).into(),
-            sorafs::prelude::FindSorafsPopAuditDigestBySequence::new(4).into(),
-            sorafs::prelude::FindSorafsPopRegistryStatus.into(),
+            sorafs::prelude::FindSorafsCitizenBondBySerialCommitment::new([0x21; 32]).into(),
+            sorafs::prelude::FindSorafsCitizenBondSnapshot.into(),
             sorafs::prelude::FindSorafsPinManifest::new(
                 crate::sorafs::pin_registry::ManifestDigest::new([0x24; 32]),
                 Some(pin_cursor),
@@ -541,12 +536,6 @@ mod tests {
             sorafs::prelude::FindSorafsModerationAppeal::new(
                 "case-1".to_owned(),
                 "round-1".to_owned(),
-            )
-            .into(),
-            sorafs::prelude::FindSorafsModerationJurorEligibility::new(
-                "case-1".to_owned(),
-                "round-1".to_owned(),
-                juror.clone(),
             )
             .into(),
             sorafs::prelude::FindSorafsModerationCase::new(

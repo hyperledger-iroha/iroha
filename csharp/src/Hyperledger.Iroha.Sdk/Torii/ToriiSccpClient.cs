@@ -210,7 +210,7 @@ public sealed partial class ToriiClient
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var body = JsonSerializer.SerializeToUtf8Bytes(request, serializerOptions);
+        var body = JsonSerializer.SerializeToUtf8Bytes(request, SerializerOptions);
         using var content = new ByteArrayContent(body);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         using var response = await SendExactSccpAsync(
@@ -226,12 +226,13 @@ public sealed partial class ToriiClient
             context,
             SccpJsonResponseMaximumBytes,
             cancellationToken);
-        var (authority, proof, feePayment, transactionPayload, signature) = request switch
+        var (authority, proof, replayWitness, feePayment, transactionPayload, signature) = request switch
         {
             SccpBridgeProofSubmitRequest proofRequest =>
                 (
                     proofRequest.Authority,
                     Convert.FromBase64String(proofRequest.DestinationProofBase64),
+                    (byte[]?)null,
                     proofRequest.FeePayment,
                     proofRequest.TransactionPayloadBase64,
                     proofRequest.SignatureBase64),
@@ -239,6 +240,7 @@ public sealed partial class ToriiClient
                 (
                     messageRequest.Authority,
                     Convert.FromBase64String(messageRequest.NativeProofBase64),
+                    Convert.FromBase64String(messageRequest.ReplayWitnessBase64),
                     messageRequest.FeePayment,
                     messageRequest.TransactionPayloadBase64,
                     messageRequest.SignatureBase64),
@@ -251,7 +253,8 @@ public sealed partial class ToriiClient
             proof,
             transactionPayload,
             signature,
-            expectedFeePayment: feePayment);
+            expectedFeePayment: feePayment,
+            expectedReplayWitness: replayWitness);
     }
 
     private async Task<byte[]> GetExactSccpJsonAsync(

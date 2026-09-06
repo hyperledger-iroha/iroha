@@ -336,7 +336,7 @@ pub fn build_privacy_release_vega_network_action_v1(
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseVegaNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = iroha_data_model::privacy::PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    let protocol_id = iroha_data_model::privacy::PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
     compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
             protocol_id: unavailable,
@@ -429,6 +429,8 @@ pub fn build_privacy_release_orchard_network_action_v1(
         expiry_height,
     )?;
     let draft_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -466,6 +468,8 @@ pub fn build_privacy_release_orchard_network_action_v1(
     }
     let typed_statement = PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone());
     let envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -513,10 +517,12 @@ fn build_pq_masp_transaction_v1(
     private_key: &PrivateKey,
 ) -> Result<(SignedTransaction, PqMaspStarkStatementV1), PrivacyReleaseEvidenceErrorClassV1> {
     let profile =
-        compiled_privacy_profile_v1(iroha_data_model::privacy::PrivacyProtocolIdV1::PqMaspStarkV0)
+        compiled_privacy_profile_v1(iroha_data_model::privacy::PrivacyProtocolIdV1::PqMaspStarkV1)
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     statement.context = statement_context_v1(transaction_context, profile);
     let draft_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -526,8 +532,8 @@ fn build_pq_masp_transaction_v1(
         statement_schema_digest: profile.statement_schema_digest,
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest: PrivacyStatementDigestV1::new([0; 32]),
-        statement: PrivacyStatementV1::PqMaspStarkV0(statement.clone()),
-        proof: PrivacyProofV1::PqMaspStarkV0(PrivacyProofBytesV1::new(Vec::new())),
+        statement: PrivacyStatementV1::PqMaspStarkV1(statement.clone()),
+        proof: PrivacyProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(Vec::new())),
     };
     let intent = transaction_payload_v1(transaction_context, draft_envelope)?
         .privacy_transaction_intent_digest_v1()
@@ -553,8 +559,10 @@ fn build_pq_masp_transaction_v1(
         &mut proof_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-    let typed_statement = PrivacyStatementV1::PqMaspStarkV0(statement.clone());
+    let typed_statement = PrivacyStatementV1::PqMaspStarkV1(statement.clone());
     let envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -567,7 +575,7 @@ fn build_pq_masp_transaction_v1(
             .digest()
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
         statement: typed_statement,
-        proof: PrivacyProofV1::PqMaspStarkV0(PrivacyProofBytesV1::new(proof)),
+        proof: PrivacyProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(proof)),
     };
     let payload = transaction_payload_v1(transaction_context, envelope)?;
     if payload
@@ -620,7 +628,7 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let bootstrap =
-        PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1 {
+        PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(PrivacyPqMaspPoolBootstrapV1 {
             pool_id: fixture.statement.pool_id,
             asset_definition_id: fixture.statement.asset_definition_id.clone(),
             initial_note_commitments,

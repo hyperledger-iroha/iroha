@@ -1,6 +1,6 @@
 # Data Availability Replication Policy (DA-4)
 
-_Status: In Progress — Owners: Core Protocol WG / Storage Team / SRE_
+_Status: Implemented — Owners: Core Protocol WG / Storage Team / SRE_
 
 The DA ingestion pipeline now enforces deterministic retention targets for
 every blob class described in `roadmap.md` (workstream DA-4). Torii refuses to
@@ -45,9 +45,15 @@ override these values by editing the new
 
 The policy lives under `torii.da_ingest.replication_policy` and exposes a
 *default* template plus an array of per-class overrides. Class identifiers are
-case-insensitive and accept `taikai_segment`, `nexus_lane_sidecar`,
+exact and case-sensitive: `taikai_segment`, `nexus_lane_sidecar`,
 `governance_artifact`, or `custom:<u16>` for governance-approved extensions.
-Storage classes accept `hot`, `warm`, or `cold`.
+Custom codes use canonical unsigned decimal text without a sign or leading
+zeroes. Storage and Taikai availability classes accept only exact lowercase
+`hot`, `warm`, or `cold` labels. Duplicate class entries are configuration
+errors rather than last-write-wins overrides. Every retention template requires
+at least one replica and a non-empty governance tag without surrounding
+whitespace or control characters. Invalid values are reported together as
+configuration diagnostics; config projection does not unwind.
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]

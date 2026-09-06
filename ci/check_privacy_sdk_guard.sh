@@ -1507,16 +1507,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 "max_privacy_bytes_per_block: 18 * 1024 * 1024",
             ),
         ),
-        (
-            "python/iroha_python/src/iroha_python/privacy_catalog.py",
-            py_catalog,
-            (
-                '"max_proof_bytes_per_action": 9 * 1024 * 1024',
-                '"max_action_bytes": 9 * 1024 * 1024',
-                '"max_privacy_bytes_per_transaction": 9 * 1024 * 1024',
-                '"max_privacy_bytes_per_block": 18 * 1024 * 1024',
-            ),
-        ),
     ):
         require(
             all(marker in source for marker in markers),
@@ -1598,18 +1588,21 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     for marker in (
         "objectWithExactKeys",
-        "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+        "exactManifestObjectV1",
+        "parseStrictLosslessIntegerJson",
+        "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
         "PRIVACY_PROTOCOL_IDS_V1.length",
         "Object.freeze",
     ):
         require(marker in js_source, f"JavaScript strict parser lost {marker}", errors)
-    for marker in (
-        "_exact_object",
-        "reject_duplicate_pairs",
-        "PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1",
-        "type(value) is not int",
-    ):
-        require(marker in py_catalog, f"Python strict parser lost {marker}", errors)
+    require(
+        "there is deliberately no parallel json snapshot decoder in v1"
+        in py_catalog.lower()
+        and "parse_privacy_capability_snapshot" not in py_catalog
+        and "PRIVACY_CAPABILITY_SNAPSHOT" not in py_catalog,
+        "Python catalog must delegate Exact12 decoding to the native canonical-Norito manifest and expose no legacy JSON snapshot parser",
+        errors,
+    )
 
     public_files = (
         "javascript/iroha_js/src/index.js",
@@ -1964,9 +1957,13 @@ def check(overrides: dict[str, str] | None = None) -> None:
         )
 
     js_tests = read("javascript/iroha_js/test/privacyCatalogParity.test.js", overrides)
+    js_manifest_tests = read(
+        "javascript/iroha_js/test/privacyExact12CapabilityManifest.test.js",
+        overrides,
+    )
     py_tests = read("python/iroha_python/tests/privacy_catalog_test.py", overrides)
     matrix_consumers = (
-        "crates/iroha_data_model/src/privacy.rs",
+        "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs",
         "javascript/iroha_js/test/privacyCatalogParity.test.js",
         "python/iroha_python/tests/privacy_catalog_test.py",
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
@@ -1980,15 +1977,13 @@ def check(overrides: dict[str, str] | None = None) -> None:
             f"{relative} must consume the shared exact12 matrix",
             errors,
         )
-    for marker in ("unknown fields", "aliases", "canonical 12"):
-        require(
-            marker.lower() in js_tests.lower() or marker.lower() in py_tests.lower(),
-            f"strict SDK tests must retain {marker} coverage",
-            errors,
-        )
     require(
-        "duplicate" in py_tests.lower() and "NaN" in py_tests,
-        "Python tests must retain duplicate-key and non-finite-number rejection",
+        "canonical 12" in js_tests.lower()
+        and "value.unknown = true" in js_manifest_tests
+        and 'assurance: "experimental"' in js_manifest_tests
+        and "test_package_root_uses_native_manifest_not_old_json_snapshot"
+        in py_tests,
+        "SDK tests must retain canonical-12 parity, unknown-field rejection, legacy-assurance rejection, and Python native-manifest-only coverage",
         errors,
     )
 
@@ -2627,8 +2622,8 @@ if mode:
         elif selector == 1:
             path = "python/iroha_python/src/iroha_python/privacy_catalog.py"
             overrides[path] = read(path, {}).replace(
-                '"iroha-zk-x509-stark-p256-v0",',
-                '"iroha-jindo-polynomial-commitment-v0",',
+                '"iroha-zk-x509-stark-p256-v1",',
+                '"iroha-jindo-polynomial-commitment-v1",',
             )
         elif selector == 2:
             path = "javascript/iroha_js/src/index.js"

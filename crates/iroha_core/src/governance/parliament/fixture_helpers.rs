@@ -4,7 +4,7 @@ fn enacted_fixture_governance(
     requirements: &[RequiredParliamentBodyV1],
 ) -> iroha_config::parameters::actual::Governance {
     let mut governance = iroha_config::parameters::actual::Governance {
-        parliament_alternate_size: Some(0),
+        parliament_alternate_size: 0,
         ..iroha_config::parameters::actual::Governance::default()
     };
     for requirement in requirements {
@@ -208,7 +208,7 @@ fn complete_enacted_fixture_body(
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
-fn build_enacted_parliament_attempt_for_testing<F>(
+fn build_certified_parliament_attempt_for_testing<F>(
     proposal: &ProposalKind,
     mut candidates: Vec<AccountId>,
     network_id: &NetworkId,
@@ -218,10 +218,6 @@ fn build_enacted_parliament_attempt_for_testing<F>(
 where
     F: FnMut(&mut ParliamentAttemptStateV1, RequiredParliamentBodyV1, BodyElectionAttemptId, u8),
 {
-    assert!(
-        enact_at_height > 9,
-        "fixture enactment must follow the complete reducer transcript"
-    );
     candidates.sort_unstable();
     candidates.dedup();
     assert!(candidates.len() >= 3, "fixture requires three candidates");
@@ -301,22 +297,29 @@ where
                 .expect("result tag does not overflow"),
         );
     }
+    let certified_at_height = attempt
+        .body_bindings
+        .values()
+        .map(|binding| binding.result_height)
+        .max()
+        .expect("completed fixture has at least one body result");
+    assert!(
+        enact_at_height > certified_at_height,
+        "fixture enactment must follow atomic certification"
+    );
     attempt
-        .construct_certificate(governance_attempt_id, enact_at_height - 1, enact_at_height)
+        .construct_certificate(governance_attempt_id, certified_at_height, enact_at_height)
         .expect("construct enacted-attempt fixture certificate");
     attempt
-        .mark_enacted(governance_attempt_id, enact_at_height)
-        .expect("mark enacted-attempt fixture enacted");
-    attempt
         .validate_proposal_bindings_v1(proposal)
-        .expect("enacted-attempt fixture retains exact proposal bindings");
+        .expect("certified-attempt fixture retains exact proposal bindings");
     attempt
 }
 
 /// Build one complete, proposal-bound enacted Parliament attempt for integration fixtures.
 ///
 /// This helper is available only to Core's explicit test corridor. It deliberately exercises the
-/// reducer instead of manufacturing certificate-only compatibility state.
+/// reducer instead of manufacturing detached certificate-only state.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 #[doc(hidden)]
 pub fn enacted_parliament_attempt_for_testing(
@@ -325,7 +328,32 @@ pub fn enacted_parliament_attempt_for_testing(
     network_id: &NetworkId,
     enact_at_height: u64,
 ) -> ParliamentAttemptStateV1 {
-    build_enacted_parliament_attempt_for_testing(
+    let mut attempt = build_certified_parliament_attempt_for_testing(
+        proposal,
+        candidates,
+        network_id,
+        enact_at_height,
+        complete_enacted_fixture_body,
+    );
+    let governance_attempt_id = attempt.attempt().id;
+    attempt
+        .mark_enacted(governance_attempt_id, enact_at_height)
+        .expect("mark enacted-attempt fixture enacted");
+    attempt
+}
+
+/// Build one complete, proposal-bound certified Parliament attempt for integration fixtures.
+///
+/// The returned attempt is waiting for automatic execution at `enact_at_height`.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[doc(hidden)]
+pub fn certified_parliament_attempt_for_testing(
+    proposal: &ProposalKind,
+    candidates: Vec<AccountId>,
+    network_id: &NetworkId,
+    enact_at_height: u64,
+) -> ParliamentAttemptStateV1 {
+    build_certified_parliament_attempt_for_testing(
         proposal,
         candidates,
         network_id,

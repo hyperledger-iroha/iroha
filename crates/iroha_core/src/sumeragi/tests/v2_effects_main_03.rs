@@ -315,6 +315,7 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
         epoch_id: fixture.context.epoch,
         lane_catalog_hash: Hash::new(b"deferred Apply merge lane catalog"),
         active_lanes: Vec::new(),
+        lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
         incarnation_root: Hash::new(b"deferred Apply merge incarnations"),
         activation_root: Hash::new(b"deferred Apply merge activations"),
         lane_snapshots: Vec::new(),

@@ -64,7 +64,7 @@ def test_valid_mixed_archive_reconciles(tmp_path: Path) -> None:
         tmp_path / "reports/external.md",
         classification="externally evidence-blocked",
         status="external evidence blocked",
-        evidence="Production HSM attestation and independent reviewer seal are unavailable.",
+        evidence="Production custody evidence and independent reviewer seal are unavailable.",
     )
 
     summary = _reconcile(tmp_path, reports_root=tmp_path / "reports")

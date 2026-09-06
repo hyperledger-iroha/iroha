@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
@@ -30,7 +32,10 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
  * implementation) and exposes helper builders for per-request overrides so SDK consumers can issue
  * binary Norito RPC payloads alongside the REST pipeline flows.
  */
-class NoritoRpcClient private constructor(builder: Builder) {
+class NoritoRpcClient private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { transportExecutor.close() }
+
 
     private val baseUri: URI = builder.baseUri
     private val timeout: Duration? = builder.timeout
@@ -39,7 +44,7 @@ class NoritoRpcClient private constructor(builder: Builder) {
     private val telemetrySink: TelemetrySink? = builder.telemetrySink
     private val networkContextProvider: NetworkContextProvider = builder.networkContextProvider ?: NetworkContextProvider.disabled()
     private val deviceProfileProvider: DeviceProfileProvider = builder.deviceProfileProvider ?: DeviceProfileProvider.disabled()
-    private val transportExecutor: HttpTransportExecutor = builder.transportExecutor ?: PlatformHttpTransportExecutor.createDefault()
+    private val transportExecutor: HttpTransportExecutor = HttpTransportScope.create(builder.transportExecutor)
     private val observers: List<ClientObserver>
     private val flowController: NoritoRpcFlowController = builder.flowController ?: NoritoRpcFlowController.unlimited()
     private val wireFormatPreference: WireFormatPreference = builder.wireFormatPreference

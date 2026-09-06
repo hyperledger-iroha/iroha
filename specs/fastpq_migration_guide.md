@@ -44,8 +44,10 @@ execution model).
    chunks against Merkle paths rooted at `lde_root`, and uses the proof's
    `lde_domain_size` when deriving query indices. It rebuilds the canonical
    trace, LDE, and AIR commitments before accepting proof-carried
-   openings. Keep node-facing proof batches within
-   the transition-count, payload, query, and path caps. V1 proofs now carry
+   openings. Proof roots, FRI layer commitments, and Merkle siblings use the
+   canonical `GoldilocksDigest384V1` carrier, so malformed field representatives
+   are rejected during construction or decoding. Keep node-facing proof batches
+   within the transition-count, payload, query, and path caps. V1 proofs now carry
    exactly 16 AIR composition challenges, sampled AIR trace rows, sampled AIR
    composition openings, and per-round FRI
    openings; the verifier recomputes the sampled AIR composition value from
@@ -91,7 +93,7 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
    `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`. The backend will exercise the Metal kernels; investigate any unavailable-backend warning before enabling production `gpu` mode.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
 3. Capture a benchmark sample for dashboards using the release binary's build-time library (or its embedded-source fallback):\
   `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`.
-  The canonical `fastpq-lane-balanced` profile now pads every capture to 32,768 rows (2¹⁵), so the JSON carries both `rows` and `padded_rows` along with the Metal LDE latency; rerun the capture if `zero_fill` or queue settings push the GPU LDE beyond the 950 ms (<1 s) target on Apple M-series hosts. Archive the resulting JSON/log alongside other release evidence. No nightly FastPQ Metal workflow or reference capture is checked in, so the release ticket must carry the fresh result.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
+  The canonical `fastpq-state-transition-stark-v1` profile now pads every capture to 32,768 rows (2¹⁵), so the JSON carries both `rows` and `padded_rows` along with the Metal LDE latency; rerun the capture if `zero_fill` or queue settings push the GPU LDE beyond the 950 ms (<1 s) target on Apple M-series hosts. Archive the resulting JSON/log alongside other release evidence. No nightly FastPQ Metal workflow or reference capture is checked in, so the release ticket must carry the fresh result.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
   When you need Poseidon-only telemetry (e.g., to record an Instruments trace), add `--operation poseidon_hash_columns` to the command above; the bench will still respect `FASTPQ_GPU=gpu`, emit `metal_dispatch_queue.poseidon`, and include the new `poseidon_profiles` block so the release bundle documents the Poseidon bottleneck explicitly.
   Evidence now includes `zero_fill.{bytes,ms,queue_delta}` plus `kernel_profiles` (per-kernel
   occupancy, estimated GB/s, and duration stats) so GPU efficiency can be graphed without
@@ -229,9 +231,10 @@ GPU backend; `backend="none"` is a failure signal, not a usable execution path.
 ## Regression Tests
 - `cargo test -p fastpq_prover --release`
 - `cargo test -p fastpq_prover --release --features fastpq-gpu` (on GPU hosts)
-- Optional golden fixture check:
+- Optional canonical 64-row raw-transcript fixture check
+  (`tests/fixtures/v1_raw_transcript_64.bin`):
   ```bash
-  cargo test -p fastpq_prover --features dev-tools --test fastpq_integration backend_regression::v1_artifacts_match_fixtures --release -- --nocapture
+  cargo test -p fastpq_prover --features dev-tools --test transcript_replay --release -- --nocapture
   ```
 
 Document any deviations from this checklist in your ops runbook and update

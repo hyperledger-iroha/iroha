@@ -1,0 +1,98 @@
+{
+  "schema": "sccp-circuit-constraint-counts-final-v1",
+  "version": 1,
+  "toolchain": {
+    "go": "go1.25.7",
+    "gnark": "v0.16.3",
+    "builder": "frontend.Compile+r1cs.NewBuilder",
+    "module_mode": "vendor",
+    "network": "none"
+  },
+  "definition_state": "final-v1-wire-identifiers-aligned",
+  "profiles": [
+    {
+      "profile": "sccp-final-v1-bsc-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bn254",
+      "constraints": 115576820,
+      "kat_sha256": "602def10b174dd298ed1f44bdbcb2ab9010b67ecb6f81ef832e9558a07f1d14d"
+    },
+    {
+      "profile": "sccp-final-v1-bsc-mainnet-message",
+      "role": "message",
+      "outer_curve": "bn254",
+      "constraints": 36473351,
+      "kat_sha256": "bf0bdf95282961bcf3e97903487fc0773d6de8ba62280ec0954affa4c72872ad"
+    },
+    {
+      "profile": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bn254",
+      "constraints": 115576901,
+      "kat_sha256": "eec2fa96f1ec575e53aeaab74fcc80d99aad6a3425e27b41078cae6cf73cb878"
+    },
+    {
+      "profile": "sccp-final-v1-ethereum-mainnet-message",
+      "role": "message",
+      "outer_curve": "bn254",
+      "constraints": 36473349,
+      "kat_sha256": "48715de72c792496a52d930e53573ac1abbd7571ebc09151ae9c94c8b268cf6f"
+    },
+    {
+      "profile": "sccp-final-v1-ton-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bls12-381",
+      "constraints": 113227081,
+      "kat_sha256": "542b5d46a121aa144458be6666b109d8cb37e1b117895f237201c087b285af66"
+    },
+    {
+      "profile": "sccp-final-v1-ton-mainnet-message",
+      "role": "message",
+      "outer_curve": "bls12-381",
+      "constraints": 34718292,
+      "kat_sha256": "b469b281edb4d8cba398a631d68579b8459e4d39d9e71825350b80a30d9fd763"
+    },
+    {
+      "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bn254",
+      "constraints": 115576832,
+      "kat_sha256": "ed115b44ccfb5e1b19444021c03f1da604ad749c2f2aa656799004afeb368cf6"
+    },
+    {
+      "profile": "sccp-final-v1-tron-mainnet-message",
+      "role": "message",
+      "outer_curve": "bn254",
+      "constraints": 36474274,
+      "kat_sha256": "43db673cc7c4d17c4bd71ed9a1e80b8f5dc3b378e0c8125fccc5e85d3c825518"
+    }
+  ],
+  "artifact_state": {
+    "r1cs_identities_current": false,
+    "invalidated_artifact_roles": [
+      "r1cs",
+      "phase2_transcript",
+      "proving_key",
+      "verifying_key",
+      "fixed_key_verifier",
+      "destination_deployment"
+    ],
+    "fresh_closure_required": [
+      "circuit_specific_phase2_mpc",
+      "semantic_cryptographic_audit",
+      "reproducibility_ceremony_audit",
+      "destination_integration_audit"
+    ],
+    "profiles_requiring_fresh_r1cs": [
+      "sccp-final-v1-bsc-mainnet-message",
+      "sccp-final-v1-ethereum-mainnet-message",
+      "sccp-final-v1-ton-mainnet-epoch-anchor-update",
+      "sccp-final-v1-ton-mainnet-message",
+      "sccp-final-v1-tron-mainnet-epoch-anchor-update",
+      "sccp-final-v1-tron-mainnet-message"
+    ],
+    "reason": "Final-V1 payload discriminant, hub-kind, domain, codec, and destination-backend identifiers were aligned with the canonical Rust wire format. Message authorization additionally constrains same-height checkpoint block, context, and finality-artifact equality. No earlier R1CS identity or dependent release artifact for these profiles is current."
+  },
+  "production_admissible": false,
+  "note": "Listed message constraint counts are historical and require recount after adding same-height checkpoint identity constraints; epoch counts are unchanged by this consistency repair. Corrected positive KATs remain current, but fresh R1CS identities, circuit-specific ceremonies, destination deployments, and all three independent audits are mandatory before release."
+}

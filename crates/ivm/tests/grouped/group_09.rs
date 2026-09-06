@@ -2,10 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../vm_aes_wide.rs"]
 mod vm_aes_wide;
-#[path = "../vm_circuit.rs"]
-mod vm_circuit;
-#[path = "../voting.rs"]
-mod voting;
 #[path = "../vrf_verify_batch_syscall.rs"]
 mod vrf_verify_batch_syscall;
 #[path = "../vrf_verify_chain.rs"]

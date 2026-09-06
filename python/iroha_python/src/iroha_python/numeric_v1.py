@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping, NoReturn, Union, cast
 
+from norito.crc64 import crc64 as _crc64_xz
+
 INT_MIN = -(1 << 511)
 """Smallest canonical Kotodama ``int`` and numeric mantissa."""
 
@@ -32,8 +34,6 @@ _MAX_SIGNIFICANT_DIGITS = 154
 _FRAME_HEADER_BYTES = 40
 _ENVELOPE_HEADER_BYTES = 7
 _HASH_BYTES = 32
-_U64_MASK = (1 << 64) - 1
-_CRC64_POLY = 0xC96C5795D7870F42
 _FRAME_PREFIX = b"NRT0\x00\x00"
 _CANONICAL_INT_RE = re.compile(r"-?(?:0|[1-9][0-9]*)\Z", re.ASCII)
 _SCALED_RE = re.compile(r"(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?\Z", re.ASCII)
@@ -308,19 +308,6 @@ def _decode_twos_complement(encoded: bytes) -> int:
         if (last == 0 and previous & 0x80 == 0) or (last == 0xFF and previous & 0x80 != 0):
             _fail("noncanonical_mantissa", "mantissa has redundant sign extension")
     return _check_int_range(int.from_bytes(encoded, "little", signed=True))
-
-
-def _crc64_xz(data: bytes) -> int:
-    crc = _U64_MASK
-    for byte in data:
-        index = (crc ^ byte) & 0xFF
-        table_value = index
-        for _ in range(8):
-            table_value = (
-                table_value >> 1 if table_value & 1 == 0 else (table_value >> 1) ^ _CRC64_POLY
-            )
-        crc = table_value ^ (crc >> 8)
-    return (crc ^ _U64_MASK) & _U64_MASK
 
 
 def _payload_hash(frame: bytes) -> bytes:

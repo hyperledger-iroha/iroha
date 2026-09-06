@@ -20,7 +20,7 @@ use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{ChainId, NetworkId, account::AccountId, peer::PeerId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
-use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
+use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, TestApiRouterRuntime, Torii};
 use std::sync::{
     Arc, LazyLock, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -164,6 +164,7 @@ impl ToriiHarness {
             None,
             telemetry,
         )
+        .expect("valid Torii integration-test fixture")
         .with_local_peer_id(local_peer_id.clone());
         Self {
             torii,
@@ -194,8 +195,10 @@ impl ToriiHarness {
         )
     }
     /// Build the complete test router while retaining the backing Kiso task.
-    pub fn router(&self) -> axum::Router {
-        self.torii.api_router_for_tests()
+    pub fn router(&self) -> TestApiRouterRuntime {
+        self.torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes")
     }
 }
 /// Standard single-ledger Torii fixture used by endpoint tests.
@@ -214,10 +217,14 @@ impl StandardToriiHarness {
         let kura = Kura::blank_kura_for_testing();
         let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
         seed_peer(&mut world, local_peer_id.clone());
-        let state = Arc::new(State::new_for_testing(
+        let chain_id = cfg.common.chain.clone();
+        let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             world,
             kura.clone(),
             LiveQueryStore::start_test(),
+            chain_id,
+            network_id,
         ));
         Self::from_state(cfg, &kura, state)
     }
@@ -234,8 +241,8 @@ impl StandardToriiHarness {
         ));
         let harness = ToriiHarness::new(
             cfg,
-            ChainId::from("test-chain"),
-            iroha_torii::test_utils::signed_query_network_id(),
+            state.chain_id_ref().clone(),
+            *state.network_id_ref(),
             kura,
             &state,
             &queue,
@@ -250,7 +257,7 @@ impl StandardToriiHarness {
         }
     }
     /// Build the endpoint router while retaining the ledger fixture.
-    pub fn router(&self) -> axum::Router {
+    pub fn router(&self) -> TestApiRouterRuntime {
         self.harness.router()
     }
 }

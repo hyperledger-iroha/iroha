@@ -78,7 +78,7 @@ struct ExternalProofOutcomeSigner {
     public_key: iroha_crypto::PublicKey,
 }
 impl ExternalProofOutcomeSigner {
-    const HANDLE: &'static str = "hsm://external-launcher/proof-outcome/primary";
+    const HANDLE: &'static str = "provider://external-launcher/proof-outcome/primary";
     const QUALIFICATION: iroha_torii::SorafsNativeTransactionSignerQualificationV1 =
         iroha_torii::SorafsNativeTransactionSignerQualificationV1::new(1, [0x41; 32]);
     fn new() -> Self {

@@ -1,16 +1,15 @@
 //! Utilities for testing
 use crate::{
-    Context,
     gates::{
-        GateChip, RangeChip,
-        circuit::{BaseCircuitParams, CircuitBuilderStage, builder::RangeCircuitBuilder},
+        circuit::{builder::RangeCircuitBuilder, BaseCircuitParams, CircuitBuilderStage},
         flex_gate::threads::SinglePhaseCoreManager,
+        GateChip, RangeChip,
     },
     halo2_proofs::{
         dev::MockProver,
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         plonk::{
-            Circuit, ProvingKey, VerifyingKey, create_proof, keygen_pk, keygen_vk, verify_proof,
+            create_proof, keygen_pk, keygen_vk, verify_proof, Circuit, ProvingKey, VerifyingKey,
         },
         poly::commitment::ParamsProver,
         poly::kzg::{
@@ -21,9 +20,10 @@ use crate::{
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     },
+    Context,
 };
 use ark_std::{end_timer, perf_trace::TimerInfo, start_timer};
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, SeedableRng};
 
 use super::fs::gen_srs;
 
@@ -204,12 +204,10 @@ impl BaseTester {
                 .unwrap()
                 .assert_satisfied();
         } else {
-            assert!(
-                MockProver::run(self.k, &builder, vec![])
-                    .unwrap()
-                    .verify()
-                    .is_err()
-            );
+            assert!(MockProver::run(self.k, &builder, vec![])
+                .unwrap()
+                .verify()
+                .is_err());
         }
         res
     }

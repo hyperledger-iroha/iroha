@@ -893,7 +893,8 @@ fn persist_and_evict_native_body(
     let (carrier_height, payload_len) = adapter
         .kura
         .durable_block_payload_len_by_hash(carrier.hash())
-        .expect("inspect durable carrier payload");
+        .expect("inspect durable carrier payload")
+        .expect("durable carrier exists");
     let height = NonZeroUsize::new(usize::try_from(carrier_height).expect("height fits usize"))
         .expect("non-zero carrier height");
     assert_eq!(
@@ -1097,6 +1098,7 @@ fn merge_native_projection_execution(
             .iter()
             .map(|entrypoint| Hash::from(entrypoint.hash()))
             .collect(),
+        authenticated_signed_replay_aliases: vec![None; entrypoints.len()],
         entrypoints,
         reservation_keys: vec![Vec::new(); receipts.len()],
         routing_plans: vec![Vec::new(); receipts.len()],
@@ -1162,6 +1164,7 @@ fn merge_native_projection_entry_and_carrier(
         epoch_id: 3,
         lane_catalog_hash: Hash::new(b"Native AMX merge projection lane catalog"),
         active_lanes: Vec::new(),
+        lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
         incarnation_root: Hash::new(b"Native AMX merge projection incarnations"),
         activation_root: Hash::new(b"Native AMX merge projection activations"),
         lane_snapshots: Vec::new(),
@@ -1629,7 +1632,7 @@ fn native_amx_merge_projection_matches_decoded_replay_entry() {
             &fixture.block,
         )
         .expect("ordinary-only replay projection");
-    let witness = crate::sumeragi::consensus::ExecWitness {
+    let witness = iroha_data_model::block::consensus::ExecWitness {
         reads: Vec::new(),
         writes: Vec::new(),
         fastpq_transcripts: Vec::new(),

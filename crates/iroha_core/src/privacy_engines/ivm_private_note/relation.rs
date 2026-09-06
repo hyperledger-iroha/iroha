@@ -36,33 +36,37 @@ pub(super) const ACCUMULATOR_NODE_DOMAIN_V1: &[u8] =
 pub(crate) const IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:tree=sha256-depth32-exact-ledger-domains:program=IPN1-v1-fixed16x8:registers=8xu128:r4=reserved-zero:producer=typed-redacted-witness+relation-preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind-policy-v1+self-verify:wallet=x25519+xchacha20poly1305:wallet-rng=prover-rng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error-or-unwind:v1:successor=validator-derived-only:legacy=unrepresentable";
 /// Exact hash framing used inside the AIR and native differential oracle.
 pub(crate) const IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1: &[u8] = b"sha256:frame-domain-len-u16be-field-count-u16be-field-len-u64be:program-id+authority+commitment+stable-pool-program-nullifier:proof-managed-leaf-and-level-node-exact-v1";
-/// Closed relation controls shared with a future sibling settlement adapter.
+/// Closed relation controls shared with the atomic private-settlement adapter.
 ///
-/// The public IVM private-note API always selects [`Self::Legacy`].  The
+/// The public IVM private-note API always selects [`Self::IvmPrivateNote`]. The
 /// crate-private three-output variant retains the same hash, VM, tree, and AIR
 /// machinery while fixing the only intentional semantic differences: exact
 /// two-input/three-output geometry, balanced-only value flow, zero-valued
 /// input/output cover notes, and verifier-selected output memo digests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PrivateNoteRelationProfileV1 {
-    /// Existing public one-or-two input/output relation, byte-for-byte.
-    Legacy,
+    /// Canonical public one-or-two input/output IVM private-note relation.
+    IvmPrivateNote,
     /// Exact balanced two-input/three-output relation with fixed output memos.
     ExactThreeOutputBalanced {
         /// Verifier-fixed memo digest for each canonical output slot.
         output_memo_digests: [[u8; 32]; PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1],
+        /// Hiding commitment to the exact two private input openings.
+        audit_input_commitment: [u8; 32],
     },
 }
 impl PrivateNoteRelationProfileV1 {
-    /// Existing public relation profile.
-    pub(crate) const LEGACY: Self = Self::Legacy;
+    /// Canonical public IVM private-note relation profile.
+    pub(crate) const IVM_PRIVATE_NOTE: Self = Self::IvmPrivateNote;
 
     /// Construct the exact three-output balanced profile.
     pub(crate) const fn exact_three_output_balanced(
         output_memo_digests: [[u8; 32]; PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1],
+        audit_input_commitment: [u8; 32],
     ) -> Self {
         Self::ExactThreeOutputBalanced {
             output_memo_digests,
+            audit_input_commitment,
         }
     }
 
@@ -76,7 +80,7 @@ impl PrivateNoteRelationProfileV1 {
 
     fn accepts_shape(self, input_count: usize, output_count: usize) -> bool {
         match self {
-            Self::Legacy => {
+            Self::IvmPrivateNote => {
                 (1..=PRIVATE_NOTE_MAX_INPUTS_V1).contains(&input_count)
                     && (1..=PRIVATE_NOTE_MAX_OUTPUTS_V1).contains(&output_count)
             }
@@ -89,15 +93,26 @@ impl PrivateNoteRelationProfileV1 {
 
     pub(super) fn fixed_output_memo(self, output: usize) -> Option<[u8; 32]> {
         match self {
-            Self::Legacy => None,
+            Self::IvmPrivateNote => None,
             Self::ExactThreeOutputBalanced {
                 output_memo_digests,
+                ..
             } => output_memo_digests.get(output).copied(),
         }
     }
 
     fn requires_balanced_value(self) -> bool {
         matches!(self, Self::ExactThreeOutputBalanced { .. })
+    }
+
+    pub(super) const fn audit_input_commitment(self) -> Option<[u8; 32]> {
+        match self {
+            Self::IvmPrivateNote => None,
+            Self::ExactThreeOutputBalanced {
+                audit_input_commitment,
+                ..
+            } => Some(audit_input_commitment),
+        }
     }
 }
 /// Deterministic private-program opcode.
@@ -760,6 +775,7 @@ pub(super) enum Sha256InvocationRoleV1 {
     Program,
     Authority { input: u8 },
     InputCommitment { input: u8 },
+    AuditInputOpenings,
     Nullifier { input: u8 },
     AccumulatorLeaf { input: u8 },
     AccumulatorNode { input: u8, level: u8 },
@@ -887,6 +903,50 @@ fn sha256_invocation_v1(
         preimage,
         digest,
     })
+}
+
+/// Domain for the circuit-bound input openings disclosed only to auditors.
+pub(super) const AUDIT_INPUT_OPENINGS_DOMAIN_V1: &[u8] =
+    b"iroha.atomic-private-settlement.input-openings.v1";
+
+fn audit_input_openings_invocation_v1(
+    notes: &[PrivateNotePlaintextV1],
+) -> Result<Sha256InvocationV1, IvmPrivateNoteRelationErrorV1> {
+    if notes.len() != PRIVATE_NOTE_MAX_INPUTS_V1 {
+        return Err(IvmPrivateNoteRelationErrorV1::WitnessShape);
+    }
+    let values = zeroize::Zeroizing::new(
+        notes
+            .iter()
+            .map(|note| note.value.to_be_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let mut fields: Vec<&[u8]> = Vec::with_capacity(PRIVATE_NOTE_MAX_INPUTS_V1 * 5);
+    for (note, value) in notes.iter().zip(values.iter()) {
+        fields.extend([
+            value.as_slice(),
+            &note.spending_authority,
+            &note.rho,
+            &note.blinding,
+            &note.memo_digest,
+        ]);
+    }
+    sha256_invocation_v1(
+        Sha256InvocationRoleV1::AuditInputOpenings,
+        AUDIT_INPUT_OPENINGS_DOMAIN_V1,
+        &fields,
+    )
+}
+
+/// Commit both ordered input openings, including their private entropy.
+///
+/// Hashing only public note commitments would permit enumerating candidate
+/// pairs. The opening includes the secret rho and blinding. Activity is
+/// canonical: precisely a nonzero value denotes an active input.
+pub(crate) fn derive_private_note_input_openings_commitment_v1(
+    notes: &[PrivateNotePlaintextV1],
+) -> Result<[u8; 32], IvmPrivateNoteRelationErrorV1> {
+    Ok(audit_input_openings_invocation_v1(notes)?.digest)
 }
 /// Derive the exact program identifier.
 pub fn derive_private_program_id_v1(
@@ -1114,7 +1174,7 @@ pub(crate) fn accumulator_node_digest_for_testing_v1(
 pub(super) fn validate_statement_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), IvmPrivateNoteRelationErrorV1> {
-    validate_statement_with_profile_v1(statement, PrivateNoteRelationProfileV1::LEGACY)
+    validate_statement_with_profile_v1(statement, PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE)
 }
 /// Validate a statement against one crate-private relation profile.
 pub(crate) fn validate_statement_with_profile_v1(
@@ -1133,6 +1193,9 @@ pub(crate) fn validate_statement_with_profile_v1(
         || statement.state_root.is_zero()
         || statement.root_epoch == 0
         || statement.execution_epoch != statement.root_epoch
+        || profile
+            .audit_input_commitment()
+            .is_some_and(|digest| is_zero(&digest))
         || !profile.accepts_shape(
             statement.nullifiers.len(),
             statement.output_commitments.len(),
@@ -1273,7 +1336,7 @@ pub(super) fn validate_private_note_relation_v1(
     validate_private_note_relation_with_profile_v1(
         statement,
         witness,
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 /// Preflight a witness under one crate-private relation profile.
@@ -1307,6 +1370,9 @@ pub(super) fn validate_private_note_relation_with_profile_v1(
                 .ok_or(IvmPrivateNoteRelationErrorV1::AllocationFailure)?,
         )
         .and_then(|value| value.checked_add(witness.outputs.len()))
+        .and_then(|value| {
+            value.checked_add(usize::from(profile.audit_input_commitment().is_some()))
+        })
         .ok_or(IvmPrivateNoteRelationErrorV1::AllocationFailure)?;
     invocations
         .try_reserve_exact(maximum_invocations)
@@ -1390,12 +1456,27 @@ pub(super) fn validate_private_note_relation_with_profile_v1(
             invocations.push(invocation);
             position >>= 1;
         }
-        if position != 0 || PrivacyRootV1::new(current) != statement.state_root {
+        if position != 0
+            || ((input.note.value != 0 || !profile.allows_zero_input_values())
+                && PrivacyRootV1::new(current) != statement.state_root)
+        {
             return Err(IvmPrivateNoteRelationErrorV1::Membership);
         }
         input_sum = input_sum
             .checked_add(input.note.value)
             .ok_or(IvmPrivateNoteRelationErrorV1::ValueOverflow)?;
+    }
+    if let Some(expected) = profile.audit_input_commitment() {
+        let notes = witness
+            .inputs
+            .iter()
+            .map(|input| input.note.clone())
+            .collect::<Vec<_>>();
+        let invocation = audit_input_openings_invocation_v1(&notes)?;
+        if invocation.digest != expected {
+            return Err(IvmPrivateNoteRelationErrorV1::CommitmentMismatch);
+        }
+        invocations.push(invocation);
     }
     let mut output_sum = 0_u128;
     let mut seen_outputs = BTreeSet::new();

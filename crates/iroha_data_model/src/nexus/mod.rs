@@ -386,6 +386,8 @@ impl LaneLifecycleParameterV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(unsafe {robust})
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::LaneId")]
 pub struct LaneId(u32);
 
 /// Identifier for a storage shard within a data space.
@@ -406,6 +408,8 @@ pub struct LaneId(u32);
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(unsafe {robust})
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::ShardId")]
 pub struct ShardId(u32);
 impl LaneId {
     /// Canonical primary lane identifier used by the default single-lane catalog.
@@ -572,6 +576,8 @@ impl norito::json::JsonDeserialize for ShardId {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(unsafe {robust})
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::DataSpaceId")]
 pub struct DataSpaceId(u64);
 impl DataSpaceId {
     /// Identifier for the reserved `universal` data space.

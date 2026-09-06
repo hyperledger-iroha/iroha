@@ -2,7 +2,7 @@
 //!
 //! This module owns proof-system mechanics and relation-neutral note chips: canonical byte range
 //! checks, a three-lane byte-copy permutation, masked trace LDEs, verifier-fixed preprocessing,
-//! quotient composition, SHA-256 vector-row commitments, binary FRI, grinding, and the exact
+//! quotient composition, six-lane Poseidon vector-row commitments, binary FRI, grinding, and the exact
 //! aggregate proof codec. Protocol adapters retain their statement policy, ordered hash schedule,
 //! profile-only rows, public-input digest, and error mapping.
 //!
@@ -12,16 +12,19 @@
 use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
-        ReplayableTraceMaskV1, TransparentStarkErrorV1, TransparentTranscriptV1,
-        goldilocks_evaluate_coset_v1, goldilocks_ifft_v1, goldilocks_primitive_root_v1,
-        grind_nonce_v1, masked_trace_lde_column_with_mask_v1, sample_trace_mask_v1,
+        GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
+        GoldilocksFp4V1 as E, ReplayableTraceMaskV1, TransparentStarkErrorV1,
+        TransparentTranscriptV1, goldilocks_digest384_frame_v1, goldilocks_fft_v1,
+        goldilocks_ifft_v1, goldilocks_primitive_root_v1, grind_nonce_v1,
+        masked_trace_lde_column_with_mask_v1, sample_trace_mask_v1,
         transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
+#[cfg(test)]
+use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
 use rand::TryRngCore;
-use sha2::{Digest as _, Sha256};
+use rayon::prelude::*;
 use std::collections::BTreeSet;
 use thiserror::Error;
 /// Number of byte-copy cells in every shared note row.
@@ -80,17 +83,17 @@ const NOTE_SHARED_PROFILE_BINDING_LABEL_V1: &[u8] =
 const NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-stark.combined-profile.v1";
 /// Sole first-release proof-system identity for proof-managed note pools.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_SUITE_V1: &[u8] = b"StarkFriSha256Goldilocks";
+pub(crate) const PROOF_MANAGED_NOTE_STARK_SUITE_V1: &[u8] = b"StarkFriPoseidonX7Goldilocks6x64";
 /// Independent composition and FRI lanes in the first-release profile.
 pub(crate) const PROOF_MANAGED_NOTE_SECURITY_LANES_V1: usize = 1;
 /// Unique shared extension-domain queries in the first-release profile.
-pub(crate) const PROOF_MANAGED_NOTE_QUERY_COUNT_V1: usize = 60;
+pub(crate) const PROOF_MANAGED_NOTE_QUERY_COUNT_V1: usize = 136;
 /// Trace-to-LDE blow-up logarithm in the first-release profile.
-pub(crate) const PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1: u8 = 6;
+pub(crate) const PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1: u8 = 3;
 /// Terminal FRI vector logarithm in the first-release profile.
 pub(crate) const PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1: u8 = 10;
 /// Exact terminal FRI polynomial-degree bound.
-pub(crate) const PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1: usize = 31;
+pub(crate) const PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1: usize = 143;
 /// Coefficient chunks used to normalize degree-four quotient polynomials.
 pub(crate) const PROOF_MANAGED_NOTE_COMPOSITION_DEGREE_CHUNKS_V1: usize = 4;
 /// One out-of-domain DEEP-ALI query binds each neighboring-row AIR.
@@ -98,23 +101,23 @@ pub(crate) const PROOF_MANAGED_NOTE_DEEP_QUERY_COUNT_V1: usize = 1;
 /// Largest native trace supported by the shared first-release soundness proof.
 pub(crate) const PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1: u8 = 14;
 /// Inclusive trace zero-knowledge mask degree.
-pub(crate) const PROOF_MANAGED_NOTE_MASK_DEGREE_V1: usize = 443;
+pub(crate) const PROOF_MANAGED_NOTE_MASK_DEGREE_V1: usize = 975;
 /// Largest constraint degree supported by the first-release FRI profile.
 pub(crate) const PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// Exact transcript grinding target.
 pub(crate) const PROOF_MANAGED_NOTE_GRINDING_BITS_V1: u8 = 20;
 /// Required non-grinding soundness floor for every proof-managed note profile.
 pub(crate) const PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
-/// Machine-checked affine-batched FRI query-error exponent at 60 queries.
-pub(crate) const PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1: u16 = 136;
+/// Machine-checked affine-batched FRI query-error exponent at 136 queries.
+pub(crate) const PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1: u16 = 160;
 /// Worst-case commitment-error exponent at the maximum native trace.
-pub(crate) const PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1: u16 = 191;
+pub(crate) const PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1: u16 = 197;
 /// Affine batching parameter in the sole first-release FRI theorem instance.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_BATCHING_PARAMETER_M_V1: u8 = 3;
 /// Exact effective FRI code-rate numerator.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_NUMERATOR_V1: u8 = 1;
 /// Exact effective FRI code-rate denominator.
-pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_DENOMINATOR_V1: u8 = 32;
+pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_DENOMINATOR_V1: u8 = 7;
 /// Complete affine arities whose sum enters the commitment-error term.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_AFFINE_ARITIES_V1: [u8; 3] = [2, 2, 2];
 /// Proven lower-bound exponent for the Goldilocks quartic extension field.
@@ -124,25 +127,40 @@ pub(crate) const PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 2
 /// Protocol adapters bind a separate relation descriptor. The canonical
 /// profile digest frames this shared descriptor first and the relation
 /// descriptor second, so neither layer can silently restate stale geometry.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriSha256Goldilocks:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha256:transcript=sha256:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=60:lde-blowup=64:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=443:trace-mask-coefficients=444:max-constraint-degree=4:fri-terminal=1024:fri-degree=31:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho=1/32:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=136:commitment-error-bits-min=191:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-shape-big-endian";
-/// SHA-256 of [`PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1`].
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1: [u8; 32] = [
-    0x44, 0x2a, 0xf0, 0x7c, 0xaf, 0x81, 0x76, 0xe5, 0x5e, 0xaf, 0x01, 0xdd, 0x72, 0x3a, 0xbd, 0x10,
-    0xf8, 0xd9, 0x3a, 0x8e, 0xc0, 0xf3, 0x62, 0x98, 0x0f, 0xb7, 0xa3, 0xa1, 0x62, 0x61, 0x93, 0xe4,
-];
+pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriPoseidonX7Goldilocks6x64:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=160:commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-shape-big-endian-digest384";
 /// Derive the canonical digest of shared proof geometry plus one relation.
-pub(crate) fn proof_managed_note_stark_profile_digest_v1(relation_descriptor: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1);
-    hasher.update(2_u64.to_be_bytes());
-    for field in [
-        PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
-        relation_descriptor,
-    ] {
-        hasher.update(u64::try_from(field.len()).unwrap_or(u64::MAX).to_be_bytes());
-        hasher.update(field);
-    }
-    hasher.finalize().into()
+pub(crate) fn proof_managed_note_stark_profile_digest_v1(
+    domains: aggregate::AggregateStarkDomainsV1,
+    relation_descriptor: &[u8],
+) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+    goldilocks_digest384_frame_v1(
+        domains.digest_context,
+        NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1,
+        b"compiled-profile",
+        0,
+        0,
+        0,
+        &[
+            PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
+            relation_descriptor,
+        ],
+    )
+    .map_err(map_transparent_error_v1)
+}
+/// Derive the protocol-bound digest of the shared proof geometry.
+pub(crate) fn proof_managed_note_stark_geometry_digest_v1(
+    domains: aggregate::AggregateStarkDomainsV1,
+) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+    goldilocks_digest384_frame_v1(
+        domains.digest_context,
+        NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1,
+        b"shared-geometry",
+        0,
+        0,
+        0,
+        &[PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1],
+    )
+    .map_err(map_transparent_error_v1)
 }
 /// Shared proof-driver or copy-chip failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -244,12 +262,10 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
 pub(crate) struct ProofManagedNoteStarkProtocolV1 {
     /// Exact aggregate proof dimensions and wire limits.
     pub(crate) parameters: aggregate::AggregateStarkParametersV1,
-    /// Complete SHA-256 Merkle and transcript domains.
+    /// Complete six-lane Poseidon Merkle and transcript domains.
     pub(crate) domains: aggregate::AggregateStarkDomainsV1,
     /// Maximum algebraic degree across shared and profile constraints.
     pub(crate) maximum_constraint_degree: u8,
-    /// Digest of the complete compiled profile.
-    pub(crate) profile_digest: [u8; 32],
     /// Transcript label binding the human-auditable compiled descriptor.
     pub(crate) profile_binding_label: &'static [u8],
     /// Complete immutable profile descriptor.
@@ -309,6 +325,13 @@ impl ProofManagedNoteStarkProtocolV1 {
     pub(crate) fn validate(self) -> Result<(), ProofManagedNoteStarkErrorV1> {
         self.parameters.validate().map_err(map_aggregate_error_v1)?;
         self.domains.validate().map_err(map_aggregate_error_v1)?;
+        // Reject caller-controlled degrees before deriving mask geometry, whose
+        // zero-degree error would otherwise be misclassified as internal.
+        if !(NOTE_COPY_CONSTRAINT_DEGREE_V1..=PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1)
+            .contains(&self.maximum_constraint_degree)
+        {
+            return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+        }
         let fri_soundness = validate_note_fri_soundness_v1(self.parameters)?;
         let mask_geometry = transparent_stark_zk_mask_geometry_v1(
             usize::from(
@@ -323,10 +346,8 @@ impl ProofManagedNoteStarkProtocolV1 {
         .map_err(map_transparent_error_v1)?;
         let consensus_proof_cap = usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
-        let shared_descriptor_digest: [u8; 32] =
-            Sha256::digest(PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1).into();
-        let combined_profile_digest =
-            proof_managed_note_stark_profile_digest_v1(self.profile_descriptor);
+        let _combined_profile_digest =
+            proof_managed_note_stark_profile_digest_v1(self.domains, self.profile_descriptor)?;
         if self.parameters.security_lanes != PROOF_MANAGED_NOTE_SECURITY_LANES_V1
             || self.parameters.query_count != PROOF_MANAGED_NOTE_QUERY_COUNT_V1
             || self.parameters.blowup_log2 != PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1
@@ -338,17 +359,12 @@ impl ProofManagedNoteStarkProtocolV1 {
             || self.parameters.maximum_trace_groups != 1
             || self.parameters.maximum_segment_instances != 1
             || self.parameters.maximum_proof_bytes > consensus_proof_cap
-            || self.maximum_constraint_degree < NOTE_COPY_CONSTRAINT_DEGREE_V1
-            || self.maximum_constraint_degree > PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1
             || PROOF_MANAGED_NOTE_MASK_DEGREE_V1 < mask_geometry.minimum_mask_degree
             || fri_soundness.query_error_bits != PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1
             || fri_soundness.commitment_error_bits
                 < PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
             || fri_soundness.query_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
-            || shared_descriptor_digest != PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1
-            || self.profile_digest == [0; 32]
-            || self.profile_digest != combined_profile_digest
             || self.profile_binding_label.is_empty()
             || self.profile_descriptor.is_empty()
             || self.relation_layout_domain.is_empty()
@@ -412,14 +428,17 @@ impl ProofManagedNoteStarkProtocolV1 {
 /// begin with [`NOTE_COPY_AUX_WIDTH_V1`] shared columns, and fixed columns begin
 /// with [`NOTE_COPY_FIXED_WIDTH_V1`] shared columns. Profile methods receive
 /// those complete, prefix-stable rows so they can reuse shared byte
-/// decompositions without duplicating range checks.
-pub(crate) trait ProofManagedNoteStarkAdapterV1 {
+/// decompositions without duplicating range checks. Adapters and their derived
+/// challenges are immutable and `Sync` because quotient rows are evaluated in
+/// deterministic parallel batches.
+pub(crate) trait ProofManagedNoteStarkAdapterV1: Sync {
     /// Profile-specific Fiat-Shamir challenges derived after copy challenges.
-    type ProfileChallenges: Clone;
+    type ProfileChallenges: Clone + Sync;
     /// Closed proof protocol.
     fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1;
     /// Exact digest of all public statement fields.
-    fn public_input_digest_v1(&self) -> Result<[u8; 32], ProofManagedNoteStarkErrorV1>;
+    fn public_input_digest_v1(&self)
+    -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1>;
     /// Binary logarithm of the sole native trace group.
     fn trace_log2_v1(&self) -> u8;
     /// Exact base-trace width, including the eight copy cells.
@@ -593,7 +612,7 @@ pub(crate) fn derive_note_copy_challenges_v1(
         beta: F::ZERO,
         gamma: F::ZERO,
     }; NOTE_COPY_LANES_V1];
-    for lane in &mut lanes {
+    for lane in lanes.iter_mut() {
         lane.beta = transcript
             .challenge_field(NOTE_COPY_BETA_LABEL_V1)
             .map_err(map_transparent_error_v1)?;
@@ -623,19 +642,27 @@ fn columns_to_rows_v1(
     if columns.is_empty() || columns.iter().any(|column| column.len() != rows) {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    (0..rows)
-        .map(|row| {
-            columns
-                .iter()
-                .map(|column| {
-                    column
-                        .get(row)
-                        .copied()
-                        .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)
-                })
-                .collect()
-        })
-        .collect()
+    let mut output = ZeroizingBaseFieldMatrixV1::from(Vec::new());
+    output
+        .try_reserve_exact(rows)
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    for row in 0..rows {
+        let mut values = ZeroizingBaseFieldValuesV1::from(Vec::new());
+        values
+            .0
+            .try_reserve_exact(columns.len())
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        for column in columns {
+            values.0.push(
+                column
+                    .get(row)
+                    .copied()
+                    .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)?,
+            );
+        }
+        output.push(values.into_inner());
+    }
+    Ok(output.into_inner())
 }
 fn rows_to_columns_v1(
     rows: &[Vec<F>],
@@ -644,10 +671,22 @@ fn rows_to_columns_v1(
     if rows.is_empty() || width == 0 || rows.iter().any(|row| row.len() != width) {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    let columns = (0..width)
-        .map(|column| rows.iter().map(|row| row[column]).collect())
-        .collect();
-    Ok(columns)
+    let mut columns = ZeroizingBaseFieldMatrixV1::from(Vec::new());
+    columns
+        .try_reserve_exact(width)
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    for column in 0..width {
+        let mut values = ZeroizingBaseFieldValuesV1::from(Vec::new());
+        values
+            .0
+            .try_reserve_exact(rows.len())
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        for row in rows {
+            values.0.push(row[column]);
+        }
+        columns.push(values.into_inner());
+    }
+    Ok(columns.into_inner())
 }
 fn copy_factor_v1(value: F, label: F, challenge: NoteCopyLaneChallengesV1) -> F {
     value.add(challenge.beta.mul(label)).add(challenge.gamma)
@@ -680,9 +719,10 @@ pub(crate) fn build_note_copy_aux_columns_v1(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    let base_rows = columns_to_rows_v1(base_columns, trace_size)?;
+    let base_rows = ZeroizingBaseFieldMatrixV1::from(columns_to_rows_v1(base_columns, trace_size)?);
     let fixed_rows = columns_to_rows_v1(fixed_columns, trace_size)?;
-    let mut rows = vec![vec![F::ZERO; NOTE_COPY_AUX_WIDTH_V1]; trace_size];
+    let mut rows =
+        ZeroizingBaseFieldMatrixV1::from(vec![vec![F::ZERO; NOTE_COPY_AUX_WIDTH_V1]; trace_size]);
     let mut running_numerator = [F::ONE; NOTE_COPY_LANES_V1];
     let mut running_denominator = [F::ONE; NOTE_COPY_LANES_V1];
     for row_index in 0..trace_size {
@@ -724,7 +764,9 @@ pub(crate) fn build_note_copy_aux_columns_v1(
     if running_numerator != running_denominator {
         return Err(ProofManagedNoteStarkErrorV1::Copy);
     }
-    rows_to_columns_v1(&rows, NOTE_COPY_AUX_WIDTH_V1)
+    let columns =
+        ZeroizingBaseFieldMatrixV1::from(rows_to_columns_v1(&rows, NOTE_COPY_AUX_WIDTH_V1)?);
+    Ok(columns.into_inner())
 }
 fn push_boolean_residue_v1(residues: &mut Vec<F>, value: F) {
     residues.push(value.mul(value.sub(F::ONE)));
@@ -1006,15 +1048,244 @@ fn row_at_columns_v1(
     columns: &[Vec<F>],
     row: usize,
 ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-    columns
-        .iter()
-        .map(|column| {
+    let mut values = ZeroizingBaseFieldValuesV1::from(Vec::new());
+    values
+        .0
+        .try_reserve_exact(columns.len())
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    for column in columns {
+        values.0.push(
             column
                 .get(row)
                 .copied()
-                .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)
-        })
-        .collect()
+                .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)?,
+        );
+    }
+    Ok(values.into_inner())
+}
+struct ZeroizingBaseFieldValuesV1(Vec<F>);
+impl From<Vec<F>> for ZeroizingBaseFieldValuesV1 {
+    fn from(values: Vec<F>) -> Self {
+        Self(values)
+    }
+}
+impl ZeroizingBaseFieldValuesV1 {
+    fn into_inner(mut self) -> Vec<F> {
+        core::mem::take(&mut self.0)
+    }
+
+    fn zeroize_v1(&mut self) {
+        for value in &mut self.0 {
+            value.zeroize_v1();
+        }
+    }
+}
+impl core::ops::Deref for ZeroizingBaseFieldValuesV1 {
+    type Target = [F];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for ZeroizingBaseFieldValuesV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ZeroizingBaseFieldValuesV1 {
+    fn drop(&mut self) {
+        self.zeroize_v1();
+    }
+}
+struct ZeroizingBaseFieldMatrixV1(Vec<Vec<F>>);
+impl From<Vec<Vec<F>>> for ZeroizingBaseFieldMatrixV1 {
+    fn from(values: Vec<Vec<F>>) -> Self {
+        Self(values)
+    }
+}
+impl ZeroizingBaseFieldMatrixV1 {
+    fn into_inner(mut self) -> Vec<Vec<F>> {
+        core::mem::take(&mut self.0)
+    }
+
+    fn append(&mut self, other: &mut Self) {
+        self.0.append(&mut other.0);
+    }
+
+    fn zeroize_v1(&mut self) {
+        for column in &mut self.0 {
+            for value in column {
+                value.zeroize_v1();
+            }
+        }
+    }
+}
+impl core::ops::Deref for ZeroizingBaseFieldMatrixV1 {
+    type Target = Vec<Vec<F>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for ZeroizingBaseFieldMatrixV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ZeroizingBaseFieldMatrixV1 {
+    fn drop(&mut self) {
+        self.zeroize_v1();
+    }
+}
+struct ZeroizingExtensionFieldValuesV1(Vec<E>);
+impl From<Vec<E>> for ZeroizingExtensionFieldValuesV1 {
+    fn from(values: Vec<E>) -> Self {
+        Self(values)
+    }
+}
+impl ZeroizingExtensionFieldValuesV1 {
+    fn into_inner(mut self) -> Vec<E> {
+        core::mem::take(&mut self.0)
+    }
+
+    fn zeroize_v1(&mut self) {
+        for value in &mut self.0 {
+            value.zeroize_v1();
+        }
+    }
+}
+impl core::ops::Deref for ZeroizingExtensionFieldValuesV1 {
+    type Target = [E];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for ZeroizingExtensionFieldValuesV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ZeroizingExtensionFieldValuesV1 {
+    fn drop(&mut self) {
+        self.zeroize_v1();
+    }
+}
+struct ZeroizingExtensionFieldMatrixV1(Vec<Vec<E>>);
+impl From<Vec<Vec<E>>> for ZeroizingExtensionFieldMatrixV1 {
+    fn from(values: Vec<Vec<E>>) -> Self {
+        Self(values)
+    }
+}
+impl ZeroizingExtensionFieldMatrixV1 {
+    fn zeroize_v1(&mut self) {
+        for column in &mut self.0 {
+            for value in column {
+                value.zeroize_v1();
+            }
+        }
+    }
+}
+impl core::ops::Deref for ZeroizingExtensionFieldMatrixV1 {
+    type Target = Vec<Vec<E>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for ZeroizingExtensionFieldMatrixV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ZeroizingExtensionFieldMatrixV1 {
+    fn drop(&mut self) {
+        self.zeroize_v1();
+    }
+}
+struct ZeroizingExtensionFieldCubeV1(Vec<Vec<Vec<E>>>);
+impl From<Vec<Vec<Vec<E>>>> for ZeroizingExtensionFieldCubeV1 {
+    fn from(values: Vec<Vec<Vec<E>>>) -> Self {
+        Self(values)
+    }
+}
+impl ZeroizingExtensionFieldCubeV1 {
+    fn into_inner(mut self) -> Vec<Vec<Vec<E>>> {
+        core::mem::take(&mut self.0)
+    }
+
+    fn zeroize_v1(&mut self) {
+        for matrix in &mut self.0 {
+            for column in matrix {
+                for value in column {
+                    value.zeroize_v1();
+                }
+            }
+        }
+    }
+}
+impl core::ops::Deref for ZeroizingExtensionFieldCubeV1 {
+    type Target = Vec<Vec<Vec<E>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for ZeroizingExtensionFieldCubeV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ZeroizingExtensionFieldCubeV1 {
+    fn drop(&mut self) {
+        self.zeroize_v1();
+    }
+}
+struct ZeroizingExtensionFieldRowV1<const N: usize>([E; N]);
+impl<const N: usize> ZeroizingExtensionFieldRowV1<N> {
+    fn iter(&self) -> core::slice::Iter<'_, E> {
+        self.0.iter()
+    }
+
+    fn zeroize_v1(&mut self) {
+        for value in &mut self.0 {
+            value.zeroize_v1();
+        }
+    }
+}
+impl<const N: usize> Drop for ZeroizingExtensionFieldRowV1<N> {
+    fn drop(&mut self) {
+        self.zeroize_v1();
+    }
+}
+fn collect_bounded_parallel_columns_v1<T, Transform>(
+    column_count: usize,
+    transform: Transform,
+) -> Result<Vec<T>, ProofManagedNoteStarkErrorV1>
+where
+    T: Send,
+    Transform: Fn(usize) -> Result<T, ProofManagedNoteStarkErrorV1> + Sync,
+{
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(column_count)
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    // Sequential source-ordered batches make the resident transform count independent of the
+    // process-global Rayon width. Indexed collection and serial reduction preserve both output
+    // order and the lowest-column error.
+    for batch_start in (0..column_count).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        let batch_end = batch_start
+            .checked_add(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .map_or(column_count, |end| end.min(column_count));
+        let batch = (batch_start..batch_end)
+            .into_par_iter()
+            .map(&transform)
+            .collect::<Vec<_>>();
+        for transformed in batch {
+            output.push(transformed?);
+        }
+    }
+    Ok(output)
 }
 fn fixed_lde_columns_v1(
     columns: &[Vec<F>],
@@ -1032,16 +1303,19 @@ fn fixed_lde_columns_v1(
     let trace_root = goldilocks_primitive_root_v1(trace_log2).map_err(map_transparent_error_v1)?;
     let lde_root = goldilocks_primitive_root_v1(lde_log2).map_err(map_transparent_error_v1)?;
     let shift = F(GOLDILOCKS_GENERATOR_V1);
-    columns
-        .iter()
-        .map(|column| {
-            let mut coefficients = column.clone();
-            goldilocks_ifft_v1(&mut coefficients, trace_root).map_err(map_transparent_error_v1)?;
-            coefficients.resize(lde_size, F::ZERO);
-            goldilocks_evaluate_coset_v1(&coefficients, lde_size, lde_root, shift)
-                .map_err(map_transparent_error_v1)
-        })
-        .collect()
+    collect_bounded_parallel_columns_v1(columns.len(), |column_index| {
+        let column = &columns[column_index];
+        let mut coefficients = column.clone();
+        goldilocks_ifft_v1(&mut coefficients, trace_root).map_err(map_transparent_error_v1)?;
+        coefficients.resize(lde_size, F::ZERO);
+        let mut shift_power = F::ONE;
+        for coefficient in &mut coefficients {
+            *coefficient = coefficient.mul(shift_power);
+            shift_power = shift_power.mul(shift);
+        }
+        goldilocks_fft_v1(&mut coefficients, lde_root).map_err(map_transparent_error_v1)?;
+        Ok(coefficients)
+    })
 }
 fn masked_lde_columns_v1<R: TryRngCore>(
     columns: &[Vec<F>],
@@ -1052,24 +1326,74 @@ fn masked_lde_columns_v1<R: TryRngCore>(
     if columns.is_empty() {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    let mut lde_columns = Vec::new();
+    // Reject every semantic transform failure before consuming masking entropy. Once these
+    // checks pass, the generated masks are canonical and every worker has the same valid FFT/coset
+    // geometry; only a bounded allocation failure can still stop an individual transform.
+    let trace_size = checked_trace_size_v1(trace_log2)?;
+    let lde_size = checked_trace_size_v1(lde_log2)?;
+    let mask_len = PROOF_MANAGED_NOTE_MASK_DEGREE_V1
+        .checked_add(1)
+        .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+    let coefficient_count = trace_size
+        .checked_add(mask_len)
+        .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+    if lde_size <= trace_size
+        || coefficient_count > lde_size
+        || columns.iter().any(|column| column.len() != trace_size)
+    {
+        return Err(map_transparent_error_v1(
+            TransparentStarkErrorV1::InvalidDomain,
+        ));
+    }
+    if columns
+        .iter()
+        .flatten()
+        .any(|value| F::canonical(value.0).is_none())
+    {
+        return Err(map_transparent_error_v1(
+            TransparentStarkErrorV1::NonCanonicalField,
+        ));
+    }
+    goldilocks_primitive_root_v1(trace_log2).map_err(map_transparent_error_v1)?;
+    goldilocks_primitive_root_v1(lde_log2).map_err(map_transparent_error_v1)?;
+    let shift = F(GOLDILOCKS_GENERATOR_V1);
+    if shift.pow(trace_size as u128) == F::ONE || shift.pow(lde_size as u128) == F::ONE {
+        return Err(map_transparent_error_v1(
+            TransparentStarkErrorV1::InvalidDomain,
+        ));
+    }
     let mut masks = Vec::new();
-    lde_columns
-        .try_reserve_exact(columns.len())
-        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
     masks
         .try_reserve_exact(columns.len())
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-    for column in columns {
-        let mask = sample_trace_mask_v1(PROOF_MANAGED_NOTE_MASK_DEGREE_V1, rng)
-            .map_err(map_transparent_error_v1)?;
-        lde_columns.push(
-            masked_trace_lde_column_with_mask_v1(column, trace_log2, lde_log2, mask.coefficients())
+    // Preserve the exact canonical RNG-consumption order before any parallel work begins.
+    for _ in columns {
+        masks.push(
+            sample_trace_mask_v1(PROOF_MANAGED_NOTE_MASK_DEGREE_V1, rng)
                 .map_err(map_transparent_error_v1)?,
         );
-        masks.push(mask);
     }
-    Ok((lde_columns, masks))
+    // Masks live until every bounded transform succeeds, so their Drop implementation wipes the
+    // sampled coefficients on success, ordinary error, and unwind. The transform itself likewise
+    // guards and wipes the witness-interpolating coefficient vector.
+    let lde_columns = collect_bounded_parallel_columns_v1(columns.len(), |column_index| {
+        masked_trace_lde_column_with_mask_v1(
+            &columns[column_index],
+            trace_log2,
+            lde_log2,
+            masks[column_index].coefficients(),
+        )
+        .map(ZeroizingBaseFieldValuesV1::from)
+        .map_err(map_transparent_error_v1)
+    })?;
+    let mut protected_columns = ZeroizingBaseFieldMatrixV1(Vec::new());
+    protected_columns
+        .try_reserve_exact(lde_columns.len())
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    for column in lde_columns {
+        protected_columns.push(column.into_inner());
+    }
+    Ok((protected_columns.into_inner(), masks))
 }
 fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
     coefficients
@@ -1105,40 +1429,54 @@ fn evaluate_masked_native_columns_at_deep_v1(
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
     next.try_reserve_exact(columns.len())
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-    for (column, mask) in columns.iter().zip(masks) {
-        let mut trace_coefficients = column.clone();
-        if let Err(error) = goldilocks_ifft_v1(&mut trace_coefficients, native_root) {
-            for coefficient in &mut trace_coefficients {
-                coefficient.zeroize_v1();
-            }
-            return Err(map_transparent_error_v1(error));
-        }
-        for (target, evaluation_point) in [(&mut current, point), (&mut next, next_point)] {
+    // Columns are independent and occupy fixed output indices. The temporary coefficient copy is
+    // owned by one worker and is zeroized before that worker returns on both success and failure.
+    // Results are reduced serially in column order so malformed inputs retain deterministic error
+    // precedence as well as deterministic successful output.
+    let evaluations = collect_bounded_parallel_columns_v1(columns.len(), |column_index| {
+        let column = &columns[column_index];
+        let mask = &masks[column_index];
+        let mut trace_coefficients = ZeroizingBaseFieldValuesV1::from(Vec::new());
+        trace_coefficients
+            .0
+            .try_reserve_exact(column.len())
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        trace_coefficients.0.extend_from_slice(column);
+        goldilocks_ifft_v1(&mut trace_coefficients, native_root)
+            .map_err(map_transparent_error_v1)?;
+        let evaluate = |evaluation_point| {
             let trace = evaluate_base_coefficients_at_fp4_v1(&trace_coefficients, evaluation_point);
             let randomizer =
                 evaluate_base_coefficients_at_fp4_v1(mask.coefficients(), evaluation_point);
-            target.push(
-                trace.add(
-                    evaluation_point
-                        .pow(trace_size as u128)
-                        .sub(E::ONE)
-                        .mul(randomizer),
-                ),
-            );
-        }
-        for coefficient in &mut trace_coefficients {
-            coefficient.zeroize_v1();
-        }
+            trace.add(
+                evaluation_point
+                    .pow(trace_size as u128)
+                    .sub(E::ONE)
+                    .mul(randomizer),
+            )
+        };
+        Ok((evaluate(point), evaluate(next_point)))
+    })?;
+    for (current_value, next_value) in evaluations {
+        current.push(current_value);
+        next.push(next_value);
     }
     Ok((current, next))
 }
 fn new_note_transcript_v1(
     prepared: &PreparedNoteProfileV1,
-    public_digest: &[u8; 32],
+    public_digest: &GoldilocksDigest384V1,
 ) -> Result<TransparentTranscriptV1, ProofManagedNoteStarkErrorV1> {
+    let profile_digest = proof_managed_note_stark_profile_digest_v1(
+        prepared.protocol.domains,
+        prepared.protocol.profile_descriptor,
+    )?;
+    let geometry_digest = proof_managed_note_stark_geometry_digest_v1(prepared.protocol.domains)?;
+    let geometry_digest = geometry_digest.to_le_bytes();
     let mut transcript = TransparentTranscriptV1::new(
+        prepared.protocol.domains.digest_context,
         PROOF_MANAGED_NOTE_STARK_SUITE_V1,
-        &prepared.protocol.profile_digest,
+        &profile_digest,
         public_digest,
     )
     .map_err(map_transparent_error_v1)?;
@@ -1148,7 +1486,7 @@ fn new_note_transcript_v1(
             NOTE_SHARED_PROFILE_BINDING_LABEL_V1,
             &[
                 PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
-                &PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1,
+                &geometry_digest,
             ],
         )
         .map_err(map_transparent_error_v1)?;
@@ -1253,7 +1591,7 @@ fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
     fixed: &[F],
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &A::ProfileChallenges,
-) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+) -> Result<ZeroizingBaseFieldValuesV1, ProofManagedNoteStarkErrorV1> {
     if current_base.len() != prepared.base_width
         || next_base.len() != prepared.base_width
         || current_aux.len() != prepared.aux_width
@@ -1262,14 +1600,14 @@ fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    let mut residues = note_copy_constraint_residues_v1(
+    let shared = ZeroizingBaseFieldValuesV1::from(note_copy_constraint_residues_v1(
         current_base,
         current_aux,
         next_aux,
         fixed,
         copy_challenges,
-    )?;
-    let profile = adapter.profile_constraint_residues_v1(
+    )?);
+    let profile = ZeroizingBaseFieldValuesV1::from(adapter.profile_constraint_residues_v1(
         current_base,
         next_base,
         current_aux,
@@ -1277,7 +1615,7 @@ fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
         fixed,
         copy_challenges,
         profile_challenges,
-    )?;
+    )?);
     if profile.len()
         != prepared
             .constraint_count
@@ -1286,7 +1624,13 @@ fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
     }
-    residues.extend(profile);
+    let mut residues = ZeroizingBaseFieldValuesV1::from(Vec::new());
+    residues
+        .0
+        .try_reserve_exact(prepared.constraint_count)
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    residues.0.extend_from_slice(&shared);
+    residues.0.extend_from_slice(&profile);
     if residues.len() != prepared.constraint_count {
         return Err(ProofManagedNoteStarkErrorV1::Internal);
     }
@@ -1300,24 +1644,40 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &A::ProfileChallenges,
 ) -> Result<(), ProofManagedNoteStarkErrorV1> {
-    for row in 0..prepared.trace_size {
-        let next = (row + 1) % prepared.trace_size;
-        let residues = all_constraint_residues_v1(
-            adapter,
-            prepared,
-            &row_at_columns_v1(base_columns, row)?,
-            &row_at_columns_v1(base_columns, next)?,
-            &row_at_columns_v1(aux_columns, row)?,
-            &row_at_columns_v1(aux_columns, next)?,
-            &row_at_columns_v1(&prepared.fixed_columns, row)?,
-            copy_challenges,
-            profile_challenges,
-        )?;
-        if residues.iter().any(|residue| *residue != F::ZERO) {
-            return Err(ProofManagedNoteStarkErrorV1::Constraint);
-        }
-    }
-    Ok(())
+    // Native rows are immutable and independently constrained. Indexed collection plus serial
+    // reduction retains the lowest-row error while successful validation has no output ordering
+    // to perturb.
+    let results = (0..prepared.trace_size)
+        .into_par_iter()
+        .map(|row| -> Result<(), ProofManagedNoteStarkErrorV1> {
+            let next = (row + 1) % prepared.trace_size;
+            let current_base =
+                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_columns, row)?);
+            let next_base =
+                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_columns, next)?);
+            let current_aux =
+                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_columns, row)?);
+            let next_aux = ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_columns, next)?);
+            let fixed =
+                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(&prepared.fixed_columns, row)?);
+            let residues = all_constraint_residues_v1(
+                adapter,
+                prepared,
+                &current_base,
+                &next_base,
+                &current_aux,
+                &next_aux,
+                &fixed,
+                copy_challenges,
+                profile_challenges,
+            )?;
+            if residues.iter().any(|residue| *residue != F::ZERO) {
+                return Err(ProofManagedNoteStarkErrorV1::Constraint);
+            }
+            Ok(())
+        })
+        .collect::<Vec<_>>();
+    results.into_iter().collect()
 }
 fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
@@ -1349,50 +1709,117 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
         .ok_or(ProofManagedNoteStarkErrorV1::Internal)?
         .next_stride(prepared.layout.common_lde_log2())
         .map_err(map_aggregate_error_v1)?;
-    let mut lanes = (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
-        .map(|_| Vec::with_capacity(lde_size))
-        .collect::<Vec<_>>();
-    let mut x = F(GOLDILOCKS_GENERATOR_V1);
-    for index in 0..lde_size {
-        let next = (index + next_stride) % lde_size;
-        let residues = all_constraint_residues_v1(
-            adapter,
-            prepared,
-            &row_at_columns_v1(base_lde, index)?,
-            &row_at_columns_v1(base_lde, next)?,
-            &row_at_columns_v1(aux_lde, index)?,
-            &row_at_columns_v1(aux_lde, next)?,
-            &row_at_columns_v1(fixed_lde, index)?,
-            copy_challenges,
-            profile_challenges,
-        )?;
-        let inverse_vanishing = x
-            .pow(prepared.trace_size as u128)
-            .sub(F::ONE)
-            .inv()
-            .ok_or(ProofManagedNoteStarkErrorV1::Internal)?;
-        for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
-            let numerator = residues
-                .iter()
-                .zip(&alphas[lane])
-                .fold(E::ZERO, |sum, (residue, alpha)| {
-                    sum.add(alpha.mul_base(*residue))
-                });
-            lanes[lane].push(numerator.mul_base(inverse_vanishing));
-        }
-        x = x.mul(lde_root);
+    let mut lanes = ZeroizingExtensionFieldMatrixV1::from(
+        (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
+            .map(|_| Vec::new())
+            .collect::<Vec<_>>(),
+    );
+    for lane in lanes.iter_mut() {
+        lane.try_reserve_exact(lde_size)
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
     }
-    lanes
-        .iter()
-        .map(|lane| {
+    let mut x = F(GOLDILOCKS_GENERATOR_V1);
+    // Retain only one canonical row batch at a time. The domain recurrence is evaluated serially
+    // across batch boundaries, matching the historical path exactly, while rows inside a batch
+    // are independent and collected by index. Serial reduction writes directly into the final
+    // lane vectors, avoiding both a full domain-point table and a full row-major staging vector.
+    for batch_start in (0..lde_size).step_by(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1) {
+        let batch_end = batch_start
+            .checked_add(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1)
+            .map_or(lde_size, |end| end.min(lde_size));
+        let batch_len = batch_end - batch_start;
+        let mut domain_points = Vec::new();
+        domain_points
+            .try_reserve_exact(batch_len)
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        for _ in batch_start..batch_end {
+            domain_points.push(x);
+            x = x.mul(lde_root);
+        }
+        let rows = (batch_start..batch_end)
+            .into_par_iter()
+            .map(|index| {
+                let next = (index + next_stride) % lde_size;
+                let current_base =
+                    ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_lde, index)?);
+                let next_base =
+                    ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_lde, next)?);
+                let current_aux =
+                    ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_lde, index)?);
+                let next_aux = ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_lde, next)?);
+                let fixed = ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(fixed_lde, index)?);
+                let residues = all_constraint_residues_v1(
+                    adapter,
+                    prepared,
+                    &current_base,
+                    &next_base,
+                    &current_aux,
+                    &next_aux,
+                    &fixed,
+                    copy_challenges,
+                    profile_challenges,
+                )?;
+                let local_index = index - batch_start;
+                let inverse_vanishing = domain_points[local_index]
+                    .pow(prepared.trace_size as u128)
+                    .sub(F::ONE)
+                    .inv()
+                    .ok_or(ProofManagedNoteStarkErrorV1::Internal)?;
+                let mut row = [E::ZERO; PROOF_MANAGED_NOTE_SECURITY_LANES_V1];
+                for (lane, value) in row.iter_mut().enumerate() {
+                    let numerator = residues
+                        .iter()
+                        .zip(&alphas[lane])
+                        .fold(E::ZERO, |sum, (residue, alpha)| {
+                            sum.add(alpha.mul_base(*residue))
+                        });
+                    *value = numerator.mul_base(inverse_vanishing);
+                }
+                Ok(ZeroizingExtensionFieldRowV1(row))
+            })
+            .collect::<Vec<Result<_, ProofManagedNoteStarkErrorV1>>>();
+        for row in rows {
+            let row = row?;
+            for (lane, value) in lanes.iter_mut().zip(row.iter().copied()) {
+                lane.push(value);
+            }
+        }
+    }
+    let mut compositions = ZeroizingExtensionFieldCubeV1(Vec::new());
+    compositions
+        .try_reserve_exact(lanes.len())
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    for lane in lanes.iter() {
+        compositions.push(
             aggregate::split_composition_evaluations_v1(
                 lane,
                 prepared.protocol.parameters,
                 &prepared.layout,
             )
-            .map_err(map_aggregate_error_v1)
-        })
-        .collect()
+            .map_err(map_aggregate_error_v1)?,
+        );
+    }
+    Ok(compositions.into_inner())
+}
+fn try_for_each_ordered_deep_batch_v1<Batch>(
+    rows: usize,
+    mut batch: Batch,
+) -> Result<(), ProofManagedNoteStarkErrorV1>
+where
+    Batch: FnMut(usize, usize) -> Result<(), ProofManagedNoteStarkErrorV1>,
+{
+    let mut start = 0_usize;
+    while start < rows {
+        let end = start
+            .checked_add(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1)
+            .map_or(rows, |end| end.min(rows));
+        if end <= start {
+            return Err(ProofManagedNoteStarkErrorV1::Resource);
+        }
+        batch(start, end)?;
+        start = end;
+    }
+    Ok(())
 }
 #[allow(clippy::too_many_arguments)]
 fn mixed_deep_fri_base_v1(
@@ -1459,18 +1886,20 @@ fn mixed_deep_fri_base_v1(
     let deep_next_point = deep_point.mul_base(native_root);
     let lde_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2()).map_err(map_transparent_error_v1)?;
-    let mut result = Vec::new();
+    let mut result = ZeroizingExtensionFieldValuesV1(Vec::new());
     result
+        .0
         .try_reserve_exact(rows)
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-    for start in (0..rows).step_by(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1) {
-        let end = start
-            .checked_add(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1)
-            .ok_or(ProofManagedNoteStarkErrorV1::Resource)?
-            .min(rows);
-        let denominator_count = end
-            .checked_sub(start)
-            .and_then(|length| length.checked_mul(2))
+    result.0.resize(rows, E::ZERO);
+    // Fallible denominator construction and inversion run one canonical batch at a time. Only the
+    // now-infallible row arithmetic is parallel, preserving the earliest batch error while keeping
+    // denominator and prefix scratch bounded to one 4,096-row batch.
+    try_for_each_ordered_deep_batch_v1(rows, |start, end| {
+        let output = &mut result.0[start..end];
+        let denominator_count = output
+            .len()
+            .checked_mul(2)
             .ok_or(ProofManagedNoteStarkErrorV1::Resource)?;
         let mut inverse_denominators = Vec::new();
         inverse_denominators
@@ -1478,7 +1907,7 @@ fn mixed_deep_fri_base_v1(
             .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
         let exponent = u128::try_from(start).map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
         let mut x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(exponent));
-        for _ in start..end {
+        for _ in output.iter() {
             let query_point = E::from_base(x);
             inverse_denominators.push(query_point.sub(deep_point));
             inverse_denominators.push(query_point.sub(deep_next_point));
@@ -1486,58 +1915,59 @@ fn mixed_deep_fri_base_v1(
         }
         aggregate::batch_invert_fp4_nonzero_v1(&mut inverse_denominators)
             .map_err(map_aggregate_error_v1)?;
-        for index in start..end {
-            let local_index = index - start;
-            let current_inverse = inverse_denominators[2 * local_index];
-            let next_inverse = inverse_denominators[2 * local_index + 1];
-            let mut quotient = E::ZERO;
-            for (column_index, column) in base_lde.iter().enumerate() {
-                let value = E::from_base(column[index]);
-                quotient = quotient.add(
-                    value
-                        .sub(deep_trace.base_current[column_index])
-                        .mul(current_inverse)
-                        .mul(trace_mix.base_current[column_index]),
-                );
-                quotient = quotient.add(
-                    value
-                        .sub(deep_trace.base_next[column_index])
-                        .mul(next_inverse)
-                        .mul(trace_mix.base_next[column_index]),
-                );
-            }
-            for (column_index, column) in aux_lde.iter().enumerate() {
-                let value = E::from_base(column[index]);
-                quotient = quotient.add(
-                    value
-                        .sub(deep_trace.aux_current[column_index])
-                        .mul(current_inverse)
-                        .mul(trace_mix.aux_current[column_index]),
-                );
-                quotient = quotient.add(
-                    value
-                        .sub(deep_trace.aux_next[column_index])
-                        .mul(next_inverse)
-                        .mul(trace_mix.aux_next[column_index]),
-                );
-            }
-            for (chunk_index, (chunk, coefficient)) in
-                composition.iter().zip(&mix.composition).enumerate()
-            {
-                quotient = quotient.add(
-                    chunk[index]
-                        .sub(deep_composition[chunk_index])
-                        .mul(current_inverse)
-                        .mul(*coefficient),
-                );
-            }
-            result.push(quotient);
-        }
-    }
-    if result.len() != rows {
-        return Err(ProofManagedNoteStarkErrorV1::Internal);
-    }
-    Ok(result)
+        output
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(local_index, quotient_slot)| {
+                let index = start + local_index;
+                let current_inverse = inverse_denominators[2 * local_index];
+                let next_inverse = inverse_denominators[2 * local_index + 1];
+                let mut quotient = E::ZERO;
+                for (column_index, column) in base_lde.iter().enumerate() {
+                    let value = E::from_base(column[index]);
+                    quotient = quotient.add(
+                        value
+                            .sub(deep_trace.base_current[column_index])
+                            .mul(current_inverse)
+                            .mul(trace_mix.base_current[column_index]),
+                    );
+                    quotient = quotient.add(
+                        value
+                            .sub(deep_trace.base_next[column_index])
+                            .mul(next_inverse)
+                            .mul(trace_mix.base_next[column_index]),
+                    );
+                }
+                for (column_index, column) in aux_lde.iter().enumerate() {
+                    let value = E::from_base(column[index]);
+                    quotient = quotient.add(
+                        value
+                            .sub(deep_trace.aux_current[column_index])
+                            .mul(current_inverse)
+                            .mul(trace_mix.aux_current[column_index]),
+                    );
+                    quotient = quotient.add(
+                        value
+                            .sub(deep_trace.aux_next[column_index])
+                            .mul(next_inverse)
+                            .mul(trace_mix.aux_next[column_index]),
+                    );
+                }
+                for (chunk_index, (chunk, coefficient)) in
+                    composition.iter().zip(&mix.composition).enumerate()
+                {
+                    quotient = quotient.add(
+                        chunk[index]
+                            .sub(deep_composition[chunk_index])
+                            .mul(current_inverse)
+                            .mul(*coefficient),
+                    );
+                }
+                *quotient_slot = quotient;
+            });
+        Ok(())
+    })?;
+    Ok(result.into_inner())
 }
 fn absorb_grinding_nonce_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -1567,7 +1997,9 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let lde_size = prepared.layout.common_lde_size();
     let (base_lde, base_masks) =
         masked_lde_columns_v1(base_columns, prepared.trace_log2, lde_log2, rng)?;
+    let base_lde = ZeroizingBaseFieldMatrixV1::from(base_lde);
     let base_tree = aggregate::row_tree_v1(
+        prepared.protocol.domains.digest_context,
         prepared.protocol.domains.base_leaf,
         prepared.protocol.domains.base_node,
         0,
@@ -1578,7 +2010,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let mut transcript = new_note_transcript_v1(&prepared, &public_digest)?;
     let mut trace_group_proofs = vec![aggregate::AggregateTraceGroupProofV1 {
         base_root: base_tree.root(),
-        aux_root: [0; 32],
+        aux_root: GoldilocksDigest384V1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -1591,26 +2023,26 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let copy_challenges = derive_note_copy_challenges_v1(&mut transcript)?;
     let profile_challenges =
         adapter.derive_profile_challenges_v1(&mut transcript, copy_challenges)?;
-    let copy_aux = build_note_copy_aux_columns_v1(
+    let copy_aux = ZeroizingBaseFieldMatrixV1::from(build_note_copy_aux_columns_v1(
         base_columns,
         &prepared.fixed_columns,
         copy_challenges,
         prepared.trace_size,
-    )?;
-    let profile_aux = adapter.build_profile_aux_columns_v1(
+    )?);
+    let mut profile_aux = ZeroizingBaseFieldMatrixV1::from(adapter.build_profile_aux_columns_v1(
         base_columns,
         &copy_aux,
         &prepared.fixed_columns,
         copy_challenges,
         &profile_challenges,
-    )?;
+    )?);
     canonical_columns_v1(
         &profile_aux,
         adapter.profile_aux_width_v1(),
         prepared.trace_size,
     )?;
     let mut aux_columns = copy_aux;
-    aux_columns.extend(profile_aux);
+    aux_columns.append(&mut profile_aux);
     canonical_columns_v1(&aux_columns, prepared.aux_width, prepared.trace_size)?;
     validate_native_constraints_v1(
         adapter,
@@ -1622,7 +2054,9 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     )?;
     let (aux_lde, aux_masks) =
         masked_lde_columns_v1(&aux_columns, prepared.trace_log2, lde_log2, rng)?;
+    let aux_lde = ZeroizingBaseFieldMatrixV1::from(aux_lde);
     let aux_tree = aggregate::row_tree_v1(
+        prepared.protocol.domains.digest_context,
         prepared.protocol.domains.aux_leaf,
         prepared.protocol.domains.aux_node,
         0,
@@ -1639,7 +2073,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     .map_err(map_aggregate_error_v1)?;
     let alphas = derive_constraint_alphas_v1(&mut transcript, prepared.constraint_count)?;
     let fixed_lde = fixed_lde_columns_v1(&prepared.fixed_columns, prepared.trace_log2, lde_log2)?;
-    let compositions = composition_lanes_v1(
+    let compositions = ZeroizingExtensionFieldCubeV1::from(composition_lanes_v1(
         adapter,
         &prepared,
         &base_lde,
@@ -1648,7 +2082,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         copy_challenges,
         &profile_challenges,
         &alphas,
-    )?;
+    )?);
     let mut composition_trees = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
     let mut composition_roots = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
     for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
@@ -1665,9 +2099,13 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         &composition_roots,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fri_masks =
-        aggregate::build_fri_mask_oracles_v1(prepared.protocol.parameters, &prepared.layout, rng)
-            .map_err(map_aggregate_error_v1)?;
+    let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        prepared.protocol.parameters,
+        prepared.protocol.domains,
+        &prepared.layout,
+        rng,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let fri_mask_roots = fri_masks
         .iter()
         .map(|mask| mask.tree.root())
@@ -1675,12 +2113,13 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         prepared.protocol.parameters,
+        prepared.protocol.domains,
         &fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
     let trace_materials = vec![aggregate::AggregateTraceGroupMaterialV1 {
-        base_lde,
-        aux_lde,
+        base_lde: base_lde.into_inner(),
+        aux_lde: aux_lde.into_inner(),
         base_tree,
         aux_tree,
     }];
@@ -1758,7 +2197,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     )?;
     let mut fri_lanes = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
     for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
-        let mut fri_base = mixed_deep_fri_base_v1(
+        let mut fri_base = ZeroizingExtensionFieldValuesV1::from(mixed_deep_fri_base_v1(
             &trace_materials[0].base_lde,
             &trace_materials[0].aux_lde,
             &compositions[lane],
@@ -1768,7 +2207,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
             lane,
             prepared.protocol.parameters,
             &prepared.layout,
-        )?;
+        )?);
         aggregate::add_fri_mask_oracle_v1(&mut fri_base, &fri_masks[lane])
             .map_err(map_aggregate_error_v1)?;
         fri_lanes.push(
@@ -1777,15 +2216,19 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
                 prepared.protocol.domains,
                 &prepared.layout,
                 lane,
-                fri_base,
+                fri_base.into_inner(),
                 &mut transcript,
             )
             .map_err(map_aggregate_error_v1)?,
         );
     }
     let grinding_state = transcript.state();
-    let grinding_nonce = grind_nonce_v1(&grinding_state, PROOF_MANAGED_NOTE_GRINDING_BITS_V1)
-        .map_err(map_transparent_error_v1)?;
+    let grinding_nonce = grind_nonce_v1(
+        prepared.protocol.domains.digest_context,
+        &grinding_state,
+        PROOF_MANAGED_NOTE_GRINDING_BITS_V1,
+    )
+    .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
     let query_indices = aggregate::query_indices_v1(
         &transcript,
@@ -1973,6 +2416,7 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         prepared.protocol.parameters,
+        prepared.protocol.domains,
         &proof.fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
@@ -2007,6 +2451,7 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     .map_err(map_aggregate_error_v1)?;
     let grinding_state = transcript.state();
     verify_grinding_nonce_v1(
+        prepared.protocol.domains.digest_context,
         &grinding_state,
         PROOF_MANAGED_NOTE_GRINDING_BITS_V1,
         proof.grinding_nonce,
@@ -2181,10 +2626,14 @@ mod tests {
     use super::*;
     use rand::{RngCore, SeedableRng as _, rngs::StdRng};
     use std::sync::OnceLock;
-    const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^12:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
-    const MOCK_TRACE_LOG2_V1: u8 = 12;
+    const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^13:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
+    const MOCK_TRACE_LOG2_V1: u8 = 13;
     const MOCK_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
         aggregate::AggregateStarkDomainsV1 {
+            digest_context: super::super::transparent_stark::TransparentStarkDigestContextV1::new(
+                PrivacyProtocolIdV1::PqMaspStarkV1,
+                b"proof-managed-note-mock-profile-v1",
+            ),
             base_leaf: b"proof-managed-note-mock-base-leaf-v1",
             base_node: b"proof-managed-note-mock-base-node-v1",
             aux_leaf: b"proof-managed-note-mock-aux-leaf-v1",
@@ -2224,8 +2673,7 @@ mod tests {
     struct MockAdapterV1 {
         parameters: aggregate::AggregateStarkParametersV1,
         maximum_constraint_degree: u8,
-        profile_digest: [u8; 32],
-        public_digest: [u8; 32],
+        public_digest: GoldilocksDigest384V1,
         corrupt_schedule: bool,
     }
     impl Default for MockAdapterV1 {
@@ -2233,10 +2681,8 @@ mod tests {
             Self {
                 parameters: mock_parameters_v1(),
                 maximum_constraint_degree: NOTE_COPY_CONSTRAINT_DEGREE_V1,
-                profile_digest: proof_managed_note_stark_profile_digest_v1(
-                    MOCK_PROFILE_DESCRIPTOR_V1,
-                ),
-                public_digest: [0x24; 32],
+                public_digest: GoldilocksDigest384V1::new([0x24; 6])
+                    .expect("mock public digest is canonical"),
                 corrupt_schedule: false,
             }
         }
@@ -2248,13 +2694,14 @@ mod tests {
                 parameters: self.parameters,
                 domains: MOCK_DOMAINS_V1,
                 maximum_constraint_degree: self.maximum_constraint_degree,
-                profile_digest: self.profile_digest,
                 profile_binding_label: b"proof-managed-note-mock-profile-binding-v1",
                 profile_descriptor: MOCK_PROFILE_DESCRIPTOR_V1,
                 relation_layout_domain: b"proof-managed-note-mock-relation-layout-v1",
             }
         }
-        fn public_input_digest_v1(&self) -> Result<[u8; 32], ProofManagedNoteStarkErrorV1> {
+        fn public_input_digest_v1(
+            &self,
+        ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
             Ok(self.public_digest)
         }
         fn trace_log2_v1(&self) -> u8 {
@@ -2330,6 +2777,468 @@ mod tests {
             .map(|column| vec![F(column as u64); 1 << MOCK_TRACE_LOG2_V1])
             .collect()
     }
+
+    #[test]
+    fn column_stage_orchestration_is_identical_across_rayon_widths() {
+        // One more than the source-fixed resident-column bound forces two canonical dispatches.
+        // TODO: add whole-proof fixed-RNG byte equality to the slow release suite; repeating the
+        // protocol-mandated 20-bit Poseidon grind is intentionally outside this unit test.
+        assert_eq!(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, 8);
+        let columns = (0..=aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .map(|column| {
+                (0..8)
+                    .map(|row| {
+                        F::reduce(
+                            u128::try_from(column + 3).expect("small column")
+                                * u128::try_from(row + 11).expect("small row"),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let run = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("private test thread pool")
+                .install(|| {
+                    let mut rng = StdRng::from_seed([0x9B; 32]);
+                    let (masked, masks) = masked_lde_columns_v1(&columns, 3, 10, &mut rng)
+                        .expect("masked LDE columns");
+                    let fixed = fixed_lde_columns_v1(&columns, 3, 10).expect("fixed LDE columns");
+                    let deep = evaluate_masked_native_columns_at_deep_v1(
+                        &columns,
+                        &masks,
+                        3,
+                        E::from_base(F(19)),
+                    )
+                    .expect("deep column openings");
+                    let mask_coefficients = masks
+                        .iter()
+                        .map(|mask| mask.coefficients().to_vec())
+                        .collect::<Vec<_>>();
+                    (masked, fixed, deep, mask_coefficients)
+                })
+        };
+        assert_eq!(run(1), run(4));
+
+        let mut rejected_rng = StdRng::from_seed([0xC7; 32]);
+        let mut untouched_rng = rejected_rng.clone();
+        let malformed = vec![vec![F::ZERO; 7]];
+        assert!(matches!(
+            masked_lde_columns_v1(&malformed, 3, 10, &mut rejected_rng),
+            Err(ProofManagedNoteStarkErrorV1::Internal)
+        ));
+        assert_eq!(
+            rejected_rng.next_u64(),
+            untouched_rng.next_u64(),
+            "semantic transform rejection must happen before mask sampling"
+        );
+    }
+
+    #[test]
+    fn fixed_lde_in_place_matches_allocating_reference_and_secret_owners_wipe() {
+        let columns = (0..=aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .map(|column| {
+                (0..8)
+                    .map(|row| {
+                        F::reduce(
+                            u128::try_from(column + 5).expect("small column")
+                                * u128::try_from(row + 13).expect("small row"),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let actual = fixed_lde_columns_v1(&columns, 3, 10).expect("in-place fixed LDE");
+        let trace_root = goldilocks_primitive_root_v1(3).expect("trace root");
+        let lde_root = goldilocks_primitive_root_v1(10).expect("LDE root");
+        let expected = columns
+            .iter()
+            .map(|column| {
+                let mut coefficients = column.clone();
+                goldilocks_ifft_v1(&mut coefficients, trace_root).expect("reference IFFT");
+                coefficients.resize(1 << 10, F::ZERO);
+                super::super::transparent_stark::goldilocks_evaluate_coset_v1(
+                    &coefficients,
+                    1 << 10,
+                    lde_root,
+                    F(GOLDILOCKS_GENERATOR_V1),
+                )
+                .expect("allocating fixed-LDE reference")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+
+        let mut base_values = ZeroizingBaseFieldValuesV1::from(vec![F::ONE; 3]);
+        base_values.zeroize_v1();
+        assert!(base_values.iter().all(|value| *value == F::ZERO));
+        let mut base_matrix = ZeroizingBaseFieldMatrixV1::from(vec![vec![F::ONE; 3]; 2]);
+        base_matrix.zeroize_v1();
+        assert!(base_matrix.iter().flatten().all(|value| *value == F::ZERO));
+        let mut extension_values = ZeroizingExtensionFieldValuesV1::from(vec![E::ONE; 3]);
+        extension_values.zeroize_v1();
+        assert!(extension_values.iter().all(|value| *value == E::ZERO));
+        let mut extension_matrix = ZeroizingExtensionFieldMatrixV1::from(vec![vec![E::ONE; 3]; 2]);
+        extension_matrix.zeroize_v1();
+        assert!(
+            extension_matrix
+                .iter()
+                .flatten()
+                .all(|value| *value == E::ZERO)
+        );
+        let mut extension_cube =
+            ZeroizingExtensionFieldCubeV1::from(vec![vec![vec![E::ONE; 3]; 2]; 2]);
+        extension_cube.zeroize_v1();
+        assert!(
+            extension_cube
+                .iter()
+                .flatten()
+                .flatten()
+                .all(|value| *value == E::ZERO)
+        );
+        let mut extension_row = ZeroizingExtensionFieldRowV1([E::ONE; 3]);
+        extension_row.zeroize_v1();
+        assert!(extension_row.iter().all(|value| *value == E::ZERO));
+        assert!(core::mem::needs_drop::<ZeroizingBaseFieldMatrixV1>());
+        assert!(core::mem::needs_drop::<ZeroizingExtensionFieldCubeV1>());
+    }
+
+    #[test]
+    fn bounded_column_dispatch_preserves_order_and_lowest_error() {
+        let column_count = aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 * 2 + 1;
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        let peak = std::sync::atomic::AtomicUsize::new(0);
+        let ordered = rayon::ThreadPoolBuilder::new()
+            .num_threads(16)
+            .build()
+            .expect("private test thread pool")
+            .install(|| {
+                collect_bounded_parallel_columns_v1(column_count, |column| {
+                    let resident = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    peak.fetch_max(resident, std::sync::atomic::Ordering::SeqCst);
+                    std::thread::yield_now();
+                    active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(column)
+                })
+                .expect("bounded ordered dispatch")
+            });
+        assert_eq!(ordered, (0..column_count).collect::<Vec<_>>());
+        assert!(
+            peak.load(std::sync::atomic::Ordering::SeqCst)
+                <= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+            "resident column transforms must stay inside the source-fixed bound"
+        );
+
+        let later_batch_visited = std::sync::atomic::AtomicBool::new(false);
+        let error = rayon::ThreadPoolBuilder::new()
+            .num_threads(16)
+            .build()
+            .expect("private test thread pool")
+            .install(|| {
+                collect_bounded_parallel_columns_v1(column_count, |column| {
+                    if column >= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 {
+                        later_batch_visited.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    match column {
+                        3 => Err(ProofManagedNoteStarkErrorV1::InvalidTrace),
+                        5 => Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+                        _ => Ok(column),
+                    }
+                })
+            });
+        assert_eq!(error, Err(ProofManagedNoteStarkErrorV1::InvalidTrace));
+        assert!(
+            !later_batch_visited.load(std::sync::atomic::Ordering::Relaxed),
+            "a failing canonical batch must stop before the next batch is dispatched"
+        );
+
+        struct DropProbe {
+            dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.dropped
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(16)
+            .build()
+            .expect("private drop-probe pool");
+        let created = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let error = pool.install(|| {
+            collect_bounded_parallel_columns_v1(
+                aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                |column| {
+                    if column == 3 {
+                        return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
+                    }
+                    created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(DropProbe {
+                        dropped: std::sync::Arc::clone(&dropped),
+                    })
+                },
+            )
+        });
+        assert!(matches!(
+            error,
+            Err(ProofManagedNoteStarkErrorV1::InvalidTrace)
+        ));
+        assert_eq!(
+            created.load(std::sync::atomic::Ordering::SeqCst),
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+            "every successful sibling output must drop when its batch fails"
+        );
+
+        let created = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.install(|| {
+                let _ = collect_bounded_parallel_columns_v1(
+                    aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                    |column| -> Result<DropProbe, ProofManagedNoteStarkErrorV1> {
+                        if column == 3 {
+                            panic!("injected transform unwind");
+                        }
+                        created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(DropProbe {
+                            dropped: std::sync::Arc::clone(&dropped),
+                        })
+                    },
+                );
+            });
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            created.load(std::sync::atomic::Ordering::SeqCst),
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+            "every constructed worker output must drop during unwind"
+        );
+    }
+
+    #[test]
+    fn ordered_deep_batches_cover_partial_tail_and_stop_at_earliest_error() {
+        let batch = aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1;
+        let rows = batch * 2 + 17;
+        let mut visited = Vec::new();
+        try_for_each_ordered_deep_batch_v1(rows, |start, end| {
+            visited.push((start, end));
+            Ok(())
+        })
+        .expect("ordered partial-tail traversal");
+        assert_eq!(
+            visited,
+            vec![(0, batch), (batch, batch * 2), (batch * 2, rows)]
+        );
+
+        let mut visited = Vec::new();
+        let error = try_for_each_ordered_deep_batch_v1(batch * 3 + 17, |start, end| {
+            visited.push((start, end));
+            if start == batch {
+                Err(ProofManagedNoteStarkErrorV1::Composition)
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(error, Err(ProofManagedNoteStarkErrorV1::Composition));
+        assert_eq!(visited, vec![(0, batch), (batch, batch * 2)]);
+    }
+
+    #[test]
+    fn native_constraint_validation_is_identical_across_rayon_widths() {
+        let adapter = MockAdapterV1::default();
+        let prepared = prepare_note_profile_v1(&adapter).expect("mock profile");
+        let base = mock_base_columns_v1();
+        let challenges = NoteCopyChallengesV1 {
+            lanes: std::array::from_fn(|lane| NoteCopyLaneChallengesV1 {
+                beta: F(u64::try_from(lane + 2).expect("small challenge")),
+                gamma: F(u64::try_from(lane + 11).expect("small challenge")),
+            }),
+        };
+        let aux = build_note_copy_aux_columns_v1(
+            &base,
+            &prepared.fixed_columns,
+            challenges,
+            prepared.trace_size,
+        )
+        .expect("mock copy auxiliary columns");
+        let run = |threads, candidate: &[Vec<F>]| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("private test thread pool")
+                .install(|| {
+                    validate_native_constraints_v1(
+                        &adapter,
+                        &prepared,
+                        candidate,
+                        &aux,
+                        challenges,
+                        &(),
+                    )
+                })
+        };
+        assert_eq!(run(1, &base), Ok(()));
+        assert_eq!(run(4, &base), Ok(()));
+        let mut invalid = base;
+        invalid[0][0] = F::ONE;
+        assert_eq!(
+            run(1, &invalid),
+            Err(ProofManagedNoteStarkErrorV1::Constraint)
+        );
+        assert_eq!(
+            run(4, &invalid),
+            Err(ProofManagedNoteStarkErrorV1::Constraint)
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn composition_lanes_are_identical_to_serial_across_rayon_widths() {
+        const TRACE_LOG2: u8 = PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1;
+        let adapter = MockAdapterV1::default();
+        let mut protocol = adapter.protocol_v1();
+        protocol.parameters.minimum_trace_log2 = TRACE_LOG2;
+        protocol.parameters.maximum_trace_log2 = TRACE_LOG2;
+        // This focused quotient-scheduling test does not construct a proof. Widen its terminal
+        // degree cap only enough to admit the smaller domain; release-profile geometry remains
+        // pinned and is covered separately by the Protocol-2 dimension tests.
+        protocol.parameters.terminal_degree_bound = (1_usize << 8) - 1;
+        let layout = aggregate::AggregateProofLayoutV1::new(
+            protocol.parameters,
+            vec![aggregate::AggregateTraceGroupLayoutV1 {
+                native_trace_log2: TRACE_LOG2,
+                segment_instances: 1,
+                base_width: NOTE_COPY_WIDTH_V1,
+                aux_width: NOTE_COPY_AUX_WIDTH_V1,
+            }],
+        )
+        .expect("focused composition layout");
+        let trace_size = 1_usize << TRACE_LOG2;
+        let lde_size = layout.common_lde_size();
+        let prepared = PreparedNoteProfileV1 {
+            protocol,
+            trace_log2: TRACE_LOG2,
+            trace_size,
+            base_width: NOTE_COPY_WIDTH_V1,
+            aux_width: NOTE_COPY_AUX_WIDTH_V1,
+            fixed_width: NOTE_COPY_FIXED_WIDTH_V1,
+            constraint_count: NOTE_COPY_CONSTRAINT_COUNT_V1 + 1,
+            layout,
+            fixed_columns: Vec::new(),
+        };
+        let synthetic_columns = |width: usize, salt: u64| {
+            (0..width)
+                .map(|column| {
+                    (0..lde_size)
+                        .map(|row| {
+                            F::reduce(
+                                u128::from(salt + 1)
+                                    * u128::try_from(column + 3).expect("small column")
+                                    * u128::try_from(row + 5).expect("small row"),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let base_lde = synthetic_columns(NOTE_COPY_WIDTH_V1, 11);
+        let aux_lde = synthetic_columns(NOTE_COPY_AUX_WIDTH_V1, 17);
+        let fixed_lde = synthetic_columns(NOTE_COPY_FIXED_WIDTH_V1, 23);
+        let copy_challenges = NoteCopyChallengesV1 {
+            lanes: std::array::from_fn(|lane| NoteCopyLaneChallengesV1 {
+                beta: F(u64::try_from(lane + 29).expect("small beta")),
+                gamma: F(u64::try_from(lane + 41).expect("small gamma")),
+            }),
+        };
+        let alphas = (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
+            .map(|lane| {
+                (0..prepared.constraint_count)
+                    .map(|constraint| {
+                        E::from_base(F::reduce(
+                            u128::try_from(lane + 2).expect("small lane")
+                                * u128::try_from(constraint + 7).expect("small constraint"),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let run = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("private test thread pool")
+                .install(|| {
+                    composition_lanes_v1(
+                        &adapter,
+                        &prepared,
+                        &base_lde,
+                        &aux_lde,
+                        &fixed_lde,
+                        copy_challenges,
+                        &(),
+                        &alphas,
+                    )
+                    .expect("parallel composition lanes")
+                })
+        };
+
+        let lde_root = goldilocks_primitive_root_v1(prepared.layout.common_lde_log2())
+            .expect("composition LDE root");
+        let next_stride = prepared.layout.trace_groups()[0]
+            .next_stride(prepared.layout.common_lde_log2())
+            .expect("composition next-row stride");
+        let mut serial_lanes = (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
+            .map(|_| Vec::with_capacity(lde_size))
+            .collect::<Vec<_>>();
+        let mut x = F(GOLDILOCKS_GENERATOR_V1);
+        for index in 0..lde_size {
+            let next = (index + next_stride) % lde_size;
+            let residues = all_constraint_residues_v1(
+                &adapter,
+                &prepared,
+                &row_at_columns_v1(&base_lde, index).expect("serial current base"),
+                &row_at_columns_v1(&base_lde, next).expect("serial next base"),
+                &row_at_columns_v1(&aux_lde, index).expect("serial current auxiliary"),
+                &row_at_columns_v1(&aux_lde, next).expect("serial next auxiliary"),
+                &row_at_columns_v1(&fixed_lde, index).expect("serial fixed"),
+                copy_challenges,
+                &(),
+            )
+            .expect("serial constraint residues");
+            let inverse_vanishing = x
+                .pow(trace_size as u128)
+                .sub(F::ONE)
+                .inv()
+                .expect("composition coset is disjoint from the trace domain");
+            for (lane, values) in serial_lanes.iter_mut().enumerate() {
+                let numerator = residues
+                    .iter()
+                    .zip(&alphas[lane])
+                    .fold(E::ZERO, |sum, (residue, alpha)| {
+                        sum.add(alpha.mul_base(*residue))
+                    });
+                values.push(numerator.mul_base(inverse_vanishing));
+            }
+            x = x.mul(lde_root);
+        }
+        let serial = serial_lanes
+            .iter()
+            .map(|lane| {
+                aggregate::split_composition_evaluations_v1(
+                    lane,
+                    prepared.protocol.parameters,
+                    &prepared.layout,
+                )
+                .expect("serial composition split")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(run(1), serial);
+        assert_eq!(run(4), serial);
+    }
+
     fn proof_fixture_v1() -> &'static (MockAdapterV1, Vec<Vec<F>>, Vec<u8>) {
         static FIXTURE: OnceLock<(MockAdapterV1, Vec<Vec<F>>, Vec<u8>)> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -2356,7 +3265,7 @@ mod tests {
     #[test]
     fn shared_geometry_descriptor_and_digest_match_every_driver_constant() {
         let expected = format!(
-            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha256:transcript=sha256:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:codec=fixed-shape-big-endian",
+            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho-upper-bound={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:codec=fixed-shape-big-endian-digest384",
             std::str::from_utf8(PROOF_MANAGED_NOTE_STARK_SUITE_V1).expect("ASCII suite"),
             NOTE_COPY_WIDTH_V1,
             NOTE_COPY_LANES_V1,
@@ -2391,16 +3300,16 @@ mod tests {
             PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
             expected.as_bytes()
         );
+        let digest =
+            proof_managed_note_stark_profile_digest_v1(MOCK_DOMAINS_V1, MOCK_PROFILE_DESCRIPTOR_V1)
+                .expect("profile digest");
         assert_eq!(
-            <[u8; 32]>::from(Sha256::digest(
-                PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1
-            )),
-            PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1
-        );
-        assert_ne!(
-            proof_managed_note_stark_profile_digest_v1(MOCK_PROFILE_DESCRIPTOR_V1),
-            <[u8; 32]>::from(Sha256::digest(MOCK_PROFILE_DESCRIPTOR_V1)),
-            "the canonical profile digest must frame the shared geometry before the relation"
+            digest,
+            proof_managed_note_stark_profile_digest_v1(
+                MOCK_DOMAINS_V1,
+                MOCK_PROFILE_DESCRIPTOR_V1,
+            )
+            .expect("replayed profile digest"),
         );
     }
     #[test]
@@ -2411,7 +3320,7 @@ mod tests {
             mock_bound,
             aggregate::AggregateFriTheorem2BoundV1 {
                 query_error_bits: PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1,
-                commitment_error_bits: 195,
+                commitment_error_bits: 199,
             }
         );
         let mut maximum_release_parameters = mock_parameters_v1();
@@ -2428,13 +3337,15 @@ mod tests {
     }
     #[test]
     fn materialized_deep_codeword_matches_the_opened_row_verifier() {
-        // This is the smallest native domain that satisfies the release
-        // geometry's Protocol-2 FRI-mask dimension. A smaller trace would make
-        // the fixture invalid before reaching the DEEP differential check.
+        // Use a smaller native domain with a test-only terminal bound that
+        // still satisfies the Protocol-2 FRI-mask inequality. The production
+        // parameter certificate is exercised separately; this test isolates
+        // the DEEP materialization/opening differential.
         const DIFFERENTIAL_TRACE_LOG2_V1: u8 = 9;
         let mut parameters = mock_parameters_v1();
         parameters.minimum_trace_log2 = DIFFERENTIAL_TRACE_LOG2_V1;
         parameters.maximum_trace_log2 = DIFFERENTIAL_TRACE_LOG2_V1;
+        parameters.terminal_degree_bound = 255;
         parameters.maximum_base_columns_per_instance = 2;
         parameters.maximum_aux_columns_per_instance = 1;
         let layout = aggregate::AggregateProofLayoutV1::new(
@@ -2474,6 +3385,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         ];
         let base_tree = aggregate::row_tree_v1(
+            MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.base_leaf,
             MOCK_DOMAINS_V1.base_node,
             0,
@@ -2482,6 +3394,7 @@ mod tests {
         )
         .expect("base tree");
         let aux_tree = aggregate::row_tree_v1(
+            MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.aux_leaf,
             MOCK_DOMAINS_V1.aux_node,
             0,
@@ -2524,18 +3437,28 @@ mod tests {
         };
         aggregate::validate_deep_lane_mixes_v1(core::slice::from_ref(&mix), parameters, &layout)
             .expect("DEEP mix");
-        let codeword = mixed_deep_fri_base_v1(
-            &materials[0].base_lde,
-            &materials[0].aux_lde,
-            &compositions[0],
-            &deep,
-            deep_point,
-            &mix,
-            0,
-            parameters,
-            &layout,
-        )
-        .expect("DEEP codeword");
+        let build_codeword = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("private test thread pool")
+                .install(|| {
+                    mixed_deep_fri_base_v1(
+                        &materials[0].base_lde,
+                        &materials[0].aux_lde,
+                        &compositions[0],
+                        &deep,
+                        deep_point,
+                        &mix,
+                        0,
+                        parameters,
+                        &layout,
+                    )
+                    .expect("DEEP codeword")
+                })
+        };
+        let codeword = build_codeword(1);
+        assert_eq!(codeword, build_codeword(4));
         let deep_trace = aggregate::canonical_deep_trace_groups_v1(&deep, parameters, &layout)
             .expect("canonical DEEP trace");
         let deep_composition = aggregate::canonical_fp4_fields_v1(
@@ -2578,9 +3501,10 @@ mod tests {
     }
     #[test]
     fn replayed_native_masks_match_materialized_lde_at_both_deep_points() {
-        // Keep this fixture inside the same closed FRI geometry used by the
-        // materialized-DEEP differential test above.
-        let trace_log2 = 9;
+        // Match the valid, bounded differential geometry used immediately
+        // above so mask replay is tested without a production-sized fixture.
+        const MASK_DIFFERENTIAL_TRACE_LOG2_V1: u8 = 9;
+        let trace_log2 = MASK_DIFFERENTIAL_TRACE_LOG2_V1;
         let lde_log2 = trace_log2 + PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1;
         let trace_size = 1_usize << trace_log2;
         let columns = vec![
@@ -2598,6 +3522,7 @@ mod tests {
         let mut parameters = mock_parameters_v1();
         parameters.minimum_trace_log2 = trace_log2;
         parameters.maximum_trace_log2 = trace_log2;
+        parameters.terminal_degree_bound = 255;
         parameters.maximum_base_columns_per_instance = columns.len();
         parameters.maximum_aux_columns_per_instance = 1;
         let layout = aggregate::AggregateProofLayoutV1::new(
@@ -2637,8 +3562,8 @@ mod tests {
         let mut transcript =
             new_note_transcript_v1(&prepared, &adapter.public_digest).expect("transcript");
         let dummy_groups = [aggregate::AggregateTraceGroupProofV1 {
-            base_root: [7; 32],
-            aux_root: [0; 32],
+            base_root: GoldilocksDigest384V1::new([7; 6]).expect("base root"),
+            aux_root: GoldilocksDigest384V1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }];
@@ -2789,8 +3714,8 @@ mod tests {
         let mut transcript =
             new_note_transcript_v1(&prepared, &adapter.public_digest).expect("transcript");
         let groups = [aggregate::AggregateTraceGroupProofV1 {
-            base_root: [9; 32],
-            aux_root: [0; 32],
+            base_root: GoldilocksDigest384V1::new([9; 6]).expect("base root"),
+            aux_root: GoldilocksDigest384V1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }];
@@ -2815,14 +3740,23 @@ mod tests {
         verify_proof_managed_note_stark_v1(adapter, proof).expect("canonical proof verifies");
         assert_eq!(&proof[..4], b"PMN1");
         assert!(proof.len() < adapter.parameters.maximum_proof_bytes);
-        let digest: [u8; 32] = Sha256::digest(proof).into();
-        assert_ne!(digest, [0; 32]);
+        let digest = goldilocks_digest384_frame_v1(
+            MOCK_DOMAINS_V1.digest_context,
+            b"proof-managed-note-test-proof",
+            b"complete-wire",
+            0,
+            0,
+            0,
+            &[proof],
+        )
+        .expect("proof digest");
+        assert_ne!(digest, GoldilocksDigest384V1::default());
         let mut wrong_public = adapter.clone();
-        wrong_public.public_digest[0] ^= 1;
+        let mut wrong_public_words = wrong_public.public_digest.words();
+        wrong_public_words[0] += 1;
+        wrong_public.public_digest =
+            GoldilocksDigest384V1::new(wrong_public_words).expect("mutated public digest");
         assert!(verify_proof_managed_note_stark_v1(&wrong_public, proof).is_err());
-        let mut wrong_profile = adapter.clone();
-        wrong_profile.profile_digest[0] ^= 1;
-        assert!(verify_proof_managed_note_stark_v1(&wrong_profile, proof).is_err());
     }
     #[test]
     fn exact_wire_and_committed_values_reject_adversarial_mutations() {
@@ -2944,7 +3878,7 @@ mod tests {
         assert!(verify_proof_managed_note_stark_v1(adapter, &wrong_nonce).is_err());
     }
     #[test]
-    fn malformed_trace_profile_and_entropy_never_emit_a_proof() {
+    fn malformed_trace_and_entropy_never_emit_a_proof() {
         let adapter = MockAdapterV1::default();
         let mut changed = mock_base_columns_v1();
         changed[0][5] = F::ONE;
@@ -2958,6 +3892,18 @@ mod tests {
             ),
             Err(ProofManagedNoteStarkErrorV1::Randomness)
         ));
+    }
+    #[test]
+    fn malformed_profiles_are_rejected_before_proving() {
+        let adapter = MockAdapterV1::default();
+        for degree in [0, 1, 5, u8::MAX] {
+            let mut invalid = adapter.protocol_v1();
+            invalid.maximum_constraint_degree = degree;
+            assert_eq!(
+                invalid.validate(),
+                Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
+            );
+        }
         let mut wrong_parameters = adapter.clone();
         wrong_parameters.parameters.query_count -= 1;
         assert!(matches!(
@@ -3011,19 +3957,16 @@ mod tests {
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
             "profile domains must fit the canonical u16-framed transcript"
         );
-        let mut insufficient_fri_capacity = adapter.clone();
-        insufficient_fri_capacity.maximum_constraint_degree =
-            PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
-        assert!(matches!(
-            prepare_note_profile_v1(&insufficient_fri_capacity),
-            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
-        ));
-        let mut zero_profile = adapter;
-        zero_profile.profile_digest = [0; 32];
-        assert!(matches!(
-            prepare_note_profile_v1(&zero_profile),
-            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
-        ));
+        let mut degree_four = adapter.clone();
+        degree_four.maximum_constraint_degree = PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
+        prepare_note_profile_v1(&degree_four)
+            .expect("the canonical four composition chunks admit degree-four quotients");
+        let mut empty_profile = adapter.protocol_v1();
+        empty_profile.profile_descriptor = b"";
+        assert_eq!(
+            empty_profile.validate(),
+            Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+        );
     }
     #[test]
     fn mock_profile_cannot_exceed_the_consensus_proof_cap() {
@@ -3065,10 +4008,20 @@ mod tests {
         let maximum_fri_input_degree =
             maximum_fri_input_degree_v1(&prepared.layout, prepared.protocol.parameters)
                 .expect("FRI capacity");
-        assert_eq!(maximum_trace_degree, 4_539);
-        assert_eq!(maximum_quotient_degree, 4_982);
-        assert_eq!(maximum_fri_input_degree, 8_191);
-        assert!(maximum_trace_degree.max(maximum_quotient_degree) <= maximum_fri_input_degree);
+        // n = 8192, mask degree = 975, terminal degree = 143, six folds.
+        // Quotients span four coefficient chunks; their combined degree is
+        // compared with the composition capacity, not one FRI input chunk.
+        let maximum_composition_degree = prepared
+            .layout
+            .maximum_composition_degree(prepared.protocol.parameters)
+            .expect("composition capacity");
+        assert_eq!(maximum_trace_degree, 9_167);
+        assert_eq!(maximum_quotient_degree, 10_142);
+        assert_eq!(maximum_fri_input_degree, 9_215);
+        assert_eq!(maximum_composition_degree, 36_863);
+        assert!(maximum_trace_degree <= maximum_fri_input_degree);
+        assert!(maximum_quotient_degree > maximum_fri_input_degree);
+        assert!(maximum_quotient_degree <= maximum_composition_degree);
         assert!(matches!(
             maximum_masked_trace_degree_v1(usize::MAX),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
@@ -3104,10 +4057,10 @@ mod tests {
         let production_composition_capacity = production_layout
             .maximum_composition_degree(production_parameters)
             .expect("production composition capacity");
-        assert_eq!(degree_four_quotient, 50_924);
-        assert_eq!(degree_nine_quotient, 135_059);
-        assert_eq!(production_fri_input_capacity, 32_767);
-        assert_eq!(production_composition_capacity, 131_071);
+        assert_eq!(degree_four_quotient, 53_052);
+        assert_eq!(degree_nine_quotient, 139_847);
+        assert_eq!(production_fri_input_capacity, 18_431);
+        assert_eq!(production_composition_capacity, 73_727);
         assert!(
             maximum_masked_trace_degree_v1(production_trace_size).expect("production trace degree")
                 <= production_fri_input_capacity

@@ -59,17 +59,17 @@ _U64_MAX = (1 << 64) - 1
 
 
 PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1: dict[str, str] = {
-    "zk-ace-pq-authorization-v0": "zk_ace_authorization_action_v1",
+    "zk-ace-pq-authorization-v1": "zk_ace_authorization_action_v1",
     "anonymous-pgc-k-out-of-n-v1": "anonymous_pgc_payment_action_v1",
     "verange-transparent-range-v1": "verange_range_proof_v1",
     "iroha-zk-ams-v1": "zk_ams_admission_and_provisioning_v1",
-    "vega-existing-credential-zk-v0": "vega_credential_presentation_v1",
-    "iroha-jindo-polynomial-commitment-v0": "jindo_polynomial_evaluation_v1",
+    "vega-existing-credential-zk-v1": "vega_credential_presentation_v1",
+    "iroha-jindo-polynomial-commitment-v1": "jindo_polynomial_evaluation_v1",
     "iroha-bootle-lantern-anoncred-v1": "bootle_lantern_credential_presentation_v1",
     "orchard-halo2-actions-v1": "orchard_note_action_v1",
     "monero-fcmp-plus-plus-v1": "fcmp_membership_payment_v1",
     "iroha-ivm-private-note-stark-v1": "ivm_private_note_action_v1",
-    "pq-masp-stark-v0": "pq_masp_note_action_v1",
+    "pq-masp-stark-v1": "pq_masp_note_action_v1",
 }
 
 
@@ -211,9 +211,9 @@ class PrivateSettlementWalletLeaseV1:
     audit_plaintext_commitment: bytes
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class PrivateSettlementPreparedProofV1:
-    """Public artifacts returned by terminal native settlement proving."""
+    """Public proof, canonical delta, and capsule returned by native proving."""
 
     wallet_id: str
     canonical_genesis_hash: bytes
@@ -223,7 +223,13 @@ class PrivateSettlementPreparedProofV1:
     audit_plaintext_commitment: bytes
     statement_norito: bytes
     proof: bytes
+    delta_norito: bytes
     audit_capsule_norito: bytes
+
+    def __repr__(self) -> str:
+        """Return a log-safe representation without proof or capsule bytes."""
+
+        return "PrivateSettlementPreparedProofV1(<restricted>)"
 
 
 @dataclass(frozen=True)
@@ -552,7 +558,7 @@ class PrivacyWalletWorkerControllerV1:
         canonical_genesis_hash: bytes,
         current_height: int,
     ) -> PrivateSettlementPreparedProofV1:
-        """Consume one handle in Rust and return only public proof artifacts."""
+        """Consume one handle in Rust and return the proof-bound public leg."""
 
         _require_private_settlement_binding(binding)
         manifest = _require_opaque_public_bytes(
@@ -832,6 +838,7 @@ class PrivacyWalletWorkerControllerV1:
         expected_statement: bytes,
         expected_capsule: bytes,
     ) -> PrivateSettlementPreparedProofV1:
+        substituted = "private-settlement proof response substituted public artifacts"
         try:
             cursor = _Cursor(payload)
             if cursor.u8() != 5:
@@ -849,6 +856,10 @@ class PrivacyWalletWorkerControllerV1:
                 PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PROOF_BYTES_V1,
                 "private-settlement proof",
             )
+            delta = cursor.bytes_u32(
+                PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+                "private-settlement delta",
+            )
             capsule = cursor.bytes_u32(
                 PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
                 "private-settlement audit capsule",
@@ -859,12 +870,12 @@ class PrivacyWalletWorkerControllerV1:
                 or not hmac.compare_digest(genesis_hash, binding.network_id)
                 or not hmac.compare_digest(digests[0], binding.public_intent_digest)
                 or any(not any(digest) for digest in digests)
+                or not proof
+                or not delta
                 or not hmac.compare_digest(statement, expected_statement)
                 or not hmac.compare_digest(capsule, expected_capsule)
             ):
-                raise PrivacyWalletWorkerErrorV1(
-                    "private-settlement proof response substituted public artifacts"
-                )
+                raise PrivacyWalletWorkerErrorV1(substituted)
             return PrivateSettlementPreparedProofV1(
                 wallet_id=wallet_id,
                 canonical_genesis_hash=genesis_hash,
@@ -874,10 +885,11 @@ class PrivacyWalletWorkerControllerV1:
                 audit_plaintext_commitment=digests[3],
                 statement_norito=statement,
                 proof=proof,
+                delta_norito=delta,
                 audit_capsule_norito=capsule,
             )
-        except (PrivacyWalletWorkerErrorV1, TypeError, ValueError) as error:
-            raise self._malformed(str(error)) from error
+        except (PrivacyWalletWorkerErrorV1, TypeError, ValueError):
+            raise self._malformed(substituted) from None
 
 
 def privacy_wallet_public_intent_digest_v1(canonical_public_intent: bytes) -> bytes:

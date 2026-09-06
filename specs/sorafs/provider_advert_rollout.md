@@ -48,7 +48,12 @@ following requirements are enforced at admission:
      `returned_count` and `truncated` metadata so inventory scripts can detect
      partial pages. Use the same `limit` contract on
      `/v1/sorafs/storage/peers` when checking configured gateway/pin Torii peer
-     URLs on nodes with publish discovery enabled.
+     URLs on nodes with publish discovery enabled. Values under
+     `[sorafs.discovery.publish]` are exact canonical origins: use HTTPS, or
+     HTTP only with a literal loopback IP address, and omit credentials, paths,
+     queries, fragments, default ports, aliases, whitespace, and the trailing
+     root slash. Each URL is limited to 2048 bytes; `pin_torii_urls` is unique
+     and limited to 500 entries so the complete set fits one maximum readback.
 3. **Validate multi-source readiness.**
    - Execute `sorafs_fetch` with `--provider-advert=<path>`; the CLI now fails
      when `chunk_range_fetch` is missing and prints warnings for ignored unknown

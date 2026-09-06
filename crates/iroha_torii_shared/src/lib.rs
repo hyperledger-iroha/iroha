@@ -8,19 +8,25 @@ use iroha_data_model::{
     transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+/// Public account-bootstrap network and signing policy.
+pub mod account_capabilities;
+/// Canonical node configuration snapshots and operator update records.
+pub mod configuration;
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
 pub mod governance_proposal_api;
-/// Public Torii DTOs for the offline cash lifecycle.
-pub mod offline_api;
+/// Public Torii DTOs for the KAGEMUSHA lifecycle.
+pub mod kagemusha_api;
+/// Shared MCP wire constants for Torii and repository clients.
+pub mod mcp;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
 pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.
 pub mod prepared_transaction;
 /// Public and restricted DTOs for atomic private cross-dataspace settlement.
 pub mod private_settlement_api;
-/// Shared QR Code encoder used by Torii and CLI offline flows.
+/// Shared QR Code encoder used by Torii and CLI device-handoff flows.
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
@@ -28,6 +34,10 @@ pub mod route_catalog;
 pub mod sorafs_hedging_billing_api;
 /// Canonical wire types for externally signed SoraFS moderation recovery.
 pub mod sorafs_moderation_api;
+/// Canonical response envelopes for the Sumeragi evidence audit API.
+pub mod sumeragi_evidence_api;
+/// Canonical node status response and capability snapshots.
+pub mod status;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 /// Response header binding a hosted Soracloud response to the served service name.
@@ -338,18 +348,12 @@ pub mod uri {
     //! URI that Torii uses to route incoming requests.
     /// Query URI is used to handle incoming Query requests.
     pub const QUERY: &str = "/v1/query";
-    /// URI used to evaluate offline-payment readiness.
-    pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
-    /// URI used to resolve proof-bearing active receiver registration lineage.
-    pub const OFFLINE_RECIPIENT_LINEAGE: &str =
-        crate::route_catalog::offline::RECIPIENT_LINEAGE_PATH;
-    /// URI used to submit an online-to-offline top-up operation.
-    pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
-    /// URI used to submit an offline redemption operation.
-    pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
-    /// URI used to submit one exact ordinary Kagemusha V4 lifecycle transaction.
-    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION: &str =
-        crate::route_catalog::offline::KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH;
+    /// URI used to evaluate KAGEMUSHA readiness.
+    pub const KAGEMUSHA_READINESS: &str = crate::route_catalog::kagemusha::READINESS_PATH;
+    /// URI used to submit a KAGEMUSHA top-up operation.
+    pub const KAGEMUSHA_TOP_UP: &str = crate::route_catalog::kagemusha::TOP_UP_PATH;
+    /// URI used to submit a KAGEMUSHA redemption operation.
+    pub const KAGEMUSHA_REDEEM: &str = crate::route_catalog::kagemusha::REDEEM_PATH;
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;
@@ -393,8 +397,8 @@ pub mod uri {
     /// URI used to draft one strict native validation-fee Parliament proposal.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH;
-    /// URI used to fetch an offline operation by ID.
-    pub const OFFLINE_OPERATION: &str = crate::route_catalog::offline::OPERATION_PATH;
+    /// URI used to fetch a KAGEMUSHA operation by ID.
+    pub const KAGEMUSHA_OPERATION: &str = crate::route_catalog::kagemusha::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.
     pub const TRANSACTION: &str = "/v1/pipeline/transactions";
     /// Transaction entrypoint URI is used to handle sealed and non-external submissions.
@@ -450,6 +454,10 @@ pub mod uri {
     pub const NEXUS_LANE_LIFECYCLE: &str = "/v1/nexus/lifecycle";
     /// URI to report status for administration
     pub const STATUS: &str = "/status";
+    /// Canonical committed block-height diagnostic.
+    pub const STATUS_BLOCKS: &str = crate::route_catalog::diagnostic::STATUS_BLOCKS.path();
+    /// Current online-peer-count diagnostic.
+    pub const STATUS_PEERS: &str = crate::route_catalog::diagnostic::STATUS_PEERS.path();
     ///  Metrics URI is used to export metrics according to [Prometheus
     ///  Guidance](https://prometheus.io/docs/instrumenting/writing_exporters/).
     pub const METRICS: &str = "/metrics";
@@ -473,8 +481,6 @@ pub mod uri {
     pub const GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE: &str = "/v1/gov/proposals/sccp-route-governance";
     /// Standalone referendum ballot route; never a Parliament body ballot.
     pub const GOV_BALLOT_PLAIN: &str = "/v1/gov/ballots/plain";
-    /// Governance: query the current sortition council
-    pub const GOV_COUNCIL_CURRENT: &str = "/v1/gov/council/current";
     /// Governance: query exact citizenship registry count
     pub const GOV_CITIZENS_COUNT: &str = "/v1/gov/citizens";
     /// Governance: query citizenship status for an account
@@ -491,16 +497,12 @@ pub mod uri {
     pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
     /// Governance: read the active binding for a canonical contract address
     pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
+    /// Accounts: public bootstrap network identity and explicit signing default.
+    pub const ACCOUNTS_CAPABILITIES: &str = "/v1/accounts/capabilities";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Node: latest persisted query projection checkpoint descriptor
     pub const NODE_QUERY_PROJECTION_CHECKPOINT: &str = "/v1/node/query/projection/checkpoint";
-    /// Node: validate uploaded shard refs and preview a rebuilt projection checkpoint
-    pub const NODE_QUERY_PROJECTION_CHECKPOINT_PLAN: &str =
-        "/v1/node/query/projection/checkpoint/plan";
-    /// Node: rebuild uploaded shard refs and persist the resulting projection checkpoint
-    pub const NODE_QUERY_PROJECTION_CHECKPOINT_PUBLISH: &str =
-        "/v1/node/query/projection/checkpoint/publish";
     /// Node: enumerate the canonical live query projection shard catalog for one resource family
     pub const NODE_QUERY_PROJECTION_SHARD_CATALOG: &str =
         "/v1/node/query/projection/catalog/{resource}";
@@ -524,6 +526,7 @@ pub mod uri {
 }
 /// Queue pressure snapshot returned with transaction queue rejections.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+#[norito(deny_unknown_fields)]
 pub struct QueueErrorSnapshot {
     /// Queue state label (`healthy` or `saturated`).
     pub state: String,
@@ -538,6 +541,7 @@ pub struct QueueErrorSnapshot {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AxtErrorDetails {
     /// Stable AXT rejection code.
     #[norito(default)]
@@ -572,6 +576,7 @@ pub struct AxtErrorDetails {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeErrorDetails {
     /// Stable snake-case [`iroha_data_model::nexus::FeeRejectionCode`] label.
     pub code: String,
@@ -614,6 +619,7 @@ pub struct FeeErrorDetails {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ErrorDetails {
     /// Public surface layer that produced the error (for example `cli`, `torii`, or `mcp`).
     #[norito(default)]
@@ -754,6 +760,7 @@ pub fn network_profile_names() -> String {
 }
 /// Canonical Torii error envelope returned for HTTP API failures.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+#[norito(deny_unknown_fields)]
 pub struct ErrorEnvelope {
     /// Stable error code string.
     pub code: String,
@@ -2035,6 +2042,17 @@ mod tests {
                 format!(r#"{{"code":"bad_request","message":"invalid","details":{details}}}"#);
             norito::json::from_str::<ErrorEnvelope>(&json)
                 .expect_err("details must be the declared typed record or null");
+        }
+    }
+    #[test]
+    fn error_envelope_json_rejects_unknown_fields_recursively() {
+        for json in [
+            r#"{"code":"bad_request","message":"invalid","retired":null}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"retired":null}}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"fee":{"retired":null}}}"#,
+        ] {
+            norito::json::from_str::<ErrorEnvelope>(json)
+                .expect_err("error envelopes must reject unknown members at every owned boundary");
         }
     }
     #[test]

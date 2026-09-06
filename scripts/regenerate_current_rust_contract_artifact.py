@@ -1271,7 +1271,7 @@ def _fixture_document(
     provenance: dict[str, str | int],
 ) -> dict[str, Any]:
     return {
-        "fixture_version": 2,
+        "fixture_version": 1,
         "source": SOURCE_PATH.name,
         "artifact_base64": base64.b64encode(artifact).decode("ascii"),
         "artifact_length": len(artifact),

@@ -1,7 +1,7 @@
 /**
- * Fail-closed parser for the authoritative `PrivacyCapabilitySnapshotV1` Torii
- * response. This snapshot is the sole first-release privacy catalog contract;
- * only committed, typed protocol state can authorize proof submission.
+ * Fail-closed native admission for the canonical Exact12 capability manifest.
+ * Only native-validated canonical bytes from authenticated Torii state can
+ * authorize proof submission.
  */
 
 import { getNativeBinding } from "./native.js";
@@ -10,10 +10,7 @@ import {
   requirePrivacyExact12CapabilityAdmissionV1,
   requirePrivacyExact12CapabilityTupleV1,
 } from "./privacyCapabilityAdmission.js";
-import {
-  privacyCapabilityTransportV1,
-  privacyExact12CapabilityManifestTransportV1,
-} from "./privacyCapabilityTransport.js";
+import { privacyExact12CapabilityManifestTransportV1 } from "./privacyCapabilityTransport.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 export {
@@ -21,49 +18,46 @@ export {
   requirePrivacyExact12CapabilityTupleV1,
 };
 
-export const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1 = 1;
-
 /** Canonical public Exact12 capability-manifest version. */
 export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1 = 1;
 /** Native validator byte ceiling shared with the Rust decoder. */
 export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1 = 256 * 1024;
 
 export const PRIVACY_PROTOCOL_IDS_V1 = Object.freeze([
-  "zk-ace-pq-authorization-v0",
+  "zk-ace-pq-authorization-v1",
   "anonymous-pgc-k-out-of-n-v1",
   "verange-transparent-range-v1",
   "iroha-zk-ams-v1",
-  "vega-existing-credential-zk-v0",
-  "iroha-zk-x509-stark-p256-v0",
-  "iroha-jindo-polynomial-commitment-v0",
+  "vega-existing-credential-zk-v1",
+  "iroha-zk-x509-stark-p256-v1",
+  "iroha-jindo-polynomial-commitment-v1",
   "iroha-bootle-lantern-anoncred-v1",
   "orchard-halo2-actions-v1",
   "monero-fcmp-plus-plus-v1",
   "iroha-ivm-private-note-stark-v1",
-  "pq-masp-stark-v0",
+  "pq-masp-stark-v1",
 ]);
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U32 = 0xffff_ffff;
 const POLICY_DELAY_BLOCKS_V1 = 300n;
 const PROTOCOL_BINDINGS = Object.freeze({
-  "zk-ace-pq-authorization-v0": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
+  "zk-ace-pq-authorization-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
   "anonymous-pgc-k-out-of-n-v1": ["anonymous-pgc-p256", "native-anonymous-pgc-p256"],
   "verange-transparent-range-v1": ["iroha-verange-p256", "native-verange-p256"],
   "iroha-zk-ams-v1": [
     "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
     "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
   ],
-  "vega-existing-credential-zk-v0": ["vega-neutron-nova-spartan-hyrax-t256", "native-vega"],
-  "iroha-zk-x509-stark-p256-v0": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
-  "iroha-jindo-polynomial-commitment-v0": ["jindo-polynomial-commitment", "native-jindo"],
+  "vega-existing-credential-zk-v1": ["vega-neutron-nova-spartan-hyrax-t256", "native-vega"],
+  "iroha-zk-x509-stark-p256-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "iroha-jindo-polynomial-commitment-v1": ["jindo-polynomial-commitment", "native-jindo"],
   "iroha-bootle-lantern-anoncred-v1": ["lantern-lnp22-module-linear-norm", "native-lantern-lnp22"],
   "orchard-halo2-actions-v1": ["halo2-ipa-pasta", "native-halo2-orchard"],
   "monero-fcmp-plus-plus-v1": ["fcmp-plus-plus-curve-tree-bulletproofs", "native-fcmp-plus-plus"],
-  "iroha-ivm-private-note-stark-v1": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
-  "pq-masp-stark-v0": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
+  "iroha-ivm-private-note-stark-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "pq-masp-stark-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
 });
-
 const CONSENSUS_LIMIT_KEYS = Object.freeze([
   "max_actions_per_transaction",
   "max_actions_per_block",
@@ -89,92 +83,20 @@ const CONSENSUS_LIMIT_MAXIMA = Object.freeze({
   retained_root_count: 2048,
 });
 
-/** Error raised when a privacy-capability response cannot be trusted. */
-export class PrivacyCapabilitySnapshotError extends TypeError {
-  constructor(message, path = "privacy capability snapshot") {
-    super(`${path}: ${message}`);
-    this.name = "PrivacyCapabilitySnapshotError";
-    this.path = path;
-  }
-}
-
-/**
- * Parse and validate the exact first-release Torii privacy capability JSON.
- *
- * The output keeps the server's snake_case wire names so callers can compare
- * governed bindings byte-for-byte without an SDK-specific projection.
- *
- * @param {unknown} payload Torii JSON response body.
- * @returns {Readonly<Record<string, unknown>>} validated immutable snapshot.
- */
-export function parsePrivacyCapabilitySnapshotV1(payload) {
-  const snapshot = objectWithExactKeys(payload, [
-    "version",
-    "committed_height",
-    "consensus_policy",
-    "protocols",
-  ], "privacy capability snapshot");
-  if (u32(snapshot.version, "privacy capability snapshot.version") !== PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1) {
-    fail("version must be exactly 1", "privacy capability snapshot.version");
-  }
-  const committedHeight = u64(snapshot.committed_height, "privacy capability snapshot.committed_height");
-  const consensusPolicy = parseConsensusPolicy(snapshot.consensus_policy, committedHeight);
-  if (!Array.isArray(snapshot.protocols) || snapshot.protocols.length !== PRIVACY_PROTOCOL_IDS_V1.length) {
-    fail("protocols must contain exactly the 12 canonical protocol rows", "privacy capability snapshot.protocols");
-  }
-  const protocols = snapshot.protocols.map((row, index) => {
-    const expected = PRIVACY_PROTOCOL_IDS_V1[index];
-    return parseCapabilityRow(row, expected, committedHeight, `privacy capability snapshot.protocols[${index}]`);
-  });
-  return deepFreeze({
-    version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
-    committed_height: committedHeight,
-    consensus_policy: consensusPolicy,
-    protocols,
-  });
-}
-
-/**
- * Fetch and fail-closed validate the authoritative committed privacy
- * capability snapshot from a configured Iroha JS Torii client.
- *
- * @param {unknown} client A package ToriiClient or ToriiBrowserClient.
- * @param {object} [options] Client-specific request options.
- * @returns {Promise<Readonly<Record<string, unknown>>>}
- */
-export async function getPrivacyCapabilitiesV1(client, options) {
-  if (
-    (typeof client !== "object" && typeof client !== "function")
-    || client === null
-  ) {
-    throw new TypeError(
-      "getPrivacyCapabilitiesV1 client must be an Iroha JS Torii client",
-    );
-  }
-  const transport = client[privacyCapabilityTransportV1];
-  if (typeof transport !== "function") {
-    throw new TypeError(
-      "getPrivacyCapabilitiesV1 client must be an Iroha JS Torii client",
-    );
-  }
-  const payload = await Reflect.apply(transport, client, [options]);
-  return parsePrivacyCapabilitySnapshotV1(payload);
-}
-
-function parseConsensusPolicy(value, committedHeight) {
-  const policy = objectWithExactKeys(value, ["current_limits", "pending_tightening"], "privacy capability snapshot.consensus_policy");
-  const currentLimits = parseConsensusLimits(policy.current_limits, "privacy capability snapshot.consensus_policy.current_limits");
+function parseConsensusPolicy(value, committedHeight, path) {
+  const policy = objectWithExactKeys(value, ["current_limits", "pending_tightening"], path);
+  const currentLimits = parseConsensusLimits(policy.current_limits, `${path}.current_limits`);
   let pending = null;
   if (policy.pending_tightening !== null) {
-    const path = "privacy capability snapshot.consensus_policy.pending_tightening";
-    const tightening = objectWithExactKeys(policy.pending_tightening, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
-    const scheduled = positiveU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
-    const effective = positiveU64(tightening.effective_at_height, `${path}.effective_at_height`);
+    const pendingPath = `${path}.pending_tightening`;
+    const tightening = objectWithExactKeys(policy.pending_tightening, ["scheduled_at_height", "effective_at_height", "next_limits"], pendingPath);
+    const scheduled = positiveU64(tightening.scheduled_at_height, `${pendingPath}.scheduled_at_height`);
+    const effective = positiveU64(tightening.effective_at_height, `${pendingPath}.effective_at_height`);
     if (scheduled > MAX_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) {
-      fail("has invalid committed-height schedule", path);
+      fail("has invalid committed-height schedule", pendingPath);
     }
-    const nextLimits = parseConsensusLimits(tightening.next_limits, `${path}.next_limits`);
-    assertStrictTightening(currentLimits, nextLimits, path);
+    const nextLimits = parseConsensusLimits(tightening.next_limits, `${pendingPath}.next_limits`);
+    assertStrictTightening(currentLimits, nextLimits, pendingPath);
     pending = { scheduled_at_height: scheduled, effective_at_height: effective, next_limits: nextLimits };
   }
   return { current_limits: currentLimits, pending_tightening: pending };
@@ -244,7 +166,7 @@ function parseActivation(value, protocol, compiled, committedHeight, path) {
   const record = objectWithExactKeys(value, [
     "protocol_id", "proof_system_id", "engine_id", "parameter_id", "parameter_digest",
     "verifier_digest", "statement_schema_digest", "engine_manifest_digest", "lifecycle",
-    "protocol_limits", "pending_protocol_limits_tightening", "assurance",
+    "protocol_limits", "pending_protocol_limits_tightening",
   ], path);
   const bindings = parseBindings(record, protocol, path);
   if (compiled.status === "available") assertEqualBindings(bindings, compiled.value, path);
@@ -252,8 +174,12 @@ function parseActivation(value, protocol, compiled, committedHeight, path) {
   if (compiled.status === "available") assertLimitsAtMost(protocolLimits, compiled.value.protocol_limits, `${path}.protocol_limits`);
   const lifecycle = parseLifecycle(record.lifecycle, committedHeight, `${path}.lifecycle`);
   const pending = parseProtocolTightening(record.pending_protocol_limits_tightening, protocolLimits, committedHeight, `${path}.pending_protocol_limits_tightening`);
-  const assurance = taggedUnit(record.assurance, "assurance", "value", ["experimental"], `${path}.assurance`);
-  return { ...bindings, lifecycle, protocol_limits: protocolLimits, pending_protocol_limits_tightening: pending, assurance: tagged(assurance, "assurance", "value") };
+  return {
+    ...bindings,
+    lifecycle,
+    protocol_limits: protocolLimits,
+    pending_protocol_limits_tightening: pending,
+  };
 }
 
 function parseBindings(value, protocol, path) {
@@ -301,11 +227,11 @@ function limitFieldsFor(protocol) {
     case "anonymous-pgc-k-out-of-n-v1": return [["max_anonymity_set_size", 64, [16, 32, 64]], ["max_recipient_count", 8]];
     case "verange-transparent-range-v1": return [["max_aggregation_count", 8]];
     case "iroha-zk-ams-v1": return [["max_batch_size", 8], ["max_ring_size", 64, [16, 32, 64]]];
-    case "iroha-jindo-polynomial-commitment-v0": return [["max_polynomial_count", 4]];
+    case "iroha-jindo-polynomial-commitment-v1": return [["max_polynomial_count", 4]];
     case "orchard-halo2-actions-v1": return [["max_action_count", 2]];
     case "monero-fcmp-plus-plus-v1": return [["max_input_count", 2], ["max_output_count", 4]];
     case "iroha-ivm-private-note-stark-v1":
-    case "pq-masp-stark-v0": return [["max_input_count", 2], ["max_output_count", 2]];
+    case "pq-masp-stark-v1": return [["max_input_count", 2], ["max_output_count", 2]];
     default: return [];
   }
 }
@@ -376,12 +302,19 @@ function taggedUnit(value, tagKey, contentKey, permitted, path) {
 function tagged(value, tagKey, contentKey) { return { [tagKey]: value, [contentKey]: null }; }
 
 function fixedBytes(value, path) {
-  if (!Array.isArray(value) || value.length !== 32) fail("must be exactly 32 bytes", path);
+  const bytes = fixedBytesWithLength(value, 32, path);
+  if (bytes.every((byte) => byte === 0)) fail("must not be all zero", path);
+  return bytes;
+}
+
+function fixedBytesWithLength(value, length, path) {
+  if (!Array.isArray(value) || value.length !== length) {
+    fail(`must be exactly ${length} bytes`, path);
+  }
   const bytes = value.map((byte, index) => {
     if (!Number.isInteger(byte) || byte < 0 || byte > 255) fail("must contain only uint8 values", `${path}[${index}]`);
     return byte;
   });
-  if (bytes.every((byte) => byte === 0)) fail("must not be all zero", path);
   return bytes;
 }
 
@@ -405,6 +338,11 @@ function u32(value, path) {
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_U32) fail("must be a safe uint32 integer", path);
   return value;
 }
+function u16(value, path) {
+  const result = u32(value, path);
+  if (result > 0xffff) fail("must be a uint16 integer", path);
+  return result;
+}
 function positiveU32(value, path) { const result = u32(value, path); if (result === 0) fail("must be non-zero", path); return result; }
 function u64(value, path) {
   let result;
@@ -420,12 +358,64 @@ function u64(value, path) {
 }
 function positiveU64(value, path) { const result = u64(value, path); if (result === 0n) fail("must be non-zero", path); return result; }
 function sameJson(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
-function fail(message, path) { throw new PrivacyCapabilitySnapshotError(message, path); }
+function fail(message, path) { manifestFailV1(message, path); }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); for (const item of Object.values(value)) deepFreeze(item); } return value; }
 
 const PRIVACY_EXACT12_CAPABILITY_MANIFEST_JSON_MAX_BYTES_V1 = 2 * 1024 * 1024;
 const PRIVACY_EXACT12_MANIFEST_CONSTRUCTOR = Symbol("Exact12 manifest constructor");
 const privacyExact12ManifestState = new WeakMap();
+const privacyExact12QualificationState = new WeakMap();
+
+const PRIVACY_EXACT12_RELEASE_MANIFEST_KEYS_V1 = Object.freeze([
+  "version",
+  "catalog_id",
+  "catalog_commitment",
+  "source",
+  "abi_version",
+  "abi_hash",
+  "syscall_list_digest",
+  "executables",
+  "protocols",
+  "stage_receipts",
+  "proof_artifacts",
+  "sdk_packages",
+  "hardware_results",
+  "release_artifact_set_digest",
+  "audits",
+  "audit_bundle_digest",
+  "release_signatures",
+  "manifest_digest",
+]);
+
+const PRIVACY_EXACT12_RELEASE_PROTOCOL_BINDING_KEYS_V1 = Object.freeze([
+  "protocol_id",
+  "proof_system_id",
+  "engine_id",
+  "parameter_id",
+  "parameter_digest",
+  "verifier_digest",
+  "statement_schema_digest",
+  "engine_manifest_digest",
+  "security_claim",
+  "security_claim_digest",
+]);
+
+const PRIVACY_EXACT12_DEPLOYMENT_QUALIFICATION_KEYS_V1 = Object.freeze([
+  "version",
+  "chain_id",
+  "network_id",
+  "genesis_hash",
+  "release_manifest_digest",
+  "activation_transaction_digest",
+  "activations",
+  "validator_roster_digest",
+  "endpoint_version",
+  "convergence_height",
+  "converged_state_digest",
+  "validator_canaries",
+  "validator_signatures",
+  "qualification_digest",
+]);
 
 const PRIVACY_EXACT12_OPERATION_TUPLES_V1 = Object.freeze([
   Object.freeze(["zk_ace_authorization_action_v1", "authorization_action", 0]),
@@ -462,10 +452,9 @@ export class PrivacyExact12CapabilityManifestError extends TypeError {
 /**
  * Immutable model created only from native-validated canonical manifest bytes.
  *
- * The public fields preserve the exact `manifest_digest`, `operation_schema`,
- * `execution_mode`, `privacy_feature_mask`, readiness, and `activation_state`
- * projection. The self-digest identifies content; it does not authenticate an
- * untrusted producer. Use authenticated Torii transport or a signed candidate.
+ * The public fields preserve the exact seven-field rows and manifest digest.
+ * The self-digest identifies content; it does not authenticate an untrusted
+ * producer. Use authenticated Torii transport.
  */
 export class PrivacyExact12CapabilityManifestV1 {
   constructor(token, canonicalArchive, projection) {
@@ -477,6 +466,7 @@ export class PrivacyExact12CapabilityManifestV1 {
     this.version = projection.version;
     this.committed_height = projection.committed_height;
     this.consensus_policy = projection.consensus_policy;
+    this.qualification = projection.qualification;
     this.protocols = projection.protocols;
     this.manifest_digest = projection.manifest_digest;
     privacyExact12ManifestState.set(this, {
@@ -609,11 +599,11 @@ export async function getPrivacyExact12CapabilityManifestV1(client, options) {
 }
 
 /**
- * Require one committed active row and exact native-local compiled tuple.
+ * Require one production-qualified row and exact native-local compiled tuple.
  *
  * Transaction builders must call this guard with the validated manifest at
- * construction time. A legacy `PrivacyCapabilitySnapshotV1`, local catalog,
- * digest shell, or caller-created object is never accepted as admission.
+ * construction time. A local catalog, digest shell, or caller-created object
+ * is never accepted as admission.
  */
 function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
   const state = privacyExact12ManifestState.get(manifest);
@@ -622,12 +612,13 @@ function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
   const row = manifest.protocols[index];
   const readiness = row.readiness.readiness;
   if (
-    (readiness !== "available" && readiness !== "available-experimental")
-    || row.activation_state.activation_state !== "active"
+    readiness !== "production-qualified"
+    || row.activation?.lifecycle.state !== "active"
+    || manifest.qualification === null
     || row.compiled_profile.status !== "available"
   ) {
     manifestFailV1(
-      `protocol ${protocolId} is not active and available in committed state`,
+      `protocol ${protocolId} is not production-qualified in committed state`,
       `protocols[${index}]`,
     );
   }
@@ -654,8 +645,6 @@ function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
     execution_mode: row.execution_mode.execution_mode,
     privacy_feature_mask: row.privacy_feature_mask,
     readiness,
-    activation_state: row.activation_state.activation_state,
-    limitation: row.limitation?.limitation ?? null,
     compiled_profile: row.compiled_profile.value,
   });
 }
@@ -736,28 +725,38 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
     "version",
     "committed_height",
     "consensus_policy",
+    "qualification",
     "protocols",
     "manifest_digest",
   ], "Exact12 capability manifest");
-  let snapshot;
-  try {
-    snapshot = parsePrivacyCapabilitySnapshotV1({
-      version: manifest.version,
-      committed_height: manifest.committed_height,
-      consensus_policy: manifest.consensus_policy,
-      protocols: Array.isArray(manifest.protocols)
-        ? manifest.protocols.map((row) => ({
-            protocol_id: row?.protocol_id,
-            compiled_profile: row?.compiled_profile,
-            activation: row?.activation,
-          }))
-        : manifest.protocols,
-    });
-  } catch (cause) {
-    throw new PrivacyExact12CapabilityManifestError(
-      "native projection violates the closed profile, policy, or activation contract",
-      "Exact12 capability manifest",
-      { cause },
+  if (
+    u32(manifest.version, "Exact12 capability manifest.version")
+    !== PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1
+  ) {
+    manifestFailV1("version must be exactly 1", "Exact12 capability manifest.version");
+  }
+  const committedHeight = u64(
+    manifest.committed_height,
+    "Exact12 capability manifest.committed_height",
+  );
+  const consensusPolicy = parseConsensusPolicy(
+    manifest.consensus_policy,
+    committedHeight,
+    "Exact12 capability manifest.consensus_policy",
+  );
+  const qualification = manifest.qualification === null
+    ? null
+    : parsePrivacyExact12QualificationV1(
+        manifest.qualification,
+        "Exact12 capability manifest.qualification",
+      );
+  if (
+    !Array.isArray(manifest.protocols)
+    || manifest.protocols.length !== PRIVACY_PROTOCOL_IDS_V1.length
+  ) {
+    manifestFailV1(
+      "protocols must contain exactly the 12 canonical protocol rows",
+      "Exact12 capability manifest.protocols",
     );
   }
   const protocols = manifest.protocols.map((rawRow, index) => {
@@ -769,11 +768,18 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
       "privacy_feature_mask",
       "compiled_profile",
       "readiness",
-      "activation_state",
       "activation",
-      "limitation",
     ], path);
-    const base = snapshot.protocols[index];
+    const base = parseCapabilityRow(
+      {
+        protocol_id: row.protocol_id,
+        compiled_profile: row.compiled_profile,
+        activation: row.activation,
+      },
+      PRIVACY_PROTOCOL_IDS_V1[index],
+      committedHeight,
+      path,
+    );
     const [operationSchema, executionMode, featureMask] =
       PRIVACY_EXACT12_OPERATION_TUPLES_V1[index];
     const operation = manifestTaggedUnitV1(
@@ -799,38 +805,25 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
     const readiness = parsePrivacyExact12ReadinessV1(
       row.readiness,
       base,
-      index,
+      qualification,
+      committedHeight,
       `${path}.readiness`,
     );
-    const expectedActivationState = base.activation === null
-      ? "not-registered"
-      : base.activation.lifecycle.state;
-    const activationState = manifestTaggedUnitV1(
-      row.activation_state,
-      "activation_state",
-      "detail",
-      expectedActivationState,
-      `${path}.activation_state`,
-    );
-    const limitation = parsePrivacyExact12LimitationV1(
-      row.limitation,
-      index,
-      `${path}.limitation`,
-    );
     return {
-      ...base,
+      protocol_id: base.protocol_id,
       operation_schema: operation,
       execution_mode: execution,
       privacy_feature_mask: featureMask,
+      compiled_profile: base.compiled_profile,
       readiness,
-      activation_state: activationState,
-      limitation,
+      activation: base.activation,
     };
   });
   return deepFreeze({
     version: PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1,
-    committed_height: snapshot.committed_height,
-    consensus_policy: snapshot.consensus_policy,
+    committed_height: committedHeight,
+    consensus_policy: consensusPolicy,
+    qualification,
     protocols,
     manifest_digest: manifestFixed32V1(
       manifest.manifest_digest,
@@ -839,40 +832,220 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
   });
 }
 
-function parsePrivacyExact12ReadinessV1(value, row, index, path) {
-  const readiness = exactManifestObjectV1(value, ["readiness", "detail"], path);
-  const expected = row.compiled_profile.status === "unavailable"
-    ? "unavailable"
-    : index === 6
-      ? "available-experimental"
-      : "available";
-  if (readiness.readiness !== expected) {
-    manifestFailV1(`must equal evidence-derived ${expected}`, `${path}.readiness`);
-  }
-  const expectedDetail = expected === "unavailable"
-    ? row.compiled_profile.value
-    : null;
-  if (!manifestValuesEqualV1(readiness.detail, expectedDetail)) {
-    manifestFailV1("detail does not match the compiled result", `${path}.detail`);
-  }
-  return {
-    readiness: expected,
-    detail: expectedDetail,
-  };
-}
-
-function parsePrivacyExact12LimitationV1(value, index, path) {
-  if (index !== 6) {
-    if (value !== null) manifestFailV1("must be null for this protocol", path);
-    return null;
-  }
-  return manifestTaggedUnitV1(
+function parsePrivacyExact12QualificationV1(value, path) {
+  const record = exactManifestObjectV1(
     value,
-    "limitation",
-    "detail",
-    "missing-distribution-wide-knowledge-soundness-evidence",
+    ["release_manifest", "deployment_qualification"],
     path,
   );
+  const releasePath = `${path}.release_manifest`;
+  const release = exactManifestObjectV1(
+    record.release_manifest,
+    PRIVACY_EXACT12_RELEASE_MANIFEST_KEYS_V1,
+    releasePath,
+  );
+  if (u16(release.version, `${releasePath}.version`) !== 1) {
+    manifestFailV1("version must be exactly 1", `${releasePath}.version`);
+  }
+  if (u16(release.abi_version, `${releasePath}.abi_version`) !== 1) {
+    manifestFailV1("ABI version must be exactly 1", `${releasePath}.abi_version`);
+  }
+  if (
+    !Array.isArray(release.protocols)
+    || release.protocols.length !== PRIVACY_PROTOCOL_IDS_V1.length
+  ) {
+    manifestFailV1(
+      "protocols must contain exactly the 12 canonical release bindings",
+      `${releasePath}.protocols`,
+    );
+  }
+  const releaseBindings = release.protocols.map((rawBinding, index) => {
+    const bindingPath = `${releasePath}.protocols[${index}]`;
+    const binding = exactManifestObjectV1(
+      rawBinding,
+      PRIVACY_EXACT12_RELEASE_PROTOCOL_BINDING_KEYS_V1,
+      bindingPath,
+    );
+    return parseBindings(binding, PRIVACY_PROTOCOL_IDS_V1[index], bindingPath);
+  });
+
+  const deploymentPath = `${path}.deployment_qualification`;
+  const deployment = exactManifestObjectV1(
+    record.deployment_qualification,
+    PRIVACY_EXACT12_DEPLOYMENT_QUALIFICATION_KEYS_V1,
+    deploymentPath,
+  );
+  if (u16(deployment.version, `${deploymentPath}.version`) !== 1) {
+    manifestFailV1("version must be exactly 1", `${deploymentPath}.version`);
+  }
+  const releaseManifestDigest = manifestFixed32V1(
+    release.manifest_digest,
+    `${releasePath}.manifest_digest`,
+  );
+  const deployedReleaseManifestDigest = manifestFixed32V1(
+    deployment.release_manifest_digest,
+    `${deploymentPath}.release_manifest_digest`,
+  );
+  if (!manifestValuesEqualV1(releaseManifestDigest, deployedReleaseManifestDigest)) {
+    manifestFailV1(
+      "must name the embedded release manifest",
+      `${deploymentPath}.release_manifest_digest`,
+    );
+  }
+  manifestFixed32V1(deployment.genesis_hash, `${deploymentPath}.genesis_hash`);
+  if (
+    !Array.isArray(deployment.activations)
+    || deployment.activations.length !== PRIVACY_PROTOCOL_IDS_V1.length
+  ) {
+    manifestFailV1(
+      "activations must contain exactly the 12 canonical protocols",
+      `${deploymentPath}.activations`,
+    );
+  }
+  const activationHeights = deployment.activations.map((rawActivation, index) => {
+    const activationPath = `${deploymentPath}.activations[${index}]`;
+    const activation = exactManifestObjectV1(
+      rawActivation,
+      ["protocol_id", "activation_height"],
+      activationPath,
+    );
+    taggedUnit(
+      activation.protocol_id,
+      "protocol",
+      "value",
+      [PRIVACY_PROTOCOL_IDS_V1[index]],
+      `${activationPath}.protocol_id`,
+    );
+    return positiveU64(
+      activation.activation_height,
+      `${activationPath}.activation_height`,
+    );
+  });
+  const convergenceHeight = positiveU64(
+    deployment.convergence_height,
+    `${deploymentPath}.convergence_height`,
+  );
+  if (activationHeights.some((height) => height >= convergenceHeight)) {
+    manifestFailV1(
+      "every activation must precede convergence",
+      `${deploymentPath}.activations`,
+    );
+  }
+
+  // Rust has already validated every signature, audit, artifact, and digest in
+  // the canonical archive. Retain that complete projection while recording only
+  // the tuple metadata needed to recompute row readiness locally.
+  const qualification = {
+    release_manifest: release,
+    deployment_qualification: deployment,
+  };
+  privacyExact12QualificationState.set(qualification, {
+    releaseBindings,
+    activationHeights,
+    convergenceHeight,
+  });
+  return deepFreeze(qualification);
+}
+
+function qualificationMatchesCapabilityRowV1(qualification, row, committedHeight) {
+  const evidence = privacyExact12QualificationState.get(qualification);
+  if (!evidence || evidence.convergenceHeight > committedHeight) return false;
+  const protocol = row.protocol_id.protocol;
+  const index = PRIVACY_PROTOCOL_IDS_V1.indexOf(protocol);
+  if (
+    index < 0
+    || row.compiled_profile.status !== "available"
+    || row.activation?.lifecycle.state !== "active"
+  ) return false;
+  const releaseBinding = evidence.releaseBindings[index];
+  const compiledBinding = row.compiled_profile.value;
+  for (const key of [
+    "protocol_id",
+    "proof_system_id",
+    "engine_id",
+    "parameter_id",
+    "parameter_digest",
+    "verifier_digest",
+    "statement_schema_digest",
+    "engine_manifest_digest",
+  ]) {
+    if (!manifestValuesEqualV1(releaseBinding[key], compiledBinding[key])) return false;
+  }
+  return evidence.activationHeights[index]
+    === row.activation.lifecycle.record.activated_at_height;
+}
+
+function parsePrivacyExact12ReadinessV1(value, row, qualification, committedHeight, path) {
+  const readiness = exactManifestObjectV1(value, ["readiness", "detail"], path);
+  let expectedReadiness;
+  let expectedReason = null;
+  let expectedReasonDetail = null;
+  if (row.compiled_profile.status === "unavailable") {
+    expectedReadiness = "unavailable";
+    expectedReason = "compiled-profile";
+    expectedReasonDetail = row.compiled_profile.value;
+  } else if (row.activation === null) {
+    expectedReadiness = "unavailable";
+    expectedReason = "not-registered";
+  } else {
+    switch (row.activation.lifecycle.state) {
+      case "proposed":
+      case "suspended":
+      case "retired":
+        expectedReadiness = "unavailable";
+        expectedReason = row.activation.lifecycle.state;
+        break;
+      case "active":
+        if (qualification === null) {
+          expectedReadiness = "unavailable";
+          expectedReason = "missing-production-qualification";
+        } else if (!qualificationMatchesCapabilityRowV1(qualification, row, committedHeight)) {
+          expectedReadiness = "unavailable";
+          expectedReason = "invalid-production-qualification";
+        } else {
+          expectedReadiness = "production-qualified";
+        }
+        break;
+      default:
+        manifestFailV1("has an unknown lifecycle state", path);
+    }
+  }
+  if (readiness.readiness !== expectedReadiness) {
+    manifestFailV1(
+      `must equal evidence-derived ${expectedReadiness}`,
+      `${path}.readiness`,
+    );
+  }
+  if (expectedReadiness === "production-qualified") {
+    if (readiness.detail !== null) {
+      manifestFailV1("must have null detail", `${path}.detail`);
+    }
+    return { readiness: "production-qualified", detail: null };
+  }
+  const detail = exactManifestObjectV1(
+    readiness.detail,
+    ["reason", "detail"],
+    `${path}.detail`,
+  );
+  if (detail.reason !== expectedReason) {
+    manifestFailV1(
+      `must equal evidence-derived ${expectedReason}`,
+      `${path}.detail.reason`,
+    );
+  }
+  if (!manifestValuesEqualV1(detail.detail, expectedReasonDetail)) {
+    manifestFailV1(
+      "does not match the evidence-derived unavailable detail",
+      `${path}.detail.detail`,
+    );
+  }
+  return {
+    readiness: "unavailable",
+    detail: {
+      reason: expectedReason,
+      detail: expectedReasonDetail,
+    },
+  };
 }
 
 function requirePrivacyExact12ProtocolIdV1(value) {

@@ -131,14 +131,167 @@ fun TairaXorJettonWallet.sendSccpWalletMint(
     messageId: uint256,
     bridgeAddress: address,
     jettonAmount: coins,
-    payloadHash: uint256,
+    tail: SccpWalletMintTail,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: SccpWalletMint { queryId, messageId, bridgeAddress, jettonAmount, payloadHash },
+        body: SccpWalletMint {
+            queryId,
+            messageId,
+            bridgeAddress,
+            jettonAmount,
+            tail: tail.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpWalletPrepareBurn(
+    self,
+    from: address,
+    queryId: uint64,
+    expectedNonce: uint64,
+    jettonAmount: coins,
+    tairaRecipient: cell,
+    replayWitnesses: SccpBurnReplayWitnessesV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletPrepareBurn {
+            queryId,
+            expectedNonce,
+            jettonAmount,
+            tairaRecipient,
+            replayWitnesses: replayWitnesses.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpWalletValidateBurnRecipient(
+    self,
+    from: address,
+    encodedEd25519Key: uint256,
+    material: SccpWalletBurnValidationMaterialV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletValidateBurnRecipient {
+            encodedEd25519Key,
+            material: material.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpWalletValidateBurnSubgroup(
+    self,
+    from: address,
+    stepsRemaining: uint8,
+    remainingScalar: uint256,
+    result: SccpEdwardsPointV1,
+    multiple: SccpEdwardsPointV1,
+    material: SccpWalletBurnValidationMaterialV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletValidateBurnSubgroup {
+            stepsRemaining,
+            remainingScalar,
+            result: result.toCell(),
+            multiple: multiple.toCell(),
+            material: material.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpWalletBurnHashStep(
+    self,
+    from: address,
+    nextBlock: uint8,
+    chainingState: SccpBlake2bStateV1,
+    material: SccpWalletBurnValidationMaterialV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletBurnHashStep {
+            nextBlock,
+            chainingState: chainingState.toCell(),
+            material: material.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpWalletCommitValidatedBurn(
+    self,
+    from: address,
+    payloadHash: uint256,
+    material: SccpWalletBurnValidationMaterialV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletCommitValidatedBurn {
+            payloadHash,
+            material: material.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpWalletRetryBurnPrepare(
+    self,
+    from: address,
+    lockSequence: uint64,
+    replayWitnesses: SccpBurnPrepareRetryWitnessesV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletRetryBurnPrepare {
+            lockSequence,
+            replayWitnesses: replayWitnesses.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpWalletRefundBurnLock(
+    self,
+    from: address,
+    lockSequence: uint64,
+    replayWitness: SccpReplayWitnessV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletRefundBurnLock {
+            lockSequence,
+            replayWitness: replayWitness.toCell(),
+        },
     });
     return net.send(from, genericMsg);
 }
@@ -146,60 +299,54 @@ fun TairaXorJettonWallet.sendSccpWalletMint(
 fun TairaXorJettonWallet.sendSccpWalletBurn(
     self,
     from: address,
+    lockSequence: uint64,
+    queryId: uint64,
+    messageId: uint256,
+    outboundNonce: uint64,
+    ownerAddress: address,
+    jettonAmount: coins,
+    completed: bool,
+    tail: SccpWalletBurnTail,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpWalletBurn {
+            lockSequence,
+            queryId,
+            messageId,
+            outboundNonce,
+            ownerAddress,
+            jettonAmount,
+            completed,
+            tail: tail.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorJettonWallet.sendSccpMasterBurnAck(
+    self,
+    from: address,
+    lockSequence: uint64,
     queryId: uint64,
     messageId: uint256,
     jettonAmount: coins,
-    payloadHash: uint256,
-    sourceEventDigest: uint256,
+    tail: SccpMasterBurnAckTail,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: SccpWalletBurn { queryId, messageId, jettonAmount, payloadHash, sourceEventDigest },
-    });
-    return net.send(from, genericMsg);
-}
-
-fun TairaXorJettonWallet.sendSccpRefund(
-    self,
-    from: address,
-    queryId: uint64,
-    refundId: uint256,
-    recipientOwner: address,
-    jettonAmount: coins,
-    config: SendParams = {},
-): SendResultList {
-    val genericMsg = createMessage({
-        bounce: config.bounce,
-        value: config.value,
-        dest: self.address,
-        body: SccpRefund { queryId, refundId, recipientOwner, jettonAmount },
-    });
-    return net.send(from, genericMsg);
-}
-
-fun TairaXorJettonWallet.sendSccpWalletRefundTransfer(
-    self,
-    from: address,
-    queryId: uint64,
-    refundId: uint256,
-    bridgeAddress: address,
-    recipientOwner: address,
-    jettonAmount: coins,
-    config: SendParams = {},
-): SendResultList {
-    val genericMsg = createMessage({
-        bounce: config.bounce,
-        value: config.value,
-        dest: self.address,
-        body: SccpWalletRefundTransfer {
+        body: SccpMasterBurnAck {
+            lockSequence,
             queryId,
-            refundId,
-            bridgeAddress,
-            recipientOwner,
+            messageId,
             jettonAmount,
+            tail: tail.toCell(),
         },
     });
     return net.send(from, genericMsg);
@@ -237,4 +384,67 @@ fun TairaXorJettonWallet.sendAny(
 
 fun TairaXorJettonWallet.getWalletData(self): JettonWalletDataReply {
     return net.runGetMethod(self.address, "get_wallet_data");
+}
+
+fun TairaXorJettonWallet.getSccpPendingCounts(self): (uint16, uint16) {
+    return net.runGetMethod(self.address, "get_sccp_pending_counts");
+}
+
+fun TairaXorJettonWallet.getSccpOutboundState(self): (uint64, uint64, uint16) {
+    return net.runGetMethod(self.address, "get_sccp_outbound_state");
+}
+
+fun TairaXorJettonWallet.getSccpRouteBinding(self): (address, address, uint256, coins) {
+    return net.runGetMethod(self.address, "get_sccp_route_binding");
+}
+
+fun TairaXorJettonWallet.getSccpFundingParameters(self): (coins, coins, coins, coins) {
+    return net.runGetMethod(self.address, "get_sccp_funding_parameters");
+}
+
+fun TairaXorJettonWallet.getSccpReplayState(self, operation: uint8, shard: uint8): (
+    uint256,
+    uint256,
+    uint64,
+    uint64,
+) {
+    return net.runGetMethod(self.address, "get_sccp_replay_state", [operation, shard]);
+}
+
+fun TairaXorJettonWallet.getSccpVerifyReplayMembership(
+    self,
+    operation: uint8,
+    replayId: uint256,
+    payloadSha256: uint256,
+    amountScale9: uint128,
+    principal: address,
+    auxiliaryIdentitySha256: uint256,
+    witness: SccpReplayWitnessV1,
+): bool {
+    return net.runGetMethod(
+        self.address,
+        "get_sccp_verify_replay_membership",
+        [
+            operation,
+            replayId,
+            payloadSha256,
+            amountScale9,
+            principal,
+            auxiliaryIdentitySha256,
+            witness.toCell(),
+        ],
+    );
+}
+
+fun TairaXorJettonWallet.getSccpVerifyReplayNonMembership(
+    self,
+    operation: uint8,
+    replayId: uint256,
+    witness: SccpReplayWitnessV1,
+): bool {
+    return net.runGetMethod(
+        self.address,
+        "get_sccp_verify_replay_non_membership",
+        [operation, replayId, witness.toCell()],
+    );
 }

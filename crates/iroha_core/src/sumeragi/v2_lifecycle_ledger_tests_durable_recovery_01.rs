@@ -92,8 +92,13 @@ impl RecoveryFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = crate::sumeragi::synthetic_network_id(network);
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 1, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id(network),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 1,
@@ -105,6 +110,8 @@ impl RecoveryFixture {
             quorum: wire::DualQuorum::from_roster(&roster)
                 .expect("four-validator durable Ready-Fetch quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"durable Ready-Fetch nexus context"),
             execution_policy_hash: Hash::new(b"durable Ready-Fetch execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -210,13 +217,14 @@ impl RecoveryFixture {
         let receipt = store
             .store(manifest.clone(), body)
             .expect("fsync durable Ready-Fetch body");
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new([marker, 1]),
-            Hash::new([marker, 2]),
-            Hash::new([marker, 3]),
-            1,
-            Hash::new([marker, 4]),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new([marker, 1]),
+                Hash::new([marker, 2]),
+                Hash::new([marker, 3]),
+                1,
+                Hash::new([marker, 4]),
+            );
         let signers = vec![0, 1, 2];
         let preimage = wire::Vote {
             round,
@@ -397,13 +405,14 @@ impl RecoveryFixture {
             height: context.height,
             view,
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new([marker, 0xB1]),
-            Hash::new([marker, 0xB2]),
-            Hash::new([marker, 0xB3]),
-            1,
-            Hash::new([marker, 0xB4]),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new([marker, 0xB1]),
+                Hash::new([marker, 0xB2]),
+                Hash::new([marker, 0xB3]),
+                1,
+                Hash::new([marker, 0xB4]),
+            );
         let signers = vec![0, 1, 2];
         let preimage = wire::Vote {
             round,
@@ -1945,10 +1954,49 @@ fn complete_tip_terminal_apply_store_join_consumes_the_exact_opened_frame() {
 
     assert!(
         complete_tip
-            .into_canonical_predecessor_storage(&fixture.keys[0])
+            .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &fixture.keys[0])
             .and_then(|cut| cut.is_exact())
             .is_ok_and(|exact| exact),
         "the capability must open its exact ledger, body, and Serve-payload owners"
+    );
+}
+
+#[test]
+fn complete_tip_predecessor_store_rejects_a_foreign_kura_before_disk_mutation() {
+    let fixture = RecoveryFixture::new("foreign-kura-complete-tip-predecessor", 0x46);
+    let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+    let kura = Kura::blank_kura_for_testing();
+    let foreign_kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open canonical foreign-Kura regression predecessor");
+    assert!(empty.records().is_empty());
+    store
+        .persist(&ledger)
+        .expect("persist foreign-Kura regression predecessor");
+    let before = fs::read(predecessor_root.join(LEDGER_FILE))
+        .expect("read predecessor bytes before foreign-Kura rejection");
+    let foreign_lifecycle_root = foreign_kura.sumeragi_v2_storage_root().join("lifecycle-v1");
+
+    assert!(
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+            .into_kura_bound_canonical_predecessor_storage(foreign_kura.as_ref(), &fixture.keys[0],)
+            .is_err(),
+        "CompleteTip must reject a live Kura other than its recovery owner"
+    );
+    assert_eq!(
+        fs::read(predecessor_root.join(LEDGER_FILE))
+            .expect("reread predecessor after foreign-Kura rejection"),
+        before,
+        "foreign-Kura rejection must precede predecessor repair"
+    );
+    assert!(
+        !foreign_lifecycle_root.exists(),
+        "foreign-Kura rejection must not materialize lifecycle ancestry"
     );
 }
 
@@ -2641,7 +2689,7 @@ fn complete_tip_recovery_terminalizes_the_exact_live_apply_crash_window() {
     let complete_tip =
         complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref());
     let retired = complete_tip
-        .into_canonical_predecessor_storage(&fixture.keys[0])
+        .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &fixture.keys[0])
         .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
         .expect("recover live Apply and retire its CompleteTip predecessor exactly");
     assert_eq!(retired.retained_high_water(), 4);
@@ -2653,6 +2701,115 @@ fn complete_tip_recovery_terminalizes_the_exact_live_apply_crash_window() {
             .records()
             .iter()
             .all(|record| record.terminal().is_some_and(|terminal| terminal.is_some()))
+    );
+}
+
+#[test]
+fn complete_tip_corrupt_payload_rejects_before_live_apply_ledger_repair() {
+    let fixture = RecoveryFixture::new("complete-tip-corrupt-payload-before-repair", 0xA6);
+    let (terminal, projection) = terminal_decision_chain_fixture(&fixture);
+    let mut live_records = terminal.records.clone();
+    live_records[3].terminal = None;
+    let live = LifecycleLedgerV1::new(
+        terminal.context(),
+        terminal.high_water(),
+        live_records,
+        BTreeMap::new(),
+    )
+    .expect("construct exact live Apply corrupt-payload fixture");
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open corrupt-payload predecessor store");
+    assert!(empty.records().is_empty());
+    predecessor_store
+        .persist(&live)
+        .expect("persist live Apply before corrupt payload rejection");
+    let ledger_path = predecessor_root.join(LEDGER_FILE);
+    let before = fs::read(&ledger_path).expect("read live Apply predecessor bytes");
+    let payload_directory = predecessor_root.join("certified-serve-payload-v1");
+    fs::create_dir(&payload_directory).expect("create corrupt payload directory");
+    let corrupt_path = payload_directory.join("unexpected");
+    let corrupt = b"not a canonical Certified-Serve payload";
+    fs::write(&corrupt_path, corrupt).expect("write corrupt payload sentinel");
+
+    assert!(
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+            .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &fixture.keys[0])
+            .is_err(),
+        "corrupt payload storage must reject CompleteTip before live Apply repair"
+    );
+    assert_eq!(
+        fs::read(&ledger_path).expect("reread live Apply after corrupt payload rejection"),
+        before,
+        "payload authentication must precede every predecessor ledger repair"
+    );
+    assert_eq!(
+        fs::read(&corrupt_path).expect("reread corrupt payload sentinel"),
+        corrupt,
+        "failed payload authentication must not mutate the corrupt evidence"
+    );
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn complete_tip_replaced_payload_directory_rejects_before_live_apply_ledger_repair() {
+    let fixture = RecoveryFixture::new("complete-tip-replaced-payload-before-repair", 0xA7);
+    let (terminal, projection) = terminal_decision_chain_fixture(&fixture);
+    let mut live_records = terminal.records.clone();
+    live_records[3].terminal = None;
+    let live = LifecycleLedgerV1::new(
+        terminal.context(),
+        terminal.high_water(),
+        live_records,
+        BTreeMap::new(),
+    )
+    .expect("construct exact live Apply replaced-payload fixture");
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open replaced-payload predecessor store");
+    assert!(empty.records().is_empty());
+    predecessor_store
+        .persist(&live)
+        .expect("persist live Apply before payload-directory replacement");
+    let ledger_path = predecessor_root.join(LEDGER_FILE);
+    let before = fs::read(&ledger_path).expect("read live Apply predecessor bytes");
+
+    let complete_tip =
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref());
+    let payload_directory = predecessor_root.join("certified-serve-payload-v1");
+    let detached_directory = predecessor_root.join("certified-serve-payload-v1-detached");
+    fs::rename(&payload_directory, &detached_directory)
+        .expect("detach the recovery-authenticated payload directory");
+    fs::create_dir(&payload_directory).expect("install replacement payload directory");
+    let sentinel_path = payload_directory.join("replacement-sentinel");
+    let sentinel = b"replacement must remain untouched";
+    fs::write(&sentinel_path, sentinel).expect("write replacement payload sentinel");
+
+    assert!(
+        complete_tip
+            .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &fixture.keys[0])
+            .is_err(),
+        "CompleteTip must reject a payload directory replaced after recovery authentication"
+    );
+    assert_eq!(
+        fs::read(&ledger_path).expect("reread live Apply after replacement rejection"),
+        before,
+        "payload-directory authority rejection must precede every ledger repair"
+    );
+    assert_eq!(
+        fs::read(&sentinel_path).expect("reread replacement sentinel"),
+        sentinel,
+        "rejected replacement storage must remain untouched"
     );
 }
 
@@ -2976,6 +3133,120 @@ pub(crate) fn complete_tip_retirement_binds_only_the_exact_unlaunched_successor_
         !bound.remains_exact_for_test(),
         "the bound owner must detect canonical H+1 drift before launch"
     );
+}
+
+#[test]
+fn complete_tip_post_settlement_reauthentication_refreezes_exact_successor() {
+    let fixture = RecoveryFixture::new("complete-tip-post-settlement-reauthentication", 0x5A);
+    let (predecessor, projection) = terminal_decision_chain_fixture(&fixture);
+    let verified_successor = complete_tip_successor_fixture(&fixture, &projection);
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open post-settlement CompleteTip predecessor");
+    assert!(empty.records().is_empty());
+    predecessor_store
+        .persist(&predecessor)
+        .expect("persist post-settlement CompleteTip predecessor");
+    let retirement =
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+            .into_canonical_predecessor_storage(&fixture.keys[0])
+            .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+            .expect("retire predecessor and authenticate its empty successor");
+    let successor_root = retirement
+        .successor_store
+        .path
+        .parent()
+        .expect("canonical successor store has a parent root")
+        .to_path_buf();
+    let body_root = kura.sumeragi_v2_storage_root().join("bodies");
+    let owner = empty_successor_owner_for_complete_tip(
+        &retirement,
+        kura.as_ref(),
+        verified_successor.clone(),
+        &body_root,
+        &successor_root,
+        retirement.successor_store.clone(),
+    );
+    let mut bound = retirement
+        .bind_successor_owner(owner)
+        .expect("bind the exact pre-launch CompleteTip successor owner");
+    assert!(bound.remains_exact_for_test());
+
+    let retained_frame = bound.retirement.successor_frame_identity;
+    let retained = bound.retirement.successor_ledger.clone();
+    let settled_ordinal = retained
+        .high_water()
+        .checked_add(1)
+        .expect("post-settlement ordinal remains representable");
+    let settled_owner = OwnerId::new(
+        CausalRoot::new(LifecycleDigest::new([0x5B; 32])),
+        settled_ordinal,
+    );
+    let settled = LifecycleLedgerV1::new(
+        retained.context(),
+        settled_ordinal,
+        vec![unrelated_terminal_record(
+            retained.context(),
+            settled_owner,
+            settled_ordinal,
+            0x5C,
+        )],
+        BTreeMap::new(),
+    )
+    .expect("construct exact post-launch settlement successor");
+    bound
+        .retirement
+        .successor_store
+        .persist_exact_successor(&retained, &settled)
+        .expect("publish exact post-launch settlement successor");
+
+    let authority = authority::lifecycle_storage_owner_test_authority(&verified_successor, 0, 0)
+        .expect("construct post-settlement lifecycle authority");
+    let mut coordinator = LifecycleCoordinator::new_with_authority(authority, settled_ordinal);
+    coordinator.reconcile_restart(
+        settled
+            .recovery_snapshot(BTreeMap::from([(
+                settled_ordinal,
+                std::collections::BTreeSet::<PhysicalSlotId>::new(),
+            )]))
+            .expect("project post-settlement recovery snapshot"),
+    );
+    assert!(coordinator.fault.is_none());
+    coordinator.ledger_store = Some(bound.retirement.successor_store.clone());
+    assert_eq!(
+        LifecycleLedgerV1::from_coordinator(&coordinator)
+            .expect("project post-settlement coordinator"),
+        settled
+    );
+    bound.owner.coordinator = coordinator;
+    let body_store = bound
+        .owner
+        .body_store
+        .take()
+        .expect("pre-launch owner retains its body store");
+    bound.owner.body_store_identity = Some(body_store.instance_identity());
+    assert!(bound.owner.adapter_startup.take().is_some());
+
+    assert_ne!(retained_frame, settled.frame_identity());
+    assert!(
+        !bound.retirement.authorizes_retained_successor(),
+        "the retirement must not authorize a post-settlement frame before reauthentication"
+    );
+    bound
+        .retirement
+        .reauthenticate_launched_successor_owner(&mut bound.owner)
+        .expect("reauthenticate the exact post-settlement CompleteTip successor");
+    assert_eq!(
+        bound.retirement.successor_frame_identity,
+        settled.frame_identity(),
+        "reauthentication must refreeze the exact settled successor frame"
+    );
+    assert!(bound.retirement.authorizes_retained_successor());
 }
 
 #[test]

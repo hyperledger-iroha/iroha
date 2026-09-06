@@ -493,7 +493,7 @@ async fn pipeline_status_handler_uses_dedicated_rate_limiter() {
         &headers,
         Some(remote_ip),
         "v1/pipeline/transactions/status",
-        false,
+        app.authenticated_api_token_principal(&headers),
     );
     assert!(limits::allow_conditionally(&app.rate_limiter, &rate_key, true).await);
     assert!(!limits::allow_conditionally(&app.rate_limiter, &rate_key, true).await);
@@ -554,7 +554,7 @@ async fn pipeline_status_handler_charges_cache_hits_before_local_reads() {
         &headers,
         Some(remote_ip),
         "v1/pipeline/transactions/status",
-        false,
+        app.authenticated_api_token_principal(&headers),
     );
     assert!(limits::allow_conditionally(&app.pipeline_status_rate_limiter, &rate_key, true).await);
     assert!(!limits::allow_conditionally(&app.pipeline_status_rate_limiter, &rate_key, true).await);
@@ -633,12 +633,15 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
                 block_hash,
                 entry_hash: Hash::prehashed([batch_index as u8 + 1; Hash::LENGTH]),
                 batch_index,
-                parameter: "fastpq-test".to_owned(),
+                parameter: "fastpq-state-transition-stark-v1".to_owned(),
                 transition_count: 0,
-                trace_commitment: Hash::new([batch_index as u8]),
+                trace_commitment: iroha_data_model::privacy::GoldilocksDigest384V1::new(
+                    [u64::from(batch_index) + 1; 6],
+                )
+                .expect("canonical test FASTPQ trace commitment"),
                 proof_digest: Hash::new(&proof),
                 batch: fastpq_prover::TransitionBatch::new(
-                    "fastpq-test",
+                    "fastpq-state-transition-stark-v1",
                     fastpq_prover::PublicInputs::default(),
                 ),
                 proof,
@@ -663,8 +666,10 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
         value.get("proofs").and_then(|v| v.as_array()).map(Vec::len),
         Some(1)
     );
-    let batch =
-        fastpq_prover::TransitionBatch::new("fastpq-test", fastpq_prover::PublicInputs::default());
+    let batch = fastpq_prover::TransitionBatch::new(
+        "fastpq-state-transition-stark-v1",
+        fastpq_prover::PublicInputs::default(),
+    );
     let mut artifact_bytes = 0;
     let (encoded, reconstructed) = encode_fastpq_recovery_batch(&batch, false, &mut artifact_bytes)
         .expect("bounded FASTPQ batch encoding");
@@ -763,11 +768,16 @@ async fn account_read_for_routes_skips_route_unavailable_until_success() {
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
     let (local_route, foreign_route) =
         configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
-    let response = super::execute_torii_account_read_for_routes(
+    let response = super::execute_torii_account_read_for_resolved_routes(
         &app,
         vec![foreign_route, local_route],
+        super::ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: account_id.to_string(),
+            caller_account_id: Some(account_id.to_string()),
+        },
         account_id.to_string(),
         ResponseFormat::Json,
+        None,
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -1278,11 +1288,16 @@ async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_m
     let mut app = mk_app_state_for_tests();
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
-    let response = super::execute_torii_account_read_for_routes(
+    let response = super::execute_torii_account_read_for_resolved_routes(
         &app,
         vec![foreign_route, local_route],
+        super::ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: missing.to_string(),
+            caller_account_id: Some(missing.to_string()),
+        },
         missing.to_string(),
         ResponseFormat::Json,
+        None,
     )
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -1302,11 +1317,16 @@ async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable
     let mut app = mk_app_state_for_tests();
     let (_local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
-    let response = super::execute_torii_account_read_for_routes(
+    let response = super::execute_torii_account_read_for_resolved_routes(
         &app,
         vec![foreign_route],
+        super::ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: missing.to_string(),
+            caller_account_id: Some(missing.to_string()),
+        },
         missing.to_string(),
         ResponseFormat::Json,
+        None,
     )
     .await;
     assert_route_unavailable_response(&response);
@@ -1809,22 +1829,56 @@ fn transaction_details_rejects_unsigned_and_broadened_queries() {
     );
 }
 #[tokio::test]
-async fn pipeline_status_handler_returns_applied_for_sealed_reveal_entrypoint_hash() {
+async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias() {
     let app = mk_app_state_for_tests();
     let (block, reveal_entry_hash) = make_sealed_reveal_block(1, None);
+    let signed_hash = block
+        .external_transactions()
+        .next()
+        .expect("sealed reveal carries one signed transaction")
+        .hash();
+    let signed_entrypoint_alias =
+        iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash.clone());
     let header = block.header();
     store_block(&app, block);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header);
-    let entrypoint_hashes: HashSet<_> = [reveal_entry_hash].into_iter().collect();
+    let entrypoint_hashes: HashSet<_> = [reveal_entry_hash, signed_entrypoint_alias]
+        .into_iter()
+        .collect();
     state_block
         .transactions
         .insert_block(entrypoint_hashes, height_nz);
     state_block.commit().expect("commit");
+    assert_eq!(
+        canonical_carrier_hash_for_indexed_transaction_identity(
+            app.as_ref(),
+            height_nz,
+            &signed_entrypoint_alias,
+        )
+        .expect("signed execution alias resolves its sealed carrier"),
+        reveal_entry_hash
+    );
     let resp =
         pipeline_status_response(app.clone(), reveal_entry_hash.to_string(), None, "ok").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let payload = torii_json_body(resp).await;
+    assert_eq!(
+        payload
+            .get("status")
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str),
+        Some("Applied")
+    );
+    assert_eq!(
+        payload
+            .get("resolved_from")
+            .and_then(norito::json::Value::as_str),
+        Some("state")
+    );
+    let resp = pipeline_status_response(app, signed_hash.to_string(), None, "signed alias").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;
     assert_eq!(

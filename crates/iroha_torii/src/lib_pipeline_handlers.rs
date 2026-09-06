@@ -45,33 +45,18 @@ fn transaction_batch_submission_response(accepted_count: usize) -> Response {
 }
 async fn allow_transaction_batch_rate_limit(
     limiter: &limits::RateLimiter,
-    api_token: Option<&str>,
-    transactions: &[DecodedVersionedSignedTransaction],
+    verified_authorities: &[AccountId],
 ) -> bool {
-    if let Some(token) = api_token {
-        return limiter.allow_repeated(token, transactions.len()).await;
-    }
-    let mut index = 0;
-    while index < transactions.len() {
-        let authority = transactions[index].authority();
-        let start = index;
-        index += 1;
-        while index < transactions.len() && transactions[index].authority() == authority {
-            index += 1;
-        }
-        let key = authority.to_string();
-        if !limiter.allow_repeated(&key, index - start).await {
-            return false;
-        }
-    }
-    true
+    admit_verified_transaction_authorities(limiter, verified_authorities)
+        .await
+        .is_ok()
 }
 async fn handler_post_transactions_batch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
 ) -> Result<Response, Error> {
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     validate_transaction_batch_body_size(&body, app.transaction_batch_max_bytes)?;
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
@@ -93,14 +78,15 @@ async fn handler_post_transactions_batch(
         },
     )
     .await?;
-    if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, token_hdr, &transactions).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let accepted_count = {
+    admit_transaction_api_token_preauth(
+        &app.tx_preauth_rate_limiter,
+        token_hdr,
+        transactions.len(),
+    )
+    .await?;
+    let ((accepted_transactions, stateless_cache_warm), compute_permit) = {
         let app = app.clone();
-        let (accepted_count, _compute_permit) = run_transaction_ingress_compute_job(
+        run_transaction_ingress_compute_job(
             compute_permit,
             "transaction_batch_admission_worker_failed",
             move || {
@@ -111,12 +97,6 @@ async fn handler_post_transactions_batch(
                     app.state.pipeline.signature_batch_max_ed25519,
                 );
                 for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
-                    // Exact lifecycle multisig is intentionally outside generic transaction
-                    // admission, so preserve its dedicated-route error before that policy runs.
-                    routing::ensure_generic_transaction_batch_not_ordinary_kagemusha_lifecycle(
-                        app.queue.as_ref(),
-                        transaction.signed(),
-                    )?;
                     let accepted_tx =
                         routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
                             app.state.clone(),
@@ -158,22 +138,37 @@ async fn handler_post_transactions_batch(
                     }
                     accepted.push((accepted_tx, routing_plan));
                 }
-                let accepted_count = accepted.len();
-                routing::push_accepted_transactions_for_ingress_with_routing_plans(
-                    app.queue.clone(),
-                    app.state.clone(),
-                    accepted,
-                )?;
-                app.state.warm_stateless_validation_cache_for_torii_prechecked_batch(
-                    &stateless_cache_warm,
-                );
-                Ok::<usize, Error>(accepted_count)
+                Ok::<_, Error>((accepted, stateless_cache_warm))
             },
         )
-        .await
-        ?;
-        accepted_count
+        .await?
     };
+    let verified_authorities = accepted_transactions
+        .iter()
+        .map(|(transaction, _)| transaction.authority().clone())
+        .collect::<Vec<_>>();
+    let rate_limit_reservation =
+        reserve_verified_transaction_authorities(&app.tx_rate_limiter, &verified_authorities)
+            .await?;
+    let accepted_count = accepted_transactions.len();
+    let app_for_push = app.clone();
+    let (_, _compute_permit) = run_transaction_ingress_compute_job(
+        compute_permit,
+        "transaction_batch_queue_worker_failed",
+        move || {
+            routing::push_accepted_transactions_for_ingress_with_routing_plans(
+                app_for_push.queue.clone(),
+                app_for_push.state.clone(),
+                accepted_transactions,
+            )?;
+            rate_limit_reservation.commit();
+            app_for_push
+                .state
+                .warm_stateless_validation_cache_for_torii_prechecked_batch(&stateless_cache_warm);
+            Ok::<(), Error>(())
+        },
+    )
+    .await?;
     Ok(transaction_batch_submission_response(accepted_count))
 }
 #[cfg(feature = "app_api")]
@@ -196,6 +191,9 @@ async fn handler_proof_record_get(
         enforce,
     )
     .await?;
+    // Proof records are immutable protocol-verification artifacts, not
+    // dataspace-owned ledger rows. They are intentionally public across the
+    // configured route set; entity and transaction reads use caller visibility.
     let routes = torii_all_dataspace_routes(app.as_ref());
     let (rec, diagnostics, routed_by, fanout_reservation) =
         match resolve_torii_proof_record_for_routes(&app, routes, id).await {
@@ -346,13 +344,15 @@ async fn handler_pipeline_recovery(
     .await?;
     let admission = acquire_query_admission(&app, true).await?;
     let kura = Arc::clone(&app.kura);
-    let (result, _admission) = tokio::task::spawn_blocking(move || {
-        // Keep both general-query and heavy-work permits in the physical worker.
-        // Cancelling the HTTP future cannot release capacity while Kura reads,
-        // JSON projection, or encoding still consume memory.
-        let result = build_pipeline_recovery_response(&kura, height);
-        (result, admission)
-    })
+    let (result, _admission) = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            // Keep both general-query and heavy-work permits in the physical worker.
+            // Cancelling the HTTP future cannot release capacity while Kura reads,
+            // JSON projection, or encoding still consume memory.
+            let result = build_pipeline_recovery_response(&kura, height);
+            (result, admission)
+        }),
+    )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "pipeline_recovery_worker_failed",
@@ -413,7 +413,8 @@ mod pipeline_recovery_response_bounds_tests {
         assert!(handler.contains("check_operator_rate_limit("));
         assert!(!handler.contains("validate_api_token("));
         assert!(handler.contains("acquire_query_admission(&app, true)"));
-        assert!(handler.contains("tokio::task::spawn_blocking"));
+        assert!(handler.contains("spawn_blocking_recoverable"));
+        assert!(handler.contains("join_recoverable"));
         assert!(handler.contains("(result, admission)"));
     }
     #[test]
@@ -484,13 +485,15 @@ async fn handler_pipeline_recovery_fastpq_proofs(
     let page = PipelineFastpqRecoveryPage::parse(&query)?;
     let admission = acquire_query_admission(&app, true).await?;
     let kura = Arc::clone(&app.kura);
-    let (result, _admission) = tokio::task::spawn_blocking(move || {
-        // Keep both general-query and heavy-work permits in the physical worker.
-        // Cancelling the HTTP future therefore cannot release capacity while
-        // Kura reads, transcript reconstruction, or encoding still run.
-        let result = build_pipeline_recovery_fastpq_response(&kura, height, page);
-        (result, admission)
-    })
+    let (result, _admission) = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            // Keep both general-query and heavy-work permits in the physical worker.
+            // Cancelling the HTTP future therefore cannot release capacity while
+            // Kura reads, transcript reconstruction, or encoding still run.
+            let result = build_pipeline_recovery_fastpq_response(&kura, height, page);
+            (result, admission)
+        }),
+    )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "pipeline_recovery_fastpq_worker_failed",
@@ -660,7 +663,7 @@ fn fastpq_proof_snapshot_recovery_json(
     );
     object.insert(
         "trace_commitment".to_owned(),
-        norito::json::to_value(&snapshot.trace_commitment.to_string())
+        norito::json::to_value(&hex::encode(snapshot.trace_commitment.to_le_bytes()))
             .expect("serialize FASTPQ trace commitment"),
     );
     object.insert(
@@ -1253,41 +1256,106 @@ fn certified_merge_pipeline_transactions(
         )
         .collect())
 }
-fn pipeline_status_from_state(
-    app: &AppState,
+#[derive(Clone, Debug)]
+enum CanonicalTransactionOutcome {
+    Applied {
+        height: NonZeroU64,
+        settled_at: SystemTime,
+    },
+    Rejected {
+        height: NonZeroU64,
+        reason: TransactionRejectionReason,
+    },
+}
+impl CanonicalTransactionOutcome {
+    fn into_pipeline_status_entry(self) -> PipelineStatusEntry {
+        match self {
+            Self::Applied { height, .. } => {
+                PipelineStatusEntry::fresh(PipelineStatusKind::Applied, Some(height), None)
+            }
+            Self::Rejected { height, reason } => PipelineStatusEntry::fresh(
+                PipelineStatusKind::Rejected,
+                Some(height),
+                Some(pipeline_rejection_summary(&reason)),
+            ),
+        }
+    }
+}
+fn canonical_transaction_outcome(
+    state: &CoreState,
+    kura: &Kura,
     hash: &HashOf<SignedTransaction>,
-) -> Result<Option<PipelineStatusEntry>, Error> {
+) -> Result<Option<CanonicalTransactionOutcome>, Error> {
     let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
-    let Some(height) = app.state.committed_entrypoint_height(&entrypoint_hash) else {
+    let state_view = state.view();
+    let Some(height) = state_view.transactions.get(&entrypoint_hash) else {
         return Ok(None);
     };
     let height_u64 = u64::try_from(height.get())
         .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
     let height_nz = NonZeroU64::new(height_u64)
         .ok_or_else(|| pipeline_status_projection_error("committed height is zero"))?;
-    let block = app.kura.get_block(height).ok_or_else(|| {
+    let expected_hash = state_view
+        .block_hashes()
+        .get(height.get().saturating_sub(1))
+        .copied()
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "transaction {hash} is indexed beyond the committed block-hash journal at height {}",
+                height.get()
+            ))
+        })?;
+    let block = kura.get_block(height).ok_or_else(|| {
         pipeline_status_projection_error(format!("canonical block {} is unavailable", height.get()))
     })?;
     let block_ref = block.as_ref();
+    if block_ref.header().height() != height_nz {
+        return Err(pipeline_status_projection_error(format!(
+            "Kura returned block height {} for indexed height {}",
+            block_ref.header().height(),
+            height.get()
+        )));
+    }
+    if block_ref.hash() != expected_hash {
+        return Err(pipeline_status_projection_error(format!(
+            "Kura block hash at height {} does not match the committed State journal",
+            height.get()
+        )));
+    }
+    let settled_at = UNIX_EPOCH
+        .checked_add(block_ref.header().creation_time())
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "block {} creation time exceeds SystemTime",
+                height.get()
+            ))
+        })?;
+    let mut direct_result = None;
     for (index, entrypoint, result) in block_ref.entrypoint_results() {
         if index >= block_ref.external_entrypoint_count() {
             break;
         }
-        if entrypoint.hash() != entrypoint_hash {
+        if !transaction_entrypoint_matches_indexed_identity(&entrypoint, &entrypoint_hash) {
             continue;
         }
-        let (kind, rejection) = match &result.0 {
-            Ok(_) => (PipelineStatusKind::Applied, None),
-            Err(reason) => (
-                PipelineStatusKind::Rejected,
-                Some(pipeline_rejection_summary(reason)),
-            ),
-        };
-        return Ok(Some(PipelineStatusEntry::fresh(
-            kind,
-            Some(height_nz),
-            rejection,
-        )));
+        if direct_result.replace(result).is_some() {
+            return Err(pipeline_status_projection_error(format!(
+                "transaction {hash} occurs more than once in canonical block {}",
+                height.get()
+            )));
+        }
+    }
+    if let Some(result) = direct_result {
+        return Ok(Some(match &result.0 {
+            Ok(_) => CanonicalTransactionOutcome::Applied {
+                height: height_nz,
+                settled_at,
+            },
+            Err(reason) => CanonicalTransactionOutcome::Rejected {
+                height: height_nz,
+                reason: reason.clone(),
+            },
+        }));
     }
     let reference = block_ref
         .execution_context()
@@ -1298,8 +1366,7 @@ fn pipeline_status_from_state(
                 height.get()
             ))
         })?;
-    let entry = app
-        .kura
+    let entry = kura
         .get_merge_entry_by_carrier_height(height)
         .map_err(pipeline_status_projection_error)?
         .ok_or_else(|| {
@@ -1309,35 +1376,46 @@ fn pipeline_status_from_state(
             ))
         })?;
     let transactions = certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?;
-    let transaction = transactions
-        .iter()
-        .find(|(membership_hash, _, _)| membership_hash == &entrypoint_hash)
-        .map(|(_, _, transaction)| transaction)
-        .ok_or_else(|| {
+    let mut matches = transactions.iter().filter(|(_, _, transaction)| {
+        transaction_entrypoint_matches_indexed_identity(transaction.entrypoint(), &entrypoint_hash)
+    });
+    let transaction = matches.next().map(|(_, _, transaction)| transaction).ok_or_else(|| {
             pipeline_status_projection_error(format!(
                 "transaction {hash} is indexed at merge carrier {} but its authenticated transcript does not contain it",
                 height.get()
             ))
         })?;
-    let (kind, rejection) = match &transaction.result().0 {
-        Ok(_) => (PipelineStatusKind::Applied, None),
-        Err(reason) => (
-            PipelineStatusKind::Rejected,
-            Some(pipeline_rejection_summary(reason)),
-        ),
-    };
-    Ok(Some(PipelineStatusEntry::fresh(
-        kind,
-        Some(height_nz),
-        rejection,
-    )))
+    if matches.next().is_some() {
+        return Err(pipeline_status_projection_error(format!(
+            "transaction {hash} occurs more than once in merge carrier {}",
+            height.get()
+        )));
+    }
+    Ok(Some(match &transaction.result().0 {
+        Ok(_) => CanonicalTransactionOutcome::Applied {
+            height: height_nz,
+            settled_at,
+        },
+        Err(reason) => CanonicalTransactionOutcome::Rejected {
+            height: height_nz,
+            reason: reason.clone(),
+        },
+    }))
+}
+fn pipeline_status_from_state(
+    state: &CoreState,
+    kura: &Kura,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<Option<PipelineStatusEntry>, Error> {
+    canonical_transaction_outcome(state, kura, hash)
+        .map(|outcome| outcome.map(CanonicalTransactionOutcome::into_pipeline_status_entry))
 }
 fn pipeline_status_terminal_or_state_entry(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
-    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash)? {
+    if let Some(entry) = pipeline_status_from_state(&app.state, &app.kura, hash)? {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Ok(Some((entry, "state")));
@@ -1349,7 +1427,7 @@ fn pipeline_status_terminal_or_state_entry(
     }
     Ok(None)
 }
-fn pipeline_status_local_entry_checked(
+pub(crate) fn pipeline_status_local_entry_checked(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
@@ -1502,6 +1580,61 @@ fn transaction_details_authority_is_involved(
                 outcome.asset.account() == authority || &outcome.destination == authority
             })
 }
+fn canonical_carrier_hash_for_indexed_transaction_identity(
+    app: &AppState,
+    block_height: NonZeroUsize,
+    indexed_identity: &HashOf<TransactionEntrypoint>,
+) -> Result<HashOf<TransactionEntrypoint>, Error> {
+    let block = app.kura.get_block(block_height).ok_or_else(|| {
+        pipeline_status_projection_error(format!(
+            "canonical block {} is unavailable",
+            block_height.get()
+        ))
+    })?;
+    let block_ref = block.as_ref();
+    for (index, entrypoint, _) in block_ref.entrypoint_results() {
+        if index >= block_ref.external_entrypoint_count() {
+            break;
+        }
+        if transaction_entrypoint_matches_indexed_identity(&entrypoint, indexed_identity) {
+            return Ok(entrypoint.hash());
+        }
+    }
+    let reference = block_ref
+        .execution_context()
+        .and_then(|context| context.merge_entry.as_ref())
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "indexed transaction identity {indexed_identity} is absent from block {}",
+                block_height.get()
+            ))
+        })?;
+    let entry = app
+        .kura
+        .get_merge_entry_by_carrier_height(block_height)
+        .map_err(pipeline_status_projection_error)?
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "block {} has a merge reference but no canonical sidecar",
+                block_height.get()
+            ))
+        })?;
+    certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?
+        .into_iter()
+        .find(|(_, _, transaction)| {
+            transaction_entrypoint_matches_indexed_identity(
+                transaction.entrypoint(),
+                indexed_identity,
+            )
+        })
+        .map(|(carrier_hash, _, _)| carrier_hash)
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "indexed transaction identity {indexed_identity} is absent from merge carrier {}",
+                block_height.get()
+            ))
+        })
+}
 fn pipeline_transaction_details_response(
     app: &SharedAppState,
     authority: &AccountId,
@@ -1520,11 +1653,19 @@ fn pipeline_transaction_details_response(
         )))
     })?;
     let is_operator = transaction_details_operator_authority(world, authority);
+    drop(state_view);
+    let canonical_entrypoint_hash = canonical_carrier_hash_for_indexed_transaction_identity(
+        app.as_ref(),
+        block_height,
+        &entrypoint_hash,
+    )?;
+    let canonical_entrypoint_hash_text = canonical_entrypoint_hash.to_string();
+    let state_view = app.state.view();
     let mut transactions =
         iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(
             &state_view,
             CompoundPredicate::from_filters(CommittedTxFilters {
-                entry_eq: Some(entrypoint_hash),
+                entry_eq: Some(canonical_entrypoint_hash),
                 ..CommittedTxFilters::default()
             }),
         )
@@ -1556,7 +1697,7 @@ fn pipeline_transaction_details_response(
         trigger_completions: trigger_completion_summaries_for_entrypoint_hash(
             app,
             block_height,
-            &hash,
+            &canonical_entrypoint_hash_text,
         ),
         hash,
         transaction,
@@ -1699,14 +1840,7 @@ async fn handler_pipeline_transaction_status(
                 Err(response) => return Ok(response),
             }
         }
-        Ok(execute_torii_fanout_singleton_read(
-            &app,
-            ToriiReadEndpointV1::PipelineTransactionStatusGet,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-        )
-        .await)
+        Ok(execute_torii_public_pipeline_status_fanout(&app, query_string).await)
     }
     #[cfg(not(feature = "app_api"))]
     {
@@ -1746,6 +1880,8 @@ async fn handler_pipeline_transaction_details(
 }
 async fn handler_trigger_completions(
     State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     AxQuery(query): AxQuery<TriggerCompletionQuery>,
 ) -> Result<Response, Error> {
@@ -1753,10 +1889,29 @@ async fn handler_trigger_completions(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
-    Ok(crate::utils::respond_with_format(
-        trigger_completion_query_response(&app, &query)?,
-        format,
-    ))
+    check_operator_rate_limit(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/triggers/completed",
+        true,
+    )
+    .await?;
+    let admission = acquire_query_admission(&app, true).await?;
+    let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
+        // Keep the admission permits inside the physical task. Dropping the
+        // HTTP future must not free capacity while Kura reconstruction still
+        // consumes CPU and memory.
+        let result = trigger_completion_query_response(&app, &query);
+        (result, admission)
+    });
+    let (result, _admission) = crate::panic_recovery::join_recoverable(worker)
+        .await
+        .map_err(|error| Error::AppServiceUnavailable {
+            code: "trigger_completion_worker_failed",
+            message: error.to_string(),
+        })?;
+    Ok(crate::utils::respond_with_format(result?, format))
 }
 async fn handler_policy(
     State(app): State<SharedAppState>,

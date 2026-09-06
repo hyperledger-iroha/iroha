@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -12,9 +14,12 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.subscriptions.*
 
 /** Lightweight HTTP client for Torii subscription endpoints (`/v1/subscriptions/`). */
-class SubscriptionToriiClient private constructor(builder: Builder) {
+class SubscriptionToriiClient private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
 
-    private val executor: HttpTransportExecutor = builder.executor
+
+    private val executor: HttpTransportExecutor = HttpTransportScope.create(builder.executor)
     private val baseUri: URI = builder.baseUri
     private val timeout: Duration? = builder.timeout
     private val defaultHeaders: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
@@ -172,7 +177,7 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
     }
 
     class Builder internal constructor() {
-        internal var executor: HttpTransportExecutor = PlatformHttpTransportExecutor.createDefault()
+        internal var executor: HttpTransportExecutor? = null
         internal var baseUri: URI = URI.create("http://localhost:8080")
         internal var timeout: Duration? = Duration.ofSeconds(15)
         internal val defaultHeaders = LinkedHashMap<String, String>()

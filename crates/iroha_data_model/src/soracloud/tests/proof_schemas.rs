@@ -128,7 +128,7 @@ fn soracloud_fhe_input_admission_schema_advertises_backend() {
     )
     .expect("bounded ciphertext proof input digest domain is valid UTF-8");
     assert!(
-        schema.contains("\"proof_backend\":\"stark/fri/sha256-goldilocks\""),
+        schema.contains("\"proof_backend\":\"stark/fri/poseidon-x7-goldilocks-6x64-v1\""),
         "public schema must advertise the canonical BFV STARK/FRI backend"
     );
     assert!(

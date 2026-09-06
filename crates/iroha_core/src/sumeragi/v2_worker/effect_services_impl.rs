@@ -2,14 +2,24 @@ impl V2EffectServices for ProductionV2Services {
     type Error = String;
     fn finish_runtime_step_reconciliation(
         &mut self,
-        decided_subject: Option<wire::BlockSubject>,
+        _decided_subject: Option<wire::BlockSubject>,
+        authority: Option<super::serviced_candidate_store::LeaderWireRecoveryAuthority>,
     ) -> Result<(), Self::Error> {
-        if decided_subject.is_some() {
-            let next = self.leader_wire_recovery_authority.with_durable_decision();
-            self.leader_wire_ingress
-                .advance_leader_wire_recovery_cut(next)?;
-            self.leader_wire_recovery_authority = next;
+        let next = authority.ok_or_else(|| {
+            "production ingress reconciliation has no adapter WAL authority".to_owned()
+        })?;
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        if !next.monotonically_extends(self.leader_wire_recovery_authority) {
+            return Err(
+                "production ingress reconciliation regressed the adapter WAL authority".to_owned(),
+            );
         }
+        self.leader_wire_ingress
+            .advance_leader_wire_recovery_cut(next)?;
+        self.leader_wire_recovery_authority = next;
         Ok(())
     }
     fn complete_leader_wire_runtime_terminal(
@@ -116,7 +126,6 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -137,12 +146,10 @@ impl V2EffectServices for ProductionV2Services {
                     "local proposal chunks belong to another reducer incarnation".to_owned(),
                 );
             }
-            let encoded_chunks = chunks
-                .messages
-                .iter()
-                .cloned()
-                .map(Self::preencode_v2_network_message)
-                .collect::<Result<Vec<_>, _>>()?;
+            // `NetworkMessage::clone` retains the Arc-backed message and its
+            // canonical cached bytes. Proposal retry must not deep-clone and
+            // re-encode every payload chunk.
+            let encoded_chunks = chunks.messages.clone();
             let committee = self.committee_for_round(proposal.round)?;
             let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round);
             let payload_targets = if first_fast_path_send {
@@ -244,21 +251,52 @@ impl V2EffectServices for ProductionV2Services {
                 return Ok(());
             }
             BodyFetchServiceOwner::Live => {
-                let existing_task = self
+                let (existing_task, terminally_failed) = self
                     .fetches
                     .get(&task.id())
-                    .map(|fetch| fetch.task.clone())
+                    .map(|fetch| {
+                        (
+                            fetch.task.clone(),
+                            fetch
+                                .chunks
+                                .as_ref()
+                                .is_some_and(V2ChunkSession::is_terminally_failed),
+                        )
+                    })
                     .ok_or_else(|| {
                         "classified Sumeragi v2 body-fetch owner disappeared".to_owned()
                     })?;
                 if task != existing_task && !task.monotonically_extends(&existing_task) {
                     return Err("conflicting Sumeragi v2 body-fetch task".to_owned());
                 }
+                if terminally_failed {
+                    // Reducer retry may refresh the exact task owner, but a
+                    // deterministically poisoned manifest cannot benefit from
+                    // more peers or shards and must never emit another request.
+                    let task_id = task.id();
+                    self.fetches
+                        .get_mut(&task_id)
+                        .expect("terminal body-fetch owner was classified above")
+                        .task = task;
+                    operation.complete();
+                    return Ok(());
+                }
                 let manifest_upgrade =
                     existing_task.manifest().is_none() && task.manifest().is_some();
-                let manifest_hash = manifest_upgrade.then(|| {
-                    HashOf::new(task.manifest().expect("manifest upgrade was checked above"))
-                });
+                let opened_chunks = manifest_upgrade
+                    .then(|| {
+                        V2ChunkSession::open(
+                            &self.context,
+                            task.manifest()
+                                .expect("manifest upgrade was checked above")
+                                .clone(),
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+                let manifest_hash = opened_chunks
+                    .as_ref()
+                    .map(|session| session.validated_manifest().manifest_hash());
                 if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
                     return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
                 }
@@ -274,18 +312,6 @@ impl V2EffectServices for ProductionV2Services {
                     .as_ref()
                     .map(|_| task.sources().to_vec())
                     .unwrap_or_default();
-                let opened_chunks = manifest_upgrade
-                    .then(|| {
-                        V2ChunkSession::open(
-                            &self.chunk_root,
-                            &self.context,
-                            task.manifest()
-                                .expect("manifest upgrade was checked above")
-                                .clone(),
-                        )
-                    })
-                    .transpose()
-                    .map_err(|error| error.to_string())?;
                 let fetch = self.fetches.get_mut(&task.id()).ok_or_else(|| {
                     "preflighted Sumeragi v2 body-fetch owner disappeared".to_owned()
                 })?;
@@ -319,10 +345,6 @@ impl V2EffectServices for ProductionV2Services {
         if task.manifest().is_none() && task.certified_request().is_none() {
             return Err("Sumeragi v2 body-fetch task has no acquisition authority".to_owned());
         }
-        let manifest_hash = task.manifest().map(HashOf::new);
-        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
-            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
-        }
         let certified_message = task
             .certified_request()
             .map(|request| {
@@ -338,9 +360,15 @@ impl V2EffectServices for ProductionV2Services {
         let chunks = task
             .manifest()
             .cloned()
-            .map(|manifest| V2ChunkSession::open(&self.chunk_root, &self.context, manifest))
+            .map(|manifest| V2ChunkSession::open(&self.context, manifest))
             .transpose()
             .map_err(|error| error.to_string())?;
+        let manifest_hash = chunks
+            .as_ref()
+            .map(|session| session.validated_manifest().manifest_hash());
+        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
+            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
+        }
         if let Some(hash) = manifest_hash {
             self.fetch_by_manifest.insert(hash, task.id());
         }
@@ -433,9 +461,61 @@ impl V2EffectServices for ProductionV2Services {
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        if self.body_fetch_service_owner(task.id())? == BodyFetchServiceOwner::Live {
+            let fetch = self
+                .fetches
+                .get(&task.id())
+                .expect("live body-fetch owner was classified above");
+            if fetch.task != *task {
+                return Err(format!(
+                    "Sumeragi v2 body-fetch work {} differs from executor ownership",
+                    task.id().get()
+                ));
+            }
+            if fetch
+                .chunks
+                .as_ref()
+                .is_some_and(V2ChunkSession::is_terminally_failed)
+            {
+                // The reducer's generic noncanonical-body seam asks to retire
+                // and retry. A deterministic RS16 failure is stronger: retain
+                // this buffer-free tombstone until ordinary view/height
+                // cancellation so the exact manifest can never be reopened.
+                operation.complete();
+                return Ok(());
+            }
+        }
         self.remove_exact_body_fetch_owner(task)?;
         operation.complete();
         Ok(())
+    }
+    fn validated_payload_manifest<'a>(
+        &'a mut self,
+        context: &wire::HeightContext,
+        task: &BodyFetchTask,
+    ) -> Result<&'a wire::ValidatedPayloadManifest, Self::Error> {
+        if context != &self.context
+            || self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live
+        {
+            return Err("Sumeragi v2 chunk validation has no exact live owner".to_owned());
+        }
+        let fetch = self
+            .fetches
+            .get(&task.id())
+            .expect("live body-fetch owner was classified above");
+        if fetch.task != *task {
+            return Err(format!(
+                "Sumeragi v2 chunk task {} differs from validation-session ownership",
+                task.id().get()
+            ));
+        }
+        fetch
+            .chunks
+            .as_ref()
+            .map(V2ChunkSession::validated_manifest)
+            .ok_or_else(|| {
+                "manifest-less certified body fetch has no chunk validation session".to_owned()
+            })
     }
     fn accept_authenticated_chunk(
         &mut self,
@@ -463,9 +543,18 @@ impl V2EffectServices for ProductionV2Services {
             let session = fetch.chunks.as_mut().ok_or_else(|| {
                 "manifest-less certified body fetch cannot accept chunks".to_owned()
             })?;
-            let admission = session
-                .admit(chunk.chunk())
-                .map_err(|error| error.to_string())?;
+            let admission = match session.admit(chunk) {
+                Ok(admission) => admission,
+                Err(
+                    V2ChunkError::PayloadMismatch
+                    | V2ChunkError::ReconstructionFailed
+                    | V2ChunkError::NoncanonicalCodeword,
+                ) => {
+                    operation.complete();
+                    return Ok(AuthenticatedChunkDisposition::Rejected);
+                }
+                Err(error) => return Err(error.to_string()),
+            };
             if admission == crate::sumeragi::v2_chunks::ChunkAdmission::Duplicate {
                 operation.complete();
                 return Ok(AuthenticatedChunkDisposition::Accepted);
@@ -478,7 +567,11 @@ impl V2EffectServices for ProductionV2Services {
                 operation.complete();
                 return Ok(AuthenticatedChunkDisposition::Accepted);
             }
-            Err(V2ChunkError::PayloadMismatch | V2ChunkError::ReconstructionFailed) => {
+            Err(
+                V2ChunkError::PayloadMismatch
+                | V2ChunkError::ReconstructionFailed
+                | V2ChunkError::NoncanonicalCodeword,
+            ) => {
                 operation.complete();
                 return Ok(AuthenticatedChunkDisposition::Rejected);
             }
@@ -488,15 +581,6 @@ impl V2EffectServices for ProductionV2Services {
             .manifest()
             .expect("chunk reconstruction requires proposal manifest authority")
             .clone();
-        let canonical_manifest =
-            encode_payload(&self.context, manifest.round, manifest.subject, &body)
-                .map_err(|error| error.to_string())?
-                .manifest()
-                .clone();
-        if canonical_manifest != manifest {
-            operation.complete();
-            return Ok(AuthenticatedChunkDisposition::Rejected);
-        }
         if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
             return Err("Sumeragi v2 reconstructed fetch lost its exact live owner".to_owned());
         }
@@ -569,12 +653,10 @@ impl V2EffectServices for ProductionV2Services {
                 "Sumeragi v2 service rejected non-monotonic certified view ownership".to_owned(),
             );
         }
-        let next_recovery_authority = self
-            .leader_wire_recovery_authority
-            .advance_view(tag.view(), protected_lock)?;
-        self.leader_wire_ingress
-            .advance_leader_wire_recovery_cut(next_recovery_authority)?;
-        self.leader_wire_recovery_authority = next_recovery_authority;
+        if tag != self.leader_wire_recovery_authority.consumer_tag() {
+            return Err("entered view lacks the actual published adapter WAL consumer".to_owned());
+        }
+        let _ = protected_lock;
         // The old view's active Sign command may still complete after its
         // executor owner is cancelled. Prune first and publish the new owner
         // second; completion handling classifies the old work ID before it is
@@ -600,7 +682,7 @@ impl V2EffectServices for ProductionV2Services {
                 "Sumeragi v2 equivocation context is not anchored to the active network".to_owned(),
             );
         }
-        let inserted = super::evidence::persist_sumeragi_v2_equivocation(
+        let inserted = super::evidence::retain_sumeragi_v2_equivocation(
             self.state.as_ref(),
             &self.context,
             &self.validator_set_pops,
@@ -610,7 +692,7 @@ impl V2EffectServices for ProductionV2Services {
         if inserted {
             iroha_logger::warn!(
                 ?evidence,
-                "persisted authenticated Sumeragi v2 equivocation evidence"
+                "retained authenticated Sumeragi v2 equivocation evidence for block admission"
             );
         }
         Ok(())
@@ -732,7 +814,6 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
         wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => Some(certificate.round),
         wire::ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
         wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
-        wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
         wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
             Some(response.certificate.round)
         }

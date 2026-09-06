@@ -461,7 +461,7 @@ fn validate_attribute_projections_v1(
 fn derive_ownership_challenge_digest_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<[u8; 32], ZkX509RelationErrorV1> {
-    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .map_err(|_| ZkX509RelationErrorV1::StatementEncoding)?;
     let account = norito::to_bytes(&statement.wallet_account)
@@ -1282,7 +1282,7 @@ fn parse_revoked_certificates_v1(
         let revocation_time = parse_time_v1(fields.read_value()?)?;
         if revocation_time > this_update || !fields.is_empty() {
             // Entry extensions, including reasonCode/certificateIssuer, are
-            // outside the complete direct-CRL v0 profile.
+            // outside the complete direct-CRL V1 profile.
             return Err(ZkX509RelationErrorV1::InvalidCrl);
         }
         if serials.last().is_some_and(|previous| {

@@ -1,4 +1,4 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
 [sumeragi.queues]
-body_bytes = 103809023
+body_bytes = 106954751

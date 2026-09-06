@@ -1040,62 +1040,89 @@ impl ConcreteLifecycleWorkRegistry {
     ) -> Result<ReadyCertifiedBodyPipelineAttestationV1, ReadyCertifiedBodyPipelineAttestationErrorV1>
     {
         if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
-            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::CoordinatorUnavailable);
         }
-        let (Some(record), Some(metadata)) = (
-            coordinator.records.get(&ordinal),
-            coordinator.durable_records.get(&ordinal),
-        ) else {
-            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
-        };
+        let record = coordinator
+            .records
+            .get(&ordinal)
+            .ok_or(ReadyCertifiedBodyPipelineAttestationErrorV1::MissingRecord)?;
+        let metadata = coordinator
+            .durable_records
+            .get(&ordinal)
+            .ok_or(ReadyCertifiedBodyPipelineAttestationErrorV1::MissingDurableMetadata)?;
         let schedulable = match record.state {
             super::LifecycleState::Ready => coordinator.ready_index.contains(&ordinal),
             super::LifecycleState::Waiting(wait) => fence.is_some_and(|fence| {
                 !coordinator.ready_index.contains(&ordinal)
+                    && fence.source()
+                        == super::projection::reducer_fence_wait_source(coordinator.active_context)
                     && wait.source() == fence.source()
                     && wait.observed_generation() < fence.generation()
+                    && coordinator.observed_generation.get(&wait.source())
+                        == Some(&wait.observed_generation())
             }),
             super::LifecycleState::Claimed(_) | super::LifecycleState::Terminal(_) => false,
         };
-        if !schedulable
-            || record.ordinal != ordinal
-            || !matches!(
-                record.work_class,
-                LifecycleWorkClass::Fetch | LifecycleWorkClass::Store
-            )
-            || record.key.phase()
-                != match record.work_class {
-                    LifecycleWorkClass::Fetch => LifecyclePhase::Fetch,
-                    LifecycleWorkClass::Store => LifecyclePhase::Store,
-                    _ => unreachable!("filtered ordinary body work class"),
-                }
-            || record.stage.kind()
-                != match record.work_class {
-                    LifecycleWorkClass::Fetch => LifecycleStageKind::FetchBody,
-                    LifecycleWorkClass::Store => LifecycleStageKind::StoreBody,
-                    _ => unreachable!("filtered ordinary body work class"),
-                }
-            || record.stage.predecessor_scope() != PredecessorScope::Independent
-            || !record.episode.frozen_predecessors.is_empty()
-            || coordinator.key_index.get(&record.key) != Some(&ordinal)
-            || coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)
-            || metadata.continuation != super::schema::DurableContinuation::None
-            || metadata.reconstruction_source != record.owner.causal_root().digest()
-        {
-            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
+        if !schedulable {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::RowNotSchedulable);
+        }
+        if record.ordinal != ordinal {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::OrdinalMismatch);
+        }
+        if !matches!(
+            record.work_class,
+            LifecycleWorkClass::Fetch | LifecycleWorkClass::Store
+        ) {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidWorkClass);
+        }
+        let (expected_phase, expected_stage) = match record.work_class {
+            LifecycleWorkClass::Fetch => (LifecyclePhase::Fetch, LifecycleStageKind::FetchBody),
+            LifecycleWorkClass::Store => (LifecyclePhase::Store, LifecycleStageKind::StoreBody),
+            _ => unreachable!("filtered ordinary body work class"),
+        };
+        if record.key.phase() != expected_phase {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::PhaseMismatch);
+        }
+        if record.stage.kind() != expected_stage {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::StageMismatch);
+        }
+        if record.stage.predecessor_scope() != PredecessorScope::Independent {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::PredecessorScopeMismatch);
+        }
+        if !record.episode.frozen_predecessors.is_empty() {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::FrozenPredecessors);
+        }
+        if coordinator.key_index.get(&record.key) != Some(&ordinal) {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::KeyIndexMismatch);
+        }
+        if coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner) {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::OwnerIndexMismatch);
+        }
+        if metadata.continuation != super::schema::DurableContinuation::None {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::ContinuationMismatch);
+        }
+        if metadata.reconstruction_source != record.owner.causal_root().digest() {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::ReconstructionSourceMismatch);
         }
         let Some((&slot, &digest)) = record.physical_slots.first_key_value() else {
-            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::MissingPhysicalSlot);
         };
-        if record.physical_slots.len() != 1
-            || slot != PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
-            || record.episode.slot_universe != std::collections::BTreeSet::from([slot])
-            || record.episode.consumed_slots != std::collections::BTreeSet::from([slot])
-        {
-            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
+        if record.physical_slots.len() != 1 {
+            return Err(
+                ReadyCertifiedBodyPipelineAttestationErrorV1::PhysicalSlotCardinalityMismatch,
+            );
+        }
+        if slot != PhysicalSlotId::for_capacity(CapacityClass::Effect, 0) {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::PhysicalSlotMismatch);
+        }
+        if record.episode.slot_universe != std::collections::BTreeSet::from([slot]) {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::SlotUniverseMismatch);
+        }
+        if record.episode.consumed_slots != std::collections::BTreeSet::from([slot]) {
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::ConsumedSlotsMismatch);
         }
         let address = ConcreteWorkAddress::new(record.owner, ordinal, slot)
-            .ok_or(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex)?;
+            .ok_or(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidAddress)?;
         if self
             .entries
             .keys()
@@ -1103,7 +1130,9 @@ impl ConcreteLifecycleWorkRegistry {
             .count()
             != 1
         {
-            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
+            return Err(
+                ReadyCertifiedBodyPipelineAttestationErrorV1::RegistryOwnerCardinalityMismatch,
+            );
         }
         let work = self.entries.get(&address).ok_or(
             ReadyCertifiedBodyPipelineAttestationErrorV1::Registry(RegistryError::Missing),
@@ -1118,7 +1147,7 @@ impl ConcreteLifecycleWorkRegistry {
                 RegistryError::DigestMismatch,
             ));
         }
-        let carrier_is_exact = match (&work.kind, record.work_class) {
+        match (&work.kind, record.work_class) {
             (
                 ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion),
                 LifecycleWorkClass::Fetch,
@@ -1135,28 +1164,47 @@ impl ConcreteLifecycleWorkRegistry {
                     super::PhysicalGeometry::new([PhysicalSlot::new(slot, digest)], [slot]),
                     None,
                 );
-                completion.ready_digest() == Some(digest)
-                    && completion.matches_recovered_candidate(&candidate)
+                if completion.ready_digest() != Some(digest)
+                    || !completion.matches_recovered_candidate(&candidate)
+                {
+                    return Err(
+                        ReadyCertifiedBodyPipelineAttestationErrorV1::CertifiedFetchCarrierMismatch,
+                    );
+                }
             }
             (ConcreteLifecycleWorkKind::DurableStoreBody(store), LifecycleWorkClass::Store) => {
-                store.matches_recovered_record(coordinator.active_context, record, metadata, digest)
+                if !store.matches_schedulable_record_shape(
+                    coordinator.active_context,
+                    record,
+                    metadata,
+                    digest,
+                ) {
+                    return Err(
+                        ReadyCertifiedBodyPipelineAttestationErrorV1::DurableStoreCarrierMismatch,
+                    );
+                }
             }
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
                 LifecycleWorkClass::Store,
-            ) => store.matches_current_ready_record(address, digest, coordinator),
+            ) => {
+                if !store.matches_current_schedulable_record_shape(address, digest, coordinator) {
+                    return Err(
+                        ReadyCertifiedBodyPipelineAttestationErrorV1::RecoveredDecisionStoreCarrierMismatch,
+                    );
+                }
+            }
             (
                 ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_)
                 | ConcreteLifecycleWorkKind::DurableStoreBody(_)
                 | ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_),
                 _,
-            ) => false,
+            ) => {
+                return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::CarrierWorkClassMismatch);
+            }
             _ => {
                 return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::WrongWorkKind);
             }
-        };
-        if !carrier_is_exact {
-            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCarrier);
         }
         Ok(ReadyCertifiedBodyPipelineAttestationV1 {
             address,
@@ -2476,12 +2524,13 @@ impl ConcreteLifecycleWorkRegistry {
     pub(super) fn publish_certified_serve_terminal_transition<T, E>(
         &mut self,
         prepared: PreparedCertifiedServeTerminalRegistryTransitionV1,
+        verified: &VerifiedHeightContext,
         current: &LifecycleCoordinator,
         staged: &LifecycleCoordinator,
         lease: &TurnLease,
         publish: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, CertifiedServeTerminalRegistryPublicationError<E>> {
-        if !prepared.preflights_current(self, current, lease)
+        if !prepared.preflights_current(self, verified, current, lease)
             || !prepared.preflights_exact_staged_successor(current, staged, lease)
         {
             return Err(CertifiedServeTerminalRegistryPublicationError::Preflight(
@@ -3097,7 +3146,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
-        self.exactly_covers_all_live_work_with_optional_active_producer(verified, coordinator, None)
+        self.exactly_covers_all_live_work_with_optional_active_lease(verified, coordinator, None)
     }
 
     /// Verify the same exhaustive census while one exact ProducerTurn owns the
@@ -3108,11 +3157,12 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> bool {
-        self.exactly_covers_all_live_work_with_optional_active_producer(
-            verified,
-            coordinator,
-            Some(lease),
-        )
+        lease.work_class == LifecycleWorkClass::ProducerTurn
+            && self.exactly_covers_all_live_work_with_optional_active_lease(
+                verified,
+                coordinator,
+                Some(lease),
+            )
     }
 }
 include!("v2_lifecycle_work_registry_validate_recovery_census_impl.rs");
@@ -3253,34 +3303,26 @@ impl ConcreteLifecycleWorkRegistry {
     }
     fn exactly_covers_active_certified_serve_lease(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> bool {
-        if coordinator.fault.is_some()
-            || coordinator.active_lease.as_ref() != Some(lease)
-            || lease.work_class != LifecycleWorkClass::CertifiedServe
-        {
-            return false;
-        }
-        let Some(sign) = self.exact_recovered_wal_registry_slot() else {
-            return false;
-        };
-        self.exactly_covers_ready_work_with_extra(
-            coordinator,
-            sign,
-            &std::collections::BTreeSet::new(),
-            Some(lease),
-            &std::collections::BTreeSet::new(),
-        )
+        lease.work_class == LifecycleWorkClass::CertifiedServe
+            && self.exactly_covers_all_live_work_with_optional_active_lease(
+                verified,
+                coordinator,
+                Some(lease),
+            )
     }
     /// Prove the complete private registry and exact active Serve lease without
     /// consulting caller-supplied request material.
     pub(super) fn preflight_certified_serve_terminal_owner_state(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> bool {
-        if !self.exactly_covers_active_certified_serve_lease(coordinator, lease) {
+        if !self.exactly_covers_active_certified_serve_lease(verified, coordinator, lease) {
             return false;
         }
         let Some(&producer_ordinal) = coordinator.producer_debts.get(&lease.ordinal) else {
@@ -3331,11 +3373,12 @@ impl ConcreteLifecycleWorkRegistry {
     /// has independently passed preflight.
     pub(super) fn preflight_certified_serve_terminal_settlement(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
         authenticated: &AuthenticatedCertifiedBodyRequest,
     ) -> bool {
-        if !self.preflight_certified_serve_terminal_owner_state(coordinator, lease) {
+        if !self.preflight_certified_serve_terminal_owner_state(verified, coordinator, lease) {
             return false;
         }
         let Some(&producer_ordinal) = coordinator.producer_debts.get(&lease.ordinal) else {
@@ -3358,12 +3401,18 @@ impl ConcreteLifecycleWorkRegistry {
     /// active Serve and adjacent Producer carriers.
     pub(super) fn prepare_certified_serve_terminal_transition(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
         authenticated: &AuthenticatedCertifiedBodyRequest,
         terminal: &CertifiedServeTerminalReplayAuthorityPairV1,
     ) -> Option<PreparedCertifiedServeTerminalRegistryTransitionV1> {
-        if !self.preflight_certified_serve_terminal_settlement(coordinator, lease, authenticated) {
+        if !self.preflight_certified_serve_terminal_settlement(
+            verified,
+            coordinator,
+            lease,
+            authenticated,
+        ) {
             return None;
         }
         let producer_ordinal = *coordinator.producer_debts.get(&lease.ordinal)?;

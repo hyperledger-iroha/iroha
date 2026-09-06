@@ -88,27 +88,6 @@
     },
     {
       "type": "timeseries",
-      "title": "DA Gate Blocks (5m)",
-      "description": "Revision-4 commits gated by missing signed DA payloads during the last five minutes.",
-      "id": 4,
-      "datasource": "Prometheus",
-      "targets": [
-        {
-          "expr": "increase(sumeragi_da_gate_block_total{reason=\"missing_local_data\"}[5m])",
-          "legendFormat": "gate blocks/5m",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0
-        },
-        "overrides": []
-      }
-    },
-    {
-      "type": "timeseries",
       "title": "Oracle Price (local per XOR)",
       "id": 5,
       "datasource": "Prometheus",

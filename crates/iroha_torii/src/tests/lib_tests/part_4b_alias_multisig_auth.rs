@@ -419,7 +419,7 @@ async fn multisig_read_handler_requires_api_token_and_signed_viewer_auth() {
     let mut app = mk_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+    state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
     let router = multisig_read_contract_test_router(app);
     let canonical_account_id =
         checked_torii_test_account_id(0x0c, "derive multisig API-token policy account fixture key");
@@ -460,7 +460,7 @@ async fn browser_read_endpoints_are_not_throttled_by_deploy_limiter() {
         &headers,
         Some(remote_ip),
         "v1/contracts/state",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     assert!(app.deploy_rate_limiter.allow(&key).await);
     assert!(!app.deploy_rate_limiter.allow(&key).await);
@@ -556,7 +556,7 @@ async fn browser_read_endpoints_use_route_scoped_query_rate_keys() {
         &headers,
         Some(remote_ip),
         "v1/contracts/state",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     assert!(app.rate_limiter.allow(&shared_key).await);
     assert!(!app.rate_limiter.allow(&shared_key).await);
@@ -903,8 +903,8 @@ async fn alias_resolve_index_returns_permission_denied_when_only_hidden_routes_c
 }
 #[test]
 fn api_token_evaluator_has_one_exact_header_policy() {
-    let configured = HashSet::from(["secret".to_owned()]);
-    let empty = HashSet::new();
+    let configured = limits::ApiTokenDigestSet::from_tokens(["secret"]);
+    let empty = limits::ApiTokenDigestSet::default();
     let no_headers = HeaderMap::new();
     let mut supplied = HeaderMap::new();
     supplied.insert(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
@@ -914,7 +914,7 @@ fn api_token_evaluator_has_one_exact_header_policy() {
     );
     assert!(
         evaluate_api_token(false, &configured, &supplied)
-            .authenticated_token()
+            .authenticated_principal()
             .is_none(),
         "an unauthenticated header must not become a rate-limit principal"
     );
@@ -951,7 +951,7 @@ fn api_token_evaluator_has_one_exact_header_policy() {
     );
     assert_eq!(
         evaluate_api_token(true, &configured, &supplied),
-        ApiTokenEvaluation::Authenticated("secret")
+        ApiTokenEvaluation::Authenticated(limits::ApiTokenPrincipal::from_token("secret"))
     );
 }
 #[test]
@@ -959,14 +959,12 @@ fn validate_api_token_rejects_missing_or_unconfigured() {
     let mut app = mk_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = Arc::new(HashSet::new());
+    state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
     let headers = HeaderMap::new();
     assert!(validate_api_token(state, &headers).is_err());
     let mut configured_headers = HeaderMap::new();
     configured_headers.insert(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
-    let mut tokens = HashSet::new();
-    tokens.insert("secret".to_string());
-    state.api_tokens_set = Arc::new(tokens);
+    state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["secret"]));
     assert!(validate_api_token(state, &configured_headers).is_ok());
 }
 fn assert_unconfigured_api_token_error(error: Error) {
@@ -986,7 +984,7 @@ async fn direct_result_handler_fails_closed_with_no_configured_api_tokens() {
     let mut app = mk_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = Arc::new(HashSet::new());
+    state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
     let error =
         handler_soracloud_status(State(app), HeaderMap::new(), loopback_connect_info(), None)
             .await
@@ -998,7 +996,7 @@ async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
     let mut app = mk_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = Arc::new(HashSet::new());
+    state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
     let keypair = checked_torii_test_ed25519_keypair(
         0xd1,
         "derive fail-closed transaction ingress fixture key",

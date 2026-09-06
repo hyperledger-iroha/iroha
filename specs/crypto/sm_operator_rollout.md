@@ -26,8 +26,8 @@ legal/export guidance in `specs/crypto/sm_compliance_brief.md`.
       before shipping.
 - [ ] Ensure `status.md` and the rollout ticket record the compliance filings for
       any nodes operating in jurisdictions that require them (see compliance brief).
-- [ ] Prepare KMS/HSM updates if validators will store SM signing keys in
-      hardware modules.
+- [ ] Prepare deployment-owned signing-provider updates before validators rotate
+      SM signing keys.
 
 ## 2. Configuration Changes
 1. Run the xtask helper to generate the SM2 key inventory and ready-to-paste snippet:

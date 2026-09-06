@@ -7,12 +7,11 @@ use core::str::FromStr;
 use derive_more::Display;
 use error_stack::{Report, ResultExt};
 use eyre::Result;
-use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
 use iroha_primitives::small::SmallStr;
+use iroha_service_model::soranet::AnonymityPolicy;
+use iroha_service_model::soranet::RolloutPhase;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-/// Re-exported `SoraNet` anonymity policy for client configuration.
-pub use sorafs_orchestrator::AnonymityPolicy;
 use std::{
     env,
     path::{Path, PathBuf},
@@ -173,7 +172,7 @@ pub struct Config {
     /// Default `SoraNet` anonymity policy stage for gateway fetches.
     pub sorafs_anonymity_policy: AnonymityPolicy,
     /// Configured rollout phase for staged PQ activation.
-    pub sorafs_rollout_phase: SorafsRolloutPhase,
+    pub sorafs_rollout_phase: RolloutPhase,
 }
 /// An error type for [`Config::load`]
 #[derive(thiserror::Error, Debug, Copy, Clone)]
@@ -212,7 +211,7 @@ pub fn resolve_account_chain_discriminant(
         }
         profile.chain_discriminant
     } else {
-        explicit.unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant)
+        explicit.unwrap_or(iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT)
     };
     if discriminant == 0 {
         return Err(AccountChainDiscriminantError::Zero);

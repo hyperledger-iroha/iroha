@@ -1,13 +1,13 @@
 use crate::{
-    Context,
-    gates::{RangeChip, range::RangeInstructions},
+    gates::{range::RangeInstructions, RangeChip},
     halo2_proofs::{arithmetic::Field, halo2curves::bn256::Fr},
     poseidon::hasher::{
-        PoseidonCompactChunkInput, PoseidonCompactInput, PoseidonHasher,
-        spec::OptimizedPoseidonSpec,
+        spec::OptimizedPoseidonSpec, PoseidonCompactChunkInput, PoseidonCompactInput,
+        PoseidonHasher,
     },
     safe_types::SafeTypeChip,
-    utils::{ScalarField, testing::base_test},
+    utils::{testing::base_test, ScalarField},
+    Context,
 };
 use itertools::Itertools;
 use pse_poseidon::Poseidon;

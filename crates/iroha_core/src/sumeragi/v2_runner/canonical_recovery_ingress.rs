@@ -43,6 +43,15 @@ fn canonical_recovery_idle_wait(next_retry: Instant, now: Instant) -> Duration {
     let wait = next_retry.saturating_duration_since(now).min(IDLE_POLL);
     if wait.is_zero() { IDLE_POLL } else { wait }
 }
+fn service_canonical_executed_block_recovery(
+    recovery: &mut CanonicalExecutedBlockRecovery,
+    services: &ProductionV2Services,
+) -> Result<bool, V2RunnerError> {
+    let current_archive_targets = services.current_archive_targets();
+    recovery
+        .service_next_with_archive_targets(&current_archive_targets)
+        .map_err(V2RunnerError::from)
+}
 fn drain_canonical_executed_block_recovery_ingress(
     receiver: &FairV2Ingress,
     recovery: &mut CanonicalExecutedBlockRecovery,
@@ -162,8 +171,13 @@ pub(in crate::sumeragi) fn dispatch_canonical_executed_block_recovery_effects_fo
 /// cadence, even when no lane or relay ingress arrives to trigger recovery.
 fn service_historical_recovery_tick(
     lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
 ) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
+    let current_archive_targets = lane_work
+        .has_pending_historical_recovery()
+        .then(|| services.current_archive_targets())
+        .unwrap_or_default();
     lane_work
-        .service_next_historical_recovery()
+        .service_next_historical_recovery_with_archive_targets(&current_archive_targets)
         .map_err(V2RunnerError::from)
 }

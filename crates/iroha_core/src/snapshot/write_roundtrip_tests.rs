@@ -1,3 +1,5 @@
+use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+
 #[tokio::test]
 async fn creates_all_dirs_while_writing_snapshots() {
     let tmp_root = tempdir().unwrap();
@@ -35,6 +37,71 @@ async fn can_read_snapshot_after_writing() {
         canonical_state_snapshot_bytes_for_tests(&snapshot_state),
         canonical_state_snapshot_bytes_for_tests(&state),
         "snapshot roundtrip must preserve canonical WSV bytes"
+    );
+}
+#[tokio::test]
+async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
+    let tmp_root = tempdir().expect("snapshot tempdir");
+    let store_dir = tmp_root.path().join("snapshot");
+    let mut state = state_factory();
+    {
+        let mut parameters = state.world.parameters.block();
+        parameters.set_parameter(Parameter::Custom(
+            SumeragiNposParameters {
+                evidence_horizon_blocks: 1,
+                slashing_delay_blocks: 1,
+                ..SumeragiNposParameters::default()
+            }
+            .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+    for marker in [0x71, 0x72, 0x73] {
+        state.push_block_hash_for_testing(dummy_block_hash(marker));
+    }
+    let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
+    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
+    {
+        let mut records = state.world.consensus_evidence.block();
+        records.insert(
+            evidence_key,
+            EvidenceRecord {
+                evidence,
+                recorded_at_height: 2,
+                recorded_at_view: 0,
+                recorded_at_ms: 2_000,
+                penalty_status: EvidencePenaltyStatus::Pending,
+            },
+        );
+        records.commit();
+    }
+    let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+    let key_pair = checked_random_snapshot_keypair();
+    write_snapshot_bundle_from_bytes(&store_dir, &snapshot_bytes, &key_pair);
+    let kura = Kura::blank_kura_for_testing();
+    let error = match try_read_snapshot(
+        &store_dir,
+        &kura,
+        LiveQueryStore::start_test,
+        BlockCount(state.view().height()),
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        state.network_id_ref(),
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    ) {
+        Ok(_) => panic!("normal snapshot restore must reject overdue pending evidence"),
+        Err(error) => error,
+    };
+    let TryReadError::Serialization(error) = error else {
+        panic!("unexpected snapshot restore error: {error:?}");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("committed evidence remains pending at or after its penalty due height"),
+        "normal restore must surface the persisted evidence lifecycle violation: {error}"
     );
 }
 #[tokio::test]
@@ -686,7 +753,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         "duplicate",
     );
     let bsc_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-        iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+        iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
         iroha_data_model::bridge::SccpRouteActivationV1::Staged,
     );
     let mut reversed_lanes = vec![
@@ -714,9 +781,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
     let deployment = match &mut off_curve.lanes[0].routes[0].destination {
         iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) => deployment,
         iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(_) => {
-            unreachable!("snapshot fixture is an EVM route")
-        }
-        iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(_) => {
             unreachable!("snapshot fixture is an EVM route")
         }
         iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(_) => {
@@ -753,9 +817,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_) => {
             unreachable!("snapshot fixture is an EVM route")
         }
-        iroha_data_model::bridge::SccpSourceEmitterV1::Solana(_) => {
-            unreachable!("snapshot fixture is an EVM route")
-        }
         iroha_data_model::bridge::SccpSourceEmitterV1::Ton(_) => {
             unreachable!("snapshot fixture is an EVM route")
         }
@@ -779,8 +840,6 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         PendingMessages,
         MessageLocator,
         OrderedIndex,
-        TerminalProofs,
-        InboundMessages,
         InboundHighWater,
     }
     fn envelope_mut<'a>(world: &'a mut json::Map, field: &str) -> &'a mut json::Map {
@@ -809,15 +868,12 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         RevertMutation::PendingMessages,
         RevertMutation::MessageLocator,
         RevertMutation::OrderedIndex,
-        RevertMutation::TerminalProofs,
-        RevertMutation::InboundMessages,
         RevertMutation::InboundHighWater,
     ] {
         let tmp_root = tempdir().expect("temporary snapshot root");
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let (state, key, pending_record) =
-            state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
+        let (state, _, _) = state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
         let mut serialized = String::new();
         serialize_state_snapshot(&state, &mut serialized);
         let mut snapshot: json::Value =
@@ -849,65 +905,20 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
                 envelope_mut(world, "sccp_outbound_message_index")
                     .insert("revert".to_owned(), json::Value::Object(json::Map::new()));
             }
-            RevertMutation::TerminalProofs => {
-                let terminal = iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                    payload_hash: pending_record.payload_hash,
-                    destination_binding_hash: pending_record.destination_binding_hash,
-                    route_configuration_hash: pending_record.route_configuration_hash,
-                    finality_block_hash: [0xA1; 32],
-                    destination_proof_commitment: [0xA2; 32],
-                    finality_height: pending_record.recorded_at_height,
-                    commitment_index: pending_record.commitment_index,
-                    accepted_at_height: pending_record.recorded_at_height,
-                };
-                assert!(terminal.is_well_formed_for_key(&key));
-                envelope_mut(world, "sccp_outbound_proofs")
-                    .insert("revert".to_owned(), storage_blocks([(key, terminal)]));
-            }
-            RevertMutation::InboundMessages | RevertMutation::InboundHighWater => {
-                let (native, source_identity, trust_anchor) =
-                    iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
-                let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
-                    &native,
-                    &source_identity,
-                    trust_anchor,
-                )
-                .expect("native hostile-revert fixture verifies");
-                let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-                    iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-                    iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+            RevertMutation::InboundHighWater => {
+                let high_water_key =
+                    iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1::new(
+                        iroha_data_model::bridge::SccpLaneIdV1 {
+                            source: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                            target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                        },
+                        [0xA3; 32],
+                    )
+                    .expect("hostile revert fixture forms a structural high-water key");
+                envelope_mut(world, "sccp_inbound_anchor_high_water").insert(
+                    "revert".to_owned(),
+                    storage_blocks([(high_water_key, 1_u64)]),
                 );
-                let inbound_record = iroha_data_model::bridge::SccpInboundMessageRecordV1 {
-                    payload_hash: validated.payload_hash,
-                    source_identity_hash: validated.source_identity_hash,
-                    route_configuration_hash: route
-                        .route_configuration_hash()
-                        .expect("fixture route configuration"),
-                    trust_anchor: validated.trust_anchor,
-                    anchor_interval_height: validated.anchor_interval_height,
-                    source_finality_height: validated.source_finality.height,
-                    source_finality_hash: validated.source_finality.block_hash,
-                    source_proof_commitment: [0xA3; 32],
-                    admitted_at_height: 1,
-                };
-                assert!(inbound_record.is_well_formed_for_lane(validated.message_key.lane));
-                if matches!(mutation, RevertMutation::InboundMessages) {
-                    envelope_mut(world, "sccp_inbound_messages").insert(
-                        "revert".to_owned(),
-                        storage_blocks([(validated.message_key, inbound_record)]),
-                    );
-                } else {
-                    let high_water_key =
-                        iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1::new(
-                            validated.message_key.lane,
-                            validated.trust_anchor.anchor_hash,
-                        )
-                        .expect("validated native fixture forms high-water key");
-                    envelope_mut(world, "sccp_inbound_anchor_high_water").insert(
-                        "revert".to_owned(),
-                        storage_blocks([(high_water_key, validated.anchor_interval_height)]),
-                    );
-                }
             }
         }
         serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
@@ -1122,21 +1133,11 @@ async fn sccp_snapshot_revert_enforces_actual_pending_cap_after_terminal_compact
     let kura = Kura::blank_kura_for_testing();
     let (mut state, key, pending) =
         state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
-    let finality_block_hash = kura
-        .block_hash_at_height(nonzero!(1_usize))
-        .expect("fixture Kura hash");
-    let terminal = iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-        payload_hash: pending.payload_hash,
-        destination_binding_hash: pending.destination_binding_hash,
-        route_configuration_hash: pending.route_configuration_hash,
-        finality_block_hash: <[u8; 32]>::from(Hash::from(finality_block_hash)),
-        destination_proof_commitment: [0xB7; 32],
-        finality_height: pending.recorded_at_height,
-        commitment_index: pending.commitment_index,
-        accepted_at_height: 2,
-    };
+    let descriptor = pending.descriptor();
+    let pending_index = iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, &pending)
+        .expect("fixture pending record forms its ordered index");
     state
-        .transition_sccp_outbound_message_to_terminal_for_testing(key, terminal)
+        .transition_sccp_outbound_message_to_terminal_for_testing(key, descriptor)
         .expect("compact the current payload-bearing record to a terminal descriptor");
     state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xB8; 32]),
@@ -1164,8 +1165,22 @@ async fn sccp_snapshot_revert_enforces_actual_pending_cap_after_terminal_compact
         "validation must not roll the current WSV back"
     );
     assert!(
-        view.world.sccp_outbound_proofs.get(&key).is_some(),
-        "validation must preserve the current terminal descriptor"
+        view.world
+            .sccp_outbound_message_locator
+            .get(&key.message_id)
+            .is_none(),
+        "terminal compaction must remove its bounded pending locator"
+    );
+    assert!(
+        view.world
+            .sccp_outbound_message_index
+            .get(&pending_index)
+            .is_none(),
+        "terminal compaction must remove its bounded pending order index"
+    );
+    assert!(
+        view.world.sccp_replay_forests.is_empty(),
+        "the direct compaction fixture must not fabricate an admission replay root"
     );
 }
 #[tokio::test]
@@ -1382,10 +1397,6 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
     assert!(
         snapshot_has_space_directory_manifest_section(&snapshot_value),
         "new snapshots must carry a Space Directory manifest section"
-    );
-    assert!(
-        snapshot_world_has_field(&snapshot_value, "kagemusha_replay_keys"),
-        "new snapshots must carry Kagemusha replay keys"
     );
     let snapshot_state = try_read_snapshot(
         &store_dir,

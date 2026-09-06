@@ -1,7 +1,8 @@
 //! Synchronization helpers for integration tests.
 use eyre::{Result, WrapErr};
-use iroha::client::{Client, Status};
+use iroha::client::Client;
 use iroha_test_network::{BlockHeight, Network};
+use iroha_torii_shared::status::Status;
 use std::{
     env,
     thread::sleep,
@@ -201,12 +202,13 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
+    use iroha::config::{Config, default_connect_queue_root};
     use iroha::data_model::{ChainId, NetworkId};
     use iroha::{
         client::Client,
         crypto::{Hash, HashOf},
     };
+    use iroha_service_model::soranet::AnonymityPolicy;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use std::{
@@ -275,7 +277,7 @@ mod tests {
             soracloud_http_witness_file: None,
             sorafs_alias_cache: AliasCachePolicy::new(ttl, ttl, ttl, ttl, ttl, ttl, ttl, ttl),
             sorafs_anonymity_policy: AnonymityPolicy::default(),
-            sorafs_rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::default(),
+            sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
         };
         let mut client = Client::new(config);
         client.headers = HashMap::new();

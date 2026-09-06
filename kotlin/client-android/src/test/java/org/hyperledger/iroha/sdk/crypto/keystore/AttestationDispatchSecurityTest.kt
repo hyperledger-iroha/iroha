@@ -116,16 +116,10 @@ class AttestationDispatchSecurityTest {
         val verifier = verifier()
 
         assertFailsWith<AttestationVerificationException> {
-            provider.verifyAttestation("wallet", verifier)
-        }
-        assertFailsWith<AttestationVerificationException> {
             provider.verifyAttestation("wallet", verifier, null)
         }
         assertFailsWith<AttestationVerificationException> {
             provider.verifyAttestation("wallet", verifier, ByteArray(0))
-        }
-        assertFailsWith<AttestationVerificationException> {
-            manager.verifyAttestation("wallet", verifier)
         }
         assertFailsWith<AttestationVerificationException> {
             manager.verifyAttestation("wallet", verifier, null)

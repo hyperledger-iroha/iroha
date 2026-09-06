@@ -2703,7 +2703,6 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         if let Some(candidate) = approved_candidate {
             validate_approval_checkpoint(&approval, &candidate.persisted, self.bounds)?;
-            authenticate_approval_checkpoint_against_kura(&candidate.persisted, kura)?;
             let expected_generation = approval
                 .proposal()
                 .fence()
@@ -2714,10 +2713,14 @@ impl ReputationFinalizedArchive {
                 })?;
             if active_checkpoint_digest(&index, network_id)
                 != Some(approval.proposal().checkpoint_digest())
-                || index.generation != expected_generation
+                || index.generation < expected_generation
             {
                 return Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint);
             }
+            // Approval freezes the compaction, not subsequent committed captures.
+            // Accept later generations only with this exact approved checkpoint
+            // and a contiguous, Kura-authenticated retained successor chain.
+            authenticate_approval_checkpoint_against_kura(&candidate.persisted, &index, kura)?;
             require_exact_retention_readback(binding, authority, network_id, &approval)?;
             if let Err(error) = self.finish_checkpoint_cleanup(&index) {
                 self.reconcile_checkpoint_index(&mut index)?;
@@ -6146,6 +6149,7 @@ fn compare_and_read_back_retention_approval(
 }
 fn authenticate_approval_checkpoint_against_kura(
     checkpoint: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
+    index: &ArchiveIndex,
     kura: &Kura,
 ) -> Result<(), ReputationFinalizedArchiveError> {
     let material = &checkpoint.checkpoint;
@@ -6161,6 +6165,31 @@ fn authenticate_approval_checkpoint_against_kura(
         kura,
         &boundary,
     )?;
+    let mut retained_anchors = vec![(
+        material.retention_floor.clone(),
+        material.retention_floor_finalized_at_unix_ms,
+    )];
+    retained_anchors.extend(
+        index
+            .by_height
+            .range((
+                std::ops::Bound::Excluded((
+                    material.retention_floor.network_id.clone(),
+                    material.retention_floor.height,
+                )),
+                std::ops::Bound::Included((material.retention_floor.network_id.clone(), u64::MAX)),
+            ))
+            .map(|(_, entry)| {
+                (
+                    entry.manifest.key.clone(),
+                    entry.manifest.finalized_at_unix_ms,
+                )
+            }),
+    );
+    validate_contiguous_archive_coverage(&material.retention_floor.network_id, &retained_anchors)?;
+    for (key, finalized_at_unix_ms) in retained_anchors.iter().skip(1) {
+        authenticate_archive_anchor_against_kura(key, *finalized_at_unix_ms, kura, &boundary)?;
+    }
     let (artifact, _) = kura
         .v2_finality_artifact_with_receipt(material.retention_floor.height)
         .map_err(
@@ -6373,13 +6402,19 @@ fn authenticate_archive_anchor_against_kura(
             reason: "archive key differs from its authenticated V2 finality artifact",
         });
     }
-    let block = kura.get_block(height_index).ok_or(
-        ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
+    let block = kura
+        .read_block_body(height_index)
+        .map_err(
+            |error| ReputationFinalizedArchiveError::KuraAuthentication {
+                operation: "read canonical archived block body",
+                detail: error.to_string(),
+            },
+        )?
+        .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
             network_id: key.network_id.clone(),
             height: key.height,
             reason: "result-bearing canonical block is unavailable for archive qualification",
-        },
-    )?;
+        })?;
     if block.header().height().get() != key.height
         || *block.hash().as_ref() != key.block_hash
         || block.header().creation_time_ms != finalized_at_unix_ms

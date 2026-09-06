@@ -1,0 +1,593 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "iroha-sccp-circuits-final-v1",
+  "documentNamespace": "https://hyperledger.org/iroha/sbom/sccp-final-v1/79af562384edf9d81478a0befd8ead7f5460aa8a75b24cafa683b45b08c78ac3",
+  "creationInfo": {
+    "created": "2026-08-28T00:00:00Z",
+    "creators": [
+      "Organization: Hyperledger Iroha",
+      "Tool: circuits/sccp/tools/metadata"
+    ]
+  },
+  "packages": [
+    {
+      "name": "github.com/hyperledger-iroha/iroha/circuits/sccp",
+      "SPDXID": "SPDXRef-Package-SCCP-Circuits",
+      "versionInfo": "final-v1-pre-release",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "github.com/bits-and-blooms/bitset",
+      "SPDXID": "SPDXRef-GoModule-github.com-bits-and-blooms-bitset-v1.24.6",
+      "versionInfo": "v1.24.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "a9cadfb59515048c1fb3e9be9e1a020403d3f993d9663b62f126c76c3410919e"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/bits-and-blooms/bitset@v1.24.6"
+        }
+      ]
+    },
+    {
+      "name": "github.com/blang/semver/v4",
+      "SPDXID": "SPDXRef-GoModule-github.com-blang-semver-v4-v4.0.0",
+      "versionInfo": "v4.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "d4f147144eb20824eff02d537b234d6ab0f39ed2e2ef0308e62fe9cea608b003"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/blang/semver/v4@v4.0.0"
+        }
+      ]
+    },
+    {
+      "name": "github.com/consensys/gnark",
+      "SPDXID": "SPDXRef-GoModule-github.com-consensys-gnark-v0.16.3",
+      "versionInfo": "v0.16.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "4bb06d210497d962c7576f39ec7acb9ab439c489746512fc913eab70b9fc828c"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/consensys/gnark@v0.16.3"
+        }
+      ]
+    },
+    {
+      "name": "github.com/consensys/gnark-crypto",
+      "SPDXID": "SPDXRef-GoModule-github.com-consensys-gnark-crypto-v0.21.0",
+      "versionInfo": "v0.21.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "1431e26d5224e13e4b90e280922377f20f2012f3b135c335d262c73aabc54c3d"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/consensys/gnark-crypto@v0.21.0"
+        }
+      ]
+    },
+    {
+      "name": "github.com/davecgh/go-spew",
+      "SPDXID": "SPDXRef-GoModule-github.com-davecgh-go-spew-v1.1.1",
+      "versionInfo": "v1.1.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "be3f63feed5baa7bc211f24ec1486d94e011aacdfeae41d8635de36164d4f7b7"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/davecgh/go-spew@v1.1.1"
+        }
+      ]
+    },
+    {
+      "name": "github.com/fxamacker/cbor/v2",
+      "SPDXID": "SPDXRef-GoModule-github.com-fxamacker-cbor-v2-v2.9.2",
+      "versionInfo": "v2.9.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "5f82ac9e8f7ec77733d1366febd79cd61c4fffeb729ae47c3d7409c83c1f87bf"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/fxamacker/cbor/v2@v2.9.2"
+        }
+      ]
+    },
+    {
+      "name": "github.com/google/pprof",
+      "SPDXID": "SPDXRef-GoModule-github.com-google-pprof-v0.0.0-20260802141513-ef3492d7dac3",
+      "versionInfo": "v0.0.0-20260802141513-ef3492d7dac3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "2cc2d7f8b813356a5fbc205d15e6efe84b18a2d226aedfcfa5ce5c5c8ae2092a"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/google/pprof@v0.0.0-20260802141513-ef3492d7dac3"
+        }
+      ]
+    },
+    {
+      "name": "github.com/kr/text",
+      "SPDXID": "SPDXRef-GoModule-github.com-kr-text-v0.2.0",
+      "versionInfo": "v0.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e4dc7461ad19a98db2815dfae90cedbab1c8d7726af79029715689061a52f806"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/kr/text@v0.2.0"
+        }
+      ]
+    },
+    {
+      "name": "github.com/mattn/go-colorable",
+      "SPDXID": "SPDXRef-GoModule-github.com-mattn-go-colorable-v0.1.15",
+      "versionInfo": "v0.1.15",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "faef522d34469d7bfbddc12c9ec9a8641a26f9d314f3c076334683716cb4fe36"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/mattn/go-colorable@v0.1.15"
+        }
+      ]
+    },
+    {
+      "name": "github.com/mattn/go-isatty",
+      "SPDXID": "SPDXRef-GoModule-github.com-mattn-go-isatty-v0.0.24",
+      "versionInfo": "v0.0.24",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "b46659a15813fca8aa2b573ca1c54b7834bc05258c45de3b2772dbcfbbec45e2"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/mattn/go-isatty@v0.0.24"
+        }
+      ]
+    },
+    {
+      "name": "github.com/pmezard/go-difflib",
+      "SPDXID": "SPDXRef-GoModule-github.com-pmezard-go-difflib-v1.0.0",
+      "versionInfo": "v1.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e030700c4d0d1b24280476cb4183f04943e808c591e41133224fdfd6565b0103"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/pmezard/go-difflib@v1.0.0"
+        }
+      ]
+    },
+    {
+      "name": "github.com/rogpeppe/go-internal",
+      "SPDXID": "SPDXRef-GoModule-github.com-rogpeppe-go-internal-v1.16.0",
+      "versionInfo": "v1.16.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "3bd0cafaf34c0d518baf605e66a9a92de32388c364b977dcaa7b566d957a4b98"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/rogpeppe/go-internal@v1.16.0"
+        }
+      ]
+    },
+    {
+      "name": "github.com/ronanh/intcomp",
+      "SPDXID": "SPDXRef-GoModule-github.com-ronanh-intcomp-v1.1.1",
+      "versionInfo": "v1.1.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "fb56c657fc040621c8d05bf34bb447833a8ea5f6c12732c8c64a8c27d7bacb16"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/ronanh/intcomp@v1.1.1"
+        }
+      ]
+    },
+    {
+      "name": "github.com/rs/zerolog",
+      "SPDXID": "SPDXRef-GoModule-github.com-rs-zerolog-v1.35.1",
+      "versionInfo": "v1.35.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "9bbc507a888b222574042118e07b3e8f6346e06a76a3628f2a68679cb89acca2"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/rs/zerolog@v1.35.1"
+        }
+      ]
+    },
+    {
+      "name": "github.com/stretchr/testify",
+      "SPDXID": "SPDXRef-GoModule-github.com-stretchr-testify-v1.11.1",
+      "versionInfo": "v1.11.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "eecda2181ce9e44c11eff68866bf1aa39f9dadadf0890c8a8e316ebe054abbb5"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/stretchr/testify@v1.11.1"
+        }
+      ]
+    },
+    {
+      "name": "github.com/x448/float16",
+      "SPDXID": "SPDXRef-GoModule-github.com-x448-float16-v0.8.4",
+      "versionInfo": "v0.8.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "a8bc08d48ef4f8d8d1154477cecd493d40a06825d2877496eb6b80293d664813"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/x448/float16@v0.8.4"
+        }
+      ]
+    },
+    {
+      "name": "golang.org/x/crypto",
+      "SPDXID": "SPDXRef-GoModule-golang.org-x-crypto-v0.54.0",
+      "versionInfo": "v0.54.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "60b200e7d2b87e23731f38e766ddad50942342d5167d66de1c1a8ab64dde49cc"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/golang.org/x/crypto@v0.54.0"
+        }
+      ]
+    },
+    {
+      "name": "golang.org/x/sync",
+      "SPDXID": "SPDXRef-GoModule-golang.org-x-sync-v0.22.0",
+      "versionInfo": "v0.22.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "4998e96de2e6ac2938c614526453595b980551e09e1608de92f23ffa07d271e9"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/golang.org/x/sync@v0.22.0"
+        }
+      ]
+    },
+    {
+      "name": "golang.org/x/sys",
+      "SPDXID": "SPDXRef-GoModule-golang.org-x-sys-v0.47.0",
+      "versionInfo": "v0.47.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "a3b5c63af6500800c1410e18ed536ad9d456411ec998e516f0ac71e19b0d816b"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/golang.org/x/sys@v0.47.0"
+        }
+      ]
+    },
+    {
+      "name": "gopkg.in/yaml.v3",
+      "SPDXID": "SPDXRef-GoModule-gopkg.in-yaml.v3-v3.0.1",
+      "versionInfo": "v3.0.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "7f1566fc6cc0cc45aa2c7baf72d23dd4a4bd8613669963a85aed174d8252ec20"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/gopkg.in/yaml.v3@v3.0.1"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-SCCP-Circuits"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-bits-and-blooms-bitset-v1.24.6"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-blang-semver-v4-v4.0.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-consensys-gnark-v0.16.3"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-consensys-gnark-crypto-v0.21.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-davecgh-go-spew-v1.1.1"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-fxamacker-cbor-v2-v2.9.2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-google-pprof-v0.0.0-20260802141513-ef3492d7dac3"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-kr-text-v0.2.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-mattn-go-colorable-v0.1.15"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-mattn-go-isatty-v0.0.24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-pmezard-go-difflib-v1.0.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-rogpeppe-go-internal-v1.16.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-ronanh-intcomp-v1.1.1"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-rs-zerolog-v1.35.1"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-stretchr-testify-v1.11.1"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-github.com-x448-float16-v0.8.4"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-golang.org-x-crypto-v0.54.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-golang.org-x-sync-v0.22.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-golang.org-x-sys-v0.47.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SCCP-Circuits",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-GoModule-gopkg.in-yaml.v3-v3.0.1"
+    }
+  ]
+}

@@ -4,7 +4,8 @@ use super::{
     V2StartupReplayError, authenticate_v2_snapshot_replay_boundary,
     authenticate_v2_snapshot_startup, authenticated_v2_snapshot_startup_mode,
     build_verified_successor, committed_execution_policy_hash, committed_nexus_amx_context_hash,
-    plan_v2_startup_replay, recover_active_height, recover_active_height_with_plan,
+    plan_v2_startup_replay, recover_active_height_with_plan,
+    recover_non_terminal_active_height_for_test as recover_active_height,
     successor_proofs_of_possession,
 };
 use crate::{
@@ -71,6 +72,8 @@ fn verified_context_for_policy_state(
             power: 1,
         })
         .collect::<Vec<_>>();
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -83,6 +86,8 @@ fn verified_context_for_policy_state(
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"recovery fixture Nexus/AMX"),
         execution_policy_hash: committed_execution_policy_hash(policy_state)
             .expect("derive fixture execution policy"),
@@ -115,7 +120,7 @@ fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
     )
 }
 #[test]
-fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
+fn lifecycle_storage_mint_permit_binds_kura_context_policy_and_payload_directory() {
     let (verified, keys) = verified_context();
     let kura = Kura::blank_kura_for_testing();
     let foreign_kura = Kura::blank_kura_for_testing();
@@ -128,12 +133,25 @@ fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
         &policy,
         &genesis_account,
     );
+    let lifecycle_root = kura.sumeragi_v2_storage_root().join("lifecycle-v1");
+    let payload_directory = lifecycle_root
+        .join(hex::encode(verified.context().id().0.as_ref()))
+        .join("certified-serve-payload-v1");
+    assert!(
+        !lifecycle_root.exists(),
+        "the blank Kura must begin without lifecycle ancestry"
+    );
     let _authority = RecoveredLifecycleStorageAuthorityV1::mint_from_recovered_height(
         kura.as_ref(),
         &verified,
         &policy,
         &genesis_account,
         exact,
+    )
+    .expect("mint the recovery-bound Certified-Serve payload authority");
+    assert!(
+        payload_directory.is_dir(),
+        "authenticated recovery must materialize the exact descriptor-bound payload directory"
     );
     let foreign = RecoveredLifecycleStorageMintPermitV1::new(
         kura.as_ref(),
@@ -158,6 +176,35 @@ fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
     );
     assert!(!substituted.authorizes(kura.as_ref(), &verified, &policy, &foreign_genesis_account,));
 }
+
+#[test]
+fn emergency_fast_lifecycle_storage_mint_does_not_materialize_payload_directory() {
+    let (verified, keys) = verified_context();
+    let kura = Kura::blank_kura_for_testing_in_emergency_fast_mode();
+    let policy = BlockSignaturePolicy::RotatingLeader;
+    let genesis_account = AccountId::new(keys[0].public_key().clone());
+    let permit = RecoveredLifecycleStorageMintPermitV1::new(
+        kura.as_ref(),
+        &verified,
+        &policy,
+        &genesis_account,
+    );
+    let lifecycle_root = kura.sumeragi_v2_storage_root().join("lifecycle-v1");
+
+    let _authority = RecoveredLifecycleStorageAuthorityV1::mint_from_recovered_height(
+        kura.as_ref(),
+        &verified,
+        &policy,
+        &genesis_account,
+        permit,
+    )
+    .expect("mint inert emergency recovery storage authority");
+
+    assert!(
+        !lifecycle_root.exists(),
+        "emergency Fast recovery must not create lifecycle or payload-store ancestry"
+    );
+}
 fn state_for(kura: &Arc<Kura>, network_id: iroha_data_model::NetworkId) -> State {
     State::new_with_chain_and_network_id_for_testing(
         World::new(),
@@ -180,7 +227,6 @@ fn world_with_consensus_keys(keys: &[KeyPair]) -> World {
             ),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -368,7 +414,7 @@ fn commit_to_state(state: &State, block: &CommittedBlock, context: &wire::Height
     state_block.commit().expect("commit synthetic state block");
 }
 fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new([seed, 1]),
         Hash::new([seed, 2]),
         Hash::new([seed, 3]),
@@ -533,7 +579,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         "the production-shaped predecessor lifecycle must begin genuinely empty"
     );
     let retirement = complete_tip
-        .into_canonical_predecessor_storage(&keys[0])
+        .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &keys[0])
         .and_then(
             crate::sumeragi::v2_lifecycle_coordinator::AuthenticatedCompleteTipPredecessorStorageV1::retire,
         )
@@ -989,8 +1035,16 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
     let mut parent_context = verified.context().clone();
     parent_context.mode = wire::ConsensusMode::Npos;
     parent_context.epoch_end_height = 1;
+    let (transitioned_mint_finality_epoch_id, transitioned_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            parent_context.network_id,
+            1,
+            &transitioned_roster,
+        );
     parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: 1,
+        kagemusha_mint_finality_epoch_id: transitioned_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: transitioned_mint_finality_epoch_roster,
         epoch_end_height: 10,
         mode: wire::ConsensusMode::Npos,
         roster: transitioned_roster,
@@ -1020,6 +1074,12 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         })
         .collect::<Vec<_>>();
     let attacker_quorum = wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
+    let (attacker_mint_finality_epoch_id, attacker_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            parent_context.network_id,
+            1,
+            &attacker_roster,
+        );
     let child_context = wire::HeightContext {
         network_id: parent_context.network_id,
         protocol_version: parent_context.protocol_version,
@@ -1032,6 +1092,8 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         snapshot_bootstrap: None,
         quorum: attacker_quorum,
         roster: attacker_roster,
+        kagemusha_mint_finality_epoch_id: attacker_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: attacker_mint_finality_epoch_roster,
         nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
         execution_policy_hash: parent_context.execution_policy_hash,
         da_layout: parent_context.da_layout,
@@ -1599,8 +1661,17 @@ fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
         .collect::<Vec<_>>();
     let mut boundary_context = current_context;
     boundary_context.epoch_end_height = boundary_context.height;
+    let next_epoch = boundary_context.epoch + 1;
+    let (next_mint_finality_epoch_id, next_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            boundary_context.network_id,
+            next_epoch,
+            &next_roster,
+        );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
-        epoch: boundary_context.epoch + 1,
+        epoch: next_epoch,
+        kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: next_mint_finality_epoch_roster,
         epoch_end_height: u64::MAX,
         mode: boundary_context.mode,
         quorum: wire::DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),
@@ -1691,6 +1762,30 @@ fn durable_context_recovery_rejects_local_autoscale_policy_drift() {
     state
         .set_nexus(nexus)
         .expect("pre-genesis autoscale policy drift is structurally valid");
+    let block = dummy_block(&keys[0], 1, None);
+    kura.store_block(block).expect("persist canonical block");
+    V2ContextStore::open(kura.sumeragi_v2_storage_root())
+        .expect("open context store")
+        .persist(&PersistedHeightContext::from_verified(&verified))
+        .expect("persist active context");
+    assert!(matches!(
+        recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
+        Err(V2RecoveryError::ExecutionPolicyMismatch { .. })
+    ));
+}
+
+#[test]
+fn durable_context_recovery_rejects_local_oracle_economics_drift() {
+    let (verified, keys) = verified_context();
+    let context = verified.context().clone();
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = state_for(&kura, context.network_id);
+    state.oracle.economics.reward_amount = state
+        .oracle
+        .economics
+        .reward_amount
+        .try_add(&iroha_primitives::numeric::Quantity::one())
+        .expect("fixture oracle reward remains representable");
     let block = dummy_block(&keys[0], 1, None);
     kura.store_block(block).expect("persist canonical block");
     V2ContextStore::open(kura.sumeragi_v2_storage_root())
@@ -2374,6 +2469,95 @@ fn verified_successor_projects_only_its_exact_kura_lifecycle_storage() {
             .into_parts_with_lifecycle_storage_authority(foreign_kura.as_ref(), &genesis_account,),
         Err(V2RecoveryError::SuccessorLifecycleStorageKuraMismatch { height: 2 })
     ));
+}
+
+#[test]
+fn terminal_complete_tip_classification_and_evidence_authentication_are_exact() {
+    assert!(!super::complete_tip_is_terminal(u64::MAX - 1));
+    assert!(super::complete_tip_is_terminal(u64::MAX));
+    assert!(super::state_is_immediate_predecessor(
+        u64::MAX - 1,
+        u64::MAX
+    ));
+    assert!(!super::state_is_immediate_predecessor(u64::MAX, u64::MAX));
+
+    let (verified, keys) = verified_context();
+    let context = verified.context().clone();
+    let block = dummy_block(&keys[0], 1, None);
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(block.clone())
+        .expect("persist exact complete-tip block for Kura binding");
+    let artifact = authenticated_artifact_for(context.clone(), block.as_ref(), &keys);
+    let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
+    let predecessor = super::authenticate_complete_tip_evidence(
+        &context,
+        verified.proofs_of_possession(),
+        &artifact,
+        &receipt,
+    )
+    .expect("exact complete-tip evidence authenticates before terminal classification");
+    assert_eq!(predecessor.height(), 1);
+    super::authenticate_kura_predecessor(kura.as_ref(), predecessor)
+        .expect("complete-tip evidence binds to the exact canonical Kura block");
+    let foreign_kura = Kura::blank_kura_for_testing();
+    assert!(matches!(
+        super::authenticate_kura_predecessor(foreign_kura.as_ref(), predecessor),
+        Err(V2RecoveryError::FinalizedKuraPredecessorMismatch {
+            expected_height: 1,
+            actual_block_hash: None,
+            ..
+        })
+    ));
+
+    let mut foreign_context = context.clone();
+    foreign_context.leader_seed[0] ^= 1;
+    assert!(matches!(
+        super::authenticate_complete_tip_evidence(
+            &foreign_context,
+            verified.proofs_of_possession(),
+            &artifact,
+            &receipt,
+        ),
+        Err(V2RecoveryError::TerminalCompleteTipAuthentication(_))
+    ));
+
+    let mut foreign_pops = verified.proofs_of_possession().to_vec();
+    foreign_pops[0][0] ^= 1;
+    assert!(matches!(
+        super::authenticate_complete_tip_evidence(&context, &foreign_pops, &artifact, &receipt,),
+        Err(V2RecoveryError::TerminalCompleteTipAuthentication(_))
+    ));
+}
+
+#[test]
+fn complete_tip_recovery_authenticates_terminal_height_before_successor_construction() {
+    let source = include_str!("v2_recovery.rs");
+    let start = source
+        .find("if replay_plan.pending_tip_height().is_none()")
+        .expect("complete-tip startup branch remains source-bound");
+    let end = source[start..]
+        .find("if replay_plan.pending_tip_height() != Some(durable_height)")
+        .map(|offset| start + offset)
+        .expect("complete-tip startup branch remains independently bounded");
+    let complete_tip = &source[start..end];
+    let anchors = [
+        "verify_persisted_height(",
+        "if complete_tip_is_terminal(durable_height)",
+        "authenticate_terminal_complete_tip(",
+        "RecoveredV2Startup::Terminal(",
+        "build_verified_successor(",
+    ];
+    let mut remainder = complete_tip;
+    for anchor in anchors {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("complete-tip recovery lost safety anchor: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
+    assert!(
+        !complete_tip.contains("durable_height.saturating_add(1)"),
+        "complete-tip startup must not fabricate a successor at wire height MAX"
+    );
 }
 
 #[test]

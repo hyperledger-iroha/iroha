@@ -12,13 +12,13 @@ public static class TairaTestnetProfile
     /// <summary>Canonical I105 address discriminant for Taira.</summary>
     public const ushort I105Discriminant = 369;
 
-    /// <summary>Canonical Digital Shekel asset-definition ID used by Kagemusha on Taira.</summary>
+    /// <summary>Canonical Digital Shekel asset-definition ID used by KAGEMUSHA on Taira.</summary>
     public const string KagemushaAssetDefinitionId = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 
-    /// <summary>Canonical Digital Shekel alias used by Kagemusha on Taira.</summary>
+    /// <summary>Canonical Digital Shekel alias used by KAGEMUSHA on Taira.</summary>
     public const string KagemushaAssetAlias = "ds#boi.is";
 
-    /// <summary>Canonical Digital Shekel fixed-point scale used by Kagemusha on Taira.</summary>
+    /// <summary>Canonical Digital Shekel fixed-point scale used by KAGEMUSHA on Taira.</summary>
     public const uint KagemushaAssetScale = 2;
 
     /// <summary>Public Taira XOR asset-definition ID used for transaction fees.</summary>
@@ -39,13 +39,19 @@ public static class TairaTestnetProfile
         ArgumentNullException.ThrowIfNull(deployedNetworkId);
         return new ToriiClientOptions
         {
-            LocalSigningContext = new ToriiLocalSigningContext(deployedNetworkId),
+            NetworkId = deployedNetworkId,
         };
     }
 
     /// <summary>Creates a Taira Torii client with an exact caller-supplied network identity.</summary>
+    public static ToriiClient CreateClient(NetworkId deployedNetworkId) =>
+        new(ToriiBaseUri, CreateClientOptions(deployedNetworkId));
+
+    /// <summary>
+    /// Creates a Taira Torii client over a caller-owned transport for read-only operations.
+    /// </summary>
     public static ToriiClient CreateClient(
         NetworkId deployedNetworkId,
-        HttpClient? httpClient = null) =>
+        HttpClient httpClient) =>
         new(ToriiBaseUri, httpClient, CreateClientOptions(deployedNetworkId));
 }

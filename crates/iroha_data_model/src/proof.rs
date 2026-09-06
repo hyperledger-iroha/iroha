@@ -162,6 +162,8 @@ fn decode_byte_box_fields(
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::ProofBox")]
 pub struct ProofBox {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
@@ -288,6 +290,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofBox {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::VerifyingKeyBox")]
 pub struct VerifyingKeyBox {
     /// Identifier of the proof backend/format (must match associated proofs).
     pub backend: iroha_schema::Ident,
@@ -346,6 +350,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::VerifyingKeyId")]
 pub struct VerifyingKeyId {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
@@ -400,6 +406,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyId {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::VerifyingKeyRecord")]
 pub struct VerifyingKeyRecord {
     /// Monotonic version number managed by governance.
     pub version: u32,
@@ -2311,6 +2319,8 @@ impl norito::json::JsonDeserialize for ProofAttachmentList {
 /// Combines backend identifier with a stable 32-byte proof hash.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::ProofId")]
 pub struct ProofId {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
@@ -2471,6 +2481,8 @@ mod parse_tests {
 /// Verification status of a submitted proof artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::ProofStatus")]
 pub enum ProofStatus {
     /// Proof was observed/queued for verification.
     Submitted,
@@ -2522,6 +2534,8 @@ impl norito::json::JsonDeserialize for ProofStatus {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::ProofRecord")]
 pub struct ProofRecord {
     /// Proof identifier (backend + hash of proof bytes).
     pub id: ProofId,
@@ -2546,6 +2560,8 @@ pub struct ProofRecord {
 /// Wrapper for attaching an optional proof to a committed transaction response.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::ProofedCommittedTransaction")]
 pub struct ProofedCommittedTransaction {
     /// Base committed transaction returned by the ledger.
     pub base: crate::query::CommittedTransaction,
@@ -3088,8 +3104,11 @@ mod tests {
         for (backend, name) in [
             ("halo2/ipa", "vk_transfer"),
             ("halo2/ipa", "halo2/ipa::transfer_v1"),
-            ("stark/fri/sha256-goldilocks", "zk_ace.v1"),
-            ("stark/fri/sha256_goldilocks.v1", "zk-ace-pq-v0"),
+            ("stark/fri/poseidon-x7-goldilocks-6x64-v1", "zk_ace.v1"),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "generic.binding.v1",
+            ),
         ] {
             let id = VerifyingKeyId::new(backend, name);
             assert!(
@@ -4743,3 +4762,6 @@ mod tests {
         assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }
 }
+
+#[cfg(test)]
+mod captured_proof_schema_tests;

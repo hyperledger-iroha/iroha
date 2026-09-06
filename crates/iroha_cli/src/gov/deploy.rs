@@ -58,6 +58,7 @@ impl Run for ProposeDeployArgs {
             }
         };
         let request = iroha::client::DeployContractProposalDraftRequestV1 {
+            proposal_operator: client.account.clone(),
             contract_address,
             contract_alias,
             abi_version: AbiVersion::new(self.abi_version),

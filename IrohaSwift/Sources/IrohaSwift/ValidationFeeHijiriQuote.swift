@@ -244,10 +244,10 @@ extension NoritoNativeBridge {
         _ request: ValidationFeeHijiriQuoteRequestV1
     ) throws -> Data {
         #if canImport(Darwin)
-        guard let function = resolveKagemushaV2Symbol(
+        guard let function = resolveNativeSymbol(
             "connect_norito_validation_fee_hijiri_quote_request_v1",
             as: ValidationFeeHijiriQuoteRequestFn.self
-        ), let free = resolveKagemushaV2Symbol(
+        ), let free = resolveNativeSymbol(
             "connect_norito_free",
             as: ValidationFeeHijiriQuoteFreeFn.self
         ) else {
@@ -291,10 +291,10 @@ extension NoritoNativeBridge {
             )
         }
         #if canImport(Darwin)
-        guard let function = resolveKagemushaV2Symbol(
+        guard let function = resolveNativeSymbol(
             "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
             as: ValidationFeeHijiriQuoteResponseVerifyFn.self
-        ), let free = resolveKagemushaV2Symbol(
+        ), let free = resolveNativeSymbol(
             "connect_norito_free",
             as: ValidationFeeHijiriQuoteFreeFn.self
         ) else {

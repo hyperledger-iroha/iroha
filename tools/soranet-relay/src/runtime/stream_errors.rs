@@ -120,6 +120,12 @@ enum IncentiveStreamError {
     Decode(#[from] norito::codec::Error),
     #[error("measurement frame contains {0} trailing bytes after decoding proof")]
     TrailingBytes(usize),
+    #[error("relay incentive ingestion is disabled or has no trusted verifier roster")]
+    IncentivesDisabled,
+    #[error("relay bandwidth proof was signed by an untrusted verifier: {0}")]
+    UntrustedVerifier(String),
+    #[error("relay bandwidth proof signature is invalid: {0}")]
+    InvalidSignature(String),
     #[error("measurement stream read error: {0}")]
     Read(io::Error),
 }

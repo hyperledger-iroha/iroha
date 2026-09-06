@@ -195,14 +195,14 @@ class PrivacyCompiledProfileCatalogV1Test {
                     mapOf("max_aggregation_count" to 8)
                 PrivacyProtocolIdV1.IROHA_ZK_AMS_V1 ->
                     mapOf("max_batch_size" to 8, "max_ring_size" to 64)
-                PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V0 ->
+                PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1 ->
                     mapOf("max_polynomial_count" to 4)
                 PrivacyProtocolIdV1.ORCHARD_HALO2_ACTIONS_V1 ->
                     mapOf("max_action_count" to 2)
                 PrivacyProtocolIdV1.MONERO_FCMP_PLUS_PLUS_V1 ->
                     mapOf("max_input_count" to 2, "max_output_count" to 4)
                 PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1,
-                PrivacyProtocolIdV1.PQ_MASP_STARK_V0,
+                PrivacyProtocolIdV1.PQ_MASP_STARK_V1,
                 -> mapOf("max_input_count" to 2, "max_output_count" to 2)
                 else -> null
             },
