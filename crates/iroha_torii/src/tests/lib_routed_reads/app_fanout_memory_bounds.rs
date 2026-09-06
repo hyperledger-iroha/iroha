@@ -297,7 +297,7 @@ fn app_fanout_norito_plan_keeps_raw_bytes_live_and_splits_routes() {
     assert_eq!(plan.limits.max_total_allocated_bytes(), tracked_logical);
     assert_eq!(
         plan.limits.max_nesting_depth(),
-        norito::core::MAX_OWNED_VALUE_DECODE_DEPTH
+        norito::core::MAX_VALUE_NESTING_DEPTH
     );
     budget
         .admit_temporary(raw + plan.temporary_charge_bytes)

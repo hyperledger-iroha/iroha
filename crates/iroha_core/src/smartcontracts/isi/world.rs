@@ -1136,7 +1136,7 @@ pub mod isi {
             json_payload.len(),
             elements,
             usize::MAX,
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
         );
         let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
             json_payload.len(),

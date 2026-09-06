@@ -795,8 +795,8 @@ mod tests {
         }
     }
     #[test]
-    fn canonical_value_serializer_covers_the_full_kotodama_boundary_depth() {
-        let levels = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+    fn canonical_value_serializer_covers_the_full_codec_boundary_depth() {
+        let levels = norito::core::MAX_VALUE_NESTING_DEPTH - 1;
         let mut nested = norito::json::Value::from(7_u64);
         for _ in 0..levels {
             nested = norito::json::Value::Array(vec![nested]);
@@ -805,10 +805,10 @@ mod tests {
         object.insert("value".to_owned(), nested);
         let boundary = norito::json::Value::Object(object);
         let encoded = Json::from_norito_value_ref(&boundary)
-            .expect("the full V1 type depth plus its parameter object must serialize");
+            .expect("the full codec depth plus its parameter object must serialize");
         let decoded: norito::json::Value = encoded
             .try_into_any_norito()
-            .expect("the full V1 boundary must parse back");
+            .expect("the full codec boundary must parse back");
         let mut cursor = decoded
             .as_object()
             .and_then(|map| map.get("value"))
@@ -837,56 +837,56 @@ mod tests {
             .name("iroha-json-iterative-boundary".into())
             .stack_size(128 * 1024)
             .spawn(|| -> Result<(), String> {
-                let wrappers = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
-                let at_255 = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+                let wrappers = norito::core::MAX_VALUE_NESTING_DEPTH - 1;
+                let at_boundary = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
                 let validated =
-                    Json::from_str_norito(&at_255).map_err(|error| error.to_string())?;
-                if validated.get() != &at_255 {
+                    Json::from_str_norito(&at_boundary).map_err(|error| error.to_string())?;
+                if validated.get() != &at_boundary {
                     return Err("deep Json validation changed canonical text".to_owned());
                 }
-                let direct =
-                    norito::json::from_json::<Json>(&at_255).map_err(|error| error.to_string())?;
-                if direct.get() != &at_255 {
+                let direct = norito::json::from_json::<Json>(&at_boundary)
+                    .map_err(|error| error.to_string())?;
+                if direct.get() != &at_boundary {
                     return Err("deep direct Json decode changed the input slice".to_owned());
                 }
                 let value =
-                    norito::json::parse_value(&at_255).map_err(|error| error.to_string())?;
+                    norito::json::parse_value(&at_boundary).map_err(|error| error.to_string())?;
                 let converted = Json::from(value);
-                if converted.get() != &at_255 {
+                if converted.get() != &at_boundary {
                     return Err("owned Value conversion changed canonical text".to_owned());
                 }
                 let encoded = JsonWireOwned {
-                    value: at_255.clone(),
+                    value: at_boundary.clone(),
                 }
                 .encode();
                 let (decoded, consumed) =
                     <Json as norito::core::DecodeFromSlice>::decode_from_slice(&encoded)
                         .map_err(|error| error.to_string())?;
-                if consumed != encoded.len() || decoded.get() != &at_255 {
+                if consumed != encoded.len() || decoded.get() != &at_boundary {
                     return Err("deep Json slice decode changed the wire payload".to_owned());
                 }
                 let framed = norito::to_bytes(
-                    &Json::from_raw_json(at_255.clone()).map_err(|error| error.to_string())?,
+                    &Json::from_raw_json(at_boundary.clone()).map_err(|error| error.to_string())?,
                 )
                 .map_err(|error| error.to_string())?;
                 let decoded = norito::decode_from_bytes::<Json>(&framed)
                     .map_err(|error| error.to_string())?;
-                if decoded.get() != &at_255 {
+                if decoded.get() != &at_boundary {
                     return Err("deep framed Json decode changed the wire payload".to_owned());
                 }
-                let invalid_256th_wrapper = format!("[{at_255},]");
-                if Json::from_str_norito(&invalid_256th_wrapper).is_ok() {
+                let invalid_wrapper = format!("[{at_boundary},]");
+                if Json::from_str_norito(&invalid_wrapper).is_ok() {
                     return Err("strict Json constructor accepted a trailing comma".to_owned());
                 }
                 let invalid_wire = JsonWireOwned {
-                    value: invalid_256th_wrapper.clone(),
+                    value: invalid_wrapper.clone(),
                 }
                 .encode();
                 if <Json as norito::core::DecodeFromSlice>::decode_from_slice(&invalid_wire).is_ok()
                 {
                     return Err("Json wire decoder accepted a trailing comma".to_owned());
                 }
-                if invalid_256th_wrapper.parse::<Json>().is_ok() {
+                if invalid_wrapper.parse::<Json>().is_ok() {
                     return Err("FromStr accepted an invalid JSON document".to_owned());
                 }
                 Ok(())

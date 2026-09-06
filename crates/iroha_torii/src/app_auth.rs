@@ -1694,7 +1694,7 @@ fn decode_witness_value(
         CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
         CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
         CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1.saturating_mul(2),
-        norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+        norito::core::MAX_VALUE_NESTING_DEPTH,
     );
     let witness = norito::decode_canonical_with_limits::<BoundedCanonicalRequestWitnessV1>(
         &witness_bytes,
@@ -3223,7 +3223,7 @@ mod tests {
             CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
             CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
             CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1.saturating_mul(2),
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
         );
         let decoded: BoundedCanonicalRequestWitnessV1 =
             norito::decode_from_bytes_with_limits(&public_bytes, limits)

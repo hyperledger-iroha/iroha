@@ -1973,7 +1973,7 @@ mod tests {
         let canonical = norito::canonical_decode_limits(4 * 1024);
         assert_eq!(
             canonical.max_nesting_depth(),
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH
+            norito::core::MAX_VALUE_NESTING_DEPTH
         );
         assert!(canonical.max_total_allocated_bytes() > 4 * 1024);
     }
