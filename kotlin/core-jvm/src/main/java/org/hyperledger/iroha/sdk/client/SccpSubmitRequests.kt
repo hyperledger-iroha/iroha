@@ -10,7 +10,10 @@ import org.hyperledger.iroha.sdk.sccp.SccpReplayV1
 import org.hyperledger.iroha.sdk.sccp.SccpSparseMerkleWitnessV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 
-/** Exact request payload for POST /v1/bridge/proofs/submit. */
+/**
+ * Exact first-release request payload for POST /v1/bridge/proofs/submit.
+ * Detached signed submission is outside this surface; only unsigned preparation is representable.
+ */
 class SccpDestinationProofSubmitRequest(
     authority: String,
     destinationProofB64: String,
@@ -36,7 +39,10 @@ class SccpDestinationProofSubmitRequest(
     fun toJsonBytes(): ByteArray = JsonEncoder.encode(toJsonMap()).toByteArray(Charsets.UTF_8)
 }
 
-/** Exact native-proof request payload for POST /v1/bridge/messages. */
+/**
+ * Exact first-release native-proof request payload for POST /v1/bridge/messages.
+ * Detached signed submission is outside this surface; only unsigned preparation is representable.
+ */
 class SccpNativeMessageSubmitRequest(
     authority: String,
     nativeProofB64: String,
@@ -183,8 +189,11 @@ internal fun requireCanonicalSccpAuthority(value: String): String {
 }
 
 private fun validateCanonicalSccpReplayWitnessArchive(archive: ByteArray, field: String) {
-    val payload = NoritoHeader.decode(archive, null).payload
-    val cursor = SccpCompactCursor(payload)
+    val decoded = NoritoHeader.decode(archive, null)
+    require(decoded.header.flags == NoritoHeader.COMPACT_LEN) {
+        "$field must use the canonical compact-length Norito layout"
+    }
+    val cursor = SccpCompactCursor(decoded.payload)
     val expectedRoot = cursor.field("$field.expected_shard_root").requireSize(32, field)
     val priorRecordDigest = cursor.field("$field.prior_record_digest").requireSize(32, field)
     val siblingBitmap = cursor.field("$field.sibling_bitmap").requireSize(32, field)
@@ -202,7 +211,7 @@ private fun validateCanonicalSccpReplayWitnessArchive(archive: ByteArray, field:
     }
     SccpReplayV1.rootFromWitness(
         ByteArray(32) { 1 },
-        null,
+        ByteArray(32),
         SccpSparseMerkleWitnessV1(
             expectedRoot,
             priorRecordDigest,

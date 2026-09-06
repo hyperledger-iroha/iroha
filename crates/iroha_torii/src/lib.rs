@@ -13694,6 +13694,40 @@ mod universal_offline_capability_tests {
             .expect("liveness body");
         assert_eq!(&body[..], b"Alive");
     }
+    #[tokio::test]
+    async fn readiness_requires_replay_archive_for_every_committed_sccp_route() {
+        let app = super::mk_app_state_for_tests();
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let (_, _, trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+        app.state.set_sccp_registry_for_testing(
+            iroha_core::state::ValidatedSccpRegistryV1::try_from_wire(
+                iroha_data_model::bridge::SccpRegistryV1 {
+                    version: 1,
+                    lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                        lane_id: fixture.route.lane_id,
+                        native_trust_anchors: vec![trust_anchor],
+                        current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
+                        routes: vec![fixture.route],
+                    }],
+                },
+            )
+            .expect("exact SCCP route registry validates"),
+        );
+
+        let readiness = handler_readyz(axum::extract::State(app)).await;
+        assert_eq!(
+            readiness.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let body = axum::body::to_bytes(readiness.into_body(), usize::MAX)
+            .await
+            .expect("readiness body");
+        assert_eq!(
+            &body[..],
+            b"SCCP replay archive is not synchronized with finalized state"
+        );
+    }
     #[test]
     fn command_body_limits_remain_protocol_specific() {
         let top_up_protocol_max =
@@ -16389,6 +16423,24 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Emergency Fast mode is live but intentionally not production-ready",
+        )
+            .into_response();
+    }
+    let replay_archive_required = app
+        .state
+        .sccp_registry_snapshot()
+        .lanes()
+        .iter()
+        .any(|lane| !lane.routes.is_empty());
+    if (replay_archive_required && app.sccp_replay_archive.is_none())
+        || app
+            .sccp_replay_archive
+            .as_ref()
+            .is_some_and(|archive| archive.checkpoint_set_sha256().is_err())
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SCCP replay archive is not synchronized with finalized state",
         )
             .into_response();
     }
@@ -34516,6 +34568,255 @@ async fn handler_sccp_sora_outbound_material(
     )
     .await
 }
+fn sccp_replay_endpoint_error_response(
+    error: sccp_replay::ToriiSccpReplayEndpointErrorV1,
+) -> AxResponse {
+    if error == sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity {
+        iroha_logger::error!("SCCP replay endpoint rejected locally retained integrity state");
+    }
+    let status = match error {
+        sccp_replay::ToriiSccpReplayEndpointErrorV1::NotFound => StatusCode::NOT_FOUND,
+        sccp_replay::ToriiSccpReplayEndpointErrorV1::Disabled
+        | sccp_replay::ToriiSccpReplayEndpointErrorV1::Unavailable => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    private_no_store_error_response(
+        status,
+        ErrorEnvelope::new(
+            error.code(),
+            "SCCP replay proof is not currently available.",
+        ),
+        ResponseFormat::Norito,
+    )
+}
+fn sccp_replay_path_error_response() -> AxResponse {
+    private_no_store_error_response(
+        StatusCode::BAD_REQUEST,
+        ErrorEnvelope::new(
+            "sccp_replay_path_invalid",
+            "The SCCP replay accumulator or replay-key path is not canonical.",
+        ),
+        ResponseFormat::Norito,
+    )
+}
+fn sccp_replay_norito_response(body: Vec<u8>) -> AxResponse {
+    let mut response = AxResponse::new(Body::from(body));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static(utils::NORITO_MIME_TYPE),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    append_vary_accept(response.headers_mut());
+    response
+}
+async fn handler_sccp_replay_root(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((boundary, source_profile, route_id, asset_key, revision)): axum::extract::Path<(
+        String,
+        String,
+        String,
+        String,
+        String,
+    )>,
+    axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    if let Err(response) =
+        utils::negotiate_norito_only_response(headers.get(axum::http::header::ACCEPT))
+    {
+        return Ok(response);
+    }
+    let rate_key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests_with_cost(&app, &rate_key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let accumulator_id = match sccp_replay::decode_sccp_replay_accumulator_path_v1(
+        &boundary,
+        &source_profile,
+        &route_id,
+        &asset_key,
+        &revision,
+    ) {
+        Ok(id) => id,
+        Err(_) => return Ok(sccp_replay_path_error_response()),
+    };
+    let segments = match sccp_replay::encode_sccp_replay_accumulator_path_v1(&accumulator_id) {
+        Ok(segments) => segments,
+        Err(_) => {
+            iroha_logger::error!("SCCP replay root path failed canonical re-encoding");
+            return Ok(sccp_replay_endpoint_error_response(
+                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
+            ));
+        }
+    };
+    let expected_path = format!(
+        "/v1/sccp/replay/{}/{}/{}/{}/{}/root",
+        segments[0], segments[1], segments[2], segments[3], segments[4]
+    );
+    if original_uri.path() != expected_path {
+        return Ok(sccp_replay_path_error_response());
+    }
+    let Some(service) = app.sccp_replay_archive.clone() else {
+        return Ok(sccp_replay_endpoint_error_response(
+            sccp_replay::ToriiSccpReplayEndpointErrorV1::Disabled,
+        ));
+    };
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let response_limit = app.torii_proxy_max_response_bytes.max(1);
+    let worker = tokio::task::spawn_blocking(move || {
+        let result = service.root_response(&accumulator_id).and_then(|response| {
+            utils::encode_norito_bounded(&response, response_limit)
+                .map_err(|_| sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity)
+        });
+        (result, admission)
+    })
+    .await;
+    let (result, _admission) = match worker {
+        Ok(result) => result,
+        Err(_) => {
+            iroha_logger::error!("SCCP replay root worker exited without a response");
+            return Ok(sccp_replay_endpoint_error_response(
+                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
+            ));
+        }
+    };
+    let body = match result {
+        Ok(body) => body,
+        Err(error) => return Ok(sccp_replay_endpoint_error_response(error)),
+    };
+    let response = sccp_replay_norito_response(body);
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/sccp/replay/root",
+        response,
+        true,
+    )
+    .await
+}
+async fn handler_sccp_replay_witness(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((boundary, source_profile, route_id, asset_key, revision, replay_key)): axum::extract::Path<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    )>,
+    axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    if let Err(response) =
+        utils::negotiate_norito_only_response(headers.get(axum::http::header::ACCEPT))
+    {
+        return Ok(response);
+    }
+    let rate_key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests_with_cost(&app, &rate_key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let accumulator_id = match sccp_replay::decode_sccp_replay_accumulator_path_v1(
+        &boundary,
+        &source_profile,
+        &route_id,
+        &asset_key,
+        &revision,
+    ) {
+        Ok(id) => id,
+        Err(_) => return Ok(sccp_replay_path_error_response()),
+    };
+    let replay_key = match sccp_replay::decode_sccp_replay_key_path_v1(&replay_key) {
+        Ok(key) => key,
+        Err(_) => return Ok(sccp_replay_path_error_response()),
+    };
+    let segments = match sccp_replay::encode_sccp_replay_accumulator_path_v1(&accumulator_id) {
+        Ok(segments) => segments,
+        Err(_) => {
+            return Ok(sccp_replay_endpoint_error_response(
+                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
+            ));
+        }
+    };
+    let expected_path = format!(
+        "/v1/sccp/replay/{}/{}/{}/{}/{}/witness/{}",
+        segments[0],
+        segments[1],
+        segments[2],
+        segments[3],
+        segments[4],
+        hex::encode(replay_key)
+    );
+    if original_uri.path() != expected_path {
+        return Ok(sccp_replay_path_error_response());
+    }
+    let Some(service) = app.sccp_replay_archive.clone() else {
+        return Ok(sccp_replay_endpoint_error_response(
+            sccp_replay::ToriiSccpReplayEndpointErrorV1::Disabled,
+        ));
+    };
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let response_limit = app.torii_proxy_max_response_bytes.max(1);
+    let worker = tokio::task::spawn_blocking(move || {
+        let result = service
+            .witness_response(&accumulator_id, replay_key)
+            .and_then(|response| {
+                utils::encode_norito_bounded(&response, response_limit)
+                    .map_err(|_| sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity)
+            });
+        (result, admission)
+    })
+    .await;
+    let (result, _admission) = match worker {
+        Ok(result) => result,
+        Err(_) => {
+            iroha_logger::error!("SCCP replay witness worker exited without a response");
+            return Ok(sccp_replay_endpoint_error_response(
+                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
+            ));
+        }
+    };
+    let body = match result {
+        Ok(body) => body,
+        Err(error) => return Ok(sccp_replay_endpoint_error_response(error)),
+    };
+    let response = sccp_replay_norito_response(body);
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/sccp/replay/witness",
+        response,
+        true,
+    )
+    .await
+}
 async fn handler_sccp_proof_request(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
@@ -46566,6 +46867,96 @@ where
         }
     }
 }
+
+struct SccpReplayRefreshWorkerHandle {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl SccpReplayRefreshWorkerHandle {
+    fn new(task: tokio::task::JoinHandle<()>) -> Self {
+        Self { task }
+    }
+
+    async fn join(&mut self) -> Result<(), tokio::task::JoinError> {
+        (&mut self.task).await
+    }
+}
+
+impl Drop for SccpReplayRefreshWorkerHandle {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SccpReplayRefreshSupervisionFailure {
+    WorkerExitedUnexpectedly,
+    WorkerPanicked,
+    WorkerCancelled,
+    ServerExitedUnexpectedly,
+}
+
+impl SccpReplayRefreshSupervisionFailure {
+    const fn diagnostic(self) -> &'static str {
+        match self {
+            Self::WorkerExitedUnexpectedly => "SCCP replay refresh worker exited unexpectedly",
+            Self::WorkerPanicked => "SCCP replay refresh worker panicked",
+            Self::WorkerCancelled => "SCCP replay refresh worker was cancelled",
+            Self::ServerExitedUnexpectedly => {
+                "Torii server exited before SCCP replay refresh worker shutdown"
+            }
+        }
+    }
+}
+
+async fn supervise_sccp_replay_refresh_worker<F>(
+    shutdown_signal: ShutdownSignal,
+    worker: Option<SccpReplayRefreshWorkerHandle>,
+    server: F,
+) -> std::io::Result<()>
+where
+    F: std::future::IntoFuture<Output = std::io::Result<()>>,
+{
+    let server = server.into_future();
+    let Some(mut worker) = worker else {
+        return server.await;
+    };
+    tokio::pin!(server);
+    let outcome = tokio::select! {
+        worker_result = worker.join() => {
+            let shutdown_was_sent = shutdown_signal.is_sent();
+            if !shutdown_was_sent {
+                shutdown_signal.send();
+            }
+            let server_result = server.await;
+            match worker_result {
+                Ok(()) if shutdown_was_sent => return server_result,
+                Ok(()) => SccpReplayRefreshSupervisionFailure::WorkerExitedUnexpectedly,
+                Err(error) if error.is_panic() => {
+                    SccpReplayRefreshSupervisionFailure::WorkerPanicked
+                }
+                Err(_) => SccpReplayRefreshSupervisionFailure::WorkerCancelled,
+            }
+        }
+        server_result = &mut server => {
+            let shutdown_was_sent = shutdown_signal.is_sent();
+            if !shutdown_was_sent {
+                shutdown_signal.send();
+            }
+            let worker_result = worker.join().await;
+            match worker_result {
+                Err(error) if error.is_panic() => {
+                    SccpReplayRefreshSupervisionFailure::WorkerPanicked
+                }
+                Err(_) => SccpReplayRefreshSupervisionFailure::WorkerCancelled,
+                Ok(()) if server_result.is_err() || shutdown_was_sent => return server_result,
+                Ok(()) => SccpReplayRefreshSupervisionFailure::ServerExitedUnexpectedly,
+            }
+        }
+    };
+    Err(std::io::Error::other(outcome.diagnostic()))
+}
+
 macro_rules! catalog_route_policy {
     (canonical_account_delete($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_delete($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
@@ -46743,6 +47134,106 @@ macro_rules! mount_local_catalog_route_rows {
 }
 
 impl Torii {
+    fn spawn_sccp_replay_refresh_worker(
+        &self,
+        shutdown_signal: ShutdownSignal,
+    ) -> Option<SccpReplayRefreshWorkerHandle> {
+        let service = self.sccp_replay_archive.clone()?;
+        let mut events = self.events.subscribe();
+        let task = tokio::spawn(async move {
+            let mut retry = tokio::time::interval(service.refresh_interval());
+            retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // Bootstrap already authenticated the current head. Consume the
+            // immediate first interval tick so periodic retry begins after the
+            // configured delay, while finalized block events still wake the
+            // worker immediately.
+            retry.tick().await;
+            let mut events_open = true;
+            loop {
+                let should_refresh = tokio::select! {
+                    biased;
+                    _ = shutdown_signal.receive() => break,
+                    _ = retry.tick() => true,
+                    received = events.recv(), if events_open => match received {
+                        Ok(EventBox::Pipeline(PipelineEventBox::Block(event))) => {
+                            matches!(event.status(), BlockStatus::Committed | BlockStatus::Applied)
+                        }
+                        Ok(EventBox::PipelineBatch(events)) => events.iter().any(|event| {
+                            matches!(
+                                event,
+                                PipelineEventBox::Block(block)
+                                    if matches!(
+                                        block.status(),
+                                        BlockStatus::Committed | BlockStatus::Applied
+                                    )
+                            )
+                        }),
+                        Ok(_) => false,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            events_open = false;
+                            false
+                        }
+                    },
+                };
+                if !should_refresh {
+                    continue;
+                }
+                // One refresh authenticates the latest committed projection,
+                // so every already-queued wakeup is covered by the same job.
+                // Events arriving while that job runs remain queued and
+                // collapse into at most one immediately following refresh.
+                if events_open {
+                    loop {
+                        match events.try_recv() {
+                            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                                events_open = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if shutdown_signal.is_sent() {
+                    break;
+                }
+                let refresh = Arc::clone(&service);
+                let mut refresh_job = tokio::task::spawn_blocking(move || refresh.refresh());
+                let refresh_result = tokio::select! {
+                    biased;
+                    _ = shutdown_signal.receive() => {
+                        // Blocking validation has explicit transport, byte,
+                        // accumulator, and leaf ceilings but is not
+                        // preemptible. Detach only this one already-started
+                        // job so shutdown never waits on it; this worker exits
+                        // and cannot schedule a replacement.
+                        break;
+                    }
+                    result = &mut refresh_job => result,
+                };
+                match refresh_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        iroha_logger::warn!(
+                            %error,
+                            "SCCP replay archive refresh failed closed; retry is scheduled"
+                        );
+                    }
+                    Err(error) => {
+                        iroha_logger::error!(
+                            ?error,
+                            "SCCP replay archive refresh worker join failed"
+                        );
+                        return;
+                    }
+                }
+            }
+        });
+        Some(SccpReplayRefreshWorkerHandle::new(task))
+    }
+
     #[cfg(feature = "app_api")]
     fn spawn_musubi_search_projection_worker(&self, shutdown_signal: ShutdownSignal) {
         use iroha_core::musubi_search::search_event_height;
@@ -47146,6 +47637,8 @@ impl Torii {
             SCCP_CAPABILITIES => public_get(handler_sccp_capabilities);
             SCCP_REGISTRY => public_get(handler_sccp_registry);
             SCCP_SORA_OUTBOUND_MATERIAL => public_get(handler_sccp_sora_outbound_material);
+            SCCP_REPLAY_ROOT => public_get(handler_sccp_replay_root);
+            SCCP_REPLAY_WITNESS => public_get(handler_sccp_replay_witness);
             BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
             BRIDGE_FINALITY_ATTESTATION => public_get(handler_bridge_finality_attestation);
             BRIDGE_FINALITY_BUNDLE => public_get(handler_bridge_finality_bundle);
@@ -47742,9 +48235,11 @@ impl Torii {
     /// Native MCP Streamable HTTP JSON-RPC route.
     fn add_mcp_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
+        let rate_limiters = McpRouteRateLimiters::new(builder.state());
         builder.route(
             &route_catalog::mcp_transport::JSON_RPC,
             catalog_post(handler_mcp_jsonrpc)
+                .layer(Extension(rate_limiters))
                 .authenticated_in_handler(HandlerAuthentication::NestedRouteAuthentication),
         );
     }
@@ -51351,6 +51846,11 @@ impl Torii {
                 automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
             }
         }
+        let sccp_replay_refresh_worker = if emergency_fast {
+            None
+        } else {
+            self.spawn_sccp_replay_refresh_worker(shutdown_signal.clone())
+        };
         let listener = bind_torii_tcp_listener(torii_address.clone())
             .await
             .change_context(Error::StartServer)
@@ -51397,6 +51897,11 @@ impl Torii {
             self.http_transport,
             shutdown_signal.clone(),
         );
+        let server = supervise_sccp_replay_refresh_worker(
+            shutdown_signal.clone(),
+            sccp_replay_refresh_worker,
+            server,
+        );
         #[cfg(feature = "app_api")]
         let server_result = supervise_evidence_viewer_compaction_worker(
             shutdown_signal,
@@ -51418,6 +51923,120 @@ impl Torii {
             .change_context(Error::FailedExit)
     }
 }
+#[derive(Clone)]
+struct McpRouteRateLimiters {
+    authenticated_ordinary: limits::FixedKeyRateLimiter,
+    cancellation_control: limits::FixedKeyRateLimiter,
+}
+impl McpRouteRateLimiters {
+    fn new(app: &SharedAppState) -> Self {
+        let rate_per_minute = app.mcp.rate_per_minute.map(NonZeroU32::get);
+        let burst = app.mcp.burst.map(NonZeroU32::get);
+        Self {
+            authenticated_ordinary: limits::FixedKeyRateLimiter::new_per_minute(
+                rate_per_minute,
+                burst,
+                app.api_tokens_set.iter().cloned(),
+            ),
+            cancellation_control: limits::FixedKeyRateLimiter::new_per_minute(
+                rate_per_minute,
+                burst,
+                app.api_tokens_set.iter().cloned(),
+            ),
+        }
+    }
+}
+fn mcp_rate_limited_response() -> Response {
+    mcp::jsonrpc_transport_error_response(
+        ReviewedMcpJsonRpcError::RateLimited,
+        mcp::jsonrpc_rate_limited(),
+    )
+}
+fn is_exact_rate_limited_cancellation(payload: &norito::json::Value) -> bool {
+    let Some(request) = payload.as_object() else {
+        return false;
+    };
+    if request.len() != 3
+        || request.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || request.get("method").and_then(Value::as_str) != Some("notifications/cancelled")
+    {
+        return false;
+    }
+    let Some(params) = request.get("params").and_then(Value::as_object) else {
+        return false;
+    };
+    let expected_params = if params.contains_key("reason") { 3 } else { 2 };
+    if params.len() != expected_params
+        || params
+            .get("reason")
+            .is_some_and(|reason| !reason.is_string())
+        || !matches!(
+            params.get("requestId"),
+            Some(
+                Value::String(_)
+                    | Value::Number(norito::json::native::Number::I64(_))
+                    | Value::Number(norito::json::native::Number::U64(_))
+            )
+        )
+    {
+        return false;
+    }
+    let Some(meta) = params.get("_meta").and_then(Value::as_object) else {
+        return false;
+    };
+    if meta.len() != 1 {
+        return false;
+    }
+    let Some(encoded_nonce) = meta.get("iroha/cancellationNonce").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(decoded_nonce) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded_nonce)
+    else {
+        return false;
+    };
+    let Ok(nonce): Result<[u8; 32], _> = decoded_nonce.try_into() else {
+        return false;
+    };
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce) == encoded_nonce
+}
+async fn handle_rate_limited_mcp_request(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    control_limiter: &limits::FixedKeyRateLimiter,
+    request: Request<Body>,
+) -> Response {
+    let Some(authenticated_token) =
+        evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), headers)
+            .authenticated_token()
+    else {
+        return mcp_rate_limited_response();
+    };
+    if !control_limiter.allow(authenticated_token).await {
+        return mcp_rate_limited_response();
+    }
+    if utils::canonical_json_request_content_type(headers).is_err()
+        || !mcp::protocol_version_is_supported(headers, false)
+    {
+        return mcp_rate_limited_response();
+    }
+    let request_bytes = match tokio::time::timeout(
+        mcp::MCP_BODY_READ_TIMEOUT,
+        axum::body::to_bytes(request.into_body(), app.mcp.max_request_bytes),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) | Err(_) => return mcp_rate_limited_response(),
+    };
+    let Ok(payload) = norito::json::from_slice::<norito::json::Value>(&request_bytes) else {
+        return mcp_rate_limited_response();
+    };
+    if !is_exact_rate_limited_cancellation(&payload) {
+        return mcp_rate_limited_response();
+    }
+    mcp::handle_cancelled_notification(app, headers, &payload);
+    mcp::private_no_store_response(StatusCode::ACCEPTED)
+}
 /// GET /openapi(.json) — expose OpenAPI descriptor subject to Torii access policy.
 async fn handler_openapi(
     State(app): State<SharedAppState>,
@@ -51433,6 +52052,7 @@ async fn handler_openapi(
 /// POST /v1/mcp — dispatch bounded MCP JSON-RPC calls through exact cataloged routes.
 async fn handler_mcp_jsonrpc(
     State(app): State<SharedAppState>,
+    Extension(rate_limiters): Extension<McpRouteRateLimiters>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: axum::http::Request<Body>,
@@ -51451,18 +52071,40 @@ async fn handler_mcp_jsonrpc(
         ));
     }
     let remote_ip = remote.ip();
-    let rate_key = limits::key_from_validated_headers(
-        &headers,
-        Some(remote_ip),
-        Some("mcp"),
-        app.require_api_token,
-        app.api_tokens_set.as_ref(),
-    );
-    if !app.mcp_rate_limiter.allow(&rate_key).await {
-        return mcp::jsonrpc_transport_error_response(
-            ReviewedMcpJsonRpcError::RateLimited,
-            mcp::jsonrpc_rate_limited(),
-        );
+    let authenticated_token =
+        evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), &headers)
+            .authenticated_token();
+    let dynamic_rate_key = (!app.require_api_token).then(|| {
+        limits::key_from_validated_headers(
+            &headers,
+            Some(remote_ip),
+            Some("mcp"),
+            false,
+            app.api_tokens_set.as_ref(),
+        )
+    });
+    let initial_rate_allowed = if app.require_api_token {
+        match authenticated_token {
+            Some(token) => rate_limiters.authenticated_ordinary.allow(token).await,
+            None => false,
+        }
+    } else {
+        app.mcp_rate_limiter
+            .allow(
+                dynamic_rate_key
+                    .as_deref()
+                    .expect("anonymous MCP requests have a dynamic rate key"),
+            )
+            .await
+    };
+    if !initial_rate_allowed {
+        return handle_rate_limited_mcp_request(
+            &app,
+            &headers,
+            &rate_limiters.cancellation_control,
+            request,
+        )
+        .await;
     }
     if let Err(response) = utils::canonical_json_request_content_type(&headers) {
         return mcp::private_no_store_response(response);
@@ -51518,15 +52160,28 @@ async fn handler_mcp_jsonrpc(
         );
     }
     let additional_dispatch_cost = mcp::jsonrpc_dispatch_cost(&payload).saturating_sub(1);
-    if !app
-        .mcp_rate_limiter
-        .allow_repeated(&rate_key, additional_dispatch_cost)
-        .await
-    {
-        return mcp::jsonrpc_transport_error_response(
-            ReviewedMcpJsonRpcError::RateLimited,
-            mcp::jsonrpc_rate_limited(),
-        );
+    let additional_rate_allowed = if app.require_api_token {
+        match authenticated_token {
+            Some(token) => {
+                rate_limiters
+                    .authenticated_ordinary
+                    .allow_repeated(token, additional_dispatch_cost)
+                    .await
+            }
+            None => false,
+        }
+    } else {
+        app.mcp_rate_limiter
+            .allow_repeated(
+                dynamic_rate_key
+                    .as_deref()
+                    .expect("anonymous MCP requests have a dynamic rate key"),
+                additional_dispatch_cost,
+            )
+            .await
+    };
+    if !additional_rate_allowed {
+        return mcp_rate_limited_response();
     }
     if mcp::is_cancelled_notification(&payload) {
         mcp::handle_cancelled_notification(&app, &headers, &payload);

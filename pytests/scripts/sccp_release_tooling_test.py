@@ -508,7 +508,10 @@ def unit_v4_policy() -> tuple[
                 "source_profile": "sora-taira",
                 "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
                 "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
-                "checkpoint_height": 10_000 + index,
+                "epoch": 1,
+                "epoch_end_height": 10,
+                "roster_commitment_hex": "78" * 32,
+                "checkpoint_height": 5 + index,
                 "checkpoint_block_hash_hex": _unit_v4_hash(profile, "checkpoint-block"),
                 "checkpoint_context_id_hex": _unit_v4_hash(
                     profile, "checkpoint-context"
@@ -564,9 +567,7 @@ def unit_v4_policy() -> tuple[
             proof_systems.append(proof)
         policy["proof_systems"] = proof_systems
         policy_bytes = common.canonical_json_file_bytes(policy)
-        validated, validated_bytes = common.validate_trust_policy_bytes(
-            policy_bytes, allow_test_policy=True
-        )
+        validated, validated_bytes = common.validate_test_trust_policy_bytes(policy_bytes)
         signing_keys = {**release_keys, **auditor_keys}
         _UNIT_V4_POLICY_CACHE = (validated, validated_bytes, signing_keys)
     policy, policy_bytes, signing_keys = _UNIT_V4_POLICY_CACHE
@@ -1261,6 +1262,73 @@ def build_unit_v4_bundle(
     return output, index, material
 
 
+def verify_unit_v4_bundle_integrity(
+    bundle: Path, material: dict[str, object]
+) -> None:
+    """Exercise the exact bundle filesystem/index boundary for unit fixtures.
+
+    Production bundle verification additionally requires an authenticated
+    validator-build release. These structural adversarial tests deliberately
+    stop before that production-only boundary while still composing the same
+    canonical index, inventory, streaming-hash, and signed-evidence checks.
+    """
+
+    index_bytes = common.read_relative_file(
+        bundle,
+        "bundle.json",
+        label="unit bundle index",
+        maximum=common.MAX_INDEX_BYTES,
+    )
+    index_value = common.parse_json_bytes(
+        index_bytes,
+        label="unit bundle index",
+        maximum=common.MAX_INDEX_BYTES,
+    )
+    common.require_canonical_json_file(
+        index_bytes, index_value, label="unit bundle index"
+    )
+    index = common.validate_bundle_index(index_value)
+
+    actual_paths = common.enumerate_direct_files(bundle)
+    expected_paths = tuple(
+        sorted(("bundle.json", *(entry["path"] for entry in index["entries"])))
+    )
+    if actual_paths != expected_paths:
+        raise common.SccpReleaseError(
+            "unit bundle file inventory does not exactly match bundle.json"
+        )
+
+    entry_bytes: dict[str, bytes] = {}
+    for entry in index["entries"]:
+        maximum = (
+            common.MAX_EVIDENCE_BYTES
+            if entry["kind"] == "release-evidence"
+            else common.artifact_limit(entry["kind"])
+        )
+        entry_bytes[entry["path"]] = common.verify_relative_file_stream(
+            bundle,
+            entry["path"],
+            label=f"unit bundle entry {entry['path']}",
+            maximum=maximum,
+            expected_size=entry["size_bytes"],
+            expected_sha256_hex=entry["sha256_hex"],
+        )
+
+    evidence_bytes = entry_bytes["evidence.json"]
+    evidence_value = common.parse_json_bytes(
+        evidence_bytes,
+        label="unit bundled release evidence",
+        maximum=common.MAX_EVIDENCE_BYTES,
+    )
+    common.require_canonical_json_file(
+        evidence_bytes,
+        evidence_value,
+        label="unit bundled release evidence",
+    )
+    evidence = common.validate_evidence(evidence_value, material["policy"])
+    common.validate_bundle_index_against_evidence(index, evidence, evidence_bytes)
+
+
 def invoke_validator(artifact: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -1269,7 +1337,6 @@ def invoke_validator(artifact: Path) -> subprocess.CompletedProcess[str]:
             str(artifact),
             str(FIXTURE_POLICY),
             str(FIXTURE_EVIDENCE),
-            "test-fixture",
         ],
         cwd=ROOT,
         text=True,
@@ -1279,7 +1346,7 @@ def invoke_validator(artifact: Path) -> subprocess.CompletedProcess[str]:
 
 
 def invoke_release_validator(
-    policy: Path, evidence: Path, environment: str = "test-fixture"
+    policy: Path, evidence: Path
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -1287,7 +1354,6 @@ def invoke_release_validator(
             "validate-release",
             str(policy),
             str(evidence),
-            environment,
         ],
         cwd=ROOT,
         text=True,
@@ -1298,7 +1364,7 @@ def invoke_release_validator(
 
 def test_retired_v3_fixture_is_rejected_by_the_policy_loader() -> None:
     with pytest.raises(common.SccpReleaseError, match="schema/environment"):
-        common.load_trust_policy(FIXTURE_POLICY, allow_test_policy=True)
+        common.load_test_trust_policy(FIXTURE_POLICY)
 
 
 @pytest.mark.skip(
@@ -1638,7 +1704,7 @@ def test_external_trust_policy_rejects_substitution_and_semantic_drift(
 ) -> None:
     path = mutated_policy(tmp_path, mutation)
     with pytest.raises(common.SccpReleaseError):
-        common.load_trust_policy(path, allow_test_policy=True)
+        common.load_test_trust_policy(path)
 
 
 @pytest.mark.parametrize(
@@ -1660,7 +1726,7 @@ def test_external_trust_policy_rejects_substitution_and_semantic_drift(
 def test_policy_rejects_aliases_across_all_hash_roles(tmp_path: Path, mutation) -> None:
     path = mutated_policy(tmp_path, lambda value: mutation(value["proof_systems"][0]))
     with pytest.raises(common.SccpReleaseError, match="distinct"):
-        common.load_trust_policy(path, allow_test_policy=True)
+        common.load_test_trust_policy(path)
 
 
 def test_policy_rejects_cross_profile_cross_category_hash_alias(tmp_path: Path) -> None:
@@ -1673,7 +1739,7 @@ def test_policy_rejects_cross_profile_cross_category_hash_alias(tmp_path: Path) 
         ),
     )
     with pytest.raises(common.SccpReleaseError, match="across profiles and roles"):
-        common.load_trust_policy(path, allow_test_policy=True)
+        common.load_test_trust_policy(path)
 
 
 def test_policy_rejects_reused_audit_report_across_profiles(tmp_path: Path) -> None:
@@ -1686,7 +1752,7 @@ def test_policy_rejects_reused_audit_report_across_profiles(tmp_path: Path) -> N
         ),
     )
     with pytest.raises(common.SccpReleaseError, match="distinct report"):
-        common.load_trust_policy(path, allow_test_policy=True)
+        common.load_test_trust_policy(path)
 
 
 def test_policy_rejects_audit_report_aliased_to_proof_role(tmp_path: Path) -> None:
@@ -1697,7 +1763,7 @@ def test_policy_rejects_audit_report_aliased_to_proof_role(tmp_path: Path) -> No
         ),
     )
     with pytest.raises(common.SccpReleaseError, match="report aliases"):
-        common.load_trust_policy(path, allow_test_policy=True)
+        common.load_test_trust_policy(path)
 
 
 def test_forbidden_signal_only_circuit_check_does_not_depend_on_repo_file(
@@ -1711,7 +1777,7 @@ def test_forbidden_signal_only_circuit_check_does_not_depend_on_repo_file(
         ),
     )
     with pytest.raises(common.SccpReleaseError, match="labeled-signal-only"):
-        common.load_trust_policy(path, allow_test_policy=True)
+        common.load_test_trust_policy(path)
 
 
 def test_production_loader_rejects_test_policy_without_override() -> None:
@@ -1746,11 +1812,11 @@ def test_policy_rejects_unknown_and_duplicate_json_keys(tmp_path: Path) -> None:
     with pytest.raises(
         common.SccpReleaseError, match="schema/environment|inexact field set"
     ):
-        common.load_trust_policy(unknown_path, allow_test_policy=True)
+        common.load_test_trust_policy(unknown_path)
     duplicate_path = tmp_path / "duplicate.json"
     duplicate_path.write_text(raw.replace("{", '{"schema":"duplicate",', 1))
     with pytest.raises(common.SccpReleaseError):
-        common.load_trust_policy(duplicate_path, allow_test_policy=True)
+        common.load_test_trust_policy(duplicate_path)
 
 
 @pytest.mark.parametrize(
@@ -1820,7 +1886,7 @@ def test_policy_evidence_and_artifacts_reject_links(tmp_path: Path) -> None:
     policy_link = tmp_path / "policy-link.json"
     policy_link.symlink_to(material["policy_path"])
     with pytest.raises(common.SccpReleaseError, match="regular file"):
-        common.load_trust_policy(policy_link, allow_test_policy=True)
+        common.load_test_trust_policy(policy_link)
     evidence_copy = tmp_path / "evidence-copy.json"
     evidence_copy.write_bytes(material["evidence_bytes"])
     evidence_hardlink = tmp_path / "evidence-hardlink.json"
@@ -1859,6 +1925,7 @@ def test_bundle_rejects_inventory_and_commitment_tampering(
     tmp_path: Path, mutation: str
 ) -> None:
     bundle, _, material = build_unit_v4_bundle(tmp_path)
+    verify_unit_v4_bundle_integrity(bundle, material)
     if mutation == "extra":
         (bundle / "extra.txt").write_text("not indexed\n", encoding="utf-8")
     elif mutation == "empty-dir":
@@ -1875,15 +1942,19 @@ def test_bundle_rejects_inventory_and_commitment_tampering(
             index["trust_policy_sha256_hex"] = "13" * 32
         else:
             index["validator_executable_sha256_hex"] = "14" * 32
+        if mutation in ("policy", "validator"):
+            reseal_bundle_index(index)
         write_json(index_path, index)
-    with pytest.raises(common.SccpReleaseError):
-        verifier.verify_bundle(
-            bundle,
-            material["policy_path"],
-            material["policy"],
-            material["policy_bytes"],
-            material["validator"],
-        )
+    expected_error = {
+        "extra": "file inventory does not exactly match",
+        "empty-dir": "uncommitted empty directories",
+        "artifact": "signed size and SHA-256",
+        "index": "bundle_root_hash_hex does not match",
+        "policy": "trust-policy commitment does not match",
+        "validator": "executable commitment does not match",
+    }[mutation]
+    with pytest.raises(common.SccpReleaseError, match=expected_error):
+        verify_unit_v4_bundle_integrity(bundle, material)
 
 
 @pytest.mark.parametrize("production_semantics", (False, True))
@@ -2148,40 +2219,30 @@ def test_bundle_index_rejects_core_kind_and_count_confusion(
 
 
 def test_bundle_rejects_symlink_and_hardlink_entries(tmp_path: Path) -> None:
-    symlink_bundle, _, symlink_material = build_unit_v4_bundle(
-        tmp_path, "symlink-bundle"
-    )
+    symlink_bundle, _, _ = build_unit_v4_bundle(tmp_path, "symlink-bundle")
     artifact = symlink_bundle / "artifacts" / "phases" / "rust-sccp.log"
+    assert "artifacts/phases/rust-sccp.log" in common.enumerate_direct_files(
+        symlink_bundle
+    )
     content = artifact.read_bytes()
     artifact.unlink()
     target = tmp_path / "target.log"
     target.write_bytes(content)
     artifact.symlink_to(target)
-    with pytest.raises(common.SccpReleaseError):
-        verifier.verify_bundle(
-            symlink_bundle,
-            symlink_material["policy_path"],
-            symlink_material["policy"],
-            symlink_material["policy_bytes"],
-            symlink_material["validator"],
-        )
+    with pytest.raises(common.SccpReleaseError, match="symbolic links"):
+        common.enumerate_direct_files(symlink_bundle)
 
-    hardlink_bundle, _, hardlink_material = build_unit_v4_bundle(
-        tmp_path, "hardlink-bundle"
-    )
+    hardlink_bundle, _, _ = build_unit_v4_bundle(tmp_path, "hardlink-bundle")
     artifact = hardlink_bundle / "artifacts" / "phases" / "rust-sccp.log"
+    assert "artifacts/phases/rust-sccp.log" in common.enumerate_direct_files(
+        hardlink_bundle
+    )
     target = tmp_path / "hard-target.log"
     target.write_bytes(artifact.read_bytes())
     artifact.unlink()
     os.link(target, artifact)
-    with pytest.raises(common.SccpReleaseError):
-        verifier.verify_bundle(
-            hardlink_bundle,
-            hardlink_material["policy_path"],
-            hardlink_material["policy"],
-            hardlink_material["policy_bytes"],
-            hardlink_material["validator"],
-        )
+    with pytest.raises(common.SccpReleaseError, match="hard-linked files"):
+        common.enumerate_direct_files(hardlink_bundle)
 
 
 def test_bundle_enumeration_applies_entry_bound_before_sorting(tmp_path: Path) -> None:
@@ -2608,19 +2669,23 @@ def test_rust_validator_rejects_noncanonical_lane_json(tmp_path: Path) -> None:
 
 def test_validator_substitution_is_rejected_before_execution(tmp_path: Path) -> None:
     material = unit_v4_fixture(tmp_path)
+    _, authenticated_digest = common.authenticate_validator_executable(
+        material["validator"], material["evidence"]["validator"]
+    )
+    assert authenticated_digest == material["evidence"]["validator"][
+        "executable_sha256_hex"
+    ]
     marker = tmp_path / "executed"
     substitute = tmp_path / "substitute"
     substitute.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
     substitute.chmod(substitute.stat().st_mode | stat.S_IXUSR)
-    with pytest.raises(common.SccpReleaseError, match="signed release evidence"):
-        common.verify_rust_lane_evidence(
-            material["evidence"],
-            material["root"],
+    with pytest.raises(
+        common.SccpReleaseError,
+        match="does not match signed release evidence",
+    ):
+        common.authenticate_validator_executable(
             substitute,
-            material["policy"],
-            trust_policy_path=material["policy_path"],
-            evidence_path=material["evidence_path"],
-            environment="test-fixture",
+            material["evidence"]["validator"],
         )
     assert not marker.exists()
 
@@ -2695,6 +2760,9 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
             "source_profile": "sora-taira",
             "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
             "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
+            "epoch": 1,
+            "epoch_end_height": 10,
+            "roster_commitment_hex": "78" * 32,
             "checkpoint_height": 5,
             "checkpoint_block_hash_hex": "73" * 32,
             "checkpoint_context_id_hex": "74" * 32,
@@ -2702,7 +2770,7 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         }
     )
     assert anchor_hash.hex() == (
-        "31328ad8005a0f33e6050e8ae96f012b3285f7f14737486dce34f972686862f5"
+        "e9b9a7ff38cde8cb071d473cf0c6570270118df418ad790959474daedea7a365"
     )
 
 
@@ -2718,6 +2786,14 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         lambda anchor: anchor.update(protocol_version=True),
         lambda anchor: anchor.update(
             protocol_version=str(common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION)
+        ),
+        lambda anchor: anchor.update(epoch=0),
+        lambda anchor: anchor.update(epoch=True),
+        lambda anchor: anchor.update(epoch_end_height=4),
+        lambda anchor: anchor.update(epoch_end_height="10"),
+        lambda anchor: anchor.update(roster_commitment_hex="00" * 32),
+        lambda anchor: anchor.update(
+            roster_commitment_hex=anchor["chain_id_hash_hex"]
         ),
         lambda anchor: anchor.update(checkpoint_height=True),
         lambda anchor: anchor.update(checkpoint_context_id_hex="00" * 32),
@@ -2747,6 +2823,9 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         lambda anchor: anchor.update(validator_set_epoch=1),
         lambda anchor: anchor.update(validator_set_hash_hex="76" * 32),
         lambda anchor: anchor.update(validator_set_hash_version=1),
+        lambda anchor: anchor.pop("epoch"),
+        lambda anchor: anchor.pop("epoch_end_height"),
+        lambda anchor: anchor.pop("roster_commitment_hex"),
         lambda anchor: anchor.pop("checkpoint_context_id_hex"),
         lambda anchor: anchor.pop("checkpoint_finality_artifact_hash_hex"),
     ),
@@ -2759,6 +2838,9 @@ def test_sumeragi_v2_anchor_hash_rejects_protocol_role_and_schema_drift(
         "source_profile": "sora-taira",
         "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
         "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
+        "epoch": 1,
+        "epoch_end_height": 10,
+        "roster_commitment_hex": "78" * 32,
         "checkpoint_height": 5,
         "checkpoint_block_hash_hex": "73" * 32,
         "checkpoint_context_id_hex": "74" * 32,
@@ -2993,7 +3075,10 @@ def synthetic_production_semantic_inventory() -> tuple[
             "source_profile": "sora-taira",
             "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
             "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
-            "checkpoint_height": 100 + profile_index,
+            "epoch": 1,
+            "epoch_end_height": 10,
+            "roster_commitment_hex": "78" * 32,
+            "checkpoint_height": 5 + profile_index,
             "checkpoint_block_hash_hex": _semantic_hash(f"{profile}:anchor-block"),
             "checkpoint_context_id_hex": _semantic_hash(f"{profile}:height-context"),
             "checkpoint_finality_artifact_hash_hex": _semantic_hash(
@@ -3379,19 +3464,23 @@ def test_lane_validator_receives_complete_signed_context_not_trust_projections()
     invocation = source[start:end]
     assert "trust_policy_path" in invocation
     assert "evidence_path" in invocation
-    assert "environment" in invocation
+    assert "environment" not in invocation
     for forbidden in ("proof_system", "attestor_id", "public_key_hex", "runtime_hash"):
         assert forbidden not in invocation
 
 
 def test_production_entrypoints_expose_no_test_policy_or_signing_switch() -> None:
+    common_source = (SCRIPTS / "sccp_release_common.py").read_text(encoding="utf-8")
+    assert "allow_test_policy" not in common_source
     for path in PRODUCTION_CLIS:
         source = path.read_text(encoding="utf-8")
-        assert "allow_test_policy=True" not in source
+        assert "load_test_trust_policy" not in source
+        assert "validate_test_trust_policy_bytes" not in source
+        assert "test-fixture" not in source
         assert "private_key" not in source
         assert "--sign" not in source
     fixture_source = FIXTURE_RUNNER.read_text(encoding="utf-8")
-    assert "allow_test_policy=True" in fixture_source
+    assert "load_test_trust_policy" in fixture_source
     assert "FIXTURE_RELEASE_ID" in fixture_source
     assert "FIXTURE_POLICY_ID" in fixture_source
     assert "build_bundle" not in fixture_source

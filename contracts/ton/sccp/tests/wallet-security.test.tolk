@@ -511,6 +511,46 @@ get fun `test funded bridge mint and direct wallet burn complete every replay bo
     expect(masterLeaves).toEqual(1);
 }
 
+get fun `test ordinary Jetton transfer carries only its funded inbound value`() {
+    val deployer = testing.treasury("sccp-transfer-deployer");
+    val owner = testing.treasury("sccp-transfer-owner");
+    val recipient = testing.treasury("sccp-transfer-recipient");
+    val config = securityBridgeConfig();
+    val bridge = TairaXorSccpBridge.fromStorage(canonicalBridgeInitialStorage(config));
+    val master = TairaXorJettonMaster.fromStorage(
+        canonicalMasterInitialStorage(config, bridge.address),
+    );
+    securityDeployBridge(bridge, deployer.address);
+    securityDeployMaster(master, deployer.address);
+    securityMint(bridge, deployer.address, owner.address, 100);
+    val sourceWallet = TairaXorJettonWallet.fromAddress(master.getWalletAddress(owner.address));
+    val recipientWallet = TairaXorJettonWallet.fromAddress(
+        master.getWalletAddress(recipient.address),
+    );
+    val before = testing.getAccountBalance(sourceWallet.address);
+    val transfer = sourceWallet.sendAskToTransfer(
+        owner.address,
+        31,
+        40,
+        recipient.address,
+        owner.address,
+        null,
+        0,
+        PayloadInline { payload: beginCell().endCell().beginParse() },
+        { value: sccpWalletStorageReserve() + ton("2") },
+    );
+    expect(transfer).toHaveSuccessfulTx<AskToTransfer>({ to: sourceWallet.address });
+    expect(transfer).toHaveSuccessfulDeploy({ to: recipientWallet.address });
+    expect(transfer).toHaveSuccessfulTx<InternalTransferStep>({ to: recipientWallet.address });
+    expect(sourceWallet.getWalletData().jettonBalance).toEqual(60);
+    expect(recipientWallet.getWalletData().jettonBalance).toEqual(40);
+    expect(master.getJettonData().totalSupply).toEqual(100);
+    expect(testing.getAccountBalance(sourceWallet.address) >= before).toEqual(true);
+    expect(
+        testing.getAccountBalance(recipientWallet.address) >= sccpWalletStorageReserve(),
+    ).toEqual(true);
+}
+
 get fun `test stale bridge witness bounces before 0x31 and fresh 0x37 refunds once`() {
     val deployer = testing.treasury("sccp-refund-flow");
     val owner = testing.treasury("sccp-refund-owner");

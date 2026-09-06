@@ -105,6 +105,14 @@ pub struct SccpTonAccountStateReadbackV1 {
     pub code_hash: [u8; 32],
     /// Representation hash of the complete persistent data cell.
     pub data_hash: [u8; 32],
+    /// Last transaction hash authenticated by the shard-account leaf.
+    pub last_transaction_hash: [u8; 32],
+    /// Last transaction logical time authenticated by the shard-account leaf.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub last_transaction_lt: u64,
+    /// Account storage logical time, strictly after its latest transaction.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub storage_last_transaction_lt: u64,
 }
 
 impl SccpTonAccountStateReadbackV1 {
@@ -120,6 +128,11 @@ impl SccpTonAccountStateReadbackV1 {
             && nonzero(&self.account_state_hash)
             && nonzero(&self.code_hash)
             && nonzero(&self.data_hash)
+            && if self.last_transaction_lt == 0 {
+                self.storage_last_transaction_lt == 0
+            } else {
+                self.storage_last_transaction_lt > self.last_transaction_lt
+            }
     }
 }
 

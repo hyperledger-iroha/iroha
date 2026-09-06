@@ -36022,9 +36022,8 @@ mod tests {
             } else {
                 witness.prior_record_digest = [0xA5; 32];
             }
-            let encoded = base64::engine::general_purpose::STANDARD.encode(
-                norito::to_bytes(&witness).expect("encode invalid replay witness fixture"),
-            );
+            let encoded = base64::engine::general_purpose::STANDARD
+                .encode(norito::to_bytes(&witness).expect("encode invalid replay witness fixture"));
             assert!(
                 decode_sccp_replay_witness_b64(&encoded).is_err(),
                 "{label} must reject"

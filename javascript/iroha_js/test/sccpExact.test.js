@@ -174,6 +174,9 @@ function finalityAnchor(protocolVersion = 4) {
     source_network: network("sora-taira"),
     protocol_version: protocolVersion,
     chain_id_hash: SORA_TAIRA_CHAIN_ID_HASH,
+    epoch: 7,
+    epoch_end_height: 150,
+    roster_commitment: UPPER(0xa4, 32),
     checkpoint_height: 7,
     checkpoint_block_hash: UPPER(0xa1, 32),
     checkpoint_context_id: UPPER(0xa2, 32),
@@ -235,6 +238,10 @@ function policyHashes(policy = outboundPolicy()) {
   );
   const height = Buffer.alloc(8);
   height.writeBigUInt64LE(BigInt(anchorPolicy.checkpoint_height));
+  const epoch = Buffer.alloc(8);
+  epoch.writeBigUInt64LE(BigInt(anchorPolicy.epoch));
+  const epochEndHeight = Buffer.alloc(8);
+  epochEndHeight.writeBigUInt64LE(BigInt(anchorPolicy.epoch_end_height));
   const protocolVersion = Buffer.alloc(2);
   protocolVersion.writeUInt16LE(anchorPolicy.protocol_version);
   const anchor = Buffer.from(
@@ -244,6 +251,9 @@ function policyHashes(policy = outboundPolicy()) {
         Buffer.from([1, 0x40]),
         protocolVersion,
         Buffer.from(anchorPolicy.chain_id_hash, "hex"),
+        epoch,
+        epochEndHeight,
+        Buffer.from(anchorPolicy.roster_commitment, "hex"),
         height,
         Buffer.from(anchorPolicy.checkpoint_block_hash, "hex"),
         Buffer.from(anchorPolicy.checkpoint_context_id, "hex"),
@@ -508,7 +518,7 @@ const TEST_NETWORK_IDENTITIES = Object.freeze({
   "sora-taira": Object.freeze({ tag: 0x40, domain: 0, bytes: Buffer.from("fc56984b2be7431d840e21514d1883f0", "hex") }),
   "ethereum-mainnet": Object.freeze({ tag: 0x41, domain: 1, bytes: littleEndian(1, 8), routeId: "taira_eth_xor", id: 1 }),
   "bsc-mainnet": Object.freeze({ tag: 0x42, domain: 2, bytes: littleEndian(56, 8), routeId: "taira_bsc_xor", id: 56 }),
-  "tron-mainnet": Object.freeze({ tag: 0x43, domain: 3, bytes: littleEndian(0x2b66_53dc, 4), routeId: "taira_tron_xor", id: 0x2b66_53dc }),
+  "tron-mainnet": Object.freeze({ tag: 0x43, domain: 5, bytes: littleEndian(0x2b66_53dc, 4), routeId: "taira_tron_xor", id: 0x2b66_53dc }),
   "ton-mainnet": Object.freeze({
     tag: 0x44,
     domain: 4,
@@ -892,14 +902,14 @@ function messageBundle() {
         nonce: "7",
         route_revision: 1,
         asset_home_domain: 0,
-        asset_id_codec: 0,
+        asset_id_codec: 1,
         asset_id: "0x786f72",
         amount: "1",
-        sender_codec: 0,
+        sender_codec: 1,
         sender: "0x616c696365",
-        recipient_codec: 1,
+        recipient_codec: 2,
         recipient: `0x${HASH(0x21).slice(0, 40)}`,
-        route_id_codec: 0,
+        route_id_codec: 1,
         route_id: "0x74616972615f6273635f786f72",
       },
     },
@@ -1118,7 +1128,7 @@ test("closed SCCP inventory exposes only the four external mainnets and Sora Tai
     ["sora-taira", "0x40", 0, true],
     ["ethereum-mainnet", "0x41", 1, false],
     ["bsc-mainnet", "0x42", 2, false],
-    ["tron-mainnet", "0x43", 3, false],
+    ["tron-mainnet", "0x43", 5, false],
     ["ton-mainnet", "0x44", 4, false],
   ]) {
     assert.match(
@@ -1133,7 +1143,7 @@ test("closed SCCP inventory exposes only the four external mainnets and Sora Tai
   for (const descriptor of Object.values(SCCP_NETWORK_PROFILES)) {
     assert.equal("genesisHash" in descriptor, false);
   }
-  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["0", "1", "2", "3"]);
+  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["1", "2", "5", "7"]);
   assert.deepEqual(SCCP_PAYLOAD_KINDS, ["transfer"]);
   assert.deepEqual(SCCP_NETWORK_PROFILES["ton-mainnet"], {
     profile: "ton-mainnet",
@@ -1161,12 +1171,12 @@ test("closed SCCP inventory exposes only the four external mainnets and Sora Tai
 });
 
 test("closed codecs accept exact layouts and reject retired tags and textual aliases", () => {
-  assert.deepEqual(normalizeSccpCodecValue(0, "merchant@taira"), new TextEncoder().encode("merchant@taira"));
+  assert.deepEqual(normalizeSccpCodecValue(1, "merchant@taira"), new TextEncoder().encode("merchant@taira"));
   assert.match(AUTHORITY, /[^\x00-\x7f]/u, "fixture must exercise non-ASCII I105 digits");
-  assert.deepEqual(normalizeSccpCodecValue(0, AUTHORITY), new TextEncoder().encode(AUTHORITY));
-  assert.equal(normalizeSccpCodecValue(1, new Uint8Array(20).fill(1)).length, 20);
+  assert.deepEqual(normalizeSccpCodecValue(1, AUTHORITY), new TextEncoder().encode(AUTHORITY));
+  assert.equal(normalizeSccpCodecValue(2, new Uint8Array(20).fill(1)).length, 20);
   assert.equal(
-    normalizeSccpCodecValue(2, Uint8Array.from([0x41, ...new Uint8Array(20).fill(2)])).length,
+    normalizeSccpCodecValue(5, Uint8Array.from([0x41, ...new Uint8Array(20).fill(2)])).length,
     21,
   );
   assert.equal(
@@ -1177,6 +1187,7 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
     36,
   );
   for (const [tag, value] of [
+    [0, new Uint8Array(32).fill(1)],
     [3, new Uint8Array(32).fill(1)],
     [4, new Uint8Array(36).fill(1)],
     [6, Uint8Array.of(1)],
@@ -1187,14 +1198,14 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
     [7, new Uint8Array(35).fill(1)],
     [2, `0x${"11".repeat(20)}`],
     [2, new Uint8Array(20)],
-    [2, Uint8Array.from([0x42, ...new Uint8Array(20).fill(1)])],
-    [0, " padded"],
-    [0, "contains space"],
-    [0, "line\nbreak"],
-    [0, "merchant\ud83d\ude42"],
-    [0, `${AUTHORITY.slice(0, -1)}${AUTHORITY.endsWith("1") ? "2" : "1"}`],
-    [0, `n369${AUTHORITY.slice("test".length)}`],
-    [0, `${AUTHORITY}${"\uff72".repeat(100)}`],
+    [5, Uint8Array.from([0x42, ...new Uint8Array(20).fill(1)])],
+    [1, " padded"],
+    [1, "contains space"],
+    [1, "line\nbreak"],
+    [1, "merchant\ud83d\ude42"],
+    [1, `${AUTHORITY.slice(0, -1)}${AUTHORITY.endsWith("1") ? "2" : "1"}`],
+    [1, `n369${AUTHORITY.slice("test".length)}`],
+    [1, `${AUTHORITY}${"\uff72".repeat(100)}`],
   ]) assert.throws(() => normalizeSccpCodecValue(tag, value));
 });
 
@@ -1451,15 +1462,15 @@ test("registry destination hashes match the canonical Rust EVM and TRON layouts"
   const vectors = [
     {
       source: "bsc-mainnet",
-      destinationBindingHash: "68A718F971BBDEEA456B325B7821E20B6CBDE82A1C5FB520D31E0D27F0B2D452",
-      deploymentConfigHash: "BC7ECD599C20CECACE8B28139EB6949C9BF490E2BF04F06C12D59A3BEFB38C8C",
-      routeConfigurationHash: "4776F5FBE731E2EEBD827BAF080DB67ABE1A1E8F78F79A1B741CB004A2A992AD",
+      destinationBindingHash: "C790285EE14EE4AC1C7781F7DAD12917357A62ED0FB1B15D49769A9D75750D2E",
+      deploymentConfigHash: "D22880DA3B0CEC64BC21810A943447A47440B70D381785DB59DEBE8AC16AFD66",
+      routeConfigurationHash: "F1FCB7FAD816B9F995CC4765B170EDCC7A8CF0BA886B47E1EBAF8552538CAEDD",
     },
     {
       source: "tron-mainnet",
-      destinationBindingHash: "83B2BB7F5497E89D613DF3C6CFB745D84C4976DD4B447DDAE65D8B485EE9A408",
-      deploymentConfigHash: "F95AD7752CF34AA4BF813E23CF517591372DBB7FEF6E344C37ED16BE63FF3414",
-      routeConfigurationHash: "060705F1FB6C32BDE115DD29B6885CADE7F734DF4768772F1DA857C914018FD9",
+      destinationBindingHash: "CA9CDC7922DF282343B99CC768D862D39DC00E0B95540F6B95811FC23C1409F5",
+      deploymentConfigHash: "4BA2D6A2BD80F43D68CBB79ADAED1B318D0BD1AD0E3F6FCA8D7FB51F1AE4E0A5",
+      routeConfigurationHash: "2B21AD16AFA8BCE6851CF683AFB872DDDA9FD8E9F007B3FA86661493FA54835F",
     },
   ];
   for (const vector of vectors) {
@@ -1606,10 +1617,18 @@ test("registry rejects stale emitter hashes after either typed proof policy chan
 });
 
 test("registry rejects legacy and ambiguous Sumeragi v2 finality anchors", () => {
+  assert.equal(
+    policyHashes().anchor,
+    "9e9d4e602028b7ba99af5e47be644fbb3524e6240c284867faf9dfb85d873ba5",
+  );
   const mutations = [
     ["wrong protocol", (anchor) => { anchor.protocol_version = 1; }, /protocol_version/u],
     ["future protocol", (anchor) => { anchor.protocol_version = 5; }, /protocol_version/u],
     ["protocol type confusion", (anchor) => { anchor.protocol_version = true; }, /integer/u],
+    ["zero epoch", (anchor) => { anchor.epoch = 0; }, /epoch/u],
+    ["checkpoint beyond epoch", (anchor) => { anchor.epoch_end_height = 6; }, /epoch end/u],
+    ["aliased roster", (anchor) => { anchor.roster_commitment = anchor.chain_id_hash; }, /consensus hash role/u],
+    ["missing epoch", (anchor) => { delete anchor.epoch; }, /field/u],
     ["zero context", (anchor) => { anchor.checkpoint_context_id = UPPER(0, 32); }, /nonzero/u],
     ["aliased artifact", (anchor) => {
       anchor.checkpoint_finality_artifact_hash = anchor.checkpoint_context_id;
@@ -2092,7 +2111,7 @@ test("recent discovery validates compound commitment order, continuation, and ex
       value.payload_projection = null;
     },
     (value) => {
-      value.payload_projection.Transfer.dest_domain = 5;
+      value.payload_projection.Transfer.dest_domain = 3;
     },
     (value) => {
       value.payload_projection.Transfer.recipient = {
@@ -2215,7 +2234,7 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   oversizedNonce.payload.Transfer.nonce = (1n << 64n).toString();
   assert.throws(() => normalizeSccpMessageBundle(oversizedNonce), /u64/u);
   const wrongRecipientCodec = messageBundle();
-  wrongRecipientCodec.payload.Transfer.recipient_codec = 0;
+  wrongRecipientCodec.payload.Transfer.recipient_codec = 5;
   assert.throws(() => normalizeSccpMessageBundle(wrongRecipientCodec), /protocol domain/u);
   const longMerklePath = messageBundle();
   longMerklePath.merkle_proof.steps = Array.from({ length: 65 }, () => ({
@@ -2509,6 +2528,11 @@ test("bridge response and JSON parser reject contradictions, aliases, and duplic
     counterparty_domain: 4,
     counterparty_chain: "ton-mainnet",
   })).backend, "ton-groth16-bls12381-v1");
+  assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse({
+    backend: "tron-groth16-bn254-v1",
+    counterparty_domain: 5,
+    counterparty_chain: "tron-mainnet",
+  })).backend, "tron-groth16-bn254-v1");
   assert.equal(normalizeSccpBridgeSubmitResponse({
     ...preparedResponse(),
     submitted: true,
@@ -2519,6 +2543,7 @@ test("bridge response and JSON parser reject contradictions, aliases, and duplic
   for (const value of [
     { ...preparedResponse(), payload_kind: "burn" },
     { ...preparedResponse(), counterparty_chain: "solana-mainnet-beta" },
+    { ...preparedResponse(), counterparty_domain: 3 },
     { ...preparedResponse(), proof_artifact_hash: HASH(3) },
     { ...preparedResponse(), manifest_hash_hex: HASH(3) },
     { ...preparedResponse(), route_configuration_hash_hex: HASH(0xab).toUpperCase() },

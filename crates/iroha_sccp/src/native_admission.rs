@@ -52,6 +52,7 @@ const NORITO_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "proof", rename_all = "snake_case")]
 pub enum SccpNativeSourceProofV1 {
     /// Ethereum beacon-light-client and execution-MPT proof.
@@ -98,6 +99,7 @@ impl SccpNativeSourceProofV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpNativeSourceProofEnvelopeV1 {
     /// Envelope schema version. V1 accepts exactly `1`.
     pub version: u8,
@@ -139,6 +141,7 @@ pub struct SccpNativeSourceProofEnvelopeV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpNativeInboundMessageProofV1 {
     /// Wrapper schema version. V1 accepts exactly `1`.
     pub version: u8,
@@ -159,6 +162,7 @@ pub struct SccpNativeInboundMessageProofV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpNativeFinalityPointV1 {
     /// Native block number, slot, or shard sequence number.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -179,6 +183,7 @@ pub struct SccpNativeFinalityPointV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ValidatedSccpNativeInboundMessageV1 {
     /// Exact external-source to SORA-target lane authenticated by the proof.
     pub lane: SccpLaneIdV1,
@@ -1289,6 +1294,27 @@ mod tests {
             decode_sccp_native_inbound_message_proof_json_v1(&unknown_field),
             Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
         );
+        for (needle, replacement) in [
+            (
+                "\"source\":{\"version\":1",
+                "\"source\":{\"version\":1,\"unknown_envelope_field\":0",
+            ),
+            (
+                "\"source_finality\":{",
+                "\"source_finality\":{\"unknown_finality_field\":0,",
+            ),
+            (
+                "\"proof\":{\"backend\":",
+                "\"proof\":{\"unknown_proof_field\":0,\"backend\":",
+            ),
+        ] {
+            let nested_unknown = json.replacen(needle, replacement, 1);
+            assert_ne!(nested_unknown, json, "fixture must contain {needle}");
+            assert_eq!(
+                decode_sccp_native_inbound_message_proof_json_v1(&nested_unknown),
+                Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
+            );
+        }
         let numeric_alias = json.replace("\"nonce\":\"11\"", "\"nonce\":11");
         assert_ne!(numeric_alias, json);
         assert_eq!(

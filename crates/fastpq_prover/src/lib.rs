@@ -64,7 +64,9 @@ pub use backend::{
 };
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
-pub use backend::{hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries};
+pub use backend::{
+    compute_lookup_grand_product, hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries,
+};
 pub use batch::{
     OperationKind, PublicInputs, StateTransition, TRANSITION_BATCH_SCHEMA_NAME, TransitionBatch,
 };

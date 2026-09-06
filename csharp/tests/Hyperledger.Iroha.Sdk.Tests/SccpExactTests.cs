@@ -40,6 +40,10 @@ public sealed partial class SccpExactTests
             Enum.GetValues<SccpCodecV1>());
         Assert.Equal(new byte[] { 0x40, 0x41, 0x42, 0x43, 0x44 },
             Enum.GetValues<SccpNetworkV1>().Select(static value => (byte)value));
+        Assert.Equal(new uint[] { 0, 1, 2, 5, 4 },
+            Enum.GetValues<SccpNetworkV1>().Select(static value => value.DomainId()));
+        Assert.Equal(new byte[] { 1, 2, 5, 7 },
+            Enum.GetValues<SccpCodecV1>().Select(static value => (byte)value));
         for (var tag = 0; tag <= byte.MaxValue; tag++)
         {
             Assert.Equal(tag is >= 0x40 and <= 0x44, Enum.IsDefined((SccpNetworkV1)tag));
@@ -47,6 +51,8 @@ public sealed partial class SccpExactTests
         Assert.False(Enum.IsDefined((SccpCodecV1)3));
         Assert.False(Enum.IsDefined((SccpCodecV1)4));
         Assert.False(Enum.IsDefined((SccpCodecV1)6));
+        Assert.False(Enum.IsDefined((SccpCodecV1)0));
+        Assert.Equal(5, (byte)SccpHubMessageKindV1.Transfer);
         Assert.Equal(new[] { SccpPayloadKindV1.Transfer }, Enum.GetValues<SccpPayloadKindV1>());
         foreach (var alias in new[]
         {
@@ -136,6 +142,7 @@ public sealed partial class SccpExactTests
             SccpCodecV1.EvmAddress20, Enumerable.Repeat((byte)0x11, 20).ToArray(),
             SccpCodecV1.CanonicalText, "taira_bsc_xor"u8.ToArray());
         var bytes = payload.CanonicalBytes();
+        Assert.Equal(2, bytes[0]);
         Assert.Equal(0x0102_0304U, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(18, 4)));
         var decoded = SccpV1.DecodeCanonicalPayload(bytes);
         Assert.Equal(payload.RouteRevision, decoded.RouteRevision);
@@ -152,6 +159,7 @@ public sealed partial class SccpExactTests
 
         foreach (var mutation in new Action<byte[]>[]
         {
+            value => value[0] = 0,
             value => value[0] = 1,
             value => value[1] = 2,
             value => BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(2, 4), 3),
@@ -186,6 +194,7 @@ public sealed partial class SccpExactTests
         configuration[0] ^= 0xff;
         var commitment = SccpV1.Commitment(context, ExactTransfer());
         var bytes = SccpV1.CanonicalCommitmentBytes(commitment);
+        Assert.Equal(5, bytes[1]);
         var decoded = SccpV1.DecodeCanonicalCommitment(bytes);
         Assert.Equal(bytes, SccpV1.CanonicalCommitmentBytes(decoded));
         Assert.Equal(SccpV1.CommitmentRoot(commitment), SccpV1.MerkleRootFromCommitment(commitment, []));
@@ -193,6 +202,7 @@ public sealed partial class SccpExactTests
         foreach (var mutation in new Action<byte[]>[]
         {
             value => value[0] = 2,
+            value => value[1] = 0,
             value => value[1] = 4,
             value => value[2] = 0,
             value => value[2] = 6,
@@ -1231,10 +1241,13 @@ public sealed partial class SccpExactTests
         Assert.Equal(SccpDestinationProofBackendV1.EvmGroth16Bn254, parsed.Backend);
         Assert.Equal(SccpNetworkV1.BscMainnet, parsed.TargetNetwork);
         Assert.Equal((ushort)4, parsed.SoraFinalityAnchor.ProtocolVersion);
+        Assert.Equal((ulong)7, parsed.SoraFinalityAnchor.Epoch);
+        Assert.Equal((ulong)150, parsed.SoraFinalityAnchor.EpochEndHeight);
+        Assert.Equal(Upper(0xa4, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.RosterCommitment));
         Assert.Equal(Upper(0xa2, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointContextId));
         Assert.Equal(Upper(0xa3, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointFinalityArtifactHash));
         Assert.Equal(
-            "CDBEC097FED4AD21E44A354FE09A3C43AD489F4AC78CFF8944BA8BB5CC2FD577",
+            "9E9D4E602028B7BA99AF5E47BE644FBB3524E6240C284867FAF9DFB85D873BA5",
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
         Assert.Equal("0x1168372c5c87f384d377a3ffb9140af5ac73cdcd693bcb1b4b89995a8fcad92a", parsed.StatementHash);
         Assert.Equal("0x3757838d0f35d387dd9467d4d9c4806fc528d45db22060ea4784402a0208cd5f", parsed.RequestHash);
@@ -1263,6 +1276,11 @@ public sealed partial class SccpExactTests
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 5,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "3",
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = true,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["epoch"] = 0,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["epoch_end_height"] = 6,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["roster_commitment"] =
+                ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["chain_id_hash"],
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!).Remove("epoch"),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["validator_set_epoch"] = 2,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_context_id"] = Upper(0, 32),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_context_id"] =
@@ -1410,7 +1428,7 @@ public sealed partial class SccpExactTests
         nullProjection["payload_projection"] = null;
         Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(new Dictionary<string, object?> { ["items"] = new[] { nullProjection } })));
         var wrongProjectionDomain = DeepClone(first);
-        ((Dictionary<string, object?>)((Dictionary<string, object?>)wrongProjectionDomain["payload_projection"]!)["Transfer"]!)["dest_domain"] = 5;
+        ((Dictionary<string, object?>)((Dictionary<string, object?>)wrongProjectionDomain["payload_projection"]!)["Transfer"]!)["dest_domain"] = 3;
         Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(new Dictionary<string, object?> { ["items"] = new[] { wrongProjectionDomain } })));
         var wrongProjectionRoute = DeepClone(first);
         ((Dictionary<string, object?>)((Dictionary<string, object?>)wrongProjectionRoute["payload_projection"]!)["Transfer"]!)["route_id"] =
@@ -1641,6 +1659,14 @@ public sealed partial class SccpExactTests
         var tonExpectation = new SccpBridgeResponseExpectation(CounterpartyDomain: 4);
         tonExpectation.Validate();
         Assert.Equal((uint)4, tonExpectation.CounterpartyDomain);
+        var tronResponse = text
+            .Replace("bridge/sccp/native/bsc-parlia-v1", "tron-groth16-bn254-v1", StringComparison.Ordinal)
+            .Replace("\"counterparty_domain\":2", "\"counterparty_domain\":5", StringComparison.Ordinal)
+            .Replace("\"counterparty_chain\":\"bsc-mainnet\"", "\"counterparty_chain\":\"tron-mainnet\"", StringComparison.Ordinal);
+        Assert.True(SccpBridgeSubmitResponse.Parse(Encoding.UTF8.GetBytes(tronResponse)).Submitted);
+        var tronExpectation = new SccpBridgeResponseExpectation(CounterpartyDomain: 5);
+        tronExpectation.Validate();
+        Assert.Equal((uint)5, tronExpectation.CounterpartyDomain);
 
         var transaction = CanonicalTransactionPayload(7);
         var prepared = ResponseJson(
@@ -2242,6 +2268,9 @@ public sealed partial class SccpExactTests
                 anchor["protocol_version"],
                 System.Globalization.CultureInfo.InvariantCulture),
             Convert.FromHexString((string)anchor["chain_id_hash"]!),
+            7,
+            150,
+            Convert.FromHexString((string)anchor["roster_commitment"]!),
             7,
             Convert.FromHexString((string)anchor["checkpoint_block_hash"]!),
             Convert.FromHexString((string)anchor["checkpoint_context_id"]!),
@@ -3218,6 +3247,9 @@ public sealed partial class SccpExactTests
             ["source_network"] = Network("sora-taira"),
             ["protocol_version"] = protocolVersion,
             ["chain_id_hash"] = Convert.ToHexString(chainHash),
+            ["epoch"] = 7,
+            ["epoch_end_height"] = 150,
+            ["roster_commitment"] = Upper(0xa4, 32),
             ["checkpoint_height"] = 7,
             ["checkpoint_block_hash"] = Upper(0xa1, 32),
             ["checkpoint_context_id"] = Upper(0xa2, 32),
@@ -3643,6 +3675,13 @@ public sealed partial class SccpExactTests
         output.Write(Convert.FromHexString((string)anchor["chain_id_hash"]!));
         WriteUInt64(
             output,
+            Convert.ToUInt64(anchor["epoch"], System.Globalization.CultureInfo.InvariantCulture));
+        WriteUInt64(
+            output,
+            Convert.ToUInt64(anchor["epoch_end_height"], System.Globalization.CultureInfo.InvariantCulture));
+        output.Write(Convert.FromHexString((string)anchor["roster_commitment"]!));
+        WriteUInt64(
+            output,
             Convert.ToUInt64(anchor["checkpoint_height"], System.Globalization.CultureInfo.InvariantCulture));
         output.Write(Convert.FromHexString((string)anchor["checkpoint_block_hash"]!));
         output.Write(Convert.FromHexString((string)anchor["checkpoint_context_id"]!));
@@ -3704,11 +3743,18 @@ public sealed partial class SccpExactTests
         canonical.Write(Convert.FromHexString((string)anchor["chain_id_hash"]!));
         WriteUInt64(
             canonical,
+            Convert.ToUInt64(anchor["epoch"], System.Globalization.CultureInfo.InvariantCulture));
+        WriteUInt64(
+            canonical,
+            Convert.ToUInt64(anchor["epoch_end_height"], System.Globalization.CultureInfo.InvariantCulture));
+        canonical.Write(Convert.FromHexString((string)anchor["roster_commitment"]!));
+        WriteUInt64(
+            canonical,
             Convert.ToUInt64(anchor["checkpoint_height"], System.Globalization.CultureInfo.InvariantCulture));
         canonical.Write(Convert.FromHexString((string)anchor["checkpoint_block_hash"]!));
         canonical.Write(Convert.FromHexString((string)anchor["checkpoint_context_id"]!));
         canonical.Write(Convert.FromHexString((string)anchor["checkpoint_finality_artifact_hash"]!));
-        Assert.Equal(140, canonical.Length);
+        Assert.Equal(188, canonical.Length);
         return SccpV1.Keccak256(Concat("sccp:sora-finality-anchor:v1"u8.ToArray(), canonical.ToArray()));
     }
 

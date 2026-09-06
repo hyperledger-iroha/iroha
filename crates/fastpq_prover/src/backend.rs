@@ -37,6 +37,8 @@ const TRANSCRIPT_ROLE_V1: &[u8] = b"fiat-shamir-transcript";
 const MERKLE_LEAF_PHASE_V1: &[u8] = b"leaf";
 const MERKLE_NODE_PHASE_V1: &[u8] = b"node";
 const MERKLE_EMPTY_PHASE_V1: &[u8] = b"empty-root";
+/// Transcript domain for the permission lookup grand-product accumulator.
+pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
 
 /// Typed native-STARK Merkle role; the role and FRI round are bound into every internal node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,13 +90,15 @@ pub const TRANSCRIPT_TAG_INIT: &str = "fastpq:v1:init";
 pub const TRANSCRIPT_TAG_ROOTS: &str = "fastpq:v1:roots";
 pub const TRANSCRIPT_TAG_TRACE_ROOT: &str = "fastpq:v1:trace_root";
 pub const TRANSCRIPT_TAG_COLUMN_MIX_PREFIX: &str = "fastpq:v1:column_mix";
+/// Fiat–Shamir domain for the permission lookup challenge.
+pub const TRANSCRIPT_TAG_GAMMA: &str = "fastpq:v1:gamma";
 pub const TRANSCRIPT_TAG_ALPHA_PREFIX: &str = "fastpq:v1:alpha";
 pub const TRANSCRIPT_TAG_AIR_ROOTS: &str = "fastpq:v1:air_roots";
 pub const TRANSCRIPT_TAG_QUERY_INDEX: &str = "fastpq:v1:query_index";
 pub const TRANSCRIPT_TAG_BETA_PREFIX: &str = "fastpq:v1:beta";
 pub const TRANSCRIPT_TAG_FRI_LAYER_PREFIX: &str = "fastpq:v1:fri_layer";
-const AIR_BOOLEAN_RESIDUE_COUNT: usize = 3;
-const AIR_RELATION_RESIDUE_COUNT: usize = 3;
+const AIR_BOOLEAN_RESIDUE_COUNT: usize = 8;
+const AIR_RELATION_RESIDUE_COUNT: usize = 4;
 const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS + 2;
 /// Number of V1 AIR composition challenges derived from the transcript.
 ///
@@ -1089,7 +1093,11 @@ pub(crate) struct BackendArtifact {
     pub(crate) lde_root: GoldilocksDigest384V1,
     /// Number of evaluation rows committed under `lde_root`.
     pub(crate) lde_domain_size: u32,
-    /// Composition challenges sampled after the LDE and trace roots.
+    /// Lookup grand-product accumulator over the permission witness LDE.
+    pub(crate) lookup_grand_product: u64,
+    /// Lookup Fiat–Shamir challenge (`γ`).
+    pub(crate) lookup_challenge: u64,
+    /// Composition challenges sampled after `lookup_challenge`.
     pub(crate) alphas: Vec<u64>,
     /// Poseidon hash of each FRI layer plus the terminal root.
     pub(crate) fri_layers: Vec<GoldilocksDigest384V1>,
@@ -1305,9 +1313,12 @@ fn hash_air_composition_leaves_with_mode(
 #[derive(Debug)]
 struct AirColumnLayout {
     boolean_selectors: [usize; AIR_BOOLEAN_RESIDUE_COUNT],
-    operation_selectors: [usize; 2],
+    operation_selectors: [usize; 6],
+    numeric_selectors: [usize; 3],
+    permission_selectors: [usize; 2],
     s_active: usize,
-    s_transfer: usize,
+    s_perm: usize,
+    perm_hash: usize,
     delta: usize,
     value_old_limbs: Vec<usize>,
     value_new_limbs: Vec<usize>,
@@ -1324,7 +1335,13 @@ impl AirColumnLayout {
         };
         let s_active = required("s_active")?;
         let s_transfer = required("s_transfer")?;
+        let s_mint = required("s_mint")?;
+        let s_burn = required("s_burn")?;
+        let s_role_grant = required("s_role_grant")?;
+        let s_role_revoke = required("s_role_revoke")?;
         let s_meta_set = required("s_meta_set")?;
+        let s_perm = required("s_perm")?;
+        let perm_hash = required("perm_hash")?;
         let delta = required("delta")?;
         let mut stable_columns = [0usize; AIR_STABLE_RESIDUE_COUNT];
         for (limb, column) in stable_columns[..crate::trace::METADATA_COMMITMENT_LIMBS]
@@ -1336,10 +1353,29 @@ impl AirColumnLayout {
         stable_columns[crate::trace::METADATA_COMMITMENT_LIMBS] = required("dsid")?;
         stable_columns[crate::trace::METADATA_COMMITMENT_LIMBS + 1] = required("slot")?;
         Ok(Self {
-            boolean_selectors: [s_active, s_transfer, s_meta_set],
-            operation_selectors: [s_transfer, s_meta_set],
+            boolean_selectors: [
+                s_active,
+                s_transfer,
+                s_mint,
+                s_burn,
+                s_role_grant,
+                s_role_revoke,
+                s_meta_set,
+                s_perm,
+            ],
+            operation_selectors: [
+                s_transfer,
+                s_mint,
+                s_burn,
+                s_role_grant,
+                s_role_revoke,
+                s_meta_set,
+            ],
+            numeric_selectors: [s_transfer, s_mint, s_burn],
+            permission_selectors: [s_role_grant, s_role_revoke],
             s_active,
-            s_transfer,
+            s_perm,
+            perm_hash,
             delta,
             value_old_limbs: contiguous_limb_columns(column_names, "value_old_limb_"),
             value_new_limbs: contiguous_limb_columns(column_names, "value_new_limb_"),
@@ -1398,6 +1434,12 @@ where
         .fold(0u64, |sum, &selector| add_mod(sum, current(selector)));
     residues[residue_index] = sub_mod(current(layout.s_active), operation_sum);
     residue_index += 1;
+    let permission_sum = layout
+        .permission_selectors
+        .iter()
+        .fold(0u64, |sum, &selector| add_mod(sum, current(selector)));
+    residues[residue_index] = sub_mod(current(layout.s_perm), permission_sum);
+    residue_index += 1;
     residues[residue_index] = mul_mod(
         next(layout.s_active),
         sub_mod(FIELD_ONE, current(layout.s_active)),
@@ -1406,8 +1448,12 @@ where
     let value_old = packed_column_value_at(&layout.value_old_limbs, &current);
     let value_new = packed_column_value_at(&layout.value_new_limbs, &current);
     let expected_delta = sub_mod(value_new, value_old);
+    let numeric_selector = layout
+        .numeric_selectors
+        .iter()
+        .fold(0u64, |sum, &selector| add_mod(sum, current(selector)));
     residues[residue_index] = mul_mod(
-        current(layout.s_transfer),
+        numeric_selector,
         sub_mod(expected_delta, current(layout.delta)),
     );
     residue_index += 1;
@@ -1954,6 +2000,68 @@ fn merkle_node_hash(
         role.counter(),
         &[&left.to_le_bytes(), &right.to_le_bytes()],
     )
+}
+
+/// Compute the Fiat–Shamir lookup grand-product accumulator over canonical
+/// Goldilocks selector and witness evaluations.
+///
+/// Every non-zero `s_perm` evaluation selects the matching `perm_hash`
+/// evaluation. The accumulator therefore multiplies `(perm_hash + γ)` for
+/// exactly those selected positions, using the committed LDE columns rather
+/// than the unextended trace.
+///
+/// TODO: Before permission operations can enter the production semantic
+/// profile, extend this commitment with a table-side product plus a running
+/// product trace constrained at both boundaries and bind that table to the
+/// permission root. This deterministic accumulator alone is not a membership
+/// or non-membership proof.
+///
+/// # Errors
+///
+/// Returns [`Error::LookupColumnLengthMismatch`] when the columns have
+/// different lengths, or [`Error::NonCanonicalGoldilocksElement`] when the
+/// challenge or an evaluation is outside the canonical field range.
+pub fn compute_lookup_grand_product(
+    selector_values: &[u64],
+    witness_values: &[u64],
+    gamma: u64,
+) -> Result<u64> {
+    if selector_values.len() != witness_values.len() {
+        return Err(Error::LookupColumnLengthMismatch {
+            selector_len: selector_values.len(),
+            witness_len: witness_values.len(),
+        });
+    }
+    if gamma >= GOLDILOCKS_MODULUS {
+        return Err(Error::NonCanonicalGoldilocksElement {
+            context: "lookup_challenge",
+            indices: Vec::new(),
+        });
+    }
+
+    let mut accumulator = FIELD_ONE;
+    for (index, (&selector, &witness)) in selector_values
+        .iter()
+        .zip(witness_values.iter())
+        .enumerate()
+    {
+        if selector >= GOLDILOCKS_MODULUS {
+            return Err(Error::NonCanonicalGoldilocksElement {
+                context: "lookup_selector",
+                indices: vec![index],
+            });
+        }
+        if witness >= GOLDILOCKS_MODULUS {
+            return Err(Error::NonCanonicalGoldilocksElement {
+                context: "lookup_witness",
+                indices: vec![index],
+            });
+        }
+        if selector != 0 {
+            accumulator = mul_mod(accumulator, add_mod(witness, gamma));
+        }
+    }
+    Ok(accumulator)
 }
 
 #[cfg(test)]
@@ -2504,6 +2612,8 @@ struct PreparedBatch {
     air_composition_root: GoldilocksDigest384V1,
     lde_root: GoldilocksDigest384V1,
     lde_domain_size: u32,
+    lookup_grand_product: u64,
+    lookup_challenge: u64,
     alphas: Vec<u64>,
     lde_columns: Vec<Vec<u64>>,
     lde_values: Vec<u64>,
@@ -2529,6 +2639,10 @@ pub struct BatchDerivedCommitments {
     pub lde_root: GoldilocksDigest384V1,
     /// Canonical LDE evaluation-domain size.
     pub lde_domain_size: u32,
+    /// Canonical permission lookup grand-product accumulator.
+    pub lookup_grand_product: u64,
+    /// Canonical transcript-derived permission lookup challenge.
+    pub lookup_challenge: u64,
 }
 
 fn hash_trace_columns_v1(
@@ -2616,6 +2730,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         .iter()
         .map(|column| column.name.clone())
         .collect::<Vec<_>>();
+    let air_layout = AirColumnLayout::from_names(&column_names)?;
     let planner = Planner::new(params);
     let poseidon_mode = poseidon_policy.resolved();
     let polynomial_data = derive_polynomial_data(&trace, &planner);
@@ -2661,6 +2776,12 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
     );
+    let lookup_challenge = transcript.challenge_field(TRANSCRIPT_TAG_GAMMA);
+    let lookup_grand_product = compute_lookup_grand_product(
+        &lde_columns[air_layout.s_perm],
+        &lde_columns[air_layout.perm_hash],
+        lookup_challenge,
+    )?;
     let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
     for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
         let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
@@ -2686,6 +2807,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         ]
         .concat(),
     );
+    transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
     Ok(PreparedBatch {
         trace_commitment,
         trace_root,
@@ -2693,6 +2815,8 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         air_composition_root,
         lde_root,
         lde_domain_size,
+        lookup_grand_product,
+        lookup_challenge,
         alphas,
         lde_columns,
         lde_values,
@@ -2704,7 +2828,8 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
     })
 }
 
-/// Recompute every proof-carried root that is deterministic from the batch.
+/// Recompute every proof-carried root and lookup value that is deterministic
+/// from the batch.
 pub fn derive_batch_commitments(
     params: &StarkParameterSet,
     batch: &TransitionBatch,
@@ -2726,6 +2851,8 @@ pub fn derive_batch_commitments(
         air_composition_root: prepared.air_composition_root,
         lde_root: prepared.lde_root,
         lde_domain_size: prepared.lde_domain_size,
+        lookup_grand_product: prepared.lookup_grand_product,
+        lookup_challenge: prepared.lookup_challenge,
     })
 }
 
@@ -2758,6 +2885,8 @@ impl StarkBackend {
             air_composition_root,
             lde_root,
             lde_domain_size,
+            lookup_grand_product,
+            lookup_challenge,
             alphas,
             lde_columns,
             lde_values,
@@ -2826,6 +2955,8 @@ impl StarkBackend {
             air_composition_root,
             lde_root,
             lde_domain_size,
+            lookup_grand_product,
+            lookup_challenge,
             alphas,
             fri_layers,
             fri_betas,
@@ -2999,6 +3130,62 @@ mod tests {
         assert_ne!(a, 0);
         assert_ne!(b, 0);
         assert_ne!(a, b);
+    }
+    #[test]
+    fn lookup_grand_product_consumes_only_selected_witnesses() {
+        let gamma = 3;
+        let product = compute_lookup_grand_product(&[1, 0, 2], &[7, 9, 11], gamma)
+            .expect("canonical equal-length lookup columns");
+        assert_eq!(product, mul_mod(7 + gamma, 11 + gamma));
+        assert_eq!(
+            compute_lookup_grand_product(&[0, 0], &[7, 11], gamma)
+                .expect("unselected canonical witnesses"),
+            FIELD_ONE
+        );
+    }
+    #[test]
+    fn lookup_grand_product_rejects_mismatched_column_lengths() {
+        let error = compute_lookup_grand_product(&[1, 0], &[7], 3)
+            .expect_err("different lookup column lengths must fail");
+        assert!(matches!(
+            error,
+            Error::LookupColumnLengthMismatch {
+                selector_len: 2,
+                witness_len: 1
+            }
+        ));
+    }
+    #[test]
+    fn lookup_grand_product_rejects_noncanonical_inputs() {
+        let gamma_error = compute_lookup_grand_product(&[], &[], GOLDILOCKS_MODULUS)
+            .expect_err("non-canonical gamma must fail");
+        assert!(matches!(
+            gamma_error,
+            Error::NonCanonicalGoldilocksElement {
+                context: "lookup_challenge",
+                indices
+            } if indices.is_empty()
+        ));
+
+        let selector_error = compute_lookup_grand_product(&[GOLDILOCKS_MODULUS], &[0], 0)
+            .expect_err("non-canonical selector must fail");
+        assert!(matches!(
+            selector_error,
+            Error::NonCanonicalGoldilocksElement {
+                context: "lookup_selector",
+                indices
+            } if indices == [0]
+        ));
+
+        let witness_error = compute_lookup_grand_product(&[1], &[GOLDILOCKS_MODULUS], 0)
+            .expect_err("non-canonical witness must fail");
+        assert!(matches!(
+            witness_error,
+            Error::NonCanonicalGoldilocksElement {
+                context: "lookup_witness",
+                indices
+            } if indices == [0]
+        ));
     }
     #[test]
     fn open_queries_rejects_out_of_range() {

@@ -33,7 +33,7 @@ public static class SccpNetworkV1Extensions
         SccpNetworkV1.SoraTaira => 0,
         SccpNetworkV1.EthereumMainnet => 1,
         SccpNetworkV1.BscMainnet => 2,
-        SccpNetworkV1.TronMainnet => 3,
+        SccpNetworkV1.TronMainnet => 5,
         SccpNetworkV1.TonMainnet => 4,
         _ => throw new ArgumentOutOfRangeException(nameof(network)),
     };
@@ -84,10 +84,10 @@ public sealed record SccpLaneIdV1
 /// <summary>Closed first-release SCCP binary codec inventory.</summary>
 public enum SccpCodecV1 : byte
 {
-    CanonicalText = 0,
-    EvmAddress20 = 1,
-    TronAddress21 = 2,
-    TonAccount36 = 3,
+    CanonicalText = 1,
+    EvmAddress20 = 2,
+    TronAddress21 = 5,
+    TonAccount36 = 7,
 }
 
 /// <summary>Canonical binary codec validation.</summary>
@@ -219,7 +219,7 @@ public static class SccpNativeBackendV1Extensions
 /// <summary>Stable fixed-width kind tags used by canonical SCCP commitments.</summary>
 public enum SccpHubMessageKindV1 : byte
 {
-    Transfer = 0,
+    Transfer = 5,
 }
 
 /// <summary>Closed canonical SCCP payload. V1 admits only transfer.</summary>
@@ -241,7 +241,7 @@ public abstract class SccpPayloadV1
     public byte[] CanonicalBytes()
     {
         using var output = new MemoryStream();
-        output.WriteByte(0);
+        output.WriteByte(2);
         WriteCanonicalBody(output);
         return output.ToArray();
     }
@@ -386,7 +386,7 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
 
     private static void RequireDomain(uint value, string field)
     {
-        if (value > 4)
+        if (value is not (0 or 1 or 2 or 4 or 5))
         {
             throw new ArgumentOutOfRangeException(field, "SCCP domain is unsupported or retired.");
         }
@@ -396,7 +396,7 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
     {
         0 => SccpCodecV1.CanonicalText,
         1 or 2 => SccpCodecV1.EvmAddress20,
-        3 => SccpCodecV1.TronAddress21,
+        5 => SccpCodecV1.TronAddress21,
         4 => SccpCodecV1.TonAccount36,
         _ => throw new ArgumentOutOfRangeException(nameof(domain)),
     };
@@ -747,7 +747,7 @@ public static class SccpV1
     public static SccpTransferPayloadV1 DecodeCanonicalPayload(ReadOnlySpan<byte> bytes)
     {
         var cursor = new PayloadCursor(bytes);
-        if (cursor.TakeByte() != 0)
+        if (cursor.TakeByte() != 2)
         {
             throw new ArgumentException("Unsupported or retired SCCP payload discriminant.", nameof(bytes));
         }
@@ -1191,13 +1191,15 @@ public static class SccpV1
 
     private static byte[] CanonicalFinalityAnchorBytes(SccpSoraFinalityAnchorV1 anchor)
     {
-        if (anchor.ProtocolVersion != 4 || anchor.CheckpointHeight == 0)
+        if (anchor.ProtocolVersion != 4 || anchor.Epoch == 0 || anchor.CheckpointHeight == 0 ||
+            anchor.CheckpointHeight > anchor.EpochEndHeight)
         {
-            throw new ArgumentException("SCCP finality anchor must bind protocol version 4 and a nonzero height.");
+            throw new ArgumentException("SCCP finality anchor must bind protocol version 4 and one valid epoch checkpoint.");
         }
         foreach (var (value, name) in new[]
         {
             (anchor.ChainIdHash, "chain-id hash"),
+            (anchor.RosterCommitment, "roster commitment"),
             (anchor.CheckpointBlockHash, "checkpoint block hash"),
             (anchor.CheckpointContextId, "checkpoint context id"),
             (anchor.CheckpointFinalityArtifactHash, "checkpoint finality-artifact hash"),
@@ -1207,7 +1209,7 @@ public static class SccpV1
         }
         RequireDistinctHashes(
         [
-            anchor.ChainIdHash, anchor.CheckpointBlockHash,
+            anchor.ChainIdHash, anchor.RosterCommitment, anchor.CheckpointBlockHash,
             anchor.CheckpointContextId, anchor.CheckpointFinalityArtifactHash,
         ], "SCCP finality anchor");
 
@@ -1218,6 +1220,9 @@ public static class SccpV1
         BinaryPrimitives.WriteUInt16LittleEndian(protocol, anchor.ProtocolVersion);
         output.Write(protocol);
         output.Write(anchor.ChainIdHash);
+        WriteUInt64(output, anchor.Epoch);
+        WriteUInt64(output, anchor.EpochEndHeight);
+        output.Write(anchor.RosterCommitment);
         WriteUInt64(output, anchor.CheckpointHeight);
         output.Write(anchor.CheckpointBlockHash);
         output.Write(anchor.CheckpointContextId);

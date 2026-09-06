@@ -42,6 +42,22 @@ pub enum Error {
     /// Low-degree extension Merkle root mismatch detected during verification.
     #[error("LDE root mismatch")]
     LdeRootMismatch,
+    /// Lookup Fiat–Shamir challenge does not match the reconstructed transcript.
+    #[error("lookup challenge mismatch")]
+    LookupChallengeMismatch,
+    /// Lookup grand product does not match the reconstructed accumulator.
+    #[error("lookup grand product mismatch")]
+    LookupGrandProductMismatch,
+    /// Lookup selector and witness columns have different lengths.
+    #[error(
+        "lookup selector/witness column length mismatch: selector has {selector_len} values, witness has {witness_len}"
+    )]
+    LookupColumnLengthMismatch {
+        /// Number of selector evaluations supplied by the caller.
+        selector_len: usize,
+        /// Number of witness evaluations supplied by the caller.
+        witness_len: usize,
+    },
     /// AIR trace Merkle root mismatch detected during verification.
     #[error("AIR trace root mismatch")]
     AirTraceRootMismatch,
@@ -249,6 +265,12 @@ pub enum Error {
     /// A numeric asset operation did not use the canonical state-key shape.
     #[error("invalid asset operation key; expected `asset/<asset-id>/<account>`")]
     InvalidAssetKey,
+    /// A mint or burn did not change the balance in its required direction.
+    #[error("{operation} must change the asset value in the required direction")]
+    InvalidAssetValueChange {
+        /// Stable operation name (`mint` or `burn`).
+        operation: &'static str,
+    },
     /// Metadata field has an unexpected length.
     #[error("metadata field `{key}` has length {actual}, expected {expected}")]
     MetadataLength {

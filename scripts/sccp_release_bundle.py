@@ -184,34 +184,31 @@ def build_bundle(
     parent = ensure_new_output_parent(output_dir)
     verified_validator_executable_hash: str | None = None
     verified_validator_built_at_unix_ms: int | None = None
-    if trust_policy["environment"] == "production":
-        if rust_validator is not None:
-            raise SccpReleaseError(
-                "production bundle creation cannot accept an unauthenticated validator path"
-            )
-        if (
-            validator_build_release is None
-            or trusted_validator_builder_policy_sha256 is None
-        ):
-            raise SccpReleaseError(
-                "production bundle creation requires a verified validator build"
-            )
-        (
-            rust_validator,
-            validator_build_hashes,
-            verified_validator_built_at_unix_ms,
-        ) = verify_validator_build_release(
-            validator_build_release,
-            trust_policy,
-            trusted_policy_sha256=trusted_validator_builder_policy_sha256,
-        )
-        verified_validator_executable_hash = validator_build_hashes[
-            "validator_executable_sha256_hex"
-        ]
-    elif rust_validator is None:
+    if trust_policy.get("environment") != "production":
+        raise SccpReleaseError("bundle creation requires a production trust policy")
+    if rust_validator is not None:
         raise SccpReleaseError(
-            "test-fixture bundle creation requires its fixture validator"
+            "production bundle creation cannot accept an unauthenticated validator path"
         )
+    if (
+        validator_build_release is None
+        or trusted_validator_builder_policy_sha256 is None
+    ):
+        raise SccpReleaseError(
+            "production bundle creation requires a verified validator build"
+        )
+    (
+        rust_validator,
+        validator_build_hashes,
+        verified_validator_built_at_unix_ms,
+    ) = verify_validator_build_release(
+        validator_build_release,
+        trust_policy,
+        trusted_policy_sha256=trusted_validator_builder_policy_sha256,
+    )
+    verified_validator_executable_hash = validator_build_hashes[
+        "validator_executable_sha256_hex"
+    ]
     evidence, evidence_bytes = load_evidence_file(evidence_path, trust_policy)
     if verified_validator_built_at_unix_ms is not None:
         require_verified_validator_build_time(
@@ -230,11 +227,6 @@ def build_bundle(
         evidence=evidence,
         evidence_bytes=evidence_bytes,
         validator_path=rust_validator,
-        environment=(
-            "test-fixture"
-            if trust_policy["environment"] == "test-fixture"
-            else "production"
-        ),
     )
     if (
         verified_validator_executable_hash is not None
@@ -262,11 +254,6 @@ def build_bundle(
         trust_policy,
         trust_policy_path=trust_policy_path,
         evidence_path=evidence_path,
-        environment=(
-            "test-fixture"
-            if trust_policy["environment"] == "test-fixture"
-            else "production"
-        ),
     )
     if (
         verified_validator_executable_hash is not None

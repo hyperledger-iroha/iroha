@@ -36,6 +36,8 @@ const TON_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:ton:native-masterchain-anchor:
 const TON_BOC_MAGIC: [u8; 4] = [0xb5, 0xee, 0x9c, 0x72];
 const TON_BLOCK_CONSTRUCTOR: u32 = 0x11ef_55aa;
 const TON_BLOCK_INFO_CONSTRUCTOR: u32 = 0x9bc7_a987;
+const TON_BLOCK_EXTRA_CONSTRUCTOR: u32 = 0x4a33_f6fd;
+const TON_GLOBAL_VERSION_CONSTRUCTOR: u8 = 0xc4;
 const TON_SHARD_STATE_CONSTRUCTOR: u32 = 0x9023_afe2;
 const TON_SPLIT_STATE_CONSTRUCTOR: u32 = 0x5f32_7da5;
 const TON_MC_BLOCK_EXTRA_CONSTRUCTOR: u16 = 0xcca5;
@@ -2530,12 +2532,14 @@ fn ton_read_shard_ident(reader: &mut TonBitReader<'_>) -> Option<(i32, u64)> {
         return None;
     }
     let workchain = reader.read_i32(32)?;
-    let shard = reader.read_u64(64)?;
-    let terminator = shard.trailing_zeros();
-    if shard == 0 || terminator != 63_u32.checked_sub(u32::try_from(prefix_bits).ok()?)? {
+    let prefix = reader.read_u64(64)?;
+    let terminator = 1_u64 << (63 - prefix_bits);
+    // ShardIdent stores only the high prefix bits. BlockIdExt's in-memory
+    // shard id additionally carries the terminator immediately below them.
+    if prefix & (terminator | (terminator - 1)) != 0 {
         return None;
     }
-    Some((workchain, shard))
+    Some((workchain, prefix | terminator))
 }
 
 fn ton_parse_ext_block_ref(
@@ -2616,6 +2620,9 @@ fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBloc
     let min_ref_mc_seqno = u32::try_from(reader.read_u64(32)?).ok()?;
     reader.read_u64(32)?; // prev_key_block_seqno
     if flags & 1 != 0 {
+        if reader.read_u64(8)? != u64::from(TON_GLOBAL_VERSION_CONSTRUCTOR) {
+            return None;
+        }
         reader.read_u64(32)?; // global version
         reader.read_u64(64)?; // capabilities
     }
@@ -2732,6 +2739,9 @@ fn ton_parse_masterchain_extra(
     let extra_cell = boc.cells.get(extra_index)?;
     (ton_cell_type(extra_cell)? == TonCellType::Ordinary).then_some(())?;
     let mut extra = TonBitReader::new(extra_cell)?;
+    if extra.read_u64(32)? != u64::from(TON_BLOCK_EXTRA_CONSTRUCTOR) {
+        return None;
+    }
     extra.read_ref()?; // in_msg_descr
     extra.read_ref()?; // out_msg_descr
     extra.read_ref()?; // account_blocks
@@ -3378,7 +3388,12 @@ fn ton_parse_shard_descriptor(
     let end_lt = reader.read_u64(64)?;
     let root_hash = reader.read_h256()?;
     let file_hash = reader.read_h256()?;
-    if seqno == 0 || start_lt >= end_lt || !nonzero(&root_hash) || !nonzero(&file_hash) {
+    if seqno == 0
+        || registered_masterchain_seqno == 0
+        || start_lt >= end_lt
+        || !nonzero(&root_hash)
+        || !nonzero(&file_hash)
+    {
         return None;
     }
     Some((
@@ -3429,6 +3444,9 @@ fn ton_parse_block_extra_account_blocks(boc: &TonBoc, extra_index: usize) -> Opt
     let cell = boc.cells.get(index)?;
     (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
     let mut reader = TonBitReader::new(cell)?;
+    if reader.read_u64(32)? != u64::from(TON_BLOCK_EXTRA_CONSTRUCTOR) {
+        return None;
+    }
     reader.read_ref()?; // in_msg_descr
     reader.read_ref()?; // out_msg_descr
     let account_blocks = reader.read_ref()?;
@@ -5641,7 +5659,7 @@ mod tests {
         info.uint(0, 2); // ShardIdent constructor
         info.uint(0, 6); // masterchain prefix length
         info.uint(u64::from(u32::MAX), 32);
-        info.uint(SCCP_TON_MASTERCHAIN_SHARD_V1, 64);
+        info.uint(0, 64); // on-wire shard prefix excludes the terminator
         info.uint(1, 32); // generation time
         info.uint(1, 64); // start logical time
         info.uint(2, 64); // end logical time
@@ -5671,6 +5689,7 @@ mod tests {
         };
 
         let mut extra = TestBits::default();
+        extra.uint(u64::from(TON_BLOCK_EXTRA_CONSTRUCTOR), 32);
         extra.bytes(&[0; 64]); // random seed and creator
         extra.bit(true); // custom masterchain extra is present
         let mut custom = TestBits::default();

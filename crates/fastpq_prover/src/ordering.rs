@@ -102,4 +102,35 @@ mod tests {
         let h_padded = ordering_hash(&padded).expect("ordering hash");
         assert_ne!(h_baseline, h_padded);
     }
+    #[test]
+    fn ordering_hash_binds_permission_payload_and_epoch() {
+        let permission_transition = |permission_id, epoch| {
+            let mut batch = TransitionBatch::new(
+                "fastpq-state-transition-stark-v1",
+                crate::PublicInputs::default(),
+            );
+            batch.push(StateTransition::new(
+                b"permission/key".to_vec(),
+                Vec::new(),
+                vec![1],
+                OperationKind::RoleGrant {
+                    role_id: [0x11; 32],
+                    permission_id,
+                    epoch,
+                },
+            ));
+            batch
+        };
+        let baseline = permission_transition([0x22; 32], 7);
+        let changed_permission = permission_transition([0x23; 32], 7);
+        let changed_epoch = permission_transition([0x22; 32], 8);
+        assert_ne!(
+            ordering_hash(&baseline).expect("baseline ordering hash"),
+            ordering_hash(&changed_permission).expect("permission ordering hash")
+        );
+        assert_ne!(
+            ordering_hash(&baseline).expect("baseline ordering hash"),
+            ordering_hash(&changed_epoch).expect("epoch ordering hash")
+        );
+    }
 }

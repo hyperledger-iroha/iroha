@@ -112,6 +112,24 @@ impl SccpFinalizedBlockTestFixtureV1 {
     }
 }
 impl SccpExactOutboundTestFixtureV1 {
+    /// Rebuild this fixture at height two with its exact height-one finality as parent.
+    ///
+    /// This produces ordinary authenticated finality with a parent `CommitQC`,
+    /// rather than a genesis or snapshot-bootstrap boundary.
+    #[must_use]
+    pub fn with_exact_finalized_successor(&self) -> Self {
+        let parent = &self.finalized_block;
+        assert_eq!(parent.block().header().height().get(), 1);
+        let block = exact_sccp_fixture_block(
+            self.bundle.commitment.context,
+            &self.bundle.payload,
+            Some(self.bundle.commitment_root),
+            2,
+            Some(parent.block().hash()),
+        );
+        self.with_finalized_block(&block, Some(parent))
+    }
+
     /// Rebuild this exact fixture around one complete finalized signed block.
     ///
     /// The caller must first attach the block's transactions and results so
@@ -356,6 +374,9 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
             source_network: SccpNetworkV1::SoraTaira,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+            epoch: 1,
+            epoch_end_height: 10,
+            roster_commitment: [0x78; 32],
             checkpoint_height: 5,
             checkpoint_block_hash: [0x73; 32],
             checkpoint_context_id: [0x74; 32],
@@ -876,7 +897,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             network_id: sccp_taira_finality_network_id_v1(),
             protocol_version: PROTOCOL_VERSION,
             height,
-            epoch: 0,
+            epoch: 1,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -1292,6 +1313,7 @@ mod tests {
         let default_finality = decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
             .expect("default exact finality decodes");
         assert_eq!(default_finality.finality_artifact.height, 1);
+        assert_eq!(default_finality.finality_artifact.height_context.epoch, 1);
         assert_eq!(
             default_finality
                 .finality_artifact

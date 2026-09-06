@@ -75,6 +75,152 @@ REPLAY_WITNESS_NORITO_TYPE = (
 )
 
 
+def test_replay_final_v1_hashes_boundaries_witnesses_and_accumulator() -> None:
+    boundaries = sccp.SCCP_REPLAY_BOUNDARIES_V1
+    assert (
+        boundaries["ton_wallet_burn_authorization"],
+        boundaries["ton_wallet_burn_lock"],
+        boundaries["ton_wallet_burn_refund"],
+    ) == (0x35, 0x36, 0x37)
+    domain = {
+        "source_profile": "sora-taira",
+        "target_profile": "ethereum-mainnet",
+        "boundary": boundaries["evm_destination_mint"],
+        "route_revision": 7,
+        "route_configuration_hash": bytes([0x44]) * 32,
+        "actor": {"kind": "evm", "address": bytes([0x33]) * 20},
+    }
+    domain_hash = sccp.sccp_replay_domain_hash_v1(domain)
+    assert domain_hash.hex() == "ebc495541ef2265beebe7ee9e4e8764595c2a55ed67dc6d0a8ff69ccd3ff3228"
+    key = sccp.sccp_replay_key_v1(domain_hash, bytes([0x11]) * 32)
+    assert key.hex() == "035bcebe9423edd4f1b945bae54905e0f0860bcc54718d372b1a58797ce614d4"
+    record = {
+        "operation": boundaries["evm_destination_mint"],
+        "replay_id": bytes([0x11]) * 32,
+        "payload_sha256": bytes([0x22]) * 32,
+        "amount": 9,
+        "principal": {"kind": "evm", "address": bytes([0x33]) * 20},
+        "auxiliary_identity_sha256": bytes([0x55]) * 32,
+    }
+    digest = sccp.sccp_replay_record_digest_v1(record)
+    assert digest.hex() == "bb0a7e99f5d2d136375e46ba231903611366ea85ec0e10130488a085fa05bf4f"
+    with pytest.raises(ValueError, match="principal kind"):
+        sccp.sccp_replay_record_digest_v1(
+            {**record, "operation": boundaries["sora_outbound_lock"]}
+        )
+
+    empty = sccp.sccp_replay_empty_hashes_v1()
+    zero = bytes(32)
+    empty_witness = {
+        "expected_shard_root": empty[-1],
+        "prior_record_digest": zero,
+        "sibling_bitmap": zero,
+        "siblings": [],
+    }
+    verified = sccp.sccp_replay_verify_against_current_root_v1(
+        zero, zero, empty_witness, empty[-1]
+    )
+    assert verified.matches_expected_root and verified.shard == 0
+    zero_expected_witness = {**empty_witness, "expected_shard_root": zero}
+    assert not sccp.sccp_replay_root_from_witness_v1(
+        zero, zero, zero_expected_witness
+    ).matches_expected_root
+    with pytest.raises(ValueError, match="current shard root"):
+        sccp.sccp_replay_verify_against_current_root_v1(
+            zero, zero, zero_expected_witness, zero
+        )
+    bitmap = bytearray(32)
+    bitmap[-1] = 1
+    zero_sibling_witness = {
+        **empty_witness,
+        "sibling_bitmap": bytes(bitmap),
+        "siblings": [zero],
+    }
+    zero_sibling_root = sccp.sccp_replay_root_from_witness_v1(
+        zero, zero, zero_sibling_witness
+    ).root
+    bound = {**zero_sibling_witness, "expected_shard_root": zero_sibling_root}
+    assert sccp.sccp_replay_verify_against_current_root_v1(
+        zero, zero, bound, zero_sibling_root
+    ).matches_expected_root
+    with pytest.raises(ValueError, match="current shard root"):
+        sccp.sccp_replay_verify_against_current_root_v1(
+            zero, zero, bound, bytes([0x77]) * 32
+        )
+
+    occupied_domain = domain
+    occupied_key = sccp.sccp_replay_key_v1(
+        sccp.sccp_replay_domain_hash_v1(occupied_domain), record["replay_id"]
+    )
+    assert sccp.sccp_replay_root_from_witness_v1(
+        occupied_key, zero, empty_witness
+    ).matches_expected_root
+    result = sccp.sccp_replay_accumulator_occupy_v1(
+        {"nonempty_shard_roots": {}, "leaf_count": 0, "update_sequence": 0},
+        occupied_domain,
+        record,
+        empty_witness,
+    )
+    assert result["leaf_count"] == result["update_sequence"] == 1
+    assert result["delta"]["old_root"] == empty[-1]
+
+    # An all-zero stored root is a valid 32-byte hash value. It cannot match
+    # this empty witness, but parsing must reach the current-root comparison
+    # rather than rejecting the stored root as an absent/nonzero sentinel.
+    with pytest.raises(ValueError, match="current shard root"):
+        sccp.sccp_replay_accumulator_occupy_v1(
+            {
+                "nonempty_shard_roots": {occupied_key[0]: zero},
+                "leaf_count": 1,
+                "update_sequence": 1,
+            },
+            occupied_domain,
+            record,
+            empty_witness,
+        )
+
+
+def test_replay_ton_direction_inventory_is_exact() -> None:
+    boundaries = sccp.SCCP_REPLAY_BOUNDARIES_V1
+    actor = {"kind": "ton", "workchain": 0, "account": bytes([0x66]) * 32}
+    common = {
+        "route_revision": 7,
+        "route_configuration_hash": bytes([0x44]) * 32,
+        "actor": actor,
+    }
+    for name in ("ton_bridge_inbound_mint", "ton_master_mint", "ton_wallet_mint_credit"):
+        sccp.sccp_replay_domain_hash_v1(
+            {
+                **common,
+                "source_profile": "sora-taira",
+                "target_profile": "ton-mainnet",
+                "boundary": boundaries[name],
+            }
+        )
+    for name in (
+        "ton_bridge_outbound_burn",
+        "ton_master_burn",
+        "ton_wallet_burn_authorization",
+        "ton_wallet_burn_lock",
+        "ton_wallet_burn_refund",
+    ):
+        outward = {
+            **common,
+            "source_profile": "ton-mainnet",
+            "target_profile": "sora-taira",
+            "boundary": boundaries[name],
+        }
+        sccp.sccp_replay_domain_hash_v1(outward)
+        with pytest.raises(ValueError, match="invalid boundary"):
+            sccp.sccp_replay_domain_hash_v1(
+                {
+                    **outward,
+                    "source_profile": "sora-taira",
+                    "target_profile": "ton-mainnet",
+                }
+            )
+
+
 def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
 
@@ -270,6 +416,9 @@ def _finality_anchor() -> Dict[str, Any]:
         "source_network": _network("sora-taira"),
         "protocol_version": 4,
         "chain_id_hash": sccp._SORA_TAIRA_CHAIN_ID_HASH.hex().upper(),  # noqa: SLF001
+        "epoch": 7,
+        "epoch_end_height": 150,
+        "roster_commitment": UPPER(0xA4, 32),
         "checkpoint_height": 7,
         "checkpoint_block_hash": UPPER(0xA1, 32),
         "checkpoint_context_id": UPPER(0xA2, 32),
@@ -282,15 +431,36 @@ def test_finality_anchor_accepts_only_protocol_v4() -> None:
     current_hash, current_roles = sccp._sora_finality_anchor(  # noqa: SLF001
         current, "current anchor"
     )
-    assert len(current_roles) == 4
+    assert len(current_roles) == 5
     assert current_hash.hex().upper() == (
-        "CDBEC097FED4AD21E44A354FE09A3C43AD489F4AC78CFF8944BA8BB5CC2FD577"
+        "9E9D4E602028B7BA99AF5E47BE644FBB3524E6240C284867FAF9DFB85D873BA5"
     )
 
     retired = copy.deepcopy(current)
     retired["protocol_version"] = 3
     with pytest.raises(ValueError, match="protocol_version"):
         sccp._sora_finality_anchor(retired, "retired v3 anchor")  # noqa: SLF001
+
+    for field in ("epoch", "epoch_end_height", "roster_commitment"):
+        missing = copy.deepcopy(current)
+        del missing[field]
+        with pytest.raises(ValueError, match="missing required field"):
+            sccp._sora_finality_anchor(missing, "incomplete anchor")  # noqa: SLF001
+
+    invalid_epoch = copy.deepcopy(current)
+    invalid_epoch["epoch"] = 0
+    with pytest.raises(ValueError, match="epoch"):
+        sccp._sora_finality_anchor(invalid_epoch, "zero epoch anchor")  # noqa: SLF001
+
+    past_epoch = copy.deepcopy(current)
+    past_epoch["epoch_end_height"] = 6
+    with pytest.raises(ValueError, match="epoch end"):
+        sccp._sora_finality_anchor(past_epoch, "past-epoch anchor")  # noqa: SLF001
+
+    aliased_roster = copy.deepcopy(current)
+    aliased_roster["roster_commitment"] = aliased_roster["chain_id_hash"]
+    with pytest.raises(ValueError, match="consensus hash role"):
+        sccp._sora_finality_anchor(aliased_roster, "aliased roster anchor")  # noqa: SLF001
 
 
 def _outbound_policy() -> Dict[str, Any]:
@@ -582,14 +752,14 @@ def _bundle() -> Dict[str, Any]:
                 "nonce": "7",
                 "route_revision": 1,
                 "asset_home_domain": 0,
-                "asset_id_codec": 0,
+                "asset_id_codec": 1,
                 "asset_id": "0x786f72",
                 "amount": "1",
-                "sender_codec": 0,
+                "sender_codec": 1,
                 "sender": "0x616c696365",
-                "recipient_codec": 1,
+                "recipient_codec": 2,
                 "recipient": "0x" + HASH(0x21)[:40],
-                "route_id_codec": 0,
+                "route_id_codec": 1,
                 "route_id": "0x74616972615f6273635f786f72",
             }
         },
@@ -817,7 +987,15 @@ def test_closed_inventory_exposes_only_four_external_mainnets_and_taira() -> Non
         0x43,
         0x44,
     )
-    assert tuple(SCCP_CODEC_KEYS) == (0, 1, 2, 3)
+    assert tuple(profile["domain"] for profile in SCCP_NETWORK_PROFILES.values()) == (
+        0,
+        1,
+        2,
+        5,
+        4,
+    )
+    assert 3 not in {profile["domain"] for profile in SCCP_NETWORK_PROFILES.values()}
+    assert tuple(SCCP_CODEC_KEYS) == (1, 2, 5, 7)
     assert SCCP_NETWORK_PROFILES["ton-mainnet"] == {
         "profile": "ton-mainnet",
         "tag": 0x44,
@@ -845,23 +1023,22 @@ def test_closed_codecs_accept_exact_bytes_and_reject_retired_or_textual_aliases(
     assert normalize_sccp_codec_value(SCCP_CODEC_TRON_ADDRESS21, b"\x41" + b"\x02" * 20)
     assert normalize_sccp_codec_value(SCCP_CODEC_TON_ACCOUNT36, bytes(4) + b"\x03" * 32)
     for codec, value in (
-        (4, b"\x01" * 32),
-        (5, b"\x01" * 36),
+        (3, b"\x01" * 32),
+        (4, b"\x01" * 36),
         (6, b"\x01"),
-        (7, b"\x01"),
-        (3, bytes(36)),
-        (3, b"\x00\x00\x00\x01" + b"\x01" * 32),
-        (3, b"\x01" * 35),
-        (1, "0x" + "11" * 20),
-        (1, b"\x00" * 20),
-        (2, b"\x42" + b"\x01" * 20),
-        (0, " padded"),
-        (0, "contains space"),
-        (0, "line\nbreak"),
-        (0, "merchant🙂"),
-        (0, AUTHORITY[:-1] + ("2" if AUTHORITY.endswith("1") else "1")),
-        (0, "n753" + AUTHORITY.removeprefix("sora")),
-        (0, AUTHORITY + "ｲ" * 100),
+        (7, bytes(36)),
+        (7, b"\x00\x00\x00\x01" + b"\x01" * 32),
+        (7, b"\x01" * 35),
+        (2, "0x" + "11" * 20),
+        (2, b"\x00" * 20),
+        (5, b"\x42" + b"\x01" * 20),
+        (1, " padded"),
+        (1, "contains space"),
+        (1, "line\nbreak"),
+        (1, "merchant🙂"),
+        (1, AUTHORITY[:-1] + ("2" if AUTHORITY.endswith("1") else "1")),
+        (1, "n753" + AUTHORITY.removeprefix("sora")),
+        (1, AUTHORITY + "ｲ" * 100),
     ):
         with pytest.raises((TypeError, ValueError)):
             normalize_sccp_codec_value(codec, value)
@@ -1221,15 +1398,15 @@ def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
     (
         (
             "bsc-mainnet",
-            "68a718f971bbdeea456b325b7821e20b6cbde82a1c5fb520d31e0d27f0b2d452",
-            "bc7ecd599c20cecace8b28139eb6949c9bf490e2bf04f06c12d59a3befb38c8c",
-            "4776f5fbe731e2eebd827baf080db67abe1a1e8f78f79a1b741cb004a2a992ad",
+            "c790285ee14ee4ac1c7781f7dad12917357a62ed0fb1b15d49769a9d75750d2e",
+            "d22880da3b0cec64bc21810a943447a47440b70d381785db59debe8ac16afd66",
+            "f1fcb7fad816b9f995cc4765b170edcc7a8cf0ba886b47e1ebaf8552538caedd",
         ),
         (
             "tron-mainnet",
-            "83b2bb7f5497e89d613df3c6cfb745d84c4976dd4b447ddae65d8b485ee9a408",
-            "f95ad7752cf34aa4bf813e23cf517591372dbb7fef6e344c37ed16be63ff3414",
-            "060705f1fb6c32bde115dd29b6885cade7f734df4768772f1da857c914018fd9",
+            "ca9cdc7922df282343b99cc768d862d39dc00e0b95540f6b95811fc23c1409f5",
+            "4ba2d6a2bd80f43d68cbb79adaed1b318d0bd1ad0e3f6fca8d7fb51f1ae4e0a5",
+            "2b21ad16afa8bce6851cf683afb872ddda9fd8e9f007b3fa86661493fa54835f",
         ),
     ),
 )
@@ -1668,7 +1845,7 @@ def test_recent_links_are_exact_and_route_configuration_is_independent() -> None
     mutations = (
         lambda value: value.pop("payload_projection"),
         lambda value: value.update(payload_projection=None),
-        lambda value: value["payload_projection"]["Transfer"].update(dest_domain=5),
+        lambda value: value["payload_projection"]["Transfer"].update(dest_domain=3),
         lambda value: value["payload_projection"]["Transfer"].update(
             recipient={"CanonicalText": {"value": "not-an-address"}}
         ),
@@ -1747,7 +1924,7 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     with pytest.raises(ValueError, match="role-separated"):
         normalize_sccp_message_bundle(aliased_commitment)
     reserved_domain = _bundle()
-    reserved_domain["payload"]["Transfer"]["dest_domain"] = 5
+    reserved_domain["payload"]["Transfer"]["dest_domain"] = 3
     with pytest.raises(ValueError, match="reserved"):
         normalize_sccp_message_bundle(reserved_domain)
     oversized_nonce = _bundle()
@@ -1755,7 +1932,7 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     with pytest.raises(ValueError, match="u64"):
         normalize_sccp_message_bundle(oversized_nonce)
     wrong_recipient_codec = _bundle()
-    wrong_recipient_codec["payload"]["Transfer"]["recipient_codec"] = 2
+    wrong_recipient_codec["payload"]["Transfer"]["recipient_codec"] = 5
     with pytest.raises(ValueError, match="protocol domain"):
         normalize_sccp_message_bundle(wrong_recipient_codec)
     long_merkle_path = _bundle()
@@ -2081,6 +2258,16 @@ def test_bridge_response_and_strict_json_reject_contradictions_and_duplicates() 
         ).backend
         == "ton-groth16-bls12381-v1"
     )
+    assert (
+        normalize_sccp_bridge_submit_response(
+            _prepared_response(
+                backend="tron-groth16-bn254-v1",
+                counterparty_domain=5,
+                counterparty_chain="tron-mainnet",
+            )
+        ).backend
+        == "tron-groth16-bn254-v1"
+    )
     submitted = _prepared_response(
         submitted=True,
         tx_hash_hex=HASH(0x55),
@@ -2091,6 +2278,7 @@ def test_bridge_response_and_strict_json_reject_contradictions_and_duplicates() 
     for value in (
         _prepared_response(payload_kind="burn"),
         _prepared_response(counterparty_chain="solana-mainnet-beta"),
+        _prepared_response(counterparty_domain=3),
         _prepared_response(proof_artifact_hash=HASH(3)),
         _prepared_response(manifest_hash_hex=HASH(3)),
         _prepared_response(route_configuration_hash_hex=HASH(0xAB).upper()),

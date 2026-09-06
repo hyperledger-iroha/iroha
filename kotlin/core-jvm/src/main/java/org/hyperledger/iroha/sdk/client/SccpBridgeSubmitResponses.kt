@@ -69,7 +69,10 @@ object SccpBridgeSubmitResponseParser {
         require(backend in CLOSED_BACKENDS) {
             "backend must be one closed SCCP verifier label"
         }
-        val counterpartyDomain = integer(value, "counterparty_domain", 1, 4)
+        val counterpartyDomain = integer(value, "counterparty_domain", 1, 5)
+        require(counterpartyDomain in setOf(1, 2, 4, 5)) {
+            "counterparty_domain is unsupported or retired"
+        }
         val counterpartyChain = text(value, "counterparty_chain")
         val counterparty = SccpNetworkV1.fromProfileKey(counterpartyChain)
         require(counterparty?.isExternal == true && counterparty.domainId == counterpartyDomain) {
@@ -185,7 +188,7 @@ object SccpBridgeSubmitResponseParser {
         1 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1")
         2 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1")
         4 -> setOf("ton-groth16-bls12381-v1", "bridge/sccp/native/ton-masterchain-v1")
-        3 -> setOf("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1")
+        5 -> setOf("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1")
         else -> emptySet()
     }
     private val TRANSACTION_CODEC =

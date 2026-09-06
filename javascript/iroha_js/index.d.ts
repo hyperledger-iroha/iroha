@@ -710,14 +710,14 @@ export interface IsoBridgeAmount {
 export const SCCP_DOMAIN_SORA: 0;
 export const SCCP_DOMAIN_ETH: 1;
 export const SCCP_DOMAIN_BSC: 2;
-export const SCCP_DOMAIN_TRON: 3;
+export const SCCP_DOMAIN_TRON: 5;
 export const SCCP_DOMAIN_TON: 4;
-export type SccpDomain = 0 | 1 | 2 | 3 | 4;
-export const SCCP_CODEC_CANONICAL_TEXT: 0;
-export const SCCP_CODEC_EVM_ADDRESS20: 1;
-export const SCCP_CODEC_TRON_ADDRESS21: 2;
-export const SCCP_CODEC_TON_ACCOUNT36: 3;
-export type SccpCodecTag = 0 | 1 | 2 | 3;
+export type SccpDomain = 0 | 1 | 2 | 4 | 5;
+export const SCCP_CODEC_CANONICAL_TEXT: 1;
+export const SCCP_CODEC_EVM_ADDRESS20: 2;
+export const SCCP_CODEC_TRON_ADDRESS21: 5;
+export const SCCP_CODEC_TON_ACCOUNT36: 7;
+export type SccpCodecTag = 1 | 2 | 5 | 7;
 export const SCCP_CODEC_KEYS: Readonly<Record<SccpCodecTag, string>>;
 export type SccpPayloadKind = "transfer";
 export const SCCP_PAYLOAD_KINDS: readonly SccpPayloadKind[];
@@ -734,9 +734,9 @@ export const SCCP_REPLAY_BOUNDARIES_V1: Readonly<{
   ton_master_mint: 0x32;
   ton_master_burn: 0x33;
   ton_wallet_mint_credit: 0x34;
-  ton_wallet_burn_debit: 0x35;
-  ton_wallet_refund_debit: 0x36;
-  ton_wallet_refund_credit: 0x37;
+  ton_wallet_burn_authorization: 0x35;
+  ton_wallet_burn_lock: 0x36;
+  ton_wallet_burn_refund: 0x37;
 }>;
 export type SccpReplayBoundaryV1 =
   (typeof SCCP_REPLAY_BOUNDARIES_V1)[keyof typeof SCCP_REPLAY_BOUNDARIES_V1];
@@ -776,9 +776,15 @@ export function sccpReplayRecordDigestV1(record: SccpReplayRecordV1): string;
 export function sccpReplayEmptyHashesV1(): readonly string[];
 export function sccpReplayRootFromWitnessV1(
   key: string | BinaryLike,
-  recordDigest: string | BinaryLike | null,
+  recordDigest: string | BinaryLike,
   witness: SccpSparseMerkleWitnessV1,
 ): Readonly<{ root: string; expectedRoot: string; matchesExpectedRoot: boolean; shard: number }>;
+export function sccpReplayVerifyAgainstCurrentRootV1(
+  key: string | BinaryLike,
+  recordDigest: string | BinaryLike,
+  witness: SccpSparseMerkleWitnessV1,
+  currentRoot: string | BinaryLike,
+): Readonly<{ root: string; expectedRoot: string; matchesExpectedRoot: true; shard: number }>;
 export type SccpNetworkProfile = "sora-taira" | "ethereum-mainnet" | "bsc-mainnet" | "tron-mainnet" | "ton-mainnet";
 export type SccpNetworkTag = 0x40 | 0x41 | 0x42 | 0x43 | 0x44;
 export interface SccpNetworkDescriptor<Profile extends SccpNetworkProfile = SccpNetworkProfile, Tag extends SccpNetworkTag = SccpNetworkTag, Domain extends SccpDomain = SccpDomain, Sora extends boolean = boolean> { readonly profile: Profile; readonly tag: Tag; readonly domain: Domain; readonly sora: Sora; readonly globalId?: -239; }
@@ -786,7 +792,7 @@ export const SCCP_NETWORK_PROFILES: Readonly<{
   readonly "sora-taira": SccpNetworkDescriptor<"sora-taira", 0x40, 0, true>;
   readonly "ethereum-mainnet": SccpNetworkDescriptor<"ethereum-mainnet", 0x41, 1, false>;
   readonly "bsc-mainnet": SccpNetworkDescriptor<"bsc-mainnet", 0x42, 2, false>;
-  readonly "tron-mainnet": SccpNetworkDescriptor<"tron-mainnet", 0x43, 3, false>;
+  readonly "tron-mainnet": SccpNetworkDescriptor<"tron-mainnet", 0x43, 5, false>;
   readonly "ton-mainnet": SccpNetworkDescriptor<"ton-mainnet", 0x44, 4, false> & Readonly<{ globalId: -239 }>;
 }>;
 export function normalizeSccpCodecValue(codec: SccpCodecTag, value: string | BinaryLike): Uint8Array;
@@ -962,6 +968,9 @@ export interface SccpSoraFinalityAnchorV1 {
   readonly source_network: SccpNetworkV1;
   readonly protocol_version: 4;
   readonly chain_id_hash: string;
+  readonly epoch: number;
+  readonly epoch_end_height: number;
+  readonly roster_commitment: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
   readonly checkpoint_context_id: string;
@@ -1121,7 +1130,7 @@ export interface SccpTonAccountValueV1 { readonly TonAccount36: Readonly<{ workc
 export interface SccpTransferProjectionV1 {
   readonly version: 1;
   readonly source_domain: 0;
-  readonly dest_domain: 1 | 2 | 3 | 4;
+  readonly dest_domain: 1 | 2 | 4 | 5;
   readonly nonce: string;
   readonly route_revision: number;
   readonly asset_home_domain: 0;
@@ -1132,11 +1141,11 @@ export interface SccpTransferProjectionV1 {
   readonly route_id: SccpCanonicalTextValueV1;
 }
 export interface SccpPayloadProjectionV1 { readonly Transfer: SccpTransferProjectionV1; }
-export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 3 | 4; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
+export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 4 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
 export interface SccpRecentCursor { readonly from: number; readonly after_index: number; }
 export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; readonly next: SccpRecentCursor | null; }
 export interface SccpMessageBundle { readonly version: 1; readonly commitment_root: string; readonly commitment: Readonly<Record<string, unknown>>; readonly merkle_proof: Readonly<Record<string, unknown>>; readonly payload: Readonly<{ Transfer: Readonly<Record<string, unknown>> }>; readonly finality_proof: string; }
-export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 3 | 4; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
+export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 4 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
 export type SccpDestinationProofBackendV1 =
   | Readonly<{ backend: "evm_groth16_bn254_v1"; family: null }>
   | Readonly<{ backend: "tron_groth16_bn254_v1"; family: null }>
@@ -3939,6 +3948,7 @@ type NoritoRuntimeNamespaceExport =
   | "CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1"
   | "CONFIDENTIAL_MEMO_WIRE_MAGIC_V1"
   | "decodeCancelAssetLockV1"
+  | "decodeAccountIdNoritoValue"
   | "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
   | "encodeCancelAssetLockV1"
@@ -12592,6 +12602,11 @@ export function encodeAccountIdNoritoValue(
   value: string,
   context?: string,
 ): Uint8Array;
+/** Exact compact-length AccountId value decoding for typed policy codecs. */
+export function decodeAccountIdNoritoValue(
+  payload: BinaryLike,
+  context?: string,
+): string;
 /** Exact compact-length AssetDefinitionId value encoding for typed policy codecs. */
 export function encodeAssetDefinitionIdNoritoValue(
   value: string,

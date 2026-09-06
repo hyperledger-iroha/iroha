@@ -38,6 +38,45 @@ function parent(level, left, right) {
   ]);
 }
 
+function occupiedLeaf(key, recordDigest) {
+  return sha256([MAGIC, "0x11", key, recordDigest]);
+}
+
+function addressRecordDigest(
+  operation,
+  replayId,
+  payloadSha256,
+  amountScale9,
+  principalKind,
+  principal,
+  auxiliaryIdentitySha256,
+) {
+  const principalBytes = ethers.getBytes(principal);
+  const principalDigest = sha256([
+    MAGIC,
+    "0x03",
+    ethers.toBeHex(principalKind, 1),
+    ethers.toBeHex(principalBytes.length, 2),
+    principalBytes,
+  ]);
+  const auxiliaryDigest = sha256([
+    MAGIC,
+    "0x04",
+    ethers.toBeHex(operation, 1),
+    auxiliaryIdentitySha256,
+  ]);
+  return sha256([
+    MAGIC,
+    "0x02",
+    ethers.toBeHex(operation, 1),
+    replayId,
+    payloadSha256,
+    ethers.toBeHex(amountScale9, 16),
+    principalDigest,
+    auxiliaryDigest,
+  ]);
+}
+
 function emptyHashes() {
   const hashes = [sha256([MAGIC, "0x10"])];
   for (let level = 0; level < DEPTH; level++) {
@@ -167,7 +206,7 @@ async function main() {
     const payloadSha256 = `0x${fixture.record.payload_sha256_hex}`;
     const auxiliary = `0x${fixture.record.auxiliary_identity_sha256_hex}`;
     const principal = `0x${fixture.record.principal_bytes_hex}`;
-    const domainHash = await verifier.domainHash(
+    const fixtureDomainHash = await verifier.domainHash(
       fixture.domain.source_network_tag,
       fixture.domain.target_network_tag,
       fixture.domain.operation_tag,
@@ -176,31 +215,66 @@ async function main() {
       0,
       "0x",
     );
-    assert.equal(domainHash.slice(2), expected.domain_hash_hex);
+    assert.equal(fixtureDomainHash.slice(2), expected.domain_hash_hex);
+    const fixtureKey = await verifier.replayKey(fixtureDomainHash, replayId);
+    assert.equal(fixtureKey.slice(2), expected.replay_key_hex);
+    assert.equal(Number(BigInt(fixtureKey) >> 248n), expected.shard);
+
+    const recordOperation = 0x11;
+    const recordPrincipalKind = 1;
+    const domainHash = await verifier.domainHash(
+      0x40,
+      0x41,
+      recordOperation,
+      fixture.domain.route_revision,
+      routeHash,
+      recordPrincipalKind,
+      principal,
+    );
     const key = await verifier.replayKey(domainHash, replayId);
-    assert.equal(key.slice(2), expected.replay_key_hex);
-    assert.equal(Number(BigInt(key) >> 248n), expected.shard);
     const recordDigest = await verifier.addressRecordDigest(
-      1,
+      recordOperation,
       replayId,
       payloadSha256,
       9,
-      2,
+      recordPrincipalKind,
       principal,
       auxiliary,
     );
-    assert.equal(recordDigest.slice(2), expected.record_digest_hex);
+    assert.equal(
+      recordDigest,
+      addressRecordDigest(
+        recordOperation,
+        replayId,
+        payloadSha256,
+        9,
+        recordPrincipalKind,
+        principal,
+        auxiliary,
+      ),
+    );
     const emptyRoot = await verifier.emptyShardRoot();
     assert.equal(emptyRoot.slice(2), expected.empty_shard_root_hex);
     assert.equal(emptyHashes()[0].slice(2), expected.empty_leaf_hash_hex);
     const emptyWitness = encodedWitness(abi, emptyRoot, ethers.ZeroHash, 0n, []);
-    const record = [1, replayId, payloadSha256, 9, 2, principal, auxiliary];
+    const record = [
+      recordOperation,
+      replayId,
+      payloadSha256,
+      9,
+      recordPrincipalKind,
+      principal,
+      auxiliary,
+    ];
     const transition = await verifier.prepareAddressOccupation(domainHash, record, emptyWitness);
-    assert.equal(transition[0], BigInt(expected.shard));
+    assert.equal(transition[0], BigInt(key) >> 248n);
     assert.equal(transition[1], key);
     assert.equal(transition[2], recordDigest);
     assert.equal(transition[3], emptyRoot);
-    assert.equal(transition[4].slice(2), expected.occupied_shard_root_hex);
+    assert.equal(
+      transition[4],
+      fold(key, occupiedLeaf(key, recordDigest), new Map()),
+    );
 
   const membership = encodedWitness(abi, transition[4], recordDigest, 0n, []);
   assert.equal(await verifier.verifyMembership(key, recordDigest, transition[4], membership), true);
@@ -240,6 +314,16 @@ async function main() {
       encodedWitness(abi, emptyRoot, ethers.ZeroHash, 1n, [emptyHashes()[0]]),
     ),
     "SR16",
+  );
+  const zeroSiblingRoot = fold(
+    key,
+    emptyHashes()[0],
+    new Map([[0, ethers.ZeroHash]]),
+  );
+  await verifier.prepareAddressOccupation(
+    domainHash,
+    record,
+    encodedWitness(abi, zeroSiblingRoot, ethers.ZeroHash, 1n, [ethers.ZeroHash]),
   );
   await rejectsWith(
     verifier.prepareAddressOccupation(domainHash, record, ethers.concat([emptyWitness, "0x00"])),
@@ -283,16 +367,94 @@ async function main() {
     verifier.domainHash(0x40, 0x44, 0x30, 7, routeHash, 3, `0xffffffff${"00".repeat(31)}`),
     "SR03",
   );
+  for (const operation of [0x30, 0x32, 0x34]) {
+    await verifier.domainHash(0x40, 0x44, operation, 7, routeHash, 3, negativeWorkchainTon);
+    await rejectsWith(
+      verifier.domainHash(0x44, 0x40, operation, 7, routeHash, 3, negativeWorkchainTon),
+      "SR03",
+    );
+  }
+  for (const operation of [0x31, 0x33, 0x35, 0x36, 0x37]) {
+    await verifier.domainHash(0x44, 0x40, operation, 7, routeHash, 3, negativeWorkchainTon);
+    await rejectsWith(
+      verifier.domainHash(0x40, 0x44, operation, 7, routeHash, 3, negativeWorkchainTon),
+      "SR03",
+    );
+  }
   for (const retiredTag of fixture.rejected_network_tags) {
     await rejectsWith(
       verifier.domainHash(retiredTag, 0x41, 0x01, 7, routeHash, 0, "0x"),
       "SR03",
     );
   }
-  await verifier.addressRecordDigest(0x10, replayId, payloadSha256, 9, 2, ethers.ZeroAddress, auxiliary);
+  for (const operation of [0x10, 0x11]) {
+    await verifier.addressRecordDigest(
+      operation,
+      replayId,
+      payloadSha256,
+      9,
+      1,
+      ethers.ZeroAddress,
+      auxiliary,
+    );
+    await rejectsWith(
+      verifier.addressRecordDigest(operation, replayId, payloadSha256, 9, 2, principal, auxiliary),
+      "SR05",
+    );
+  }
+  for (const operation of [0x20, 0x21]) {
+    await verifier.addressRecordDigest(
+      operation,
+      replayId,
+      payloadSha256,
+      9,
+      2,
+      ethers.ZeroAddress,
+      auxiliary,
+    );
+    await rejectsWith(
+      verifier.addressRecordDigest(operation, replayId, payloadSha256, 9, 1, principal, auxiliary),
+      "SR05",
+    );
+  }
+  for (const operation of [0x01, 0x02]) {
+    await rejectsWith(
+      verifier.addressRecordDigest(operation, replayId, payloadSha256, 9, 0, principal, auxiliary),
+      "SR05",
+    );
+  }
+  for (const operation of [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37]) {
+    await rejectsWith(
+      verifier.addressRecordDigest(operation, replayId, payloadSha256, 9, 3, principal, auxiliary),
+      "SR05",
+    );
+  }
   assert.equal(
     await verifier.replayKey(ethers.ZeroHash, ethers.ZeroHash),
     sha256([MAGIC, "0x01", ethers.ZeroHash, ethers.ZeroHash]),
+  );
+  const zeroKeyEmptyWitness = encodedWitness(abi, emptyRoot, ethers.ZeroHash, 0n, []);
+  assert.equal(
+    await verifier.verifyNonMembership(ethers.ZeroHash, emptyRoot, zeroKeyEmptyWitness),
+    true,
+  );
+  const zeroKeyOccupiedRoot = fold(
+    ethers.ZeroHash,
+    occupiedLeaf(ethers.ZeroHash, recordDigest),
+    new Map(),
+  );
+  assert.equal(
+    await verifier.verifyMembership(
+      ethers.ZeroHash,
+      recordDigest,
+      zeroKeyOccupiedRoot,
+      encodedWitness(abi, zeroKeyOccupiedRoot, recordDigest, 0n, []),
+    ),
+    true,
+  );
+  await rejectsWith(
+    verifier.verifyMembership(ethers.ZeroHash, ethers.ZeroHash, emptyRoot, zeroKeyEmptyWitness),
+    "SR12",
   );
   await rejectsWith(
     verifier.addressRecordDigest(0x12, replayId, payloadSha256, 9, 2, principal, auxiliary),

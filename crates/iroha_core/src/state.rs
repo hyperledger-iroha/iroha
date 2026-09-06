@@ -10776,6 +10776,31 @@ pub(crate) struct PreparedSccpReplayMutationV1 {
     forest: SccpReplayForestV1,
     delta: iroha_data_model::bridge::SccpReplayDeltaV1,
 }
+
+fn sccp_replay_binding_matches_governed_route(
+    accumulator_id: &SccpReplayAccumulatorIdV1,
+    domain: &iroha_data_model::bridge::SccpReplayDomainV1,
+    record_operation: iroha_data_model::bridge::SccpReplayBoundaryV1,
+    governed_route_configuration_hash: Option<[u8; 32]>,
+) -> bool {
+    use iroha_data_model::bridge::SccpReplayBoundaryV1::{SoraInboundRelease, SoraOutboundLock};
+
+    let lane = accumulator_id.route_key.lane_id;
+    accumulator_id.boundary == domain.boundary
+        && record_operation == accumulator_id.boundary
+        && accumulator_id.route_key.revision == domain.route_revision
+        && governed_route_configuration_hash == Some(domain.route_configuration_hash)
+        && match accumulator_id.boundary {
+            SoraOutboundLock => {
+                domain.source_network == lane.target && domain.target_network == lane.source
+            }
+            SoraInboundRelease => {
+                domain.source_network == lane.source && domain.target_network == lane.target
+            }
+            _ => false,
+        }
+}
+
 impl SccpVerifierWorkV1 {
     fn checked_add(self, other: Self) -> Option<Self> {
         Some(Self {
@@ -56008,10 +56033,6 @@ impl StateTransaction<'_, '_> {
         record: &iroha_data_model::bridge::SccpReplayRecordV1,
         witness: &iroha_data_model::bridge::SccpSparseMerkleWitnessV1,
     ) -> Result<PreparedSccpReplayMutationV1, Error> {
-        use iroha_data_model::bridge::SccpReplayBoundaryV1::{
-            SoraInboundRelease, SoraOutboundLock,
-        };
-
         if self.sccp_replay_root_mutated_in_tx {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -56019,19 +56040,16 @@ impl StateTransaction<'_, '_> {
                 ),
             ));
         }
-        let lane = accumulator_id.route_key.lane_id;
-        let domain_matches_key = accumulator_id.boundary == domain.boundary
-            && record.operation == accumulator_id.boundary
-            && accumulator_id.route_key.revision == domain.route_revision
-            && match accumulator_id.boundary {
-                SoraOutboundLock => {
-                    domain.source_network == lane.target && domain.target_network == lane.source
-                }
-                SoraInboundRelease => {
-                    domain.source_network == lane.source && domain.target_network == lane.target
-                }
-                _ => false,
-            };
+        let governed_route_configuration_hash = self
+            .sccp_registry
+            .route(&accumulator_id.route_key)
+            .and_then(|route| route.route_configuration_hash().ok());
+        let domain_matches_key = sccp_replay_binding_matches_governed_route(
+            &accumulator_id,
+            domain,
+            record.operation,
+            governed_route_configuration_hash,
+        );
         if !domain_matches_key {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(

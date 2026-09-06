@@ -486,9 +486,9 @@ fn sccp_replay_boundary_from_key(value: &str) -> Option<crate::bridge::SccpRepla
         "32" => SccpReplayBoundaryV1::TonMasterMint,
         "33" => SccpReplayBoundaryV1::TonMasterBurn,
         "34" => SccpReplayBoundaryV1::TonWalletMintCredit,
-        "35" => SccpReplayBoundaryV1::TonWalletBurnDebit,
-        "36" => SccpReplayBoundaryV1::TonWalletRefundDebit,
-        "37" => SccpReplayBoundaryV1::TonWalletRefundCredit,
+        "35" => SccpReplayBoundaryV1::TonWalletBurnAuthorization,
+        "36" => SccpReplayBoundaryV1::TonWalletBurnLock,
+        "37" => SccpReplayBoundaryV1::TonWalletBurnRefund,
         _ => return None,
     })
 }

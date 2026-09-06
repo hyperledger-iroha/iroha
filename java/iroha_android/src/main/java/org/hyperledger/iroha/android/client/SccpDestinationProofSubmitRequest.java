@@ -7,7 +7,12 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 
-/** Exact request payload for {@code POST /v1/bridge/proofs/submit}. */
+/**
+ * Exact first-release request payload for {@code POST /v1/bridge/proofs/submit}.
+ *
+ * <p>Detached signed submission is outside this surface; only unsigned preparation is
+ * representable.
+ */
 public final class SccpDestinationProofSubmitRequest {
   private final String authority;
   private final FeePaymentIntent feePayment;

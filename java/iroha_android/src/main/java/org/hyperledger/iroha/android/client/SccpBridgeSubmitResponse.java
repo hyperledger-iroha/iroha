@@ -100,7 +100,13 @@ public final class SccpBridgeSubmitResponse {
     if (!CLOSED_BACKENDS.contains(backend)) {
       throw new IllegalArgumentException("backend must be one closed SCCP verifier label");
     }
-    final int counterpartyDomain = intValue(value, "counterparty_domain", 1, 4);
+    final int counterpartyDomain = intValue(value, "counterparty_domain", 1, 5);
+    if (counterpartyDomain != 1
+        && counterpartyDomain != 2
+        && counterpartyDomain != 4
+        && counterpartyDomain != 5) {
+      throw new IllegalArgumentException("counterparty_domain is unsupported or retired");
+    }
     final String counterpartyChain = text(value, "counterparty_chain");
     final SccpNetworkV1 counterparty = SccpNetworkV1.fromProfileKey(counterpartyChain);
     if (counterparty == null
@@ -220,7 +226,7 @@ public final class SccpBridgeSubmitResponse {
               "evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1");
       case 2 -> Set.of("evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1");
       case 4 -> Set.of("ton-groth16-bls12381-v1", "bridge/sccp/native/ton-masterchain-v1");
-      case 3 -> Set.of("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1");
+      case 5 -> Set.of("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1");
       default -> Set.of();
     };
   }

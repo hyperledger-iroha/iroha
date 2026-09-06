@@ -114,6 +114,9 @@ data class SccpSoraFinalityAnchorV1(
     val sourceNetwork: SccpNetworkV1,
     val protocolVersion: Int,
     val chainIdHash: String,
+    val epoch: BigInteger,
+    val epochEndHeight: BigInteger,
+    val rosterCommitment: String,
     val checkpointHeight: BigInteger,
     val checkpointBlockHash: String,
     val checkpointContextId: String,
@@ -733,7 +736,7 @@ object SccpJsonParser {
         }
         val backendMatchesTarget = when (backend) {
             "evm_groth16_bn254_v1" -> target.domainId == 1 || target.domainId == 2
-            "tron_groth16_bn254_v1" -> target.domainId == 3
+            "tron_groth16_bn254_v1" -> target.domainId == 5
             else -> target.domainId == 4
         }
         require(backendMatchesTarget) {
@@ -756,7 +759,7 @@ object SccpJsonParser {
         requiredInt(publicInputs, "version", 1, 1)
         val messageId = prefixedHash(publicInputs, "message_id")
         val payloadHash = prefixedHash(publicInputs, "payload_hash")
-        require(requiredInt(publicInputs, "target_domain", 1, 4) == target.domainId) {
+        require(requiredInt(publicInputs, "target_domain", 1, 5) == target.domainId) {
             "SCCP proof target domain does not match target network"
         }
         val commitmentRoot = prefixedHash(publicInputs, "commitment_root")
@@ -1784,23 +1787,32 @@ object SccpJsonParser {
         }
         val anchorRoles = listOf(
             upperBytes(anchor, "chain_id_hash", 32),
+            upperBytes(anchor, "roster_commitment", 32),
             upperBytes(anchor, "checkpoint_block_hash", 32),
             upperBytes(anchor, "checkpoint_context_id", 32),
             upperBytes(anchor, "checkpoint_finality_artifact_hash", 32),
         )
         require(anchorRoles[0] == TAIRA_CHAIN_ID_HASH) { "$label Taira chain id hash mismatch" }
         val protocolVersion = requiredInt(anchor, "protocol_version", 4, 4)
+        val epoch = requiredUnsignedInteger(anchor, "epoch", MAX_U64, true)
+        val epochEndHeight = requiredUnsignedInteger(anchor, "epoch_end_height", MAX_U64, false)
         val checkpointHeight = requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true)
+        require(checkpointHeight <= epochEndHeight) {
+            "$label checkpoint height exceeds its epoch end height"
+        }
         requireDistinctRawHashes(anchorRoles, "$label finality anchor")
         val canonicalAnchor = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(SccpNetworkV1.SORA_TAIRA.tag)
             writeU16(output, protocolVersion)
             output.write(anchorRoles[0].hexToBytes())
-            writeU64(output, checkpointHeight)
+            writeU64(output, epoch)
+            writeU64(output, epochEndHeight)
             output.write(anchorRoles[1].hexToBytes())
+            writeU64(output, checkpointHeight)
             output.write(anchorRoles[2].hexToBytes())
             output.write(anchorRoles[3].hexToBytes())
+            output.write(anchorRoles[4].hexToBytes())
         }.toByteArray()
         val anchorHash = keccak(
             "sccp:sora-finality-anchor:v1".toByteArray(Charsets.UTF_8) + canonicalAnchor,
@@ -1825,10 +1837,13 @@ object SccpJsonParser {
                 sourceNetwork,
                 protocolVersion,
                 anchorRoles[0],
-                checkpointHeight,
+                epoch,
+                epochEndHeight,
                 anchorRoles[1],
+                checkpointHeight,
                 anchorRoles[2],
                 anchorRoles[3],
+                anchorRoles[4],
                 "0x${anchorHash.lowercase()}",
             ),
         )
@@ -1866,7 +1881,7 @@ object SccpJsonParser {
             1 -> "ethereum_beacon_v1"
             2 -> "bsc_parlia_v1"
             4 -> "ton_masterchain_v1"
-            3 -> "tron_dpos_v1"
+            5 -> "tron_dpos_v1"
             else -> error("closed lane")
         }
         require(key == allowed) { "$label backend does not match lane source" }
@@ -1904,26 +1919,26 @@ object SccpJsonParser {
         bytesField: String,
         domain: Int?,
     ) {
-        val codec = requiredInt(value, codecField, 0, 3)
-        require(codec in 0..3) {
+        val codec = requiredInt(value, codecField, 1, 7)
+        require(codec == 1 || codec == 2 || codec == 5 || codec == 7) {
             "$codecField is unsupported or retired"
         }
         if (domain != null) {
             val expected = when (domain) {
-                0 -> 0
-                1, 2 -> 1
-                3 -> 2
-                4 -> 3
+                0 -> 1
+                1, 2 -> 2
+                5 -> 5
+                4 -> 7
                 else -> throw IllegalArgumentException("unsupported SCCP domain")
             }
             require(codec == expected) { "$codecField does not match its domain" }
         }
         val bytes = hexBytes(value, bytesField)
         when (codec) {
-            0 -> require(bytes.isNotEmpty() && bytes.size <= 256 && bytes.all { (it.toInt() and 0xff) in 0x21..0x7e })
-            1 -> require(bytes.size == 20 && bytes.any { it.toInt() != 0 })
-            2 -> require(bytes.size == 21 && bytes[0] == 0x41.toByte() && bytes.drop(1).any { it.toInt() != 0 })
-            3 -> require(
+            1 -> require(bytes.isNotEmpty() && bytes.size <= 256 && bytes.all { (it.toInt() and 0xff) in 0x21..0x7e })
+            2 -> require(bytes.size == 20 && bytes.any { it.toInt() != 0 })
+            5 -> require(bytes.size == 21 && bytes[0] == 0x41.toByte() && bytes.drop(1).any { it.toInt() != 0 })
+            7 -> require(
                 bytes.size == 36 && bytes.take(4).all { it == 0.toByte() } &&
                     bytes.drop(4).any { it != 0.toByte() },
             )
@@ -1940,7 +1955,7 @@ object SccpJsonParser {
         require(lane.isOutbound && source == SccpNetworkV1.SORA_TAIRA) {
             "$label must use a Taira-to-external lane"
         }
-        require(requiredInt(value, "target_domain", 1, 4) == target.domainId) {
+        require(requiredInt(value, "target_domain", 1, 5) == target.domainId) {
             "$label target profile/domain mismatch"
         }
         val messageId = lowerHash(value, "message_id_hex")
@@ -2002,7 +2017,7 @@ object SccpJsonParser {
         exactFields(transfer, PROJECTION_TRANSFER_FIELDS, "$label.Transfer")
         requiredInt(transfer, "version", 1, 1)
         requiredInt(transfer, "source_domain", 0, 0)
-        require(requiredInt(transfer, "dest_domain", 1, 4) == lane.target.domainId) {
+        require(requiredInt(transfer, "dest_domain", 1, 5) == lane.target.domainId) {
             "$label.Transfer.dest_domain does not match the target network"
         }
         requiredUnsignedInteger(transfer, "nonce", MAX_U64, false)
@@ -2034,7 +2049,7 @@ object SccpJsonParser {
             1 -> "taira_eth_xor"
             2 -> "taira_bsc_xor"
             4 -> "taira_ton_xor"
-            3 -> "taira_tron_xor"
+            5 -> "taira_tron_xor"
             else -> error("closed SCCP destination")
         }
         val routeId = projectionCanonicalText(
@@ -2080,7 +2095,7 @@ object SccpJsonParser {
             }
             return
         }
-        val variant = if (target.domainId == 3) "TronAddress21" else "EvmAddress20"
+        val variant = if (target.domainId == 5) "TronAddress21" else "EvmAddress20"
         exactFields(value, setOf(variant), label)
         val inner = requiredObject(value, variant)
         exactFields(inner, setOf("bytes"), "$label.$variant")
@@ -2128,7 +2143,7 @@ object SccpJsonParser {
     private fun familyFor(network: SccpNetworkV1): String =
         when (network.domainId) {
             4 -> "ton"
-            3 -> "tron"
+            5 -> "tron"
             else -> "evm"
         }
 
@@ -2228,8 +2243,8 @@ object SccpJsonParser {
     }
 
     private fun requiredDomain(value: Map<String, Any?>, field: String): Int =
-        requiredInt(value, field, 0, 4).also {
-            require(it in 0..4) {
+        requiredInt(value, field, 0, 5).also {
+            require(it == 0 || it == 1 || it == 2 || it == 4 || it == 5) {
                 "$field is an unsupported or retired SCCP domain"
             }
         }
@@ -2595,6 +2610,9 @@ object SccpJsonParser {
         "source_network",
         "protocol_version",
         "chain_id_hash",
+        "epoch",
+        "epoch_end_height",
+        "roster_commitment",
         "checkpoint_height",
         "checkpoint_block_hash",
         "checkpoint_context_id",

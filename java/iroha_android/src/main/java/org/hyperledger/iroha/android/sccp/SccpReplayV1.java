@@ -31,9 +31,9 @@ public final class SccpReplayV1 {
     TON_MASTER_MINT(0x32),
     TON_MASTER_BURN(0x33),
     TON_WALLET_MINT_CREDIT(0x34),
-    TON_WALLET_BURN_DEBIT(0x35),
-    TON_WALLET_REFUND_DEBIT(0x36),
-    TON_WALLET_REFUND_CREDIT(0x37);
+    TON_WALLET_BURN_AUTHORIZATION(0x35),
+    TON_WALLET_BURN_LOCK(0x36),
+    TON_WALLET_BURN_REFUND(0x37);
 
     private final int tag;
 
@@ -117,12 +117,12 @@ public final class SccpReplayV1 {
         final byte[] priorDigest,
         final byte[] bitmap,
         final List<byte[]> siblings) {
-      this.expectedRoot = exact(expectedRoot, 32, "expected shard root", true);
+      this.expectedRoot = exact(expectedRoot, 32, "expected shard root", false);
       this.priorDigest = exact(priorDigest, 32, "prior record digest", false);
       this.bitmap = exact(bitmap, 32, "sibling bitmap", false);
       final List<byte[]> copied = new ArrayList<>(siblings.size());
       for (int index = 0; index < siblings.size(); index++) {
-        copied.add(exact(siblings.get(index), 32, "sibling", true));
+        copied.add(exact(siblings.get(index), 32, "sibling", false));
       }
       this.siblings = Collections.unmodifiableList(copied);
     }
@@ -206,8 +206,13 @@ public final class SccpReplayV1 {
       final BigInteger amountScale9,
       final Principal principal,
       final byte[] auxiliaryIdentitySha256) {
+    Objects.requireNonNull(operation, "operation");
+    Objects.requireNonNull(principal, "principal");
     if (amountScale9.signum() <= 0 || amountScale9.compareTo(MAX_U128) > 0) {
       throw new IllegalArgumentException("replay amount must be a positive u128");
+    }
+    if (principal.kind != principalKind(operation)) {
+      throw new IllegalArgumentException("replay operation and principal kind are inconsistent");
     }
     final byte[] principalDigest =
         hash(
@@ -220,14 +225,19 @@ public final class SccpReplayV1 {
             MAGIC,
             new byte[] {4, (byte) operation.tag()},
             exact(auxiliaryIdentitySha256, 32, "auxiliary identity SHA-256", true));
-    return hash(
-        MAGIC,
-        new byte[] {2, (byte) operation.tag()},
-        exact(replayId, 32, "replay id", true),
-        exact(payloadSha256, 32, "payload SHA-256", true),
-        unsignedBe(amountScale9, 16, "scale-9 amount"),
-        principalDigest,
-        auxiliary);
+    final byte[] digest =
+        hash(
+            MAGIC,
+            new byte[] {2, (byte) operation.tag()},
+            exact(replayId, 32, "replay id", true),
+            exact(payloadSha256, 32, "payload SHA-256", true),
+            unsignedBe(amountScale9, 16, "scale-9 amount"),
+            principalDigest,
+            auxiliary);
+    if (allZero(digest)) {
+      throw new IllegalArgumentException("occupied replay record digest must be nonzero");
+    }
+    return digest;
   }
 
   /** Return all 249 canonical empty hashes in leaf-up order. */
@@ -245,7 +255,7 @@ public final class SccpReplayV1 {
   /** Strictly reconstruct one canonical compressed witness. */
   public static WitnessRoot rootFromWitness(
       final byte[] keyValue, final byte[] recordDigest, final Witness witness) {
-    final byte[] key = exact(keyValue, 32, "replay key", true);
+    final byte[] key = exact(keyValue, 32, "replay key", false);
     if (witness.bitmap[0] != 0) {
       throw new IllegalArgumentException("witness bitmap has reserved high bits");
     }
@@ -255,19 +265,12 @@ public final class SccpReplayV1 {
       throw new IllegalArgumentException("witness sibling count does not match bitmap");
     }
     final List<byte[]> empty = emptyHashes();
-    byte[] current;
-    if (recordDigest == null) {
-      if (!allZero(witness.priorDigest)) {
-        throw new IllegalArgumentException("non-membership witness has an occupied digest");
-      }
-      current = empty.get(0);
-    } else {
-      final byte[] digest = exact(recordDigest, 32, "record digest", true);
-      if (!Arrays.equals(digest, witness.priorDigest)) {
-        throw new IllegalArgumentException("membership witness record digest mismatch");
-      }
-      current = hash(MAGIC, new byte[] {0x11}, key, digest);
+    final byte[] digest = exact(recordDigest, 32, "record digest", false);
+    if (!Arrays.equals(digest, witness.priorDigest)) {
+      throw new IllegalArgumentException("witness record digest mismatch");
     }
+    byte[] current =
+        allZero(digest) ? empty.get(0) : hash(MAGIC, new byte[] {0x11}, key, digest);
     int supplied = 0;
     for (int level = 0; level < DEPTH; level++) {
       byte[] sibling = empty.get(level);
@@ -280,6 +283,46 @@ public final class SccpReplayV1 {
       current = bit(key, level) ? parent(level, sibling, current) : parent(level, current, sibling);
     }
     return new WitnessRoot(current, witness.expectedRoot, key[0] & 0xff);
+  }
+
+  /** Verify a replay witness against the caller's exact current shard root. */
+  public static WitnessRoot verifyAgainstCurrentRoot(
+      final byte[] keyValue,
+      final byte[] recordDigest,
+      final Witness witness,
+      final byte[] currentRootValue) {
+    final byte[] currentRoot = exact(currentRootValue, 32, "current shard root", false);
+    final WitnessRoot reconstructed = rootFromWitness(keyValue, recordDigest, witness);
+    if (!Arrays.equals(reconstructed.expectedRoot(), currentRoot)
+        || !Arrays.equals(reconstructed.root(), currentRoot)) {
+      throw new IllegalArgumentException("replay witness does not match the current shard root");
+    }
+    return reconstructed;
+  }
+
+  private static int principalKind(final Boundary boundary) {
+    switch (boundary) {
+      case SORA_OUTBOUND_LOCK:
+      case SORA_INBOUND_RELEASE:
+        return 0;
+      case EVM_SOURCE_BURN:
+      case EVM_DESTINATION_MINT:
+        return 1;
+      case TRON_SOURCE_BURN:
+      case TRON_DESTINATION_MINT:
+        return 2;
+      case TON_BRIDGE_INBOUND_MINT:
+      case TON_BRIDGE_OUTBOUND_BURN:
+      case TON_MASTER_MINT:
+      case TON_MASTER_BURN:
+      case TON_WALLET_MINT_CREDIT:
+      case TON_WALLET_BURN_AUTHORIZATION:
+      case TON_WALLET_BURN_LOCK:
+      case TON_WALLET_BURN_REFUND:
+        return 3;
+      default:
+        throw new IllegalArgumentException("unsupported replay boundary");
+    }
   }
 
   private static boolean validDirection(
@@ -307,14 +350,14 @@ public final class SccpReplayV1 {
       case TON_BRIDGE_INBOUND_MINT:
       case TON_MASTER_MINT:
       case TON_WALLET_MINT_CREDIT:
-      case TON_WALLET_REFUND_DEBIT:
-      case TON_WALLET_REFUND_CREDIT:
         return source == SccpNetworkV1.SORA_TAIRA
             && target == SccpNetworkV1.TON_MAINNET
             && actorKind == 3;
       case TON_BRIDGE_OUTBOUND_BURN:
       case TON_MASTER_BURN:
-      case TON_WALLET_BURN_DEBIT:
+      case TON_WALLET_BURN_AUTHORIZATION:
+      case TON_WALLET_BURN_LOCK:
+      case TON_WALLET_BURN_REFUND:
         return source == SccpNetworkV1.TON_MAINNET
             && target == SccpNetworkV1.SORA_TAIRA
             && actorKind == 3;

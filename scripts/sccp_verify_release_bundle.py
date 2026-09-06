@@ -58,34 +58,31 @@ def verify_bundle(
 
     verified_validator_executable_hash: str | None = None
     verified_validator_built_at_unix_ms: int | None = None
-    if trust_policy["environment"] == "production":
-        if rust_validator is not None:
-            raise SccpReleaseError(
-                "production bundle verification cannot accept an unauthenticated validator path"
-            )
-        if (
-            validator_build_release is None
-            or trusted_validator_builder_policy_sha256 is None
-        ):
-            raise SccpReleaseError(
-                "production bundle verification requires a verified validator build"
-            )
-        (
-            rust_validator,
-            validator_build_hashes,
-            verified_validator_built_at_unix_ms,
-        ) = verify_validator_build_release(
-            validator_build_release,
-            trust_policy,
-            trusted_policy_sha256=trusted_validator_builder_policy_sha256,
-        )
-        verified_validator_executable_hash = validator_build_hashes[
-            "validator_executable_sha256_hex"
-        ]
-    elif rust_validator is None:
+    if trust_policy.get("environment") != "production":
+        raise SccpReleaseError("bundle verification requires a production trust policy")
+    if rust_validator is not None:
         raise SccpReleaseError(
-            "test-fixture bundle verification requires its fixture validator"
+            "production bundle verification cannot accept an unauthenticated validator path"
         )
+    if (
+        validator_build_release is None
+        or trusted_validator_builder_policy_sha256 is None
+    ):
+        raise SccpReleaseError(
+            "production bundle verification requires a verified validator build"
+        )
+    (
+        rust_validator,
+        validator_build_hashes,
+        verified_validator_built_at_unix_ms,
+    ) = verify_validator_build_release(
+        validator_build_release,
+        trust_policy,
+        trusted_policy_sha256=trusted_validator_builder_policy_sha256,
+    )
+    verified_validator_executable_hash = validator_build_hashes[
+        "validator_executable_sha256_hex"
+    ]
 
     index_bytes = read_relative_file(
         bundle_dir, "bundle.json", label="bundle index", maximum=MAX_INDEX_BYTES
@@ -95,6 +92,8 @@ def verify_bundle(
     )
     require_canonical_json_file(index_bytes, index_value, label="bundle index")
     index = validate_bundle_index(index_value)
+    if index["environment"] != "production":
+        raise SccpReleaseError("bundle index must identify production evidence")
     if index["trust_policy_id"] != trust_policy["policy_id"] or index[
         "trust_policy_sha256_hex"
     ] != sha256_hex(trust_policy_bytes):
@@ -153,11 +152,6 @@ def verify_bundle(
         evidence=evidence,
         evidence_bytes=evidence_bytes,
         validator_path=rust_validator,
-        environment=(
-            "test-fixture"
-            if trust_policy["environment"] == "test-fixture"
-            else "production"
-        ),
     )
     if (
         verified_validator_executable_hash is not None
@@ -185,11 +179,6 @@ def verify_bundle(
         trust_policy,
         trust_policy_path=trust_policy_path,
         evidence_path=bundle_dir / "evidence.json",
-        environment=(
-            "test-fixture"
-            if trust_policy["environment"] == "test-fixture"
-            else "production"
-        ),
     )
     if (
         verified_validator_executable_hash is not None

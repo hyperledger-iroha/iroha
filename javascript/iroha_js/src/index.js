@@ -276,6 +276,7 @@ export {
 } from "./axt.js";
 export {
   encodeAccountIdNoritoValue,
+  decodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,
   encodeCancelAssetLockV1,
   encodeQuantityNoritoValue,
@@ -572,6 +573,7 @@ export {
   sccpReplayRecordDigestV1,
   sccpReplayEmptyHashesV1,
   sccpReplayRootFromWitnessV1,
+  sccpReplayVerifyAgainstCurrentRootV1,
   normalizeSccpCapabilities,
   normalizeSccpSoraOutboundMaterial,
   normalizeSccpRegistry,

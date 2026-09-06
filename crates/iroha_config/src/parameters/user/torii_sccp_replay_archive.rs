@@ -25,6 +25,9 @@ pub struct ToriiSccpReplayArchive {
     /// Complete timeout for one pinned replica request.
     #[config(default = "DurationMs(defaults::torii::sccp_replay_archive::REQUEST_TIMEOUT)")]
     pub request_timeout_ms: DurationMs,
+    /// Delay between bounded replica refresh attempts.
+    #[config(default = "DurationMs(defaults::torii::sccp_replay_archive::REFRESH_INTERVAL)")]
+    pub refresh_interval_ms: DurationMs,
 }
 
 impl Default for ToriiSccpReplayArchive {
@@ -39,6 +42,7 @@ impl Default for ToriiSccpReplayArchive {
             max_snapshot_leaves: archive::MAX_SNAPSHOT_LEAVES,
             max_accumulators: archive::MAX_ACCUMULATORS,
             request_timeout_ms: DurationMs(archive::REQUEST_TIMEOUT),
+            refresh_interval_ms: DurationMs(archive::REFRESH_INTERVAL),
         }
     }
 }
@@ -119,6 +123,14 @@ impl ToriiSccpReplayArchive {
                 "torii.sccp_replay_archive.request_timeout_ms is outside the first-release bounds",
             );
         }
+        let refresh_interval = self.refresh_interval_ms.get();
+        if refresh_interval < limits::REFRESH_INTERVAL_MIN
+            || refresh_interval > limits::REFRESH_INTERVAL_HARD
+        {
+            return Err(
+                "torii.sccp_replay_archive.refresh_interval_ms is outside the first-release bounds",
+            );
+        }
 
         let mut replicas = Vec::with_capacity(3);
         let mut origins = BTreeSet::new();
@@ -173,6 +185,7 @@ impl ToriiSccpReplayArchive {
             max_snapshot_leaves,
             max_accumulators,
             request_timeout,
+            refresh_interval,
         }))
     }
 }
@@ -293,6 +306,9 @@ mod tests {
         let mut zero_limit = enabled();
         zero_limit.max_accumulators = 0;
         cases.push(zero_limit);
+        let mut zero_refresh = enabled();
+        zero_refresh.refresh_interval_ms = DurationMs(Duration::ZERO);
+        cases.push(zero_refresh);
 
         for case in cases {
             assert!(case.into_actual().is_err());

@@ -130,12 +130,14 @@ fun sccpReplayLoadWitnessV1(
 }
 
 fun sccpReplayOperationIsInbound(operation: uint8): bool {
-    return operation == 0x30 || operation == 0x32 || operation == 0x34 || operation == 0x36 ||
-    operation == 0x37;
+    // Bridge/master/wallet mint admission: SORA -> TON.
+    return operation == 0x30 || operation == 0x32 || operation == 0x34;
 }
 
 fun sccpReplayOperationIsOutbound(operation: uint8): bool {
-    return operation == 0x31 || operation == 0x33 || operation == 0x35;
+    // Burn, authorization, debit/lock and rejected-lock refund: TON -> SORA.
+    return operation == 0x31 || operation == 0x33 || operation == 0x35 || operation == 0x36 ||
+    operation == 0x37;
 }
 
 /// Hash the exact final-V1 TON replay domain.
@@ -291,6 +293,9 @@ fun sccpReplayParentV1(level: int, left: uint256, right: uint256): uint256 {
 }
 
 fun sccpReplayOccupiedLeafV1(key: uint256, recordDigest: uint256): uint256 {
+    // A SHA-256 replay key may canonically be all-zero. An occupied record
+    // digest may not: zero is reserved for non-membership witnesses.
+    assert (recordDigest != 0) throw SccpErrors.InvalidReplayRecord;
     val preimage = beginCell()
         .storeSlice("SCCP-REPLAY-SMT-V1".literalSlice())
         .storeUint(0x11, 8)
@@ -459,9 +464,20 @@ fun emptySccpReplayForestV1(): Cell<SccpReplayForestV1> {
 }
 
 fun sccpReplayValidateForestV1(forest: SccpReplayForestV1) {
+    var entry = forest.nonemptyShardRoots.findFirst();
+    var nonemptyShardRootCount = 0;
+    while (entry.isFound) {
+        val root = entry.loadValue();
+        assert (
+            root != 0 && root != SCCP_REPLAY_EMPTY_ROOT_V1
+        ) throw SccpErrors.InvalidReplayForest;
+        nonemptyShardRootCount += 1;
+        entry = forest.nonemptyShardRoots.iterateNext(entry);
+    }
     assert (
         forest.updateSequence == forest.leafCount &&
-        ((forest.leafCount == 0) == forest.nonemptyShardRoots.isEmpty())
+        ((forest.leafCount == 0) == forest.nonemptyShardRoots.isEmpty()) &&
+        forest.leafCount >= nonemptyShardRootCount as uint64
     ) throw SccpErrors.InvalidReplayForest;
 }
 

@@ -1999,6 +1999,9 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
     public let sourceNetwork: ToriiGovernanceSccpNetwork
     public let protocolVersion: UInt16
     public let chainIdHash: Data
+    public let epoch: UInt64
+    public let epochEndHeight: UInt64
+    public let rosterCommitment: Data
     public let checkpointHeight: UInt64
     public let checkpointBlockHash: Data
     public let checkpointContextId: Data
@@ -2009,6 +2012,9 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
         case sourceNetwork = "source_network"
         case protocolVersion = "protocol_version"
         case chainIdHash = "chain_id_hash"
+        case epoch
+        case epochEndHeight = "epoch_end_height"
+        case rosterCommitment = "roster_commitment"
         case checkpointHeight = "checkpoint_height"
         case checkpointBlockHash = "checkpoint_block_hash"
         case checkpointContextId = "checkpoint_context_id"
@@ -2025,6 +2031,8 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
         version = try container.decode(UInt8.self, forKey: .version)
         sourceNetwork = try container.decode(ToriiGovernanceSccpNetwork.self, forKey: .sourceNetwork)
         protocolVersion = try container.decode(UInt16.self, forKey: .protocolVersion)
+        epoch = try container.decode(UInt64.self, forKey: .epoch)
+        epochEndHeight = try container.decode(UInt64.self, forKey: .epochEndHeight)
         checkpointHeight = try container.decode(UInt64.self, forKey: .checkpointHeight)
         func hash(_ key: CodingKeys) throws -> Data {
             try governanceFixedBytes(
@@ -2036,6 +2044,7 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
             )
         }
         chainIdHash = try hash(.chainIdHash)
+        rosterCommitment = try hash(.rosterCommitment)
         checkpointBlockHash = try hash(.checkpointBlockHash)
         checkpointContextId = try hash(.checkpointContextId)
         checkpointFinalityArtifactHash = try hash(.checkpointFinalityArtifactHash)
@@ -2043,13 +2052,16 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
               sourceNetwork == .soraTaira,
               protocolVersion == 4,
               chainIdHash == governanceTairaChainIdHash,
+              epoch > 0,
               checkpointHeight > 0,
+              checkpointHeight <= epochEndHeight,
               Set([
                   chainIdHash,
+                  rosterCommitment,
                   checkpointBlockHash,
                   checkpointContextId,
                   checkpointFinalityArtifactHash,
-              ]).count == 4 else {
+              ]).count == 5 else {
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: container.codingPath,
@@ -2063,6 +2075,9 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
         var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
         governanceAppendUInt16LE(protocolVersion, to: &canonical)
         canonical.append(chainIdHash)
+        governanceAppendUInt64LE(epoch, to: &canonical)
+        governanceAppendUInt64LE(epochEndHeight, to: &canonical)
+        canonical.append(rosterCommitment)
         governanceAppendUInt64LE(checkpointHeight, to: &canonical)
         canonical.append(checkpointBlockHash)
         canonical.append(checkpointContextId)
@@ -2070,6 +2085,9 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
         return SccpSoraFinalityAnchorV1(
             protocolVersion: protocolVersion,
             chainIdHash: chainIdHash,
+            epoch: epoch,
+            epochEndHeight: epochEndHeight,
+            rosterCommitment: rosterCommitment,
             checkpointHeight: checkpointHeight,
             checkpointBlockHash: checkpointBlockHash,
             checkpointContextId: checkpointContextId,

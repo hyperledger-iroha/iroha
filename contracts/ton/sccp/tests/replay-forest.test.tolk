@@ -68,6 +68,24 @@ fun replayTestAdmitExitCode(rawWitness: cell): int {
     }
 }
 
+fun replayTestForestValidationExitCode(forest: SccpReplayForestV1): int {
+    try {
+        sccpReplayValidateForestV1(forest);
+        return 0;
+    } catch (errorCode) {
+        return errorCode;
+    }
+}
+
+fun replayTestOccupiedLeafExitCode(key: uint256, recordDigest: uint256): int {
+    try {
+        sccpReplayOccupiedLeafV1(key, recordDigest);
+        return 0;
+    } catch (errorCode) {
+        return errorCode;
+    }
+}
+
 get fun `test TON replay hashes match independent final V1 golden`() {
     val actorBytes = sccpReplayTonAddress36(replayTestActor());
     expect(actorBytes.beginParse().loadUint(32)).toEqual(0xffffffff);
@@ -82,7 +100,7 @@ get fun `test TON replay hashes match independent final V1 golden`() {
     expect((key >> SCCP_REPLAY_DEPTH_V1) as uint8).toEqual(12);
     val digest = sccpTonReplayRecordDigestV1(replayTestRecord());
     expect(digest).toEqual(
-        0x47d14b8f9825981ea24647fdf1a6f9da2e779b32ee2e5705888756572f5c4b73,
+        0x28f1edb09538eb5d5b4698546e47b2e8335978bbae4b09c108107c68883b8800,
     );
     expect(sccpReplayAuxiliaryWordSha256V1(replayTestRecord().auxiliaryIdentitySha256)).toEqual(
         0x84126d0dd850199be29021aadbaee68cb9199047b1cb7ec9894ddb1e3562783c,
@@ -96,7 +114,7 @@ get fun `test TON replay hashes match independent final V1 golden`() {
             sccpReplayOccupiedLeafV1(key, digest),
             replayTestEmptyWitness(),
         ),
-    ).toEqual(0xae8127b12c22ba814b1303f2b176cd139334c6661869e37a0bb0c2661b12b026);
+    ).toEqual(0x697ab0a8df3d63b596daecf39b785f2add35acd19fd0d73288b4e12b79351f1b);
 }
 
 get fun `test canonical payload commitment uses one SHA256 layer`() {
@@ -114,6 +132,67 @@ get fun `test canonical payload commitment uses one SHA256 layer`() {
     );
 }
 
+get fun `test operation directions follow the irreversible TON state transitions`() {
+    expect(sccpReplayOperationIsInbound(0x30)).toEqual(true);
+    expect(sccpReplayOperationIsInbound(0x32)).toEqual(true);
+    expect(sccpReplayOperationIsInbound(0x34)).toEqual(true);
+    expect(sccpReplayOperationIsInbound(0x31)).toEqual(false);
+    expect(sccpReplayOperationIsInbound(0x33)).toEqual(false);
+    expect(sccpReplayOperationIsInbound(0x35)).toEqual(false);
+    expect(sccpReplayOperationIsInbound(0x36)).toEqual(false);
+    expect(sccpReplayOperationIsInbound(0x37)).toEqual(false);
+
+    expect(sccpReplayOperationIsOutbound(0x30)).toEqual(false);
+    expect(sccpReplayOperationIsOutbound(0x32)).toEqual(false);
+    expect(sccpReplayOperationIsOutbound(0x34)).toEqual(false);
+    expect(sccpReplayOperationIsOutbound(0x31)).toEqual(true);
+    expect(sccpReplayOperationIsOutbound(0x33)).toEqual(true);
+    expect(sccpReplayOperationIsOutbound(0x35)).toEqual(true);
+    expect(sccpReplayOperationIsOutbound(0x36)).toEqual(true);
+    expect(sccpReplayOperationIsOutbound(0x37)).toEqual(true);
+}
+
+get fun `test zero replay key and nondefault zero sibling remain canonical`() {
+    val digest = sccpTonReplayRecordDigestV1(replayTestRecord());
+    val occupied = sccpReplayOccupiedLeafV1(0, digest);
+    expect(occupied == 0).toEqual(false);
+    expect(replayTestOccupiedLeafExitCode(0, 0)).toEqual(
+        SccpErrors.InvalidReplayRecord as int,
+    );
+
+    val zeroSiblingWitness: SccpReplayWitnessV1 = {
+        expectedShardRoot: 1,
+        priorRecordDigest: 0,
+        siblingBitmap: 1,
+        siblings: beginCell().storeUint(0, 256).endCell(),
+    };
+    val emptyRoot = sccpReplayFoldV1(0, SCCP_REPLAY_EMPTY_LEAF_V1, zeroSiblingWitness);
+    expect(emptyRoot == 0).toEqual(false);
+    val (pairEmptyRoot, occupiedRoot) = sccpReplayFoldPairV1(
+        0,
+        SCCP_REPLAY_EMPTY_LEAF_V1,
+        occupied,
+        zeroSiblingWitness,
+    );
+    expect(pairEmptyRoot).toEqual(emptyRoot);
+    expect(occupiedRoot == 0).toEqual(false);
+}
+
+get fun `test forest leaf count covers every stored nonempty shard root`() {
+    var forest = emptySccpReplayForestV1().load();
+    forest.nonemptyShardRoots.set(1, 1);
+    forest.nonemptyShardRoots.set(2, 2);
+    forest.leafCount = 1;
+    forest.updateSequence = 1;
+    expect(replayTestForestValidationExitCode(forest)).toEqual(
+        SccpErrors.InvalidReplayForest as int,
+    );
+
+    forest.leafCount = 2;
+    forest.updateSequence = 2;
+    expect(replayTestForestValidationExitCode(forest)).toEqual(0);
+}
+
 get fun `test fresh occupation and identical membership keep counters stable`() {
     var forest = emptySccpReplayForestV1().load();
     val record = replayTestRecord();
@@ -127,7 +206,7 @@ get fun `test fresh occupation and identical membership keep counters stable`() 
     expect(fresh.leafCount).toEqual(1);
     expect(fresh.updateSequence).toEqual(1);
     expect(fresh.newRoot).toEqual(
-        0xae8127b12c22ba814b1303f2b176cd139334c6661869e37a0bb0c2661b12b026,
+        0x697ab0a8df3d63b596daecf39b785f2add35acd19fd0d73288b4e12b79351f1b,
     );
     val membership: SccpReplayWitnessV1 = {
         expectedShardRoot: fresh.newRoot,

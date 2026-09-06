@@ -20,6 +20,8 @@ pub struct ToriiSccpReplayArchive {
     pub max_accumulators: usize,
     /// Complete connect/read timeout for each pinned replica request.
     pub request_timeout: Duration,
+    /// Delay between bounded replica refresh attempts.
+    pub refresh_interval: Duration,
 }
 
 /// One pinned SCCP replay archive replica.

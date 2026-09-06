@@ -1,24 +1,28 @@
 //! Fail-closed semantic profiles for FASTPQ statements.
 //!
-//! The proof protocol is shared by two statement families. Generic transfer
-//! proofs authenticate fully witnessed changes in the transfer gadget's
-//! touched-balance tree, while AXT proofs may also authenticate an opaque effect
-//! carrier whose state roots are interpreted by the surrounding, independently
-//! authenticated AXT statement. Callers must select the family explicitly;
-//! batch metadata never selects a profile.
+//! The proof protocol is shared by the root-bound V1 state-transition relation
+//! and two narrowly scoped AXT statement families. The wire and trace schemas
+//! contain exactly the six release operations, but the production semantic gate
+//! admits an operation only after its tree relation is fully authenticated.
+//! AXT proofs remain restricted to either witnessed transfers or opaque effect
+//! carriers selected by the authenticated outer statement. Batch metadata never
+//! selects or relaxes a profile.
 
-use crate::{Error, OperationKind, Result, TransitionBatch};
+use crate::{
+    Error, OperationKind, Result, TransitionBatch, axt_binding::AXT_FASTPQ_BINDING_METADATA_KEY,
+};
 
 /// Semantics that a FASTPQ prover and verifier apply to a transition batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofSemantics {
-    /// Generic transfer-balance state-transition proof.
+    /// Root-bound first-release state-transition proof.
     ///
-    /// Non-empty batches must consist entirely of fully witnessed transfers.
-    /// `old_root` and `new_root` are roots of the transfer gadget's private
-    /// touched-balance tree, not consensus-wide world-state roots. An empty
-    /// batch is valid only when it leaves that root unchanged.
-    TransferStateTransition,
+    /// Transfer rows carry the currently implemented sparse-Merkle update
+    /// relation. The other five final operation tags remain unavailable through
+    /// this production profile until their supply, permission, membership,
+    /// non-membership, and metadata tree paths are bound. An empty batch is
+    /// valid only when it leaves the state root unchanged.
+    StateTransition,
     /// AXT transfer statement selected by a trusted, canonical outer binding.
     ///
     /// Every row must be a transfer. Transfer transcript and sparse-Merkle
@@ -39,7 +43,7 @@ impl ProofSemantics {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::TransferStateTransition => "transfer_state_transition",
+            Self::StateTransition => "state_transition",
             Self::AxtTransferClaim => "axt_transfer_claim",
             Self::AxtOpaqueEffect => "axt_opaque_effect",
         }
@@ -50,8 +54,7 @@ impl ProofSemantics {
 ///
 /// This gate deliberately does not inspect metadata to select or relax the
 /// profile. In particular, inserting an AXT-looking metadata key cannot make a
-/// generic transfer-state proof accept an opaque metadata, supply, or role
-/// operation.
+/// generic state proof accept a row without its production tree relation.
 ///
 /// # Errors
 ///
@@ -60,7 +63,7 @@ impl ProofSemantics {
 /// contains an operation not supported by the selected profile.
 pub fn validate_batch_semantics(batch: &TransitionBatch, semantics: ProofSemantics) -> Result<()> {
     match semantics {
-        ProofSemantics::TransferStateTransition => validate_transfer_state_transition(batch),
+        ProofSemantics::StateTransition => validate_state_transition(batch),
         ProofSemantics::AxtTransferClaim => {
             require_non_empty(batch, semantics)?;
             require_all_operations(batch, semantics, OperationClass::Transfer)
@@ -72,25 +75,36 @@ pub fn validate_batch_semantics(batch: &TransitionBatch, semantics: ProofSemanti
     }
 }
 
-fn validate_transfer_state_transition(batch: &TransitionBatch) -> Result<()> {
+fn validate_state_transition(batch: &TransitionBatch) -> Result<()> {
+    if batch.metadata.contains_key(AXT_FASTPQ_BINDING_METADATA_KEY) {
+        return Err(invalid(
+            ProofSemantics::StateTransition,
+            "AXT-bound batches require an explicitly authenticated AXT semantic profile",
+        ));
+    }
     if batch.transitions.is_empty() {
         if batch.public_inputs.old_root == batch.public_inputs.new_root {
             return Ok(());
         }
         return Err(invalid(
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             "empty batch changes the public state root",
         ));
     }
+    // TODO: Admit each remaining final operation here only with its canonical
+    // supply/permission/metadata membership or non-membership path bound to the
+    // corresponding public roots. Host-side row checks alone are not a proof of
+    // a state transition.
     require_all_operations(
         batch,
-        ProofSemantics::TransferStateTransition,
-        OperationClass::Transfer,
+        ProofSemantics::StateTransition,
+        OperationClass::RootBoundStateTransition,
     )
 }
 
 #[derive(Debug, Clone, Copy)]
 enum OperationClass {
+    RootBoundStateTransition,
     Transfer,
     MetaSet,
 }
@@ -98,6 +112,7 @@ enum OperationClass {
 impl OperationClass {
     const fn accepts(self, operation: &OperationKind) -> bool {
         match self {
+            Self::RootBoundStateTransition => matches!(operation, OperationKind::Transfer),
             Self::Transfer => matches!(operation, OperationKind::Transfer),
             Self::MetaSet => matches!(operation, OperationKind::MetaSet),
         }
@@ -105,6 +120,7 @@ impl OperationClass {
 
     const fn name(self) -> &'static str {
         match self {
+            Self::RootBoundStateTransition => "a root-bound final V1 state transition",
             Self::Transfer => "Transfer",
             Self::MetaSet => "MetaSet",
         }
@@ -177,35 +193,73 @@ mod tests {
     #[test]
     fn generic_empty_batch_must_preserve_root() {
         let unchanged = batch([0x11; 32], [0x11; 32]);
-        validate_batch_semantics(&unchanged, ProofSemantics::TransferStateTransition)
+        validate_batch_semantics(&unchanged, ProofSemantics::StateTransition)
             .expect("unchanged empty state batch");
 
         let changed = batch([0x11; 32], [0x22; 32]);
-        let error = validate_batch_semantics(&changed, ProofSemantics::TransferStateTransition)
+        let error = validate_batch_semantics(&changed, ProofSemantics::StateTransition)
             .expect_err("root-changing empty state batch must fail closed");
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
-                profile: "transfer_state_transition",
+                profile: "state_transition",
                 ..
             }
         ));
     }
 
     #[test]
-    fn generic_state_profile_rejects_opaque_metadata_even_with_axt_metadata() {
+    fn generic_state_profile_rejects_operations_without_tree_witnesses() {
+        for operation in [
+            OperationKind::Mint,
+            OperationKind::Burn,
+            OperationKind::RoleGrant {
+                role_id: [0x11; 32],
+                permission_id: [0x22; 32],
+                epoch: 7,
+            },
+            OperationKind::RoleRevoke {
+                role_id: [0x33; 32],
+                permission_id: [0x44; 32],
+                epoch: 8,
+            },
+            OperationKind::MetaSet,
+        ] {
+            let mut candidate = batch([0x11; 32], [0x22; 32]);
+            push(&mut candidate, operation);
+            assert!(matches!(
+                validate_batch_semantics(&candidate, ProofSemantics::StateTransition),
+                Err(Error::InvalidProofSemantics {
+                    profile: "state_transition",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn generic_state_profile_admits_the_transfer_witness_class() {
+        let mut candidate = batch([0x11; 32], [0x22; 32]);
+        push(&mut candidate, OperationKind::Transfer);
+        validate_batch_semantics(&candidate, ProofSemantics::StateTransition)
+            .expect("transfer rows have a canonical root-bound witness relation");
+    }
+
+    #[test]
+    fn generic_state_profile_rejects_axt_bound_batches() {
         let mut candidate = batch([0x11; 32], [0x22; 32]);
         push(&mut candidate, OperationKind::MetaSet);
-        candidate
-            .metadata
-            .insert("axt_fastpq_binding".into(), b"attacker-selected".to_vec());
+        candidate.metadata.insert(
+            AXT_FASTPQ_BINDING_METADATA_KEY.into(),
+            b"authenticated-outer-binding".to_vec(),
+        );
 
-        let error = validate_batch_semantics(&candidate, ProofSemantics::TransferStateTransition)
-            .expect_err("metadata must not select opaque semantics");
+        let error = validate_batch_semantics(&candidate, ProofSemantics::StateTransition)
+            .expect_err("generic verification must not infer AXT semantics from metadata");
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
-                profile: "transfer_state_transition",
+                profile: "state_transition",
                 ..
             }
         ));

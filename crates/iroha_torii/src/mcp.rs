@@ -7932,9 +7932,6 @@ fn extract_runtime_upgrade_id_argument(arguments: &Map) -> Result<String, String
 fn extract_height_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_value_argument(arguments, "height", &["height", "block_height"], &[])
 }
-fn extract_view_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_value_argument(arguments, "view", &["view"], &[])
-}
 fn extract_definition_id_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(arguments, "definition_id", &["definition_id"], &[])
 }
@@ -7946,22 +7943,6 @@ fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
 }
 fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(arguments, "rwa_id", &["rwa_id", "id"], &[])
-}
-fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "bundle_id_hex",
-        &["bundle_id_hex", "bundle_id"],
-        &["bundle_id"],
-    )
-}
-fn extract_certificate_id_hex_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "certificate_id_hex",
-        &["certificate_id_hex", "certificate_id", "id"],
-        &["certificate_id", "id"],
-    )
 }
 fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(
@@ -10608,6 +10589,25 @@ mod tests {
             iroha_nfts_chain_list_tool(),
             iroha_rwas_chain_list_tool(),
         ];
+        let audited_names = [
+            "iroha.da.proof_policies",
+            "iroha.da.proof_policy_snapshot",
+            "iroha.gov.citizens.count",
+            "iroha.gov.council.current",
+            "iroha.gov.protected_namespaces.list",
+            "iroha.gov.unlocks.stats",
+            "iroha.health",
+            "iroha.nfts.chain.list",
+            "iroha.node.capabilities",
+            "iroha.node.query_projection_checkpoint",
+            "iroha.parameters.get",
+            "iroha.runtime.abi.active",
+            "iroha.runtime.abi.hash",
+            "iroha.runtime.metrics",
+            "iroha.runtime.upgrades.list",
+            "iroha.rwas.chain.list",
+            "iroha.vpn.profile",
+        ];
         let expected_schema = norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10620,9 +10620,17 @@ mod tests {
             }
         });
 
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), audited_names.len());
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<BTreeSet<_>>(),
+            audited_names.into_iter().collect::<BTreeSet<_>>()
+        );
         for tool in tools {
-            assert_eq!(tool.effect, manual_tool_effect_from_name(&tool.name));
+            assert!(is_audited_manual_read_tool_name(&tool.name));
+            assert_eq!(tool.effect, ToolEffect::Read);
             assert_eq!(tool.method, Method::GET);
             assert_eq!(tool.input_schema, expected_schema);
             assert!(!tool.name.is_empty());
