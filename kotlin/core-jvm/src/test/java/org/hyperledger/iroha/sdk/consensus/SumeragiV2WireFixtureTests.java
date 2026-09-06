@@ -1,14 +1,15 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package org.hyperledger.iroha.android.consensus;
+package org.hyperledger.iroha.sdk.consensus;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,8 +19,8 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import org.hyperledger.iroha.android.model.NetworkId;
-import org.junit.Test;
+import org.hyperledger.iroha.sdk.core.model.NetworkId;
+import org.junit.jupiter.api.Test;
 
 /** Cross-SDK checks pinned to payloads emitted by the Rust production types. */
 public final class SumeragiV2WireFixtureTests {
@@ -42,7 +43,7 @@ public final class SumeragiV2WireFixtureTests {
               "commit_certificate_response"));
 
   @Test
-  public void executionCommitmentsCarryExactMandatoryLaneFinalityAndMergeCarrierOptions() {
+  public void executionCommitmentsCarryExactMandatoryLaneFinalityAndMergeCarrierOptions() throws Exception {
     SumeragiV2Wire.Hash32 parent = testHash(0x21);
     SumeragiV2Wire.Hash32 post = testHash(0x23);
     SumeragiV2Wire.Hash32 ordinary = testHash(0x25);
@@ -70,16 +71,16 @@ public final class SumeragiV2WireFixtureTests {
             executed);
 
     SumeragiV2Wire.ExecutionCommitment decodedBase =
-        SumeragiV2Wire.ExecutionCommitment.decode(base.encode());
+        decodeExecutionCommitment(base.encode());
     assertEquals(null, decodedBase.laneFinalityManifest);
     assertEquals(null, decodedBase.mergeCarrier);
     assertEquals(
-        123L, SumeragiV2Wire.ExecutionCommitment.decode(base.encode()).executedBlockWireLen);
+        123L, decodeExecutionCommitment(base.encode()).executedBlockWireLen);
     assertEquals(
-        carrier, SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).mergeCarrier);
+        carrier, decodeExecutionCommitment(carried.encode()).mergeCarrier);
     assertEquals(
         laneFinality,
-        SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).laneFinalityManifest);
+        decodeExecutionCommitment(carried.encode()).laneFinalityManifest);
     for (long count :
         new long[] {0, SumeragiV2Wire.MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK + 1}) {
       assertThrows(
@@ -92,10 +93,10 @@ public final class SumeragiV2WireFixtureTests {
   }
 
   @Test
-  public void unsafeProposalIgnoreReasonDecodesWireDiscriminantEleven() {
+  public void unsafeProposalIgnoreReasonDecodesWireDiscriminantEleven() throws Exception {
     assertEquals(
         SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL,
-        SumeragiV2Wire.IgnoreReason.decode(new byte[] {11, 0, 0, 0}));
+        decodeIgnoreReason(new byte[] {11, 0, 0, 0}));
   }
 
   private static SumeragiV2Wire.Hash32 testHash(int seed) {
@@ -106,25 +107,25 @@ public final class SumeragiV2WireFixtureTests {
   }
 
   @Test
-  public void successorActivationBlockerUsesRevisionFourWireDiscriminant() {
+  public void successorActivationBlockerUsesRevisionFourWireDiscriminant() throws Exception {
     assertEquals(
         SumeragiV2Wire.LivenessBlocker.SUCCESSOR_ACTIVATION_PENDING,
-        SumeragiV2Wire.LivenessBlocker.decode(new byte[] {7, 0, 0, 0}));
+        decodeLivenessBlocker(new byte[] {7, 0, 0, 0}));
     assertEquals(
         SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING,
-        SumeragiV2Wire.LivenessBlocker.decode(new byte[] {8, 0, 0, 0}));
+        decodeLivenessBlocker(new byte[] {8, 0, 0, 0}));
   }
 
   @Test
-  public void dataAvailabilityRejectsRetiredEncodingTagAndZeroShards() {
+  public void dataAvailabilityRejectsRetiredEncodingTagAndZeroShards() throws Exception {
     IllegalArgumentException retiredTag =
         assertThrows(
             IllegalArgumentException.class,
-            () -> SumeragiV2Wire.PayloadEncoding.decode(new byte[] {1, 0, 0, 0}));
+            () -> decodePayloadEncoding(new byte[] {1, 0, 0, 0}));
     assertEquals("Unknown payload encoding: 1", retiredTag.getMessage());
     assertEquals(
         SumeragiV2Wire.PayloadEncoding.REED_SOLOMON_16,
-        SumeragiV2Wire.PayloadEncoding.decode(new byte[] {0, 0, 0, 0}));
+        decodePayloadEncoding(new byte[] {0, 0, 0, 0}));
 
     for (int[] shards : new int[][] {{0, 1}, {1, 0}}) {
       IllegalArgumentException zeroShard =
@@ -153,7 +154,9 @@ public final class SumeragiV2WireFixtureTests {
       byte[] encoded = hexBytes(row.hex);
       SumeragiV2Wire.ConsensusMessageV2 decoded =
           SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(encoded);
-      assertArrayEquals(row.name, encoded, decoded.encode());
+      assertArrayEquals(encoded,
+          decoded.encode(),
+          row.name);
     }
     assertEquals(EXPECTED_MESSAGE_NAMES, names);
   }
@@ -187,12 +190,11 @@ public final class SumeragiV2WireFixtureTests {
         Arrays.asList(
             "execution_commitment_merge_carrier_wrong_version",
             "execution_commitment_missing_merge_carrier_field")) {
-      assertThrows(
-          name,
-          IllegalArgumentException.class,
+      assertThrows(IllegalArgumentException.class,
           () ->
               SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
-                  hexBytes(fixtureRow("negative_message", name).hex)));
+                  hexBytes(fixtureRow("negative_message", name).hex)),
+          name);
     }
   }
 
@@ -582,6 +584,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
@@ -596,6 +600,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
@@ -610,6 +616,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
@@ -624,6 +632,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
 
@@ -641,13 +651,15 @@ public final class SumeragiV2WireFixtureTests {
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
+            null,
+            null,
             base.executedBlockWireLen,
             base.executedBlockWireHash);
     assertEquals(largeCount, valid.kagemushaTopUpCount);
     assertEquals(kagemushaTopUpRoot, valid.kagemushaTopUpRoot);
     assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash);
     assertArrayEquals(
-        valid.encode(), SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode());
+        valid.encode(), decodeExecutionCommitment(valid.encode()).encode());
   }
 
   @Test
@@ -677,6 +689,8 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 base.nativeAmxApplicationManifestRoot,
                 0,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
@@ -691,6 +705,8 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 0,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
@@ -705,6 +721,8 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 base.nativeAmxApplicationManifestRoot,
                 1,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
@@ -719,6 +737,8 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 SumeragiV2Wire.MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                null,
+                null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
@@ -733,6 +753,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                null,
                 0,
                 base.executedBlockWireHash));
   }
@@ -844,14 +866,19 @@ public final class SumeragiV2WireFixtureTests {
           assertThrows(
               IllegalArgumentException.class,
               () -> SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(retiredMessage));
-      assertEquals("Unsupported Sumeragi protocol version " + version, messageError.getMessage());
+      assertEquals("Unsupported Sumeragi protocol version " + version + "; expected " + SumeragiV2Wire.PROTOCOL_VERSION, messageError.getMessage());
 
       IllegalArgumentException requestError =
           assertThrows(
               IllegalArgumentException.class,
               () ->
                   new SumeragiV2Wire.CommitCertificateRequest(
-                      version, null, null, 0, null, null));
+                      version,
+                      NetworkId.fromBytes(hashBytes),
+                      new SumeragiV2Wire.HeightContextId(new SumeragiV2Wire.Hash32(hashBytes)),
+                      1,
+                      new SumeragiV2Wire.PeerIdPayload(new byte[] {1}),
+                      new byte[] {1}));
       assertEquals(
           "Unsupported commit-certificate request protocol version " + version,
           requestError.getMessage());
@@ -873,15 +900,13 @@ public final class SumeragiV2WireFixtureTests {
   public void malformedAndSemanticallyNoncanonicalFixturesFailClosed() throws Exception {
     for (FixtureRow row : fixtureRows()) {
       if (row.kind.equals("negative_message")) {
-        assertThrows(
-            row.name,
-            IllegalArgumentException.class,
-            () -> SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(hexBytes(row.hex)));
+        assertThrows(IllegalArgumentException.class,
+          () -> SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(hexBytes(row.hex)),
+          row.name);
       } else if (row.kind.equals("negative_status")) {
-        assertThrows(
-            row.name,
-            IllegalArgumentException.class,
-            () -> SumeragiV2Wire.SumeragiV2Status.decodeCanonical(hexBytes(row.hex)));
+        assertThrows(IllegalArgumentException.class,
+          () -> SumeragiV2Wire.SumeragiV2Status.decodeCanonical(hexBytes(row.hex)),
+          row.name);
       }
     }
   }
@@ -898,11 +923,95 @@ public final class SumeragiV2WireFixtureTests {
       SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage responsePayload =
           (SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage)
               SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(hexBytes(row.hex)).payload;
-      assertThrows(
-          row.name,
-          IllegalArgumentException.class,
-          () -> responsePayload.value.validateAgainst(requestPayload.value));
+      assertThrows(IllegalArgumentException.class,
+          () -> responsePayload.value.validateAgainst(requestPayload.value),
+          row.name);
     }
+  }
+
+  /** Decode a nested execution value through the supported canonical envelope boundary. */
+  private static SumeragiV2Wire.ExecutionCommitment decodeExecutionCommitment(byte[] value)
+      throws IOException {
+    byte[] message = replaceMessageBodyField(
+        hexBytes(fixtureRow("message", "vote").hex), value, 4);
+    return ((SumeragiV2Wire.ConsensusPayload.VoteMessage)
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(message).payload).value.executionCommitment;
+  }
+
+  /** Exercise the enum decoder through a canonical status ignore-count row. */
+  private static SumeragiV2Wire.IgnoreReason decodeIgnoreReason(byte[] value) throws IOException {
+    byte[] row = replaceCompactField(
+        new SumeragiV2Wire.IgnoreCount(SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL, 1).encode(),
+        value, 0);
+    byte[] singleton = concatenate(new byte[] {1, 0, 0, 0, 0, 0, 0, 0}, compact(row));
+    byte[] status = replaceCompactField(
+        hexBytes(fixtureRow("status", "compact").hex), singleton, 19, 10);
+    return SumeragiV2Wire.SumeragiV2Status.decodeCanonical(status).liveness.ignoreCounts.get(0).reason;
+  }
+
+  /** Exercise the optional blocker decoder through the canonical status boundary. */
+  private static SumeragiV2Wire.LivenessBlocker decodeLivenessBlocker(byte[] value)
+      throws IOException {
+    byte[] status = replaceCompactField(
+        hexBytes(fixtureRow("status", "compact").hex),
+        concatenate(new byte[] {1}, compact(value)), 19, 9);
+    return SumeragiV2Wire.SumeragiV2Status.decodeCanonical(status).liveness.blocker;
+  }
+
+  /** Exercise the DA encoding decoder inside the Rust-owned proposal manifest. */
+  private static SumeragiV2Wire.PayloadEncoding decodePayloadEncoding(byte[] value)
+      throws IOException {
+    byte[] message = replaceMessageBodyField(
+        hexBytes(fixtureRow("message", "proposal").hex), value, 3, 3, 0);
+    return ((SumeragiV2Wire.ConsensusPayload.ProposalMessage)
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(message).payload).value.manifest.layout.encoding;
+  }
+
+  private static byte[] replaceMessageBodyField(byte[] message, byte[] value, int... fieldPath) {
+    byte[] payload = compactFieldBytes(message, 1);
+    byte[] enumBody = compactFieldBytes(Arrays.copyOfRange(payload, 4, payload.length), 0);
+    byte[] replaced = replaceCompactField(enumBody, value, fieldPath);
+    return replaceCompactField(message,
+        concatenate(Arrays.copyOf(payload, 4), compact(replaced)), 1);
+  }
+
+  private static byte[] replaceCompactField(byte[] bytes, byte[] value, int... fieldPath) {
+    if (fieldPath.length == 0) throw new AssertionError("empty compact-struct field path");
+    int fieldIndex = fieldPath[0];
+    CompactStructField field = compactStructField(bytes, fieldIndex);
+    byte[] replacement = fieldPath.length == 1 ? value : replaceCompactField(
+        compactFieldBytes(bytes, fieldIndex), value,
+        Arrays.copyOfRange(fieldPath, 1, fieldPath.length));
+    int start = 0;
+    if (fieldIndex > 0) {
+      CompactStructField previous = compactStructField(bytes, fieldIndex - 1);
+      start = previous.payloadOffset + previous.payloadLength;
+    }
+    return concatenate(Arrays.copyOf(bytes, start), compact(replacement),
+        Arrays.copyOfRange(bytes, field.payloadOffset + field.payloadLength, bytes.length));
+  }
+
+  private static byte[] compactFieldBytes(byte[] bytes, int index) {
+    CompactStructField field = compactStructField(bytes, index);
+    return Arrays.copyOfRange(bytes, field.payloadOffset, field.payloadOffset + field.payloadLength);
+  }
+
+  private static byte[] compact(byte[] bytes) {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    int remaining = bytes.length;
+    while (remaining >= 0x80) {
+      output.write((remaining & 0x7f) | 0x80);
+      remaining >>>= 7;
+    }
+    output.write(remaining);
+    output.write(bytes, 0, bytes.length);
+    return output.toByteArray();
+  }
+
+  private static byte[] concatenate(byte[]... parts) {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    for (byte[] part : parts) output.write(part, 0, part.length);
+    return output.toByteArray();
   }
 
   private static List<FixtureRow> fixtureRows() throws IOException {

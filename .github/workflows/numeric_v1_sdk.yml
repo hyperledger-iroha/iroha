@@ -29,6 +29,18 @@ jobs:
           shared-key: numeric-v1-sdk-rust
       - name: Verify Rust-authored fixture freshness and outcomes
         run: cargo test --locked -p ivm --test ivm_group_06 numeric_v1_sdk_fixture
+      - name: Verify the shared argument record through the Rust runtime
+        run: >-
+          cargo test --locked -p ivm --test ivm_group_05
+          shared_sdk_fixture_is_generated_and_validated_by_rust
+      - name: Verify exact JSON getters through the production Core host
+        run: >-
+          cargo test --locked -p ivm --lib
+          exact_json_getters_accept_only_canonical_strings_through_core_host
+      - name: Verify exact JSON getters through the production ledger host
+        run: >-
+          cargo test --locked -p iroha_core --lib
+          exact_json_getters_accept_only_canonical_strings_through_ledger_host
 
   javascript:
     runs-on: ubuntu-latest
@@ -48,6 +60,11 @@ jobs:
         run: npm run build:dist
       - name: Verify pure source numeric paths
         run: node --test test/numericV1.test.js
+      - name: Verify the shared contract boundary and complete canonical fixture corpus
+        run: >-
+          node --test
+          test/kotodamaArgumentRecordFixture.test.js
+          test/transactionFixturesParity.test.js
       - name: Verify pure browser numeric paths
         run: >-
           node --test
@@ -146,6 +163,8 @@ jobs:
           --tests org.hyperledger.iroha.sdk.numeric.NumericV1Test
           --tests org.hyperledger.iroha.sdk.core.model.instructions.InstructionQuantityTest
           --tests org.hyperledger.iroha.sdk.nexus.UaidJsonParserQuantityTest
+          --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.contractCallBoundaryConsumesSharedRustArgumentRecordFixture
+          --tests org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest
           --console=plain
 
   java:
@@ -164,7 +183,7 @@ jobs:
       - run: chmod +x ./gradlew
       - name: Verify Java Numeric V1, quantity builders, and manifest policies
         env:
-          ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.client.ContractManifestTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.nexus.UaidJsonParserTests
+          ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.client.ContractManifestTests,org.hyperledger.iroha.android.client.HttpClientTransportTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.nexus.UaidJsonParserTests,org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests
         run: >-
           ./gradlew :core:test
           --tests org.hyperledger.iroha.android.GradleHarnessTests
@@ -173,19 +192,45 @@ jobs:
           --console=plain
 
   swift:
+    # This workflow does not own an authenticated ABI-23 Apple artifact handoff.
+    # The release orchestrator must materialize NoritoBridge.xcframework outside
+    # the checkout, set MOBILE_SDK_APPLE_ARTIFACT_DIR to that canonical directory,
+    # and supply the source/tool identity required by check_mobile_sdk_artifacts.sh.
+    # Missing input fails closed; never use or rebuild dist/NoritoBridge.xcframework.
     runs-on: macos-14
     timeout-minutes: 30
+    env:
+      MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT: "1"
     defaults:
       run:
         working-directory: IrohaSwift
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Authenticate the externally provisioned ABI-23 Swift bridge
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -z "${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}" ]]; then
+            echo "an authenticated external ABI-23 Apple artifact handoff is required" >&2
+            exit 1
+          fi
+          if [[ "$MOBILE_SDK_APPLE_ARTIFACT_DIR" != /* ]]; then
+            echo "the ABI-23 Apple artifact directory must be absolute" >&2
+            exit 1
+          fi
+          case "$MOBILE_SDK_APPLE_ARTIFACT_DIR" in
+            "$GITHUB_WORKSPACE"|"$GITHUB_WORKSPACE"/*)
+              echo "the ABI-23 Apple artifact directory must remain outside the checkout" >&2
+              exit 1
+              ;;
+          esac
+          scripts/check_mobile_sdk_artifacts.sh --apple-only
       - name: Verify Swift Numeric V1, quantity builders, and manifest policies
         run: |
           swift test --filter NumericV1Tests
           swift test --filter TransactionEncoderValidationTests
           swift test --filter ToriiQuantityReadbackTests
           swift test --filter testContractManifestDynamicAccessHints
+          swift test --filter ToriiClientTests/testContractCallBoundaryConsumesSharedRustArgumentRecordFixture
 
   python:
     runs-on: ubuntu-latest
@@ -215,6 +260,7 @@ jobs:
           tests/dependency_lock_test.py
           tests/numeric_v1_test.py
           tests/numeric_v1_quantity_test.py
+          ../iroha_torii_client/tests/test_client.py::test_call_contract_preserves_shared_rust_argument_record_fixture
 
   dotnet:
     runs-on: ubuntu-latest
@@ -235,3 +281,4 @@ jobs:
           --filter-class Hyperledger.Iroha.Sdk.Tests.NumericV1Tests
           --filter-class Hyperledger.Iroha.Sdk.Tests.AssetQuantityInstructionTests
           --filter-class Hyperledger.Iroha.Sdk.Tests.ContractManifestTests
+          --filter-class Hyperledger.Iroha.Sdk.Tests.NoritoRpcFixtureParityTests

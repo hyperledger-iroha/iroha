@@ -114,38 +114,11 @@ and buffered responses at 8 MiB.
 
 ## Authoritative Sumeragi status and operational diagnostics
 
-`HttpClientTransport.getSumeragiStatus()` reads only
-`GET /v1/sumeragi/status` into the closed protocol-v4
-`SumeragiStatusModels.SumeragiV2Status` model.
-`getSumeragiDiagnostics()` separately reads
-`GET /v1/sumeragi/diagnostics` into
-`SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus`; diagnostics are durable
-operational evidence and must not be treated as consensus authority.
-
-```java
-final SumeragiStatusModels.SumeragiV2Status status =
-    transport.getSumeragiStatus().join();
-assert status.protocolVersion() == 4;
-System.out.printf(
-    "height=%s view=%s leader=%s%n",
-    status.height(), status.view(), status.leader());
-
-final SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus diagnostics =
-    transport.getSumeragiDiagnostics().join();
-for (SumeragiDiagnosticsModels.NativeAmxParticipantApplication row
-    : diagnostics.nativeAmxParticipantApplications()) {
-  System.out.printf(
-      "lane=%d height=%s state=%s%n",
-      row.laneId(), row.participantHeight(), row.state());
-}
-```
-
-Every JSON `u64` remains lossless as `BigInteger`. Status responses are capped
-at 1 MiB and diagnostics at 16 MiB; both routes require the exact JSON content
-type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
-fields and tags, and current Native AMX V2 evidence. The parsers reject
-status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
-participant rows, and inconsistent carrier identities.
+Kotlin `core-jvm` owns Sumeragi status, diagnostics, wire decoding and Native AMX
+validation for Kotlin and Java consumers. Use the `org.hyperledger.iroha.sdk`
+models and transport described in the [Kotlin SDK README](../../kotlin/README.md#authoritative-sumeragi-status-and-operational-diagnostics).
+Java consumer tests live in `kotlin/core-jvm/src/test/java`; the separate Java
+release leg executes those tests against the same canonical production SDK.
 
 ## KAGEMUSHA V1 (Java)
 

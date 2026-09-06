@@ -260,6 +260,8 @@ const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze(
   "signedTransactionHash",
 ]);
 const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
+  "wire_magic",
+  "catalog_commitment",
   "protocol_id",
   "proof_system_id",
   "engine_id",
@@ -272,6 +274,11 @@ const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "statement",
   "proof",
 ]);
+const PRIVACY_EXACT12_WIRE_MAGIC_V1 = /* @__PURE__ */ Buffer.from("4952485a4b31a55a", "hex");
+const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(
+  "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+  "hex",
+);
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
@@ -2175,6 +2182,12 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1,
     `${context}.envelopeNorito.payload`,
   );
+  if (!envelopeFields.wire_magic.equals(PRIVACY_EXACT12_WIRE_MAGIC_V1)) {
+    throw new TypeError(`${context}.envelopeNorito carries an invalid final V1 wire marker`);
+  }
+  if (!envelopeFields.catalog_commitment.equals(PRIVACY_EXACT12_CATALOG_COMMITMENT_V1)) {
+    throw new TypeError(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
+  }
   if (
     decodeU32Value(
       envelopeFields.protocol_id,
@@ -7545,13 +7558,15 @@ export function encodeAccountIdNoritoValue(value, context = "AccountId") {
   );
 }
 
+/** @internal Exact compact-length AccountId value decoding for typed policy codecs. */
+export function decodeAccountIdNoritoValue(payload, context = "AccountId") {
+  const bytes = Buffer.from(normalizeFlexibleBytes(payload, context));
+  return withNoritoCompactLengths(() => decodeAccountIdValue(bytes, context));
+}
+
 /** @internal Decode and re-encode one exact compact-length AccountId value. */
 export function _canonicalAccountIdNoritoValue(payload, context = "AccountId") {
-  return withNoritoCompactLengths(() =>
-    Uint8Array.from(
-      encodeAccountIdValue(decodeAccountIdValue(Buffer.from(payload), context), context),
-    ),
-  );
+  return encodeAccountIdNoritoValue(decodeAccountIdNoritoValue(payload, context), context);
 }
 
 function decodeAccountIdValue(payload, context) {

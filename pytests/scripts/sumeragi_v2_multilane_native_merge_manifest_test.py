@@ -24,6 +24,50 @@ def load_support():
     return module
 
 
+@pytest.mark.parametrize(
+    ("symbol", "propagate"),
+    (
+        (
+            "build_canonical_executed_block_response",
+            ".map_err(CanonicalRecoveryReadError::storage)?",
+        ),
+        (
+            "plan_lane_application_evidence_repair",
+            ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?",
+        ),
+    ),
+)
+def test_native_canonical_recovery_rejects_storage_errors_treated_as_absence(
+    symbol: str, propagate: str
+) -> None:
+    """Malformed occupied evidence must fail before body-recovery planning."""
+    support = load_support()
+    module = support.load_checker()
+    relative = (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/"
+        "canonical_executed_block_application_repair.rs"
+    )
+    errors: list[str] = []
+    item = module._rust_binding_item(
+        support.ROOT_DIR, relative, "fn", symbol, "strict canonical read", errors
+    )
+    assert errors == [] and item is not None
+    key = (relative, "fn", symbol)
+    module.native_merge_manifest.validate_native_merge_manifest_relations(
+        support.ROOT_DIR, {key: item}, errors
+    )
+    assert errors == []
+    read = item.index(".read_block_body(height)")
+    propagation = item.index(propagate, read)
+    weakened = item[:propagation] + item[propagation:].replace(
+        propagate, ".ok().flatten()", 1
+    )
+    module.native_merge_manifest.validate_native_merge_manifest_relations(
+        support.ROOT_DIR, {key: weakened}, errors
+    )
+    assert any(symbol in error and "exact reviewed Native relation" in error for error in errors)
+
+
 def test_native_prepublication_contract_rejects_removed_prepublication_call(
     tmp_path: Path,
 ) -> None:

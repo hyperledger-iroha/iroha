@@ -134,6 +134,9 @@ public struct SccpSemanticProofProfileV1: Equatable, Sendable {
 public struct SccpSoraFinalityAnchorV1: Equatable, Sendable {
     public let protocolVersion: UInt16
     public let chainIdHash: Data
+    public let epoch: UInt64
+    public let epochEndHeight: UInt64
+    public let rosterCommitment: Data
     public let checkpointHeight: UInt64
     public let checkpointBlockHash: Data
     public let checkpointContextId: Data
@@ -946,7 +949,7 @@ enum SccpExactParser {
         case .evmGroth16Bn254:
             backendMatchesTarget = target.domainId == 1 || target.domainId == 2
         case .tronGroth16Bn254:
-            backendMatchesTarget = target.domainId == 3
+            backendMatchesTarget = target.domainId == 5
         case .tonGroth16Bls12381:
             backendMatchesTarget = target.domainId == 4
         }
@@ -961,7 +964,7 @@ enum SccpExactParser {
         guard try SccpStrictJSON.uint64(inputs, "version", minimum: 1) == 1 else {
             throw SccpV1Error.invalid("SCCP public-input version must be exactly 1")
         }
-        let targetDomain = try SccpStrictJSON.uint32(inputs, "target_domain", minimum: 1, maximum: 4)
+        let targetDomain = try SccpStrictJSON.uint32(inputs, "target_domain", minimum: 1, maximum: 5)
         guard targetDomain == target.domainId else { throw SccpV1Error.invalid("SCCP target profile/domain mismatch") }
         let messageId = try prefixedHash(inputs, "message_id")
         let payloadHash = try prefixedHash(inputs, "payload_hash")
@@ -1099,7 +1102,7 @@ enum SccpExactParser {
             else { throw SccpV1Error.invalid("recent SCCP message contains an unsupported profile") }
             let lane = try SccpLaneIdV1(source: source, target: target)
             guard lane.isOutbound, source == .soraTaira else { throw SccpV1Error.invalid("recent SCCP lane must be Taira-to-external") }
-            let domain = try SccpStrictJSON.uint32(item, "target_domain", minimum: 1, maximum: 4)
+            let domain = try SccpStrictJSON.uint32(item, "target_domain", minimum: 1, maximum: 5)
             guard domain == target.domainId else { throw SccpV1Error.invalid("recent SCCP target profile/domain mismatch") }
             let id = try unprefixedHash(item, "message_id_hex")
             guard ids.insert(id).inserted else { throw SccpV1Error.invalid("recent SCCP message ids must be unique") }
@@ -1680,7 +1683,8 @@ enum SccpExactParser {
 
     private static func finalityAnchor(_ item: [String: Any], label: String) throws -> SccpSoraFinalityAnchorV1 {
         try SccpStrictJSON.exactFields(item, [
-            "version", "source_network", "protocol_version", "chain_id_hash", "checkpoint_height",
+            "version", "source_network", "protocol_version", "chain_id_hash", "epoch",
+            "epoch_end_height", "roster_commitment", "checkpoint_height",
             "checkpoint_block_hash", "checkpoint_context_id", "checkpoint_finality_artifact_hash",
         ], label: label)
         guard try SccpStrictJSON.uint64(item, "version", minimum: 1) == 1,
@@ -1691,16 +1695,25 @@ enum SccpExactParser {
         )
         let chainHash = try upperFixed(item, "chain_id_hash", bytes: 32)
         guard chainHash == irohaKeccak256(tairaChainId) else { throw SccpV1Error.invalid("\(label).chain_id_hash is not Taira") }
+        let epoch = try SccpStrictJSON.uint64(item, "epoch", minimum: 1)
+        let epochEndHeight = try SccpStrictJSON.uint64(item, "epoch_end_height")
+        let rosterCommitment = try upperFixed(item, "roster_commitment", bytes: 32)
         let checkpointHeight = try SccpStrictJSON.uint64(item, "checkpoint_height", minimum: 1)
+        guard checkpointHeight <= epochEndHeight else {
+            throw SccpV1Error.invalid("\(label).checkpoint_height exceeds its epoch end height")
+        }
         let checkpointHash = try upperFixed(item, "checkpoint_block_hash", bytes: 32)
         let contextId = try upperFixed(item, "checkpoint_context_id", bytes: 32)
         let artifactHash = try upperFixed(item, "checkpoint_finality_artifact_hash", bytes: 32)
-        guard Set([chainHash, checkpointHash, contextId, artifactHash]).count == 4 else {
+        guard Set([chainHash, rosterCommitment, checkpointHash, contextId, artifactHash]).count == 5 else {
             throw SccpV1Error.invalid("\(label) reuses a finality hash role")
         }
         var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
         appendUInt16LE(UInt16(protocolVersion), to: &canonical)
         canonical.append(chainHash)
+        appendUInt64LE(epoch, to: &canonical)
+        appendUInt64LE(epochEndHeight, to: &canonical)
+        canonical.append(rosterCommitment)
         appendUInt64LE(checkpointHeight, to: &canonical)
         canonical.append(checkpointHash)
         canonical.append(contextId)
@@ -1709,6 +1722,9 @@ enum SccpExactParser {
         return SccpSoraFinalityAnchorV1(
             protocolVersion: UInt16(protocolVersion),
             chainIdHash: chainHash,
+            epoch: epoch,
+            epochEndHeight: epochEndHeight,
+            rosterCommitment: rosterCommitment,
             checkpointHeight: checkpointHeight,
             checkpointBlockHash: checkpointHash,
             checkpointContextId: contextId,
@@ -1995,8 +2011,8 @@ enum SccpExactParser {
             "recipient", "route_id_codec", "route_id",
         ], label: "SCCP transfer payload")
         guard try SccpStrictJSON.uint64(item, "version", minimum: 1) == 1,
-              try SccpStrictJSON.uint32(item, "source_domain", minimum: 0, maximum: 4) == lane.source.domainId,
-              try SccpStrictJSON.uint32(item, "dest_domain", minimum: 0, maximum: 4) == lane.target.domainId,
+              try SccpStrictJSON.uint32(item, "source_domain", minimum: 0, maximum: 5) == lane.source.domainId,
+              try SccpStrictJSON.uint32(item, "dest_domain", minimum: 0, maximum: 5) == lane.target.domainId,
               try SccpStrictJSON.uint32(item, "route_revision", minimum: 1, maximum: UInt32.max) > 0
         else { throw SccpV1Error.invalid("SCCP transfer payload does not match its exact lane") }
         _ = try decimalUInt64(item, "nonce", minimum: 0)
@@ -2536,7 +2552,7 @@ enum SccpExactParser {
         try SccpStrictJSON.exactFields(transfer, fields, label: "\(label).Transfer")
         guard try SccpStrictJSON.uint64(transfer, "version", minimum: 1) == 1,
               try SccpStrictJSON.uint32(transfer, "source_domain", minimum: 0, maximum: 0) == 0,
-              try SccpStrictJSON.uint32(transfer, "dest_domain", minimum: 1, maximum: 4) == expectedDestinationDomain,
+              try SccpStrictJSON.uint32(transfer, "dest_domain", minimum: 1, maximum: 5) == expectedDestinationDomain,
               try SccpStrictJSON.uint32(transfer, "asset_home_domain", minimum: 0, maximum: 0) == 0
         else { throw SccpV1Error.invalid("\(label).Transfer domains or version do not match the recent message") }
         guard let nonceNumber = transfer["nonce"] as? NSNumber,
@@ -2616,17 +2632,17 @@ enum SccpExactParser {
             else { throw SccpV1Error.invalid("\(label).Transfer.\(field) is not a canonical TON account") }
             return
         }
-        let tag = destinationDomain == 3 ? "TronAddress21" : "EvmAddress20"
+        let tag = destinationDomain == 5 ? "TronAddress21" : "EvmAddress20"
         try SccpStrictJSON.exactFields(tagged, [tag], label: "\(label).Transfer.\(field)")
         let content = try object(tagged, tag)
         try SccpStrictJSON.exactFields(content, ["bytes"], label: "\(label).Transfer.\(field).\(tag)")
         let bytes = try SccpStrictJSON.text(content, "bytes")
         let hex = bytes.dropFirst(2)
-        let expectedHexCount = destinationDomain == 3 ? 42 : 40
-        guard bytes.hasPrefix(destinationDomain == 3 ? "0x41" : "0x"),
+        let expectedHexCount = destinationDomain == 5 ? 42 : 40
+        guard bytes.hasPrefix(destinationDomain == 5 ? "0x41" : "0x"),
               hex.count == expectedHexCount,
               hex.allSatisfy({ $0 >= "0" && $0 <= "9" || $0 >= "a" && $0 <= "f" }),
-              (destinationDomain == 3 ? hex.dropFirst(2) : hex).contains(where: { $0 != "0" })
+              (destinationDomain == 5 ? hex.dropFirst(2) : hex).contains(where: { $0 != "0" })
         else { throw SccpV1Error.invalid("\(label).Transfer.\(field) does not match its destination address codec") }
     }
 

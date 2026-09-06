@@ -323,18 +323,9 @@ fn two_inv() -> Fq {
 /// `U^4 - 7`. Seven generates the multiplicative group of the Goldilocks field; because the field
 /// order is one modulo four, the finite-field binomial irreducibility criterion makes `U^4 - 7`
 /// irreducible. Every verifier entry point rejects coefficients outside the canonical base-field
-/// range.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::NoritoSerialize,
-    norito::NoritoDeserialize,
-)]
+/// range. The Norito payload is exactly four little-endian coefficients (32 bytes), using the
+/// same canonical field codec as FASTPQ without a struct frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct GoldilocksFp4V1 {
     c0: u64,
     c1: u64,
@@ -342,6 +333,8 @@ pub struct GoldilocksFp4V1 {
     c3: u64,
 }
 impl GoldilocksFp4V1 {
+    /// Exact byte length of the canonical polynomial-basis encoding.
+    pub const BYTES: usize = fastpq_prover::GoldilocksFp4V1::BYTES;
     /// Construct an extension element from four canonical Goldilocks coefficients.
     #[must_use]
     pub fn new(coefficients: [u64; 4]) -> Option<Self> {
@@ -364,6 +357,45 @@ impl GoldilocksFp4V1 {
     #[must_use]
     pub const fn coefficients(self) -> [u64; 4] {
         [self.c0, self.c1, self.c2, self.c3]
+    }
+}
+impl norito::NoritoSerialize for GoldilocksFp4V1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        let value = fastpq_prover::GoldilocksFp4V1::new(self.coefficients()).ok_or_else(|| {
+            norito::Error::Message("non-canonical GoldilocksFp4V1 coefficient".into())
+        })?;
+        norito::NoritoSerialize::serialize(&value, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+}
+impl<'de> norito::NoritoDeserialize<'de> for GoldilocksFp4V1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical GoldilocksFp4V1 decode")
+    }
+
+    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
+        let value = <fastpq_prover::GoldilocksFp4V1 as norito::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        let [c0, c1, c2, c3] = value.coefficients();
+        Ok(Self { c0, c1, c2, c3 })
+    }
+}
+impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksFp4V1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::Error> {
+        let (value, consumed) =
+            <fastpq_prover::GoldilocksFp4V1 as norito::core::DecodeFromSlice>::decode_from_slice(
+                bytes,
+            )?;
+        let [c0, c1, c2, c3] = value.coefficients();
+        Ok((Self { c0, c1, c2, c3 }, consumed))
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,6 +474,12 @@ fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> Option<Fq> {
     if layer_domain < 2 || !layer_domain.is_power_of_two() || pair_index >= layer_domain / 2 {
         return None;
     }
+    let field_domain = u128::try_from(layer_domain).ok()?;
+    // An exact-order subgroup must exist before deriving its generator. Integer division alone
+    // would silently accept domains beyond the Goldilocks field's 32-bit two-adicity.
+    if !(MOD_P - 1).is_multiple_of(field_domain) {
+        return None;
+    }
     // Every FRI layer is stored in bit-reversed evaluation order. Adjacent positions `2j` and
     // `2j + 1` therefore hold `(f(x), f(-x))`, where the subgroup exponent of `x` is `j` with the
     // pair-index bits reversed. Folding preserves the same ordering in the next layer.
@@ -451,8 +489,7 @@ fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> Option<Fq> {
     } else {
         pair_index.reverse_bits() >> (usize::BITS - pair_index_bits)
     };
-    let layer_domain = u128::try_from(layer_domain).ok()?;
-    let exponent = (MOD_P - 1) / layer_domain;
+    let exponent = (MOD_P - 1) / field_domain;
     let root = Fq::new(GOLDILOCKS_GENERATOR).pow(exponent);
     Some(root.pow(pair_exponent as u128))
 }
@@ -777,26 +814,15 @@ fn log2_usize(value: usize) -> Option<usize> {
     Some(usize::BITS as usize - 1 - value.leading_zeros() as usize)
 }
 fn layers_required(params: &StarkFriParamsV1) -> Option<usize> {
-    if params.fold_arity < 2 {
-        return None;
-    }
-    let mut domain = 1usize << params.n_log2;
-    let fold = params.fold_arity as usize;
-    if !fold.is_power_of_two() {
-        return None;
-    }
-    let mut layers = 0usize;
-    while domain > 1 {
-        if domain % fold != 0 {
-            return None;
-        }
-        domain /= fold;
-        layers += 1;
-        if layers > MAX_FRI_LAYERS {
-            return None;
-        }
-    }
-    Some(layers)
+    // Opening verification calls this before validating the remaining parameters. Compute the
+    // sole V1 binary geometry directly, without shifting by an untrusted wire exponent or
+    // accepting arities that FoldDecommitV1 cannot represent.
+    let layers = usize::from(params.n_log2);
+    (params.fold_arity == 2
+        && layers != 0
+        && params.n_log2 <= MAX_DOMAIN_LOG2
+        && layers <= MAX_FRI_LAYERS)
+        .then_some(layers)
 }
 fn validate_params(
     params: &StarkFriParamsV1,
@@ -999,7 +1025,7 @@ pub struct StarkFriParamsV1 {
     pub n_log2: u8,
     /// Log2 of the blowup factor applied before FRI folding (e.g., 3 for 8x)
     pub blowup_log2: u8,
-    /// Arity of each FRI fold (must be a power of two; current backend supports 2)
+    /// Arity of each FRI fold; the sole V1 wire representation requires exactly 2.
     pub fold_arity: u8,
     /// Number of queries expected in the proof (must match `proof.queries.len()`)
     pub queries: u16,

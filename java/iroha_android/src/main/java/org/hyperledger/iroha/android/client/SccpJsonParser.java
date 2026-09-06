@@ -160,6 +160,9 @@ public final class SccpJsonParser {
           "source_network",
           "protocol_version",
           "chain_id_hash",
+          "epoch",
+          "epoch_end_height",
+          "roster_commitment",
           "checkpoint_height",
           "checkpoint_block_hash",
           "checkpoint_context_id",
@@ -928,7 +931,7 @@ public final class SccpJsonParser {
         "evm_groth16_bn254_v1".equals(backend)
             ? target.domainId() == 1 || target.domainId() == 2
             : "tron_groth16_bn254_v1".equals(backend)
-                ? target.domainId() == 3
+                ? target.domainId() == 5
                 : target.domainId() == 4;
     if (!backendMatchesTarget) {
       throw new IllegalArgumentException("SCCP proof backend does not match target network");
@@ -948,7 +951,7 @@ public final class SccpJsonParser {
     requiredInt(inputs, "version", 1, 1);
     final String messageId = prefixedHash(inputs, "message_id");
     final String payloadHash = prefixedHash(inputs, "payload_hash");
-    if (requiredInt(inputs, "target_domain", 1, 4) != target.domainId()) {
+    if (requiredInt(inputs, "target_domain", 1, 5) != target.domainId()) {
       throw new IllegalArgumentException(
           "SCCP proof target domain does not match target network");
     }
@@ -1878,6 +1881,7 @@ public final class SccpJsonParser {
     final List<String> anchorRoles =
         List.of(
             upperBytes(anchor, "chain_id_hash", 32),
+            upperBytes(anchor, "roster_commitment", 32),
             upperBytes(anchor, "checkpoint_block_hash", 32),
             upperBytes(anchor, "checkpoint_context_id", 32),
             upperBytes(anchor, "checkpoint_finality_artifact_hash", 32));
@@ -1885,8 +1889,15 @@ public final class SccpJsonParser {
       throw new IllegalArgumentException(label + " Taira chain id hash mismatch");
     }
     final int protocolVersion = requiredInt(anchor, "protocol_version", 4, 4);
+    final BigInteger epoch =
+        requiredUnsignedInteger(anchor, "epoch", MAX_U64, true);
+    final BigInteger epochEndHeight =
+        requiredUnsignedInteger(anchor, "epoch_end_height", MAX_U64, false);
     final BigInteger checkpointHeight =
         requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true);
+    if (checkpointHeight.compareTo(epochEndHeight) > 0) {
+      throw new IllegalArgumentException(label + " checkpoint height exceeds its epoch end height");
+    }
     requireDistinctRawHashes(anchorRoles, label + " finality anchor");
     final ByteArrayOutputStream canonicalAnchor = new ByteArrayOutputStream();
     canonicalAnchor.write(1);
@@ -1894,12 +1905,16 @@ public final class SccpJsonParser {
     writeU16(canonicalAnchor, protocolVersion);
     byte[] roleBytes = hexBytes(anchorRoles.get(0));
     canonicalAnchor.write(roleBytes, 0, roleBytes.length);
-    writeU64(canonicalAnchor, checkpointHeight);
+    writeU64(canonicalAnchor, epoch);
+    writeU64(canonicalAnchor, epochEndHeight);
     roleBytes = hexBytes(anchorRoles.get(1));
     canonicalAnchor.write(roleBytes, 0, roleBytes.length);
+    writeU64(canonicalAnchor, checkpointHeight);
     roleBytes = hexBytes(anchorRoles.get(2));
     canonicalAnchor.write(roleBytes, 0, roleBytes.length);
     roleBytes = hexBytes(anchorRoles.get(3));
+    canonicalAnchor.write(roleBytes, 0, roleBytes.length);
+    roleBytes = hexBytes(anchorRoles.get(4));
     canonicalAnchor.write(roleBytes, 0, roleBytes.length);
     final String anchorHash =
         upperHex(
@@ -1923,10 +1938,13 @@ public final class SccpJsonParser {
             sourceNetwork,
             protocolVersion,
             anchorRoles.get(0),
-            checkpointHeight,
+            epoch,
+            epochEndHeight,
             anchorRoles.get(1),
+            checkpointHeight,
             anchorRoles.get(2),
             anchorRoles.get(3),
+            anchorRoles.get(4),
             "0x" + anchorHash.toLowerCase(Locale.ROOT)));
   }
 
@@ -1982,7 +2000,7 @@ public final class SccpJsonParser {
           case 1 -> "ethereum_beacon_v1";
           case 2 -> "bsc_parlia_v1";
           case 4 -> "ton_masterchain_v1";
-          case 3 -> "tron_dpos_v1";
+          case 5 -> "tron_dpos_v1";
           default -> throw new IllegalArgumentException("unsupported SCCP native lane");
         };
     if (!expected.equals(requiredText(backend, "backend"))) {
@@ -2023,17 +2041,17 @@ public final class SccpJsonParser {
       final String codecField,
       final String bytesField,
       final Integer domain) {
-    final int codec = requiredInt(value, codecField, 0, 3);
-    if (codec < 0 || codec > 3) {
+    final int codec = requiredInt(value, codecField, 1, 7);
+    if (codec != 1 && codec != 2 && codec != 5 && codec != 7) {
       throw new IllegalArgumentException(codecField + " is unsupported or retired");
     }
     if (domain != null) {
       final int expected =
           switch (domain) {
-            case 0 -> 0;
-            case 1, 2 -> 1;
-            case 3 -> 2;
-            case 4 -> 3;
+            case 0 -> 1;
+            case 1, 2 -> 2;
+            case 5 -> 5;
+            case 4 -> 7;
             default -> throw new IllegalArgumentException("unsupported SCCP domain");
           };
       if (codec != expected) {
@@ -2042,17 +2060,17 @@ public final class SccpJsonParser {
     }
     final byte[] bytes = hexBytes(value, bytesField);
     boolean valid = false;
-    if (codec == 0) {
+    if (codec == 1) {
       valid = bytes.length > 0 && bytes.length <= 256;
       for (final byte item : bytes) valid &= (item & 0xff) >= 0x21 && (item & 0xff) <= 0x7e;
-    } else if (codec == 1) {
-      valid = bytes.length == 20 && !allZero(bytes);
     } else if (codec == 2) {
+      valid = bytes.length == 20 && !allZero(bytes);
+    } else if (codec == 5) {
       valid =
           bytes.length == 21
               && (bytes[0] & 0xff) == 0x41
               && !allZero(Arrays.copyOfRange(bytes, 1, bytes.length));
-    } else if (codec == 3) {
+    } else if (codec == 7) {
       valid =
           bytes.length == 36
               && allZero(Arrays.copyOfRange(bytes, 0, 4))
@@ -2074,7 +2092,7 @@ public final class SccpJsonParser {
     if (!lane.isOutbound() || source != SccpNetworkV1.SORA_TAIRA) {
       throw new IllegalArgumentException(label + " must use a Taira-to-external lane");
     }
-    if (requiredInt(value, "target_domain", 1, 4) != target.domainId()) {
+    if (requiredInt(value, "target_domain", 1, 5) != target.domainId()) {
       throw new IllegalArgumentException(label + " target profile/domain mismatch");
     }
     final String messageId = lowerHash(value, "message_id_hex");
@@ -2137,7 +2155,7 @@ public final class SccpJsonParser {
     exactFields(transfer, PROJECTION_TRANSFER_FIELDS, label + ".Transfer");
     requiredInt(transfer, "version", 1, 1);
     requiredInt(transfer, "source_domain", 0, 0);
-    if (requiredInt(transfer, "dest_domain", 1, 4) != lane.target().domainId()) {
+    if (requiredInt(transfer, "dest_domain", 1, 5) != lane.target().domainId()) {
       throw new IllegalArgumentException(
           label + ".Transfer.dest_domain does not match the target network");
     }
@@ -2166,7 +2184,7 @@ public final class SccpJsonParser {
           case 1 -> "taira_eth_xor";
           case 2 -> "taira_bsc_xor";
           case 4 -> "taira_ton_xor";
-          case 3 -> "taira_tron_xor";
+          case 5 -> "taira_tron_xor";
           default -> throw new IllegalStateException("closed SCCP destination");
         };
     final String routeId =
@@ -2211,7 +2229,7 @@ public final class SccpJsonParser {
       }
       return;
     }
-    final String variant = target.domainId() == 3 ? "TronAddress21" : "EvmAddress20";
+    final String variant = target.domainId() == 5 ? "TronAddress21" : "EvmAddress20";
     exactFields(value, Set.of(variant), label);
     final Map<String, Object> inner = requiredObject(value, variant);
     exactFields(inner, Set.of("bytes"), label + '.' + variant);
@@ -2270,7 +2288,7 @@ public final class SccpJsonParser {
 
   private static String familyFor(final SccpNetworkV1 network) {
     if (network.domainId() == 4) return "ton";
-    return network.domainId() == 3 ? "tron" : "evm";
+    return network.domainId() == 5 ? "tron" : "evm";
   }
 
   private static TonAddress tonAddress(
@@ -2449,8 +2467,8 @@ public final class SccpJsonParser {
   }
 
   private static int requiredDomain(final Map<String, Object> value, final String field) {
-    final int domain = requiredInt(value, field, 0, 4);
-    if (domain < 0 || domain > 4) {
+    final int domain = requiredInt(value, field, 0, 5);
+    if (domain != 0 && domain != 1 && domain != 2 && domain != 4 && domain != 5) {
       throw new IllegalArgumentException(field + " is an unsupported or retired SCCP domain");
     }
     return domain;

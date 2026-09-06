@@ -29,9 +29,9 @@ function u32(value) {
   return bytes;
 }
 
-function fixture(networkId) {
+function fixture(networkId, identity = Buffer.alloc(48, 1), replay = Buffer.alloc(48, 2)) {
   const context = fields(networkId, ...Array.from({ length: 7 }, () => Buffer.alloc(0)));
-  const statement = fields(context, ...Array.from({ length: 10 }, () => Buffer.alloc(0)));
+  const statement = fields(context, identity, ...Array.from({ length: 8 }, () => Buffer.alloc(0)), replay);
   const domain = Buffer.concat([u32(0), fields(networkId)]);
   return { statementTag: 0, statementContent: statement, projectionDomain: domain, unsignedDomain: domain, context: "row[0]" };
 }
@@ -39,6 +39,20 @@ function fixture(networkId) {
 test("Exact12 network binding accepts one exact NetworkId", () => {
   const networkId = Buffer.from([...Array(31).fill(0xa4), 0xa5]);
   assert.doesNotThrow(() => validatePrivacyExact12NetworkBindingsV1(fixture(networkId)));
+});
+
+test("Exact12 ZK-ACE bindings require six raw canonical Goldilocks lanes", () => {
+  const networkId = Buffer.from([...Array(31).fill(0xa4), 0xa5]);
+  const hostile = [Buffer.alloc(32, 1), Buffer.alloc(49, 1), Buffer.alloc(48)];
+  for (let lane = 0; lane < 6; lane += 1) {
+    const noncanonical = Buffer.alloc(48, 1);
+    noncanonical.writeBigUInt64LE(0xffff_ffff_0000_0001n, lane * 8);
+    hostile.push(noncanonical);
+  }
+  for (const digest of hostile) {
+    assert.throws(() => validatePrivacyExact12NetworkBindingsV1(fixture(networkId, digest)));
+    assert.throws(() => validatePrivacyExact12NetworkBindingsV1(fixture(networkId, undefined, digest)));
+  }
 });
 
 test("Exact12 network binding rejects Genesis, labels, and cross-network replay", () => {

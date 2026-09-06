@@ -1640,6 +1640,9 @@ pub(crate) fn ton_breaker_hydration_fixture_for_testing() -> (
             account_state_hash: [0xc6; 32],
             code_hash: deployment.route_code_hash,
             data_hash: [0xc7; 32],
+            last_transaction_hash: [0xd7; 32],
+            last_transaction_lt: 42,
+            storage_last_transaction_lt: 43,
         },
         jetton_master_account: SccpTonAccountStateReadbackV1 {
             address: deployment.jetton_master_address,
@@ -1653,6 +1656,9 @@ pub(crate) fn ton_breaker_hydration_fixture_for_testing() -> (
             account_state_hash: [0xcb; 32],
             code_hash: deployment.jetton_master_code_hash,
             data_hash: [0xcc; 32],
+            last_transaction_hash: [0xdc; 32],
+            last_transaction_lt: 42,
+            storage_last_transaction_lt: 43,
         },
         deployment: SccpTonDeploymentReadbackV1 {
             jetton_master_address: deployment.jetton_master_address,
@@ -34001,6 +34007,68 @@ state_test! { sync sccp_verifier_work_rejects_internal_aliases_and_counter_overf
     assert_eq!(*transaction.block_sccp_verifier_work, block_before);
     assert_eq!(transaction.sccp_verifier_work_after_block, mirror_before);
 }
+
+#[test]
+fn sccp_replay_binding_requires_the_exact_governed_route_configuration() {
+    use iroha_data_model::bridge::{
+        SccpLaneIdV1, SccpNetworkV1, SccpReplayAccumulatorIdV1, SccpReplayBoundaryV1,
+        SccpReplayDomainV1, SccpRouteKeyV1,
+    };
+
+    let route_key = SccpRouteKeyV1::new(
+        SccpLaneIdV1 {
+            source: SccpNetworkV1::EthereumMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        },
+        "taira_eth_xor".to_owned(),
+        "xor".to_owned(),
+        7,
+    )
+    .expect("valid replay route key");
+    let domain = SccpReplayDomainV1 {
+        source_network: SccpNetworkV1::SoraTaira,
+        target_network: SccpNetworkV1::EthereumMainnet,
+        boundary: SccpReplayBoundaryV1::SoraOutboundLock,
+        route_revision: 7,
+        route_configuration_hash: [0x44; 32],
+        actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+    };
+    let accumulator_id =
+        SccpReplayAccumulatorIdV1::from_domain(route_key, &domain).expect("valid replay domain");
+    assert!(sccp_replay_binding_matches_governed_route(
+        &accumulator_id,
+        &domain,
+        SccpReplayBoundaryV1::SoraOutboundLock,
+        Some(domain.route_configuration_hash),
+    ));
+    assert!(!sccp_replay_binding_matches_governed_route(
+        &accumulator_id,
+        &domain,
+        SccpReplayBoundaryV1::SoraOutboundLock,
+        Some([0x45; 32]),
+    ));
+    assert!(!sccp_replay_binding_matches_governed_route(
+        &accumulator_id,
+        &domain,
+        SccpReplayBoundaryV1::SoraOutboundLock,
+        None,
+    ));
+    let mut mismatched_identity = accumulator_id.clone();
+    mismatched_identity.domain_hash[0] ^= 1;
+    assert!(!sccp_replay_binding_matches_governed_route(
+        &mismatched_identity,
+        &domain,
+        SccpReplayBoundaryV1::SoraOutboundLock,
+        Some(domain.route_configuration_hash),
+    ));
+    assert!(!sccp_replay_binding_matches_governed_route(
+        &accumulator_id,
+        &domain,
+        SccpReplayBoundaryV1::SoraInboundRelease,
+        Some(domain.route_configuration_hash),
+    ));
+}
+
 state_test! { sync sccp_registry_revision_is_order_independent_and_tracks_native_authority
     let bsc_lane = bsc_test_lane_for_testing();
     let eth_lane = eth_test_lane_for_testing();

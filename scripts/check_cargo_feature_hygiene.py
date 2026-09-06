@@ -450,7 +450,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "dev-tests",
         "dev-tools",
         "fastpq-gpu",
-        "goldilocks_backend",
         "halo2-dev-tests",
         "ids_projection",
         "iroha-core-tests",
@@ -470,7 +469,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     ),
     "iroha_torii": (
         "bench",
-        "goldilocks_backend",
         "halo2-dev-tests",
         "pprof",
         "profiling",
@@ -514,14 +512,13 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "bench",
         "cuda",
         "dev-tools",
-        "goldilocks_backend",
         "ivm_vrf_tests",
         "ivm_zk_tests",
         "metal",
     ),
     "iroha_primitives": ("bench", "ffi_export", "iroha_ffi", "trybuild-tests"),
     "iroha_kagami": ("dev-tools",),
-    "iroha_zkp_halo2": ("bench", "goldilocks_backend", "schema-structural"),
+    "iroha_zkp_halo2": ("bench", "schema-structural"),
     "iroha_executor": ("debug",),
 }
 

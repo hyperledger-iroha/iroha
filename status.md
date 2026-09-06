@@ -16,8 +16,20 @@ counts, plans, dates, and former policies do not attest the current candidate.
 
 ## Current implementation and local evidence
 
+Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
+Source inspection confirms substantial implementation beyond the original plan;
+fresh qualification remains open. The current release-inventory preflight rejects
+an existing unmerged Git index. No milestone or release gate is closed by this audit.
+The focused Kotlin consensus/HTTP diagnostics selection now passes 60 tests,
+zero failures/errors/skips, including immutable evidence ownership and Java
+consumers of Kotlin. Four private-invocation layout tests and 27 formal-launcher
+tests pass. Rust crash/classifier regressions await the shared build queue;
+formal source inventories and full release qualification remain open.
+
 | Area | Observed evidence | Practical limit |
 | --- | --- | --- |
+| Privacy V1 admission and field carriers | Six-lane digest wrappers encode exactly 48 bytes and Fp4 values exactly 32 bytes. Complete signed synthetic qualification passes bounded native decoding; Swift/C# now require the sixth Rust capability validator, and Swift admission requires authenticated Torii origin. Canonical Exact12 fixtures are regenerated; header and 25 drift checks pass. | Final combined Rust/native and SDK fixture runs are in progress. Synthetic signatures are validator tests only; the [closure ledger](specs/privacy_first_release_closure.md) records the remaining twelve-engine, hardware, independent-review and four-validator evidence. |
+| SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact circuit checkpoint identity, and complete breaker transaction readbacks. All 191 SCCP Rust tests (35 TON native), the new model regression, 42 TON contract tests, 15 builder/golden tests, focused Go tests/compile checks, and Core/Torii production library compilation pass; authenticated StateInit regenerated. | Full Core/workspace and Torii runtime tests are unclaimed. New message R1CS counts and dependent release artifacts still require regeneration and independent qualification. |
 | Rust SDK dependency separation | Relay accounting moved to `soranet_incentives`; SoraNet policies and shared defaults have one `iroha_service_model` owner. SDK/config/CAR/orchestrator/CLI production library and binary checks pass after the policy and logging migration. | Storage orchestration and telemetry remain SDK dependencies; Musubi service ownership, immutable client contexts, asynchronous transport and consumer migration are incomplete. |
 | Configuration and status HTTP contracts | Shared configuration DTOs have 22 wire tests, 3 node conversion tests and 14 Core runtime tests. Shared status preserves 32 captured named DTO frames/hashes/JSON; 93 telemetry tests pass. Core, SDK/CLI, test-network, schema generation, Mochi and grouped consumers compile. | Named records are qualified by focused fixtures; arbitrary generic-envelope schema identity is not yet cut over or fully qualified. |
 | Core integration fixtures | The `core_api` harness compiles after all 21 identified fixture errors were repaired through canonical APIs. | The new four-validator configuration startup/restart/readback/isolation scenario has not run against rebuilt binaries. Compilation is not runtime evidence. |
@@ -45,6 +57,13 @@ build/tests, strict all-target Clippy, all SDK platforms, or release workflows
 have passed together against one immutable source tree.
 
 ## Build and architecture qualification
+
+SoraFS goal execution is tracked in the [V1 implementation goals](specs/sorafs/v1_implementation_goals.md).
+The initial release-hardening slice fixes signing-output directory substitution,
+checks the source seal before Cargo metadata, and restores native mobile CI with
+mandatory per-task execution evidence. The combined script/contract selection
+passes 714 tests; native CI execution, the source seal, HSM custody and production
+qualification remain open. See the [current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-06-execution-checkpoint).
 
 The active acceptance policy uses enforced dependency ownership, the existing
 5,000-line production and 3,000-line test-file limits, substantive duplication
@@ -86,7 +105,7 @@ source seal, artifact identity, or 13 GiB release limit is waived by local passe
   physical dataspace isolation remain required.
 - **Crypto and privacy:** independent arithmetic, soundness, side-channel and
   custody review; real CPU/Metal/CUDA conformance; unresolved FASTPQ verification,
-  ZK-ACE binding, native-STARK degree, BFV-RNS, MKHE and Figure 9 gates remain open.
+  ZK-ACE six-lane/qROM qualification, native-STARK degree, BFV-RNS, MKHE and Figure 9 gates remain open.
   Unsupported proof paths stay fail closed.
 - **KAGEMUSHA and mobile:** recursive aggregate proof, durable hardware coordinator,
   mint/redemption, long-history and adversarial recovery, same-source native

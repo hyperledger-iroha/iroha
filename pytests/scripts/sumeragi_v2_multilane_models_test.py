@@ -98,6 +98,8 @@ def test_reviewed_rust_source_expands_exact_lane_work_closure(
         source.count("fn historical_certificate_payload_corruption_is_fail_stop")
         == 1
     )
+    assert source.count("fn exact_lane_members_sign_both_phases_with_their_bound_key") == 1
+    assert source.count("fn historical_request_detects_durable_body_corruption_with_warm_cache") == 1
     expanded_paths = module._expanded_source_manifest_paths({Path(relative)})
     assert module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE in expanded_paths
     assert module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE in expanded_paths
@@ -111,6 +113,8 @@ def test_reviewed_rust_source_expands_exact_lane_work_closure(
         / "v2_lane_work/historical_recovery_and_carrier_tests.rs"
         in expanded_paths
     )
+    for component in ("signing_authority_tests.rs", "strict_historical_read_tests.rs"):
+        assert Path(relative).parent / "v2_lane_work" / component in expanded_paths
 
 
 def test_reviewed_rust_source_rejects_substituted_lane_work_include(

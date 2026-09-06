@@ -388,8 +388,8 @@ def _production_liveness_release_inventory_errors(
         ("python", 129),
         ("javascript", 88),
         ("swift", 34),
-        ("kotlin", 44),
-        ("java", 43),
+        ("kotlin", 50),
+        ("java", 48),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"

@@ -142,6 +142,26 @@ def test_trusted_release_surface_matches_reviewed_seal() -> None:
     )
 
 
+@pytest.mark.parametrize("entrypoint", ["shipping_profiles", "declared_shipping_targets"])
+def test_unreviewed_release_surface_fails_before_cargo_metadata(
+    tmp_path: Path, monkeypatch, entrypoint: str
+) -> None:
+    checker = load_checker()
+    initialize_tracked_release_surface(tmp_path)
+    reviewed = checker.trusted_release_surface_digest(tmp_path)
+    monkeypatch.setattr(checker, "_embedded_release_surface_sha256", lambda: reviewed)
+    (tmp_path / ".cargo/config.toml").write_text(
+        '[build]\nrustc = "unreviewed-toolchain-wrapper"\n', encoding="utf-8"
+    )
+
+    def unexpected_cargo_metadata(_repo: Path):
+        pytest.fail("Cargo metadata ran before unreviewed build controls were rejected")
+
+    monkeypatch.setattr(checker, "workspace_catalog", unexpected_cargo_metadata)
+    with pytest.raises(RuntimeError, match="trusted release source surface drifted"):
+        getattr(checker, entrypoint)(tmp_path)
+
+
 def test_trusted_release_surface_rejects_duplicate_or_dynamic_seal_assignment() -> None:
     checker = load_checker()
     source = SCRIPT.read_bytes()

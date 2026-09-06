@@ -59,6 +59,38 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
         assert set(required) == KAGEMUSHA_V1_C_SYMBOLS
 
 
+def test_native_privacy_inventory_requires_authoritative_capability_validator() -> None:
+    missing = "iroha_privacy_validate_exact12_capability_manifest_v1"
+    assert len(MODULE.APPROVED_PRIVACY_C_EXPORTS) == 6
+    assert missing in MODULE.REQUIRED_SYMBOLS["csharp"]
+    symbols = [symbol for symbol in MODULE.APPROVED_PRIVACY_C_EXPORTS if symbol != missing]
+    try:
+        MODULE.validate_privacy_c_exports(symbols, require_exact=True)
+    except MODULE.ArtifactContractError as error:
+        assert str(error) == (
+            "native bridge artifact is missing approved privacy C symbols: " + missing
+        )
+    else:
+        raise AssertionError("native privacy artifact without capability validator was accepted")
+
+
+def test_native_c_probe_rejects_missing_privacy_capability_validator() -> None:
+    missing = "iroha_privacy_validate_exact12_capability_manifest_v1"
+    library = types.SimpleNamespace(**{
+        symbol: object() for symbol in MODULE.REQUIRED_SYMBOLS["csharp"]
+        if symbol != missing
+    })
+    with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+        try:
+            MODULE.probe_c_abi(Path("test-only-library"), MODULE.REQUIRED_SYMBOLS["csharp"])
+        except MODULE.ArtifactContractError as error:
+            assert str(error) == (
+                "native C ABI artifact is missing required symbols: " + missing
+            )
+        else:
+            raise AssertionError("C# native probe accepted missing capability validator")
+
+
 def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
     required = set(MODULE.REQUIRED_SYMBOLS["c-jni"])
     assert {

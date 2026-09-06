@@ -763,8 +763,8 @@ _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
     ("python", 129),
     ("javascript", 88),
     ("swift", 34),
-    ("kotlin", 44),
-    ("java", 43),
+    ("kotlin", 50),
+    ("java", 48),
 )
 _SDK_SOURCE_CLOSURE_RESOLVER = "ci/resolve_sumeragi_v2_sdk_source_closure.py"
 _SDK_SOURCE_CLOSURE_MANIFEST = "ci/sumeragi_v2_sdk_source_closure.json"

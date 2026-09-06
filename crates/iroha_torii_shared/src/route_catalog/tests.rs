@@ -613,6 +613,54 @@ mod tests {
         );
     }
     #[test]
+    fn sccp_replay_routes_have_the_exact_public_read_contract() {
+        let replay_routes = sumeragi::ROUTES
+            .iter()
+            .copied()
+            .filter(|route| {
+                route.stable_route_id().starts_with("sccp.replay.")
+                    || route.path().starts_with("/v1/sccp/replay/")
+            })
+            .collect::<Vec<_>>();
+        let expected = [
+            (
+                sumeragi::SCCP_REPLAY_ROOT,
+                "sccp.replay.root.read",
+                "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root",
+            ),
+            (
+                sumeragi::SCCP_REPLAY_WITNESS,
+                "sccp.replay.witness.read",
+                "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}",
+            ),
+        ];
+
+        assert_eq!(
+            replay_routes,
+            expected.map(|(route, _, _)| route),
+            "the public SCCP replay surface must contain exactly the root and witness routes"
+        );
+        for (route, expected_id, expected_path) in expected {
+            assert_eq!(route.stable_route_id(), expected_id);
+            assert_eq!(route.path(), expected_path);
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(route.listener(), Listener::Torii);
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert_eq!(route.admission(), AdmissionPolicy::Public);
+            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+            assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
+            assert!(route.projections().openapi());
+            assert!(route.projections().sdk());
+            assert!(!route.projections().mcp());
+            assert_eq!(route.route_match(), RouteMatch::Exact);
+            assert_eq!(route.path_normalization(), PathNormalization::Strict);
+            assert!(route.implicit_head());
+            assert!(route.cors_options());
+        }
+    }
+    #[test]
     fn parliament_cutover_excludes_legacy_governance_surfaces() {
         let retired_current_council_path = ["/v1/gov/", "council/", "current"].concat();
         for retired_path in [

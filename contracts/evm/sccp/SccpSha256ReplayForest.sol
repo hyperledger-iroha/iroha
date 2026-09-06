@@ -128,8 +128,12 @@ contract SccpSha256ReplayForest {
         returns (bytes32)
     {
         require(_validOperation(record.operation), "SR04");
-        require(record.principalKind == 1 || record.principalKind == 2,
-            "SR05");
+        uint8 requiredPrincipalKind = _principalKindForOperation(record.operation);
+        require(
+            record.principalKind == requiredPrincipalKind
+                && (requiredPrincipalKind == 1 || requiredPrincipalKind == 2),
+            "SR05"
+        );
         require(
             record.replayId != bytes32(0)
                 && record.payloadSha256 != bytes32(0)
@@ -227,8 +231,7 @@ contract SccpSha256ReplayForest {
         bytes calldata encodedWitness
     ) external pure returns (bool) {
         SccpReplayWitness memory witness = _decodeWitness(encodedWitness);
-        require(key != bytes32(0) && recordDigest != bytes32(0),
-            "SR12");
+        require(recordDigest != bytes32(0), "SR12");
         require(
             witness.expectedShardRoot == currentShardRoot
                 && witness.priorRecordDigest == recordDigest,
@@ -244,7 +247,6 @@ contract SccpSha256ReplayForest {
         bytes calldata encodedWitness
     ) external pure returns (bool) {
         SccpReplayWitness memory witness = _decodeWitness(encodedWitness);
-        require(key != bytes32(0), "SR14");
         require(
             witness.expectedShardRoot == currentShardRoot
                 && witness.priorRecordDigest == bytes32(0),
@@ -360,9 +362,9 @@ contract SccpSha256ReplayForest {
                     || (boundary == 0x21 && source == 0x40 && target == 0x43));
         }
         if (actorKind == 3) {
-            bool inbound = boundary == 0x30 || boundary == 0x32 || boundary == 0x34
+            bool inbound = boundary == 0x30 || boundary == 0x32 || boundary == 0x34;
+            bool outbound = boundary == 0x31 || boundary == 0x33 || boundary == 0x35
                 || boundary == 0x36 || boundary == 0x37;
-            bool outbound = boundary == 0x31 || boundary == 0x33 || boundary == 0x35;
             return actor.length == 36
                 && ((inbound && source == 0x40 && target == 0x44)
                     || (outbound && source == 0x44 && target == 0x40));
@@ -375,6 +377,17 @@ contract SccpSha256ReplayForest {
             || operation == 0x10 || operation == 0x11
             || operation == 0x20 || operation == 0x21
             || (operation >= 0x30 && operation <= 0x37);
+    }
+
+    function _principalKindForOperation(uint8 operation)
+        private
+        pure
+        returns (uint8)
+    {
+        if (operation == 0x01 || operation == 0x02) return 0;
+        if (operation == 0x10 || operation == 0x11) return 1;
+        if (operation == 0x20 || operation == 0x21) return 2;
+        return 3;
     }
 
     function _isProduction(uint32 network) private pure returns (bool) {

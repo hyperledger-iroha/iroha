@@ -107,6 +107,79 @@ fn stark_params_decoder_rejects_retired_hash_selector_wire() {
     );
 }
 #[test]
+fn fp4_wire_is_exactly_four_little_endian_coefficients() {
+    use norito::{NoritoSerialize, codec::Encode, core::DecodeFromSlice};
+
+    let coefficients = [1, MOD_P_U64 - 1, 3, 4];
+    let value = GoldilocksFp4V1::new(coefficients).expect("canonical field element");
+    let shared = fastpq_prover::GoldilocksFp4V1::new(coefficients).expect("canonical shared field");
+    let encoded = value.encode();
+    assert_eq!(encoded, shared.to_le_bytes());
+    assert_eq!(encoded.len(), GoldilocksFp4V1::BYTES);
+    assert_eq!(value.encoded_len_hint(), Some(32));
+    assert_eq!(value.encoded_len_exact(), Some(32));
+    let framed = norito::to_bytes(&value).expect("encode field frame");
+    assert_eq!(
+        norito::decode_from_bytes::<GoldilocksFp4V1>(&framed).unwrap(),
+        value
+    );
+    for truncated in 0..GoldilocksFp4V1::BYTES {
+        assert!(GoldilocksFp4V1::decode_from_slice(&encoded[..truncated]).is_err());
+    }
+    let mut with_suffix = encoded;
+    with_suffix.extend_from_slice(&[0xa5; 8]);
+    assert_eq!(
+        GoldilocksFp4V1::decode_from_slice(&with_suffix).unwrap(),
+        (value, 32)
+    );
+}
+#[test]
+fn fp4_wire_rejects_every_noncanonical_coefficient() {
+    use norito::core::DecodeFromSlice;
+
+    for coefficient in 0..4 {
+        for invalid in [MOD_P_U64, u64::MAX] {
+            let mut coefficients = [1, 2, 3, 4];
+            coefficients[coefficient] = invalid;
+            let [c0, c1, c2, c3] = coefficients;
+            let invalid_value = GoldilocksFp4V1 { c0, c1, c2, c3 };
+            assert!(norito::to_bytes(&invalid_value).is_err());
+            let mut raw = [0_u8; 32];
+            for (word, bytes) in coefficients.iter().zip(raw.chunks_exact_mut(8)) {
+                bytes.copy_from_slice(&word.to_le_bytes());
+            }
+            assert!(GoldilocksFp4V1::decode_from_slice(&raw).is_err());
+            let framed = norito::core::frame_bare_with_header_flags::<GoldilocksFp4V1>(&raw, 0)
+                .expect("frame adversarial canonical-width bytes");
+            assert!(norito::decode_from_bytes::<GoldilocksFp4V1>(&framed).is_err());
+        }
+    }
+}
+#[test]
+fn fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema() {
+    #[derive(norito::NoritoSerialize)]
+    #[norito(schema_name = "iroha_core::zk_stark::GoldilocksFp4V1")]
+    struct RetiredStructFrame {
+        c0: u64,
+        c1: u64,
+        c2: u64,
+        c3: u64,
+    }
+    assert_eq!(
+        <RetiredStructFrame as norito::NoritoSerialize>::schema_hash(),
+        <GoldilocksFp4V1 as norito::NoritoSerialize>::schema_hash(),
+        "payload rejection must not depend on a changed schema name"
+    );
+    let retired = RetiredStructFrame {
+        c0: 1,
+        c1: 2,
+        c2: 3,
+        c3: 4,
+    };
+    let framed = norito::to_bytes(&retired).expect("encode retired struct fixture");
+    assert!(norito::decode_from_bytes::<GoldilocksFp4V1>(&framed).is_err());
+}
+#[test]
 fn fp4_modulus_reduces_u_to_the_fourth_to_seven() {
     let zero = Fq::zero();
     let one = Fq::one();
@@ -200,6 +273,81 @@ fn fri_pair_domain_uses_bit_reversed_layer_order() {
         Some(beta),
         "the former non-bit-reversed exponent must not satisfy the polynomial fold"
     );
+}
+#[test]
+fn fri_pair_domain_rejects_nonexistent_goldilocks_subgroups() {
+    assert!(domain_x_for_pair(0, 0).is_none());
+    assert!(domain_x_for_pair(1, 0).is_none());
+    assert!(domain_x_for_pair(3, 0).is_none());
+    assert!(domain_x_for_pair(8, 4).is_none());
+    assert_eq!(domain_x_for_pair(2, 0), Some(Fq::one()));
+    for exponent in 2..usize::BITS {
+        let domain = 1_usize.checked_shl(exponent).expect("representable domain");
+        let x = domain_x_for_pair(domain, domain / 2 - 1);
+        if exponent <= 32 {
+            // The final pair has an odd bit-reversed exponent, hence exact subgroup order.
+            let x = x.expect("Goldilocks supports this two-adic subgroup");
+            assert_eq!(x.pow(domain as u128), Fq::one());
+            assert_ne!(x.pow((domain / 2) as u128), Fq::one());
+        } else {
+            assert!(x.is_none(), "2^{exponent} cannot be a Goldilocks subgroup");
+        }
+    }
+}
+#[test]
+fn fri_layer_geometry_rejects_every_noncanonical_exponent_and_arity() {
+    let mut params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 1,
+        blowup_log2: 1,
+        fold_arity: 2,
+        queries: 1,
+        merkle_arity: 2,
+        domain_tag: "iroha:test:fri-layer-geometry".to_owned(),
+    };
+    for exponent in 0..=u8::MAX {
+        params.n_log2 = exponent;
+        for arity in 0..=u8::MAX {
+            params.fold_arity = arity;
+            let expected = (arity == 2 && (1..=MAX_DOMAIN_LOG2).contains(&exponent))
+                .then_some(usize::from(exponent));
+            assert_eq!(
+                layers_required(&params),
+                expected,
+                "unexpected geometry for exponent {exponent} and arity {arity}"
+            );
+        }
+    }
+}
+#[test]
+fn opening_commitment_validation_rejects_hostile_geometry_without_panicking() {
+    let mut params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 1,
+        blowup_log2: 1,
+        fold_arity: 2,
+        queries: 1,
+        merkle_arity: 2,
+        domain_tag: "iroha:test:opening-geometry".to_owned(),
+    };
+    let limits = StarkVerifierLimits::default();
+    for exponent in 0..=u8::MAX {
+        params.n_log2 = exponent;
+        assert_eq!(
+            validate_stark_opening_commitment_params_with_limits_v1(&params, &limits).is_ok(),
+            (1..=MAX_DOMAIN_LOG2).contains(&exponent),
+            "opening verification must reject invalid wire exponent {exponent}"
+        );
+    }
+    params.n_log2 = 4;
+    for arity in 0..=u8::MAX {
+        params.fold_arity = arity;
+        assert_eq!(
+            validate_stark_opening_commitment_params_with_limits_v1(&params, &limits).is_ok(),
+            arity == 2,
+            "opening verification must reject invalid wire arity {arity}"
+        );
+    }
 }
 #[test]
 fn fri_challenges_bind_the_exact_round() {

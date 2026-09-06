@@ -4242,6 +4242,7 @@
       "fixture_directory": "crates/kotodama_lang/src/semantic/fixtures/v1",
       "path": "crates/kotodama_lang/src/semantic.rs",
       "test_names": [
+        "trigger_metadata_integer_domain_is_exact_through_u128",
         "typed_aggregate_traits_are_spawn_free_for_flat_width",
         "semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary",
         "public_semantic_apis_handoff_from_a_small_caller",
@@ -4457,7 +4458,7 @@
         "wholly_divergent_expression_without_a_type_context_fails_closed",
         "sum_and_expression_control_flow_fail_closed"
       ],
-      "test_names_sha256": "406e7383c898758f9d016f739a26dad77bfa0bd1561a6d374ef4e1b1b35bc5ba"
+      "test_names_sha256": "a517afe14aa3b1b2dc22e0cf5f489bf8bc99c937aba3588688fb848d4a7707cd"
     },
     {
       "fixture_directory": "crates/kotodama_lang/src/ir/fixtures/v1",
@@ -4567,5 +4568,5 @@
       "test_names_sha256": "527e21bb794c3cd98755bfeafc9eb864bd850600f757c628b02d89cdfa52dc06"
     }
   ],
-  "test_inventory_sha256": "8f28f0ded996d74752b3e797a20e38401edecec11fcc4317d2071e612896c2a1"
+  "test_inventory_sha256": "709cdb041b8df4c16459a50a19b1dbf4b6034b0323186ce7ac8f456396795b72"
 }

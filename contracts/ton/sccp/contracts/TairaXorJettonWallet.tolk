@@ -54,10 +54,10 @@ fun assertWalletConfiguration(storage: WalletStorage) {
         storage.masterAddress != storage.tail.load().bridgeAddress
     ) throw SccpErrors.InvalidConfiguration;
     val replay = storage.replay.load();
-    sccpReplayValidateForestV1(replay.mintCredits.load());
-    sccpReplayValidateForestV1(replay.burnAuthorizations.load());
-    sccpReplayValidateForestV1(replay.burnLocks.load());
-    sccpReplayValidateForestV1(replay.burnRefunds.load());
+    sccpReplayValidateRuntimeForestV1(replay.mintCredits.load());
+    sccpReplayValidateRuntimeForestV1(replay.burnAuthorizations.load());
+    sccpReplayValidateRuntimeForestV1(replay.burnLocks.load());
+    sccpReplayValidateRuntimeForestV1(replay.burnRefunds.load());
     val pending = storage.pending.load();
     val walletState = storage.tail.load();
     assert (
@@ -88,7 +88,9 @@ fun sendInternalTransfer(
             storage.tail.load().routeConfigurationHash,
             storage.tail.load().maxWrappedSupply,
         ),
-        value: sccpMasterBurnMinimum(),
+        // Mode 64 adds the remaining inbound value. An explicit value here
+        // would also need funds from the pre-message balance that is reserved.
+        value: 0,
         body: InternalTransferStep {
             queryId,
             jettonAmount: amount,

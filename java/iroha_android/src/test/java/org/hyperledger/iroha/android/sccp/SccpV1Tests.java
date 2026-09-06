@@ -18,7 +18,8 @@ public final class SccpV1Tests {
   private SccpV1Tests() {}
 
   public static void main(final String[] args) throws Exception {
-    replayForestMatchesFinalV1CrossLanguageGolden();
+    replayForestMatchesLocalFinalV1Vector();
+    replayOperationPrincipalAndTonDirectionsAreExact();
     soraReplayPrincipalRequiresExactCanonicalAccountIdPayload();
     closedInventoryReservesRetiredTagsAndAliases();
     tonMainnetBindsCanonicalZeroState();
@@ -33,8 +34,8 @@ public final class SccpV1Tests {
     System.out.println("[IrohaAndroid] exact SCCP V1 tests passed.");
   }
 
-  private static void replayForestMatchesFinalV1CrossLanguageGolden() {
-    final SccpReplayV1.Boundary boundary = SccpReplayV1.Boundary.SORA_OUTBOUND_LOCK;
+  private static void replayForestMatchesLocalFinalV1Vector() {
+    final SccpReplayV1.Boundary boundary = SccpReplayV1.Boundary.EVM_DESTINATION_MINT;
     final byte[] domain =
         SccpReplayV1.domainHash(
             SccpNetworkV1.SORA_TAIRA,
@@ -42,22 +43,22 @@ public final class SccpV1Tests {
             boundary,
             7,
             hash(0x44),
-            SccpReplayV1.Actor.route());
+            SccpReplayV1.Actor.evm(repeated(0x33, 20)));
     assert SccpV1.encodeLowerHex(domain)
-        .equals("de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d");
+        .equals("ebc495541ef2265beebe7ee9e4e8764595c2a55ed67dc6d0a8ff69ccd3ff3228");
     final byte[] key = SccpReplayV1.replayKey(domain, hash(0x11));
     assert SccpV1.encodeLowerHex(key)
-        .equals("139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b");
+        .equals("035bcebe9423edd4f1b945bae54905e0f0860bcc54718d372b1a58797ce614d4");
     final byte[] record =
         SccpReplayV1.recordDigest(
-            boundary,
+            SccpReplayV1.Boundary.EVM_DESTINATION_MINT,
             hash(0x11),
             hash(0x22),
             BigInteger.valueOf(9),
             SccpReplayV1.Principal.evm(repeated(0x33, 20)),
             hash(0x55));
     assert SccpV1.encodeLowerHex(record)
-        .equals("31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5");
+        .equals("bb0a7e99f5d2d136375e46ba231903611366ea85ec0e10130488a085fa05bf4f");
     final List<byte[]> empty = SccpReplayV1.emptyHashes();
     assert empty.size() == 249;
     assert SccpV1.encodeLowerHex(empty.get(248))
@@ -65,12 +66,12 @@ public final class SccpV1Tests {
     final byte[] zero = new byte[32];
     final SccpReplayV1.WitnessRoot nonMembership =
         SccpReplayV1.rootFromWitness(
-            key, null, new SccpReplayV1.Witness(empty.get(248), zero, zero, List.of()));
+            key, zero, new SccpReplayV1.Witness(empty.get(248), zero, zero, List.of()));
     assert nonMembership.matchesExpectedRoot();
-    assert nonMembership.shard() == 19;
+    assert nonMembership.shard() == 3;
     final byte[] occupied =
         SccpV1.decodeLowerHex(
-            "d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849");
+            "ec10fe878a6429557c7af279b8cb6fa5cc51165f4e6a54fb27ed6ad8525caf91");
     final SccpReplayV1.WitnessRoot membership =
         SccpReplayV1.rootFromWitness(
             key,
@@ -84,7 +85,7 @@ public final class SccpV1Tests {
         () ->
             SccpReplayV1.rootFromWitness(
                 key,
-                null,
+                zero,
                 new SccpReplayV1.Witness(
                     empty.get(248), zero, reservedBitmap, List.of(hash(0x77)))));
     final byte[] explicitDefaultBitmap = new byte[32];
@@ -93,7 +94,7 @@ public final class SccpV1Tests {
         () ->
             SccpReplayV1.rootFromWitness(
                 key,
-                null,
+                zero,
                 new SccpReplayV1.Witness(
                     empty.get(248), zero, explicitDefaultBitmap, List.of(empty.get(0)))));
     expectFailure(
@@ -103,6 +104,88 @@ public final class SccpV1Tests {
                 hash(0x11),
                 hash(0x22),
                 BigInteger.ONE.shiftLeft(128),
+                SccpReplayV1.Principal.evm(repeated(0x33, 20)),
+                hash(0x55)));
+
+    assert SccpReplayV1.verifyAgainstCurrentRoot(
+            zero,
+            zero,
+            new SccpReplayV1.Witness(empty.get(248), zero, zero, List.of()),
+            empty.get(248))
+        .matchesExpectedRoot();
+    final SccpReplayV1.Witness zeroExpectedWitness =
+        new SccpReplayV1.Witness(zero, zero, zero, List.of());
+    assert !SccpReplayV1.rootFromWitness(zero, zero, zeroExpectedWitness).matchesExpectedRoot();
+    expectFailure(
+        () -> SccpReplayV1.verifyAgainstCurrentRoot(zero, zero, zeroExpectedWitness, zero));
+    final byte[] zeroSiblingBitmap = new byte[32];
+    zeroSiblingBitmap[31] = 1;
+    final SccpReplayV1.Witness zeroSiblingWitness =
+        new SccpReplayV1.Witness(
+            empty.get(248), zero, zeroSiblingBitmap, List.of(zero));
+    final byte[] zeroSiblingRoot =
+        SccpReplayV1.rootFromWitness(zero, zero, zeroSiblingWitness).root();
+    final SccpReplayV1.Witness boundZeroSiblingWitness =
+        new SccpReplayV1.Witness(
+            zeroSiblingRoot, zero, zeroSiblingBitmap, List.of(zero));
+    assert SccpReplayV1.verifyAgainstCurrentRoot(
+            zero, zero, boundZeroSiblingWitness, zeroSiblingRoot)
+        .matchesExpectedRoot();
+    expectFailure(
+        () ->
+            SccpReplayV1.verifyAgainstCurrentRoot(
+                zero, zero, boundZeroSiblingWitness, hash(0x77)));
+  }
+
+  private static void replayOperationPrincipalAndTonDirectionsAreExact() {
+    assert SccpReplayV1.Boundary.TON_WALLET_BURN_AUTHORIZATION.tag() == 0x35;
+    assert SccpReplayV1.Boundary.TON_WALLET_BURN_LOCK.tag() == 0x36;
+    assert SccpReplayV1.Boundary.TON_WALLET_BURN_REFUND.tag() == 0x37;
+    final SccpReplayV1.Actor tonActor = SccpReplayV1.Actor.ton(0, hash(0x66));
+    for (final SccpReplayV1.Boundary boundary :
+        List.of(
+            SccpReplayV1.Boundary.TON_BRIDGE_INBOUND_MINT,
+            SccpReplayV1.Boundary.TON_MASTER_MINT,
+            SccpReplayV1.Boundary.TON_WALLET_MINT_CREDIT)) {
+      SccpReplayV1.domainHash(
+          SccpNetworkV1.SORA_TAIRA,
+          SccpNetworkV1.TON_MAINNET,
+          boundary,
+          7,
+          hash(0x44),
+          tonActor);
+    }
+    for (final SccpReplayV1.Boundary boundary :
+        List.of(
+            SccpReplayV1.Boundary.TON_BRIDGE_OUTBOUND_BURN,
+            SccpReplayV1.Boundary.TON_MASTER_BURN,
+            SccpReplayV1.Boundary.TON_WALLET_BURN_AUTHORIZATION,
+            SccpReplayV1.Boundary.TON_WALLET_BURN_LOCK,
+            SccpReplayV1.Boundary.TON_WALLET_BURN_REFUND)) {
+      SccpReplayV1.domainHash(
+          SccpNetworkV1.TON_MAINNET,
+          SccpNetworkV1.SORA_TAIRA,
+          boundary,
+          7,
+          hash(0x44),
+          tonActor);
+      expectFailure(
+          () ->
+              SccpReplayV1.domainHash(
+                  SccpNetworkV1.SORA_TAIRA,
+                  SccpNetworkV1.TON_MAINNET,
+                  boundary,
+                  7,
+                  hash(0x44),
+                  tonActor));
+    }
+    expectFailure(
+        () ->
+            SccpReplayV1.recordDigest(
+                SccpReplayV1.Boundary.SORA_OUTBOUND_LOCK,
+                hash(0x11),
+                hash(0x22),
+                BigInteger.valueOf(9),
                 SccpReplayV1.Principal.evm(repeated(0x33, 20)),
                 hash(0x55)));
   }
@@ -137,6 +220,8 @@ public final class SccpV1Tests {
   private static void closedInventoryReservesRetiredTagsAndAliases() {
     assert Arrays.stream(SccpNetworkV1.values()).map(SccpNetworkV1::tag).toList()
         .equals(List.of(0x40, 0x41, 0x42, 0x43, 0x44));
+    assert Arrays.stream(SccpNetworkV1.values()).map(SccpNetworkV1::domainId).toList()
+        .equals(List.of(0, 1, 2, 5, 4));
     assert SccpNetworkV1.fromProfileKey("sora-taira") == SccpNetworkV1.SORA_TAIRA;
     assert SccpNetworkV1.SORA_TAIRA.isProduction();
     for (int tag = 0; tag <= 0xff; tag++) {
@@ -160,9 +245,9 @@ public final class SccpV1Tests {
             "tron")) {
       assert SccpNetworkV1.fromProfileKey(alias) == null : alias;
     }
-    assert SccpHubMessageKindV1.TRANSFER.tag() == 0;
-    assert SccpHubMessageKindV1.fromTag(0) == SccpHubMessageKindV1.TRANSFER;
-    assert SccpHubMessageKindV1.fromTag(5) == null;
+    assert SccpHubMessageKindV1.TRANSFER.tag() == 5;
+    assert SccpHubMessageKindV1.fromTag(5) == SccpHubMessageKindV1.TRANSFER;
+    assert SccpHubMessageKindV1.fromTag(0) == null;
   }
 
   private static void tonMainnetBindsCanonicalZeroState() {
@@ -240,7 +325,8 @@ public final class SccpV1Tests {
 
   private static void payloadDecoderRejectsRetiredAndNoncanonicalForms() {
     final byte[] canonical = outboundPayload().canonicalBytes();
-    for (final int discriminant : List.of(1, 2, 3, 4, 5, 255)) {
+    assert (canonical[0] & 0xff) == 2;
+    for (final int discriminant : List.of(0, 1, 3, 4, 5, 255)) {
       final byte[] hostile = canonical.clone();
       hostile[0] = (byte) discriminant;
       expectFailure(() -> SccpV1.decodeCanonicalPayload(hostile));
@@ -258,23 +344,23 @@ public final class SccpV1Tests {
   }
 
   private static void transferRejectsRetiredDomainsCodecsAndInvalidWidths() {
-    for (final int domain : List.of(5, 6, -1)) {
+    for (final int domain : List.of(3, 6, -1)) {
       expectFailure(
           () ->
               transfer(
                   domain,
                   0,
                   1,
-                  0,
+                  1,
                   text("xor"),
                   BigInteger.ONE,
-                  0,
+                  1,
                   text("alice"),
-                  0,
+                  1,
                   text("bob"),
                   text("route")));
     }
-    for (final int codec : List.of(4, 5, 6, 7, 255)) {
+    for (final int codec : List.of(0, 3, 4, 6, 255)) {
       expectFailure(
           () ->
               transfer(
@@ -284,9 +370,9 @@ public final class SccpV1Tests {
                   codec,
                   repeated(1, 32),
                   BigInteger.ONE,
-                  0,
-                  text("alice"),
                   1,
+                  text("alice"),
+                  2,
                   repeated(1, 20),
                   text("route")));
     }
@@ -296,12 +382,12 @@ public final class SccpV1Tests {
                 0,
                 2,
                 0,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ONE,
-                0,
-                text("alice"),
                 1,
+                text("alice"),
+                2,
                 repeated(1, 20),
                 text("route")));
     expectFailure(
@@ -310,12 +396,12 @@ public final class SccpV1Tests {
                 0,
                 2,
                 0x1_0000_0000L,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ONE,
-                0,
-                text("alice"),
                 1,
+                text("alice"),
+                2,
                 repeated(1, 20),
                 text("route")));
     expectFailure(
@@ -324,12 +410,12 @@ public final class SccpV1Tests {
                 0,
                 2,
                 1,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ZERO,
-                0,
-                text("alice"),
                 1,
+                text("alice"),
+                2,
                 repeated(1, 20),
                 text("route")));
     expectFailure(
@@ -338,12 +424,12 @@ public final class SccpV1Tests {
                 0,
                 2,
                 1,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ONE,
-                0,
-                text("alice"),
                 1,
+                text("alice"),
+                2,
                 repeated(1, 19),
                 text("route")));
     expectFailure(
@@ -352,12 +438,12 @@ public final class SccpV1Tests {
                 0,
                 2,
                 1,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ONE,
-                0,
-                text("alice"),
                 1,
+                text("alice"),
+                2,
                 new byte[20],
                 text("route")));
     expectFailure(
@@ -366,12 +452,12 @@ public final class SccpV1Tests {
                 0,
                 2,
                 1,
-                0,
+                1,
                 text("contains space"),
                 BigInteger.ONE,
-                0,
-                text("alice"),
                 1,
+                text("alice"),
+                2,
                 repeated(1, 20),
                 text("route")));
     expectFailure(
@@ -380,12 +466,12 @@ public final class SccpV1Tests {
                 0,
                 2,
                 1,
-                0,
+                1,
                 repeated('a', 257),
                 BigInteger.ONE,
-                0,
-                text("alice"),
                 1,
+                text("alice"),
+                2,
                 repeated(1, 20),
                 text("route")));
     final byte[] badTron = repeated(1, 21);
@@ -394,14 +480,14 @@ public final class SccpV1Tests {
         () ->
             transfer(
                 0,
-                3,
+                5,
                 1,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ONE,
-                0,
+                1,
                 text("alice"),
-                2,
+                5,
                 badTron,
                 text("route")));
 
@@ -412,12 +498,12 @@ public final class SccpV1Tests {
             0,
             4,
             1,
-            0,
+            1,
             text("xor"),
             BigInteger.ONE,
-            0,
+            1,
             text("alice"),
-            3,
+            7,
             tonAccount,
             text("taira_ton_xor"));
     assert Arrays.equals(tonAccount, tonTransfer.recipient());
@@ -430,12 +516,12 @@ public final class SccpV1Tests {
                 0,
                 4,
                 1,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ONE,
-                0,
+                1,
                 text("alice"),
-                3,
+                7,
                 nonBasechain,
                 text("taira_ton_xor")));
     final byte[] zeroAccount = new byte[36];
@@ -445,12 +531,12 @@ public final class SccpV1Tests {
                 0,
                 4,
                 1,
-                0,
+                1,
                 text("xor"),
                 BigInteger.ONE,
-                0,
+                1,
                 text("alice"),
-                3,
+                7,
                 zeroAccount,
                 text("taira_ton_xor")));
   }
@@ -464,12 +550,12 @@ public final class SccpV1Tests {
             1,
             0,
             1,
-            0,
+            1,
             text("xor"),
             BigInteger.ONE,
-            1,
+            2,
             repeated(1, 20),
-            0,
+            1,
             text(canonical),
             text("taira_eth_xor"));
     assert Arrays.equals(text(canonical), accepted.recipient());
@@ -491,12 +577,12 @@ public final class SccpV1Tests {
                   1,
                   0,
                   1,
-                  0,
+                  1,
                   text("xor"),
                   BigInteger.ONE,
-                  1,
+                  2,
                   repeated(1, 20),
-                  0,
+                  1,
                   invalid,
                   text("taira_eth_xor")));
     }
@@ -523,14 +609,14 @@ public final class SccpV1Tests {
     final SccpTransferPayloadV1 payload =
         transfer(
             0,
-            3,
+            5,
             1,
-            0,
+            1,
             text("xor"),
             BigInteger.ONE,
-            0,
+            1,
             text("alice"),
-            2,
+            5,
             tron,
             text("taira_tron_xor"));
     final byte[] encoded =
@@ -560,12 +646,12 @@ public final class SccpV1Tests {
             0,
             2,
             1,
-            0,
+            1,
             asset,
             BigInteger.ONE,
-            0,
-            text("alice"),
             1,
+            text("alice"),
+            2,
             repeated(1, 20),
             text("route"));
     final SccpOutboundMessageContextV1 context =
@@ -589,12 +675,12 @@ public final class SccpV1Tests {
         0,
         2,
         1,
-        0,
+        1,
         text("xor"),
         BigInteger.ONE,
-        0,
-        text("alice@taira"),
         1,
+        text("alice@taira"),
+        2,
         repeated(1, 20),
         text("taira_bsc_xor"));
   }
@@ -624,7 +710,7 @@ public final class SccpV1Tests {
         sender,
         recipientCodec,
         recipient,
-        0,
+        1,
         route);
   }
 

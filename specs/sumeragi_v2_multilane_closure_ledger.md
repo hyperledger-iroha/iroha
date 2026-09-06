@@ -12,6 +12,13 @@ activation contract in [Nexus cross-lane execution](nexus_cross_lane.md), and
 the persistence contract in [Merge ledger](merge_ledger.md). It does not replace
 those documents.
 
+The [2026-09-06 implementation goals](sumeragi_v2_multilane_completion_goals.md)
+set the active dependency order and fresh revalidation work. That source audit
+supersedes the older snapshot's no-TODO assertion and mirrored-Java delivery
+target: Kotlin owns JVM production models and Java-source consumer tests must
+exercise them. Existing implementation rows remain leads for revalidation;
+their presence does not close a milestone or any release evidence gate.
+
 The ledger deliberately distinguishes a reachable production implementation
 from a release-evidenced end-to-end path. The mutable development source
 contains autonomous production, Native application evidence, evidence-aware
@@ -1646,10 +1653,11 @@ diagnostics models live in
 `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiStatusModels.kt`
 and
 `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModels.kt`;
-the mirrored Java status, diagnostics, and exact JSON support live in
-`SumeragiStatusModels.java`, `SumeragiDiagnosticsModels.java`, and
-`SumeragiJsonSupport.java` under
-`java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/`.
+private diagnostics JSON serializers live beside them in
+`SumeragiDiagnosticsSerialization.kt`. Kotlin owns the production implementation
+for both JVM languages. Java-source status, diagnostics, transport and wire
+consumer suites live under `kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/`
+and run through Kotlin `:core-jvm:test`; duplicate Java consensus APIs are removed.
 Each client keeps status and diagnostics on distinct methods, parsers, and
 return models. Ten Rust-owned receipt-graph types and the typed SDK parsers
 reject unknown fields and duplicate or over-bound input rather than accepting
@@ -1657,8 +1665,8 @@ an implicit compatibility shape.
 
 **Closure condition.** Give status and diagnostics separate parsers, return
 types, and methods in every client. Extend Rust and Swift with the Native
-application row and state enum. Add the full diagnostics surface to Kotlin
-core-jvm and mirror it in Java. Python and JavaScript must not parse diagnostics
+application row and state enum. Keep the full diagnostics surface in Kotlin
+core-jvm and exercise it directly from Java-source consumers. Python and JavaScript must not parse diagnostics
 with the authoritative status parser or expose lane evidence through the
 status-only method.
 
@@ -2172,15 +2180,38 @@ diagnostics must be added here or mapped to a ledger row before release.
   latch, and producer-episode scheduler authorities are retired. Fresh
   immutable-candidate execution and release evidence remains Open.
 
-### No unresolved in-scope explicit TODO marker
+### Current TODO reconciliation — open
 
-The current reviewed closure contains no explicit TODO in lane routing,
-autoscale, merge, reservation ownership, Native AMX, drain, retirement, or
-multilane diagnostics. The former SafetyWal filesystem-identity marker is now
-implemented and source-bound: production runner cutover mints the opened WAL
-directory authority from Kura's retained opened root, and the adapter consumes
-that move-only authority only for the exact Kura instance. Any newly introduced
-marker must be classified here before release.
+The 2026-09-06 audit found explicit lifecycle TODOs requiring current call-graph
+classification and closure evidence. The older no-TODO assertion is superseded.
+Track these under `ML-AUT-06`, `ML-LIFE-05`, and `G-FORMAL` until each is
+implemented and tested or explicitly proven unrelated to multilane execution:
+
+- `v2_lifecycle_projection.rs::settle_certified_serve_completed`: replace the
+  unlaunched-owner seam with worker-authenticated completion bound to the
+  retained body-store instance after the consuming launch is wired.
+- `v2_lifecycle_scheduler_inputs.rs`: finish durable applied-height handoff
+  and owner rollover for the still-live recovered Broadcast.
+- `v2_lifecycle_ingress_position.rs::capture_lifecycle_queue_cut`: join the
+  frozen queue cut and complete executor-authenticated verdicts in the
+  composite planner factory.
+- `v2_runner/outer_ingress_cursor.rs::OuterIngressTurns`: wire the owner
+  transaction at the borrowed live Ingress turn with consuming body-store launch.
+
+The `v2_ready_durable_validate_adapter_preview.rs` post-WAL-append TODO now has
+token-local test-only injection and
+`ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit`.
+It checks fresh reopen/replay before live Sign publication for both vote
+phases. Execution evidence remains open until the focused Rust test runs.
+
+The former `queue.rs` QueuePlan intent TODO is stale and has been replaced with
+the current invariant. `TransactionAdmissionIntent` is signature-bound; both
+gossip receive paths reject strict intent without its certificate, and
+candidate/block/State admission enforce the autonomous-owner boundary. Existing
+tests include `queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding`,
+`exact_parent_queue_plan_admission_rejects_ordinary_external_execution`, and
+`autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external`.
+These are inspected test definitions, not fresh execution evidence.
 
 ### Unresolved in scope without a TODO marker
 

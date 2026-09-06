@@ -67,11 +67,13 @@ use iroha_data_model::{
     name::Name,
     nexus::DataSpaceId,
     privacy::{
-        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
         PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogV1,
         PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
-        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_exact12_fixture_bundle_v1,
+        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
+        validate_privacy_exact12_fixture_bundle_v1,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
@@ -171,6 +173,8 @@ mod kagemusha_device_bridge_v1;
 #[cfg(test)]
 mod kagemusha_fixture_tests;
 mod parliament_timed_ovn_ffi;
+#[cfg(test)]
+mod privacy_capability_ffi_tests;
 pub use parliament_timed_ovn_ffi::{
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1,
@@ -2457,6 +2461,33 @@ pub unsafe extern "C" fn iroha_privacy_validate_compiled_profile_catalog_v1(
     }
     let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive).code()
+}
+/// Validate canonical Exact12 capability evidence with the authoritative Rust verifier.
+///
+/// Returns the stable [`PrivacyCapabilityArchiveValidationStatusV1`] code. Only zero accepts the
+/// complete archive, including release/audit signatures, deployment signatures, exact evidence
+/// counts, and recomputed digests. Callers must additionally compare the committed compiled
+/// tuples to their local catalog and obtain network state through authenticated Torii transport.
+///
+/// # Safety
+///
+/// For a non-zero `archive_len`, `archive_ptr` must reference at least that many readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_validate_exact12_capability_manifest_v1(
+    archive_ptr: *const c_uchar,
+    archive_len: c_ulong,
+) -> c_int {
+    if archive_ptr.is_null() {
+        return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
+    }
+    let Ok(archive_len) = usize::try_from(archive_len) else {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    };
+    if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    }
+    let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
+    validate_privacy_capability_archive_v1(archive).code()
 }
 /// Return the complete Rust-derived exact-12 transaction-layer KAT bundle.
 ///
@@ -6077,6 +6108,7 @@ mod detached_transaction_scaffold_tests {
         assert!(inspect_detached_transaction_scaffold(b"not norito").is_err());
         assert!(inspect_detached_transaction_scaffold(&[]).is_err());
     }
+    #[test]
     fn inspector_rejects_genesis_domain() {
         let keypair = fixture_keypair(0x39);
         let authority = AccountId::new(keypair.public_key().clone());

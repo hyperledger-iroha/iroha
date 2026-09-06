@@ -39,7 +39,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         [0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0];
 
     [Fact]
-    public void CanonicalManifestValidationPreservesTheCommittedProjection()
+    public void ManagedProjectionPreservesFieldsWithoutGrantingNativeQualification()
     {
         var fixture = BuildFixture();
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
@@ -78,6 +78,19 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         activationCopy[0] ^= 0xff;
         Assert.False(activationCopy.SequenceEqual(decoded.Protocols[0].ActivationCanonicalBytes));
         Assert.Equal(fixture.Manifest, decoded.CanonicalArchive);
+    }
+
+    [Fact]
+    public void PublicValidatorRejectsEmptyReleaseAndDeploymentEvidence()
+    {
+        // The managed projection fixture omits all audits, release signatures,
+        // validator canaries and signatures. Only Rust can qualify these bytes.
+        var fixture = BuildFixture();
+        Assert.Equal(
+            PrivacyNative.IsAvailable()
+                ? PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest
+                : PrivacyExact12CapabilityManifestValidationStatusV1.NativeUnavailable,
+            PrivacyNative.ValidateExact12CapabilityManifestV1(fixture.Manifest));
     }
 
     [Fact]

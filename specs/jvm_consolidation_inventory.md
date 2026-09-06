@@ -27,8 +27,8 @@ platform discovery or a JDK 11 implementation in the JDK 8 API surface.
 
 | Java queue entry | Kotlin owner and implementation evidence |
 | --- | --- |
-| J `consensus/SumeragiJsonSupport.java` | K `consensus/SumeragiStatusModels.kt:1379`, `SumeragiJsonPrimitives`: strict UTF-8, exact object fields, negative-zero rejection, bounded unsigned numbers and canonical hashes. Keep helpers internal. |
-| J `consensus/NativeAmxV2Models.java` | K `consensus/NativeAmxV2.kt`: Java stores Kotlin delegates and calls `NativeAmxV2.parseReceipt[Group]` at Java lines 833–859. Remove the second public value hierarchy. Kotlin `NativeAmxV2GroupedFixtureTest.kt` exercises the grouped parser. |
+| J `consensus/SumeragiJsonSupport.java` | Removed. K `consensus/SumeragiStatusModels.kt`, internal `SumeragiJsonPrimitives`, owns strict UTF-8, exact object fields, negative-zero rejection, bounded unsigned numbers and canonical hashes. Migrated Java consumers exercise the Kotlin status and diagnostics parsers. |
+| J `consensus/NativeAmxV2Models.java` | Removed with the duplicate Sumeragi status, diagnostics and wire classes. K `consensus/NativeAmxV2.kt` owns the sole public value hierarchy and grouped parser; Java consumers call it directly. Remaining private-settlement responder checks invoke its canonical BLS peer validator directly. |
 | J `alias/AliasNameSupport.java` | K `alias/AliasNames.kt:201` performs NFC/IDN segment and qualified-domain normalization plus exact u64 bounds; `AliasSetupModels.kt:961` and `AliasPlanVerifier.kt:423` own token/hash checks. No standalone public helper is needed. |
 | J `privacy/ConfidentialNoteScalars.java` | K `privacy/ConfidentialNote.kt:533`: same Pasta modulus, 32-byte canonical/nonzero scalars, positive canonical u128 and defensive byte copies. |
 | J `privacy/ConfidentialNoteCrypto.java` | K `privacy/ConfidentialNote.kt:149–390`: public-key derivation, X25519 agreement, HKDF and authenticated note encryption/decryption, including deterministic entropy entry points. Kotlin `ConfidentialNoteTest.kt:170` covers plaintext contract and tampering. |
@@ -42,6 +42,16 @@ platform discovery or a JDK 11 implementation in the JDK 8 API surface.
 These rows establish capability ownership, not equality of every validation
 branch. Preserve shared fixture assertions and Java-source consumer coverage
 against these Kotlin classes when retiring the Java implementation.
+
+The six Sumeragi/Native AMX Java suites now run from `kotlin/core-jvm` against
+the canonical Kotlin API. All 51 original Java tests are preserved; the focused
+111-test selection passes without failures, errors or skips under JDK 8 API
+compilation. The five duplicate consensus production classes and six original
+Java suites are removed, together with the old `IrohaClient`/`HttpClientTransport`
+Sumeragi methods and their unused operator-config wiring. Private-settlement
+attestation checks and shared onboarding response validation remain. This
+records SDK ownership and focused coverage; release qualification remains
+separate.
 
 ## Capabilities and invariants still needing migration
 

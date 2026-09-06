@@ -81,6 +81,7 @@ python3 scripts/check_workflow_action_pins.py
 python3 -m pytest -q \
   scripts/tests/check_workflow_action_pins_test.py \
   scripts/tests/check_sorafs_release_automation_test.py \
+  scripts/tests/check_sorafs_mobile_parity_reports_test.py \
   scripts/tests/check_build_efficiency_provenance_test.py \
   scripts/tests/check_sorafs_release_version_map_test.py \
   scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py \

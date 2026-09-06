@@ -15,7 +15,7 @@ from pathlib import Path
 from sccp_release_common import (
     SccpReleaseError,
     canonical_json_file_bytes,
-    load_trust_policy,
+    load_test_trust_policy,
     public_error,
 )
 
@@ -43,7 +43,7 @@ def reject_retired_fixture() -> dict[str, object]:
     if _retired_protocol_versions() != {3}:
         raise SccpReleaseError("retired SCCP fixture no longer records exactly protocol v3")
     try:
-        load_trust_policy(FIXTURE_POLICY, allow_test_policy=True)
+        load_test_trust_policy(FIXTURE_POLICY)
     except SccpReleaseError as error:
         if "schema/environment" not in str(error):
             raise SccpReleaseError(

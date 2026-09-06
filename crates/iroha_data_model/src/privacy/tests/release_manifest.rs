@@ -521,6 +521,76 @@ fn exact12_qualification_links_full_manifests_and_all_twelve_activations() {
 }
 
 #[test]
+fn qualified_capability_archive_accepts_complete_signed_evidence() {
+    let release = synthetic_valid_release_manifest();
+    let deployment = synthetic_valid_deployment(release.manifest_digest);
+    let mut snapshot = capability_snapshot();
+    snapshot.committed_height = deployment.convergence_height;
+    snapshot.protocols = synthetic_qualified_capability_rows(&release, &deployment);
+    snapshot.qualification = Some(PrivacyExact12QualificationRecordV1 {
+        release_manifest: release,
+        deployment_qualification: deployment,
+    });
+    let manifest = snapshot
+        .exact12_capability_manifest_v1()
+        .expect("project complete synthetic signed qualification");
+    assert!(
+        manifest
+            .protocols
+            .iter()
+            .all(|row| row.is_network_available())
+    );
+    let archive = manifest
+        .canonical_bytes()
+        .expect("encode qualified capabilities");
+    assert!(archive.len() <= PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1);
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&archive),
+        PrivacyCapabilityArchiveValidationStatusV1::Valid,
+        "the native SDK boundary must admit all 48 stage receipts and 54 artifacts"
+    );
+    let mut missing_evidence = manifest.clone();
+    let release = &mut missing_evidence
+        .qualification
+        .as_mut()
+        .expect("complete qualification")
+        .release_manifest;
+    release.stage_receipts.clear();
+    release.proof_artifacts.clear();
+    release.audits.clear();
+    release.release_signatures.clear();
+    missing_evidence.manifest_digest = missing_evidence
+        .computed_manifest_digest()
+        .expect("rebind the outer manifest to the missing evidence");
+    let missing_archive =
+        norito::encode_canonical(&missing_evidence).expect("encode missing release evidence");
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&missing_archive),
+        PrivacyCapabilityArchiveValidationStatusV1::InvalidManifest,
+        "nonzero claim digests cannot replace signed release evidence"
+    );
+    let mut hostile = manifest;
+    hostile
+        .qualification
+        .as_mut()
+        .expect("complete qualification")
+        .release_manifest
+        .release_signatures[0]
+        .signature = Signature::from_bytes(&vec![
+        1;
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1
+            + 1
+    ]);
+    let hostile_archive = norito::encode_canonical(&hostile).expect("encode oversized signature");
+    assert!(hostile_archive.len() <= PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1);
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&hostile_archive),
+        PrivacyCapabilityArchiveValidationStatusV1::DecodeResourceLimit,
+        "qualification support must not remove nested sequence limits"
+    );
+}
+
+#[test]
 fn release_rejects_abi_stage_artifact_and_signature_mutations() {
     let release = synthetic_valid_release_manifest();
 

@@ -1,12 +1,12 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package org.hyperledger.iroha.android.consensus;
+package org.hyperledger.iroha.sdk.consensus;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -17,16 +17,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import org.hyperledger.iroha.android.client.JsonParser;
-import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplication;
-import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplicationState;
-import org.hyperledger.iroha.android.crypto.IrohaHash;
-import org.hyperledger.iroha.android.util.HashLiteral;
+import org.hyperledger.iroha.sdk.client.JsonParser;
+import org.hyperledger.iroha.sdk.crypto.IrohaHash;
+import org.hyperledger.iroha.sdk.core.util.HashLiteral;
 import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 /** Shared grouped Native AMX v2 fixture-consumption tests. */
 public final class NativeAmxV2GroupedFixtureTests {
@@ -44,47 +43,47 @@ public final class NativeAmxV2GroupedFixtureTests {
 
     final Map<String, Object> golden = object(fixture, "golden");
     final Map<String, Object> groupWire = object(golden, "receipt_group");
-    final NativeAmxV2Models.ReceiptGroup group =
-        NativeAmxV2Models.parseReceiptGroup(groupWire);
-    assertEquals(BigInteger.valueOf(42L), group.blockHeight());
-    assertEquals(BigInteger.valueOf(11L), group.dataspaceId());
-    assertEquals(2L, group.transactionCount());
+    final NativeAmxV2.ReceiptGroup group =
+        NativeAmxV2.parseReceiptGroup(groupWire);
+    assertEquals(BigInteger.valueOf(42L), group.getBlockHeight());
+    assertEquals(BigInteger.valueOf(11L), group.getDataspaceId());
+    assertEquals(2L, group.getTransactionCount());
     final List<Object> sourceOrder = array(golden, "ordered_source_ids");
     final List<String> actualSources = new ArrayList<>();
-    final NativeAmxV2Models.Leg firstLeg = group.receipts().get(0).legs().get(0);
+    final NativeAmxV2.Leg firstLeg = group.getReceipts().get(0).getLegs().get(0);
     assertEquals(
         "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
-        firstLeg.participantProposal().descriptor().validatorSetHash().value());
+        firstLeg.getParticipantProposal().getDescriptor().getValidatorSetHash().getValue());
     assertEquals(
         "hash:568077DEBB5ECE0F6655571DBD81F8B8935CA5FB064F6B74864B4F58F3CB1A33#E6A5",
-        firstLeg.participantProposal().descriptor().descriptorHash().value());
+        firstLeg.getParticipantProposal().getDescriptor().getDescriptorHash().getValue());
     assertEquals(
         "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
-        firstLeg.participantProposal().proposalHash().value());
-    assertEquals(null, firstLeg.participantProposal().payloadBlockHint());
+        firstLeg.getParticipantProposal().getProposalHash().getValue());
+    assertEquals(null, firstLeg.getParticipantProposal().getPayloadBlockHint());
     assertEquals(
         "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
-        firstLeg.participantSettlementHash().value());
-    final NativeAmxV2Models.Leg remoteLeg = group.receipts().get(0).legs().get(1);
+        firstLeg.getParticipantSettlementHash().getValue());
+    final NativeAmxV2.Leg remoteLeg = group.getReceipts().get(0).getLegs().get(1);
     assertEquals(
         "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
-        remoteLeg.participantSettlementHash().value());
+        remoteLeg.getParticipantSettlementHash().getValue());
     assertTrue(
-        NativeAmxV2Models.isCanonicalBlsNormalPeerId(
-            firstLeg.participantProposal().descriptor().validatorSet().get(0)));
-    for (final NativeAmxV2Models.Receipt receipt : group.receipts()) {
-      actualSources.add(receipt.sourceId().value());
-      assertEquals(2, receipt.legs().size());
-      assertEquals(BigInteger.valueOf(11L), receipt.dataspaceId());
-      assertEquals(BigInteger.valueOf(40L), receipt.authorityContextHeight());
-      assertEquals(BigInteger.valueOf(9L), receipt.laneBlockView());
-      for (final NativeAmxV2Models.Leg leg : receipt.legs()) {
-        assertEquals(NativeAmxV2Models.Phase.PREPARE, leg.prepareQc().body().phase());
-        assertEquals(NativeAmxV2Models.Phase.COMMIT, leg.commitQc().body().phase());
-        assertEquals(BigInteger.valueOf(6L), leg.prepareQc().body().round().view());
+        NativeAmxV2.isCanonicalBlsNormalPeerId(
+            firstLeg.getParticipantProposal().getDescriptor().getValidatorSet().get(0)));
+    for (final NativeAmxV2.Receipt receipt : group.getReceipts()) {
+      actualSources.add(receipt.getSourceId().getValue());
+      assertEquals(2, receipt.getLegs().size());
+      assertEquals(BigInteger.valueOf(11L), receipt.getDataspaceId());
+      assertEquals(BigInteger.valueOf(40L), receipt.getAuthorityContextHeight());
+      assertEquals(BigInteger.valueOf(9L), receipt.getLaneBlockView());
+      for (final NativeAmxV2.Leg leg : receipt.getLegs()) {
+        assertEquals(NativeAmxV2.Phase.PREPARE, leg.getPrepareQc().getBody().getPhase());
+        assertEquals(NativeAmxV2.Phase.COMMIT, leg.getCommitQc().getBody().getPhase());
+        assertEquals(BigInteger.valueOf(6L), leg.getPrepareQc().getBody().getRound().getView());
         assertEquals(
-            BigInteger.valueOf(9L), leg.prepareQc().body().coordinatorLaneBlockView());
-        assertEquals(96, leg.prepareQc().aggregateSignature().size());
+            BigInteger.valueOf(9L), leg.getPrepareQc().getBody().getCoordinatorLaneBlockView());
+        assertEquals(96, leg.getPrepareQc().getAggregateSignature().getSize());
       }
     }
     assertEquals(sourceOrder, actualSources);
@@ -93,8 +92,8 @@ public final class NativeAmxV2GroupedFixtureTests {
     assertEquals(groupWire, object(array(diagnostics, "lane_settlement_commitments").get(0)));
     final Map<String, Object> row =
         object(array(diagnostics, "native_amx_participant_applications").get(0));
-    final NativeAmxParticipantApplication application =
-        new NativeAmxParticipantApplication(
+    final SumeragiNativeAmxParticipantApplication application =
+        new SumeragiNativeAmxParticipantApplication(
             number(row, "lane_id"),
             unsigned64(row, "dataspace_id"),
             string(row, "lane_incarnation"),
@@ -108,22 +107,22 @@ public final class NativeAmxV2GroupedFixtureTests {
             number(row, "source_count"),
             optionalUnsigned64(row, "application_block_height"),
             optionalString(row, "application_block_hash"),
-            NativeAmxParticipantApplicationState.fromWireName(string(row, "state")));
-    assertEquals(2L, application.sourceCount());
+            SumeragiNativeAmxParticipantApplicationState.valueOf(string(row, "state").toUpperCase(Locale.ROOT)));
+    assertEquals(2L, application.getSourceCount());
     assertEquals(
-        NativeAmxParticipantApplicationState.DURABLY_APPLIED, application.state());
+        SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED, application.getState());
     validateApplicationEvidence(fixture);
 
     final IllegalArgumentException invalidGroupUtf8 =
         assertThrows(
             IllegalArgumentException.class,
-            () -> NativeAmxV2Models.parseReceiptGroup(new byte[] {(byte) 0xff}));
+            () -> NativeAmxV2.parseReceiptGroup(new byte[] {(byte) 0xff}));
     assertEquals(
         "Native AMX receipt group must be valid UTF-8", invalidGroupUtf8.getMessage());
     final IllegalArgumentException invalidReceiptUtf8 =
         assertThrows(
             IllegalArgumentException.class,
-            () -> NativeAmxV2Models.parseReceipt(new byte[] {(byte) 0xff}));
+            () -> NativeAmxV2.parseReceipt(new byte[] {(byte) 0xff}));
     assertEquals("Native AMX V2 receipt must be valid UTF-8", invalidReceiptUtf8.getMessage());
   }
 
@@ -139,7 +138,7 @@ public final class NativeAmxV2GroupedFixtureTests {
     final Map<String, Object> missingGroup = group;
     assertThrows(
         IllegalArgumentException.class,
-        () -> NativeAmxV2Models.parseReceiptGroup(missingGroup));
+        () -> NativeAmxV2.parseReceiptGroup(missingGroup));
 
     fixture = fixture();
     group = object(object(fixture, "golden"), "receipt_group");
@@ -148,7 +147,7 @@ public final class NativeAmxV2GroupedFixtureTests {
     final Map<String, Object> nonnullGroup = group;
     assertThrows(
         IllegalArgumentException.class,
-        () -> NativeAmxV2Models.parseReceiptGroup(nonnullGroup));
+        () -> NativeAmxV2.parseReceiptGroup(nonnullGroup));
 
     fixture = fixture();
     group = object(object(fixture, "golden"), "receipt_group");
@@ -157,7 +156,7 @@ public final class NativeAmxV2GroupedFixtureTests {
     final Map<String, Object> unknownGroup = group;
     assertThrows(
         IllegalArgumentException.class,
-        () -> NativeAmxV2Models.parseReceiptGroup(unknownGroup));
+        () -> NativeAmxV2.parseReceiptGroup(unknownGroup));
   }
 
   @Test
@@ -182,7 +181,7 @@ public final class NativeAmxV2GroupedFixtureTests {
                 "execution_commitment_merge_carrier_wrong_version",
                 "execution_commitment_missing_merge_carrier_field")));
     assertFalse(
-        NativeAmxV2Models.isCanonicalBlsNormalPeerId(
+        NativeAmxV2.isCanonicalBlsNormalPeerId(
             "ea0130"
                 + "000000000000000000000000000000000000000000000000"
                 + "000000000000000000000000000000000000000000000000"));
@@ -195,56 +194,55 @@ public final class NativeAmxV2GroupedFixtureTests {
         applyMutation(document, object(mutation));
       }
       if ("application_evidence".equals(string(control, "validator"))) {
-        assertThrows(
-            identifier,
-            IllegalArgumentException.class,
-            () -> validateApplicationEvidence(document));
+        assertThrows(IllegalArgumentException.class,
+          () -> validateApplicationEvidence(document),
+          identifier);
         continue;
       }
       assertEquals("receipt_group", string(control, "validator"));
       final Map<String, Object> group =
           object(object(document, "golden"), "receipt_group");
-      assertThrows(
-          identifier,
-          IllegalArgumentException.class,
-          () -> NativeAmxV2Models.parseReceiptGroup(group));
+      assertThrows(IllegalArgumentException.class,
+          () -> NativeAmxV2.parseReceiptGroup(group),
+          identifier);
     }
   }
 
   @Test
   public void mixedRoleParticipantExposesDeferredAnchorValidation() throws Exception {
     final Map<String, Object> document = fixture();
-    final NativeAmxV2Models.ReceiptGroup group =
-        NativeAmxV2Models.parseReceiptGroup(
+    final NativeAmxV2.ReceiptGroup group =
+        NativeAmxV2.parseReceiptGroup(
             object(object(document, "golden"), "receipt_group"));
-    NativeAmxV2Models.Leg remote = null;
-    for (final NativeAmxV2Models.Leg leg : group.receipts().get(0).legs()) {
-      if (leg.laneId() == 8L) {
+    NativeAmxV2.Leg remote = null;
+    for (final NativeAmxV2.Leg leg : group.getReceipts().get(0).getLegs()) {
+      if (leg.getLaneId() == 8L) {
         remote = leg;
       }
     }
     assertTrue(remote != null);
     assertFalse(
-        NativeAmxV2Models.requiresMixedRoleAnchorValidation(
-            remote.participantProposal().descriptor(),
-            remote.prepareQc().body().transactionEntrypointHash().value()));
+        NativeAmxV2.requiresMixedRoleAnchorValidation(
+            remote.getParticipantProposal().getDescriptor(),
+            remote.getPrepareQc().getBody().getTransactionEntrypointHash()));
     assertTrue(
-        NativeAmxV2Models.requiresMixedRoleAnchorValidation(
-            remote.participantProposal().descriptor(),
-            "hash:07BAE6F998F2D195BD9481ADDFB26789F771FDD7F6BB476A9C3157F70FB85AB7#9781"));
+        NativeAmxV2.requiresMixedRoleAnchorValidation(
+            remote.getParticipantProposal().getDescriptor(),
+            new NativeAmxV2.TransactionEntrypointHash(
+                "hash:07BAE6F998F2D195BD9481ADDFB26789F771FDD7F6BB476A9C3157F70FB85AB7#9781")));
   }
 
   @Test
   public void javaParserPreservesCompleteNativeUnsigned64Tokens() throws Exception {
     final Map<String, Object> document = fixtureWithEpochToken(U64_MAX.toString());
-    final NativeAmxV2Models.ReceiptGroup group =
-        NativeAmxV2Models.parseReceiptGroup(
+    final NativeAmxV2.ReceiptGroup group =
+        NativeAmxV2.parseReceiptGroup(
             object(object(document, "golden"), "receipt_group"));
 
-    for (final NativeAmxV2Models.Receipt receipt : group.receipts()) {
-      for (final NativeAmxV2Models.Leg leg : receipt.legs()) {
-        assertEquals(U64_MAX, leg.prepareQc().body().epoch());
-        assertEquals(U64_MAX, leg.commitQc().body().epoch());
+    for (final NativeAmxV2.Receipt receipt : group.getReceipts()) {
+      for (final NativeAmxV2.Leg leg : receipt.getLegs()) {
+        assertEquals(U64_MAX, leg.getPrepareQc().getBody().getEpoch());
+        assertEquals(U64_MAX, leg.getCommitQc().getBody().getEpoch());
       }
     }
   }
@@ -262,10 +260,9 @@ public final class NativeAmxV2GroupedFixtureTests {
       final Map<String, Object> document = fixtureWithEpochToken(token);
       final Map<String, Object> group =
           object(object(document, "golden"), "receipt_group");
-      assertThrows(
-          token,
-          IllegalArgumentException.class,
-          () -> NativeAmxV2Models.parseReceiptGroup(group));
+      assertThrows(IllegalArgumentException.class,
+          () -> NativeAmxV2.parseReceiptGroup(group),
+          token);
     }
     assertThrows(IllegalStateException.class, () -> fixtureWithEpochToken("01"));
   }
@@ -425,13 +422,18 @@ public final class NativeAmxV2GroupedFixtureTests {
     final String operation = string(mutation, "op");
     final String path = string(mutation, "path");
     switch (operation) {
-      case "replace" -> assign(root, path, mutation.get("value"));
-      case "remove" -> remove(root, path);
-      case "copy" -> {
+      case "replace":
+        assign(root, path, mutation.get("value"));
+        break;
+      case "remove":
+        remove(root, path);
+        break;
+      case "copy": {
         final String source = string(object(mutation, "value"), "from");
         assign(root, path, resolve(root, source));
+        break;
       }
-      case "swap" -> {
+      case "swap": {
         final Map<String, Object> options = object(mutation, "value");
         final List<Object> target = list(resolve(root, path));
         final int left = (int) number(options, "left");
@@ -439,8 +441,9 @@ public final class NativeAmxV2GroupedFixtureTests {
         final Object temporary = target.get(left);
         target.set(left, target.get(right));
         target.set(right, temporary);
+        break;
       }
-      case "repeat" -> {
+      case "repeat": {
         final Map<String, Object> options = object(mutation, "value");
         final List<Object> target = list(resolve(root, path));
         final Object source = target.get((int) number(options, "source_index"));
@@ -449,8 +452,10 @@ public final class NativeAmxV2GroupedFixtureTests {
           repeated.add(source);
         }
         assign(root, path, repeated);
+        break;
       }
-      default -> throw new AssertionError("unsupported fixture mutation " + operation);
+      default:
+        throw new AssertionError("unsupported fixture mutation " + operation);
     }
   }
 

@@ -346,6 +346,9 @@ public final class SccpModels {
     public final SccpNetworkV1 sourceNetwork;
     public final int protocolVersion;
     public final String chainIdHash;
+    public final BigInteger epoch;
+    public final BigInteger epochEndHeight;
+    public final String rosterCommitment;
     public final BigInteger checkpointHeight;
     public final String checkpointBlockHash;
     public final String checkpointContextId;
@@ -357,6 +360,9 @@ public final class SccpModels {
         final SccpNetworkV1 sourceNetwork,
         final int protocolVersion,
         final String chainIdHash,
+        final BigInteger epoch,
+        final BigInteger epochEndHeight,
+        final String rosterCommitment,
         final BigInteger checkpointHeight,
         final String checkpointBlockHash,
         final String checkpointContextId,
@@ -366,6 +372,9 @@ public final class SccpModels {
       this.sourceNetwork = sourceNetwork;
       this.protocolVersion = protocolVersion;
       this.chainIdHash = chainIdHash;
+      this.epoch = epoch;
+      this.epochEndHeight = epochEndHeight;
+      this.rosterCommitment = rosterCommitment;
       this.checkpointHeight = checkpointHeight;
       this.checkpointBlockHash = checkpointBlockHash;
       this.checkpointContextId = checkpointContextId;

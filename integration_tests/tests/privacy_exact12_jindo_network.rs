@@ -26,9 +26,7 @@ use iroha_data_model::{
         PrivacyParameterDigestV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
-    transaction::{
-        FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent, TransactionBuilder,
-    },
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};

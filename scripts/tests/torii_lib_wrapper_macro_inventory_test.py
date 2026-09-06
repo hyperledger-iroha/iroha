@@ -260,7 +260,7 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
 ROUTE_ROW_COUNT = 540
-ROUTE_TUPLE_SHA256 = "4cf4fa3e727e8ee53b84ca4224cbd88f223e08f61703d8791cc65f718011ea8e"
+ROUTE_TUPLE_SHA256 = "a533e964147dba190bd4d69ee9215493a0fd864f54fbb6d260fcc41348dcbf26"
 
 
 def _normalized_tokens(source: str) -> bytes:

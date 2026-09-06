@@ -97,6 +97,13 @@ summary: Current SF-6 release automation and QA surfaces.
 - Orchestrator SDK parity runs through `ci/sdk_sorafs_orchestrator.sh` so
   multi-source fetch, proof, and pin-registration client behavior stays tied
   to the release matrix.
+  Its mobile job builds a fresh ABI-23 host bridge and the Kotlin fixture
+  generator, runs the five canonical Kotlin/Java and Android managed/host-native
+  tasks without cached execution, and verifies the bridge before and after use.
+  `scripts/check_sorafs_mobile_parity_reports.py` requires bounded, link-free
+  JUnit evidence with actual test cases and no failures, errors or skips for
+  every task. An ABI manifest or another task's reports cannot replace missing
+  execution. The uploaded summary contains only task IDs, counts and digests.
 - Config templates for scripted runs live under `fixtures/documentation/`, but production
   release and gateway-self-cert helpers require explicit deployment inputs.
   They never substitute the committed `ci_sample` fixtures for a release
@@ -114,6 +121,13 @@ summary: Current SF-6 release automation and QA surfaces.
   path, and verifier digest are mandatory. The wrapper rejects missing,
   malformed, existing-output, symlinked, non-regular, or aliased inputs before
   producing public signature/key/verification artifacts.
+  Every output directory ancestor remains descriptor-pinned across external
+  execution. Publication and rollback use the retained directory/file
+  descriptors; directory replacement, symlink substitution or changed output
+  inodes abort the output set. Hosts without descriptor-relative no-follow
+  publication fail before external execution instead of using a pathname
+  fallback. The HSM custody contract replacement is tracked separately in
+  [G02](sorafs/v1_implementation_goals.md).
 - `scripts/package_sorafs_validate_release.sh` builds or packages
   `sorafs-validate` into `dist/sorafs-validate-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,

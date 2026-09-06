@@ -391,8 +391,8 @@ for sdk_diagnostics_suite in \
   '    ("python", 129),' \
   '    ("javascript", 88),' \
   '    ("swift", 34),' \
-  '    ("kotlin", 44),' \
-  '    ("java", 43),'; do
+  '    ("kotlin", 50),' \
+  '    ("java", 48),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
 for sdk_diagnostics_test_count in 129 88 34 44 43; do
@@ -410,7 +410,7 @@ require_exact_fragment \
   1
 require_exact_fragment \
   "$sdk_diagnostics_harness" \
-  "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests" \
+  "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests" \
   1
 require_exact_token \
   "$sdk_diagnostics_harness" \

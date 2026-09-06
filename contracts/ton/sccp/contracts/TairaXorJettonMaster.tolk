@@ -31,8 +31,8 @@ fun assertMasterConfiguration(storage: MasterStorage): BridgeConfig {
     val hashes = config.routeHashes.load();
     val codeHashes = hashes.tail.load().deploymentCodeHashes.load();
     val replay = storage.replay.load();
-    sccpReplayValidateForestV1(replay.mints.load());
-    sccpReplayValidateForestV1(replay.burns.load());
+    sccpReplayValidateRuntimeForestV1(replay.mints.load());
+    sccpReplayValidateRuntimeForestV1(replay.burns.load());
     assert (getNetworkGlobalId() == config.expectedGlobalId) throw SccpErrors.WrongNetwork;
     assert (
         storage.routeConfigurationHash == hashes.routeConfigurationHash &&

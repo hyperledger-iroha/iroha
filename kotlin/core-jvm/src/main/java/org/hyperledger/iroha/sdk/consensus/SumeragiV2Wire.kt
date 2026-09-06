@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import java.util.Collections
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 
@@ -478,7 +479,7 @@ object SumeragiV2Wire {
         signers: List<Long>,
         aggregateSignature: ByteArray,
     ) : WireValue() {
-        @JvmField val signers: List<Long> = signers.toList()
+        @JvmField val signers: List<Long> = ownWireList(signers)
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
@@ -562,11 +563,10 @@ object SumeragiV2Wire {
         signers: List<Long>,
         aggregateSignature: ByteArray,
     ) : WireValue() {
-        @JvmField val signers: List<Long> = signers.toList()
+        @JvmField val signers: List<Long> = ownWireList(signers, "timeout group must contain a signer")
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
-            require(this.signers.isNotEmpty()) { "timeout group must contain a signer" }
             requireStrictlyIncreasing(this.signers, "timeout group signers")
         }
 
@@ -598,10 +598,10 @@ object SumeragiV2Wire {
         @JvmField val round: ConsensusRound,
         groups: List<TimeoutVoteGroup>,
     ) : WireValue() {
-        @JvmField val groups: List<TimeoutVoteGroup> = groups.toList()
+        @JvmField val groups: List<TimeoutVoteGroup> =
+            ownWireList(groups, "timeout certificate must contain a group")
 
         init {
-            require(this.groups.isNotEmpty()) { "timeout certificate must contain a group" }
             val seen = HashSet<Long>()
             this.groups.forEach { group ->
                 group.signers.forEach { signer ->
@@ -786,11 +786,8 @@ object SumeragiV2Wire {
         chunkHashes: List<Hash32>,
         @JvmField val chunkRoot: Hash32,
     ) : WireValue() {
-        @JvmField val chunkHashes: List<Hash32> = chunkHashes.toList()
-
-        init {
-            require(this.chunkHashes.isNotEmpty()) { "payload manifest must contain a chunk hash" }
-        }
+        @JvmField val chunkHashes: List<Hash32> =
+            ownWireList(chunkHashes, "payload manifest must contain a chunk hash")
 
         override fun encode(): ByteArray = struct(
             round.encode(),
@@ -1721,17 +1718,24 @@ object SumeragiV2Wire {
     /** Authoritative progress diagnostics for the active height. */
     class LivenessStatus(
         @JvmField val generation: Long,
-        @JvmField val prepareQuorums: List<VoteQuorumStatus>,
-        @JvmField val commitQuorums: List<VoteQuorumStatus>,
-        @JvmField val timeoutQuorums: List<TimeoutQuorumStatus>,
-        @JvmField val outboundIntents: List<OutboundIntentStatus>,
+        prepareQuorums: List<VoteQuorumStatus>,
+        commitQuorums: List<VoteQuorumStatus>,
+        timeoutQuorums: List<TimeoutQuorumStatus>,
+        outboundIntents: List<OutboundIntentStatus>,
         @JvmField val work: WorkStatus,
-        @JvmField val queues: List<QueueStatus>,
+        queues: List<QueueStatus>,
         @JvmField val lastProgress: ProgressTransitionStatus?,
         @JvmField val noProgressAgeMs: Long,
         @JvmField val blocker: LivenessBlocker?,
-        @JvmField val ignoreCounts: List<IgnoreCount>,
+        ignoreCounts: List<IgnoreCount>,
     ) : WireValue() {
+        @JvmField val prepareQuorums: List<VoteQuorumStatus> = ownWireList(prepareQuorums)
+        @JvmField val commitQuorums: List<VoteQuorumStatus> = ownWireList(commitQuorums)
+        @JvmField val timeoutQuorums: List<TimeoutQuorumStatus> = ownWireList(timeoutQuorums)
+        @JvmField val outboundIntents: List<OutboundIntentStatus> = ownWireList(outboundIntents)
+        @JvmField val queues: List<QueueStatus> = ownWireList(queues)
+        @JvmField val ignoreCounts: List<IgnoreCount> = ownWireList(ignoreCounts)
+
         override fun encode(): ByteArray = struct(
             u64(generation), vector(prepareQuorums) { it.encode() },
             vector(commitQuorums) { it.encode() }, vector(timeoutQuorums) { it.encode() },
@@ -2127,6 +2131,16 @@ object SumeragiV2Wire {
         val value = decode(reader)
         reader.finish("struct")
         return value
+    }
+
+    /** Snapshot public wire collections before validation and prevent later mutation. */
+    private fun <T : Any> ownWireList(values: List<T?>, nonEmptyMessage: String? = null): List<T> {
+        if (nonEmptyMessage != null) {
+            require(values.isNotEmpty()) { nonEmptyMessage }
+        }
+        return Collections.unmodifiableList(values.map {
+            requireNotNull(it) { "Sumeragi wire collections must not contain null entries" }
+        })
     }
 
     private fun requireStrictlyIncreasing(values: List<Long>, label: String) {

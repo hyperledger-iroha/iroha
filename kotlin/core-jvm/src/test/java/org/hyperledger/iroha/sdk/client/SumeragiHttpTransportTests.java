@@ -1,41 +1,44 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package org.hyperledger.iroha.android.client;
+package org.hyperledger.iroha.sdk.client;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsKt.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES;
+import static org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsKt.SUMERAGI_STATUS_JSON_MAX_BYTES;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import org.hyperledger.iroha.android.alias.AccountFaucetClaimV1;
-import org.hyperledger.iroha.android.alias.AccountFaucetPolicyV1;
-import org.hyperledger.iroha.android.alias.AccountFaucetPreparedTransactionV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingPrepareResponseV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedTransactionV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
-import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
-import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
-import org.hyperledger.iroha.android.client.transport.TransportRequest;
-import org.hyperledger.iroha.android.client.transport.TransportResponse;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
-import org.hyperledger.iroha.android.model.FeePaymentIntent;
-import org.hyperledger.iroha.android.model.NetworkId;
-import org.hyperledger.iroha.android.tx.SignedTransaction;
-import org.hyperledger.iroha.android.util.HashLiteral;
-import org.junit.Test;
+import org.hyperledger.iroha.sdk.alias.AccountFaucetClaimV1;
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPolicyV1;
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPreparedTransactionV1;
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1;
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1;
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1;
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1;
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1;
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1;
+import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1;
+import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1;
+import org.hyperledger.iroha.sdk.client.transport.TransportRequest;
+import org.hyperledger.iroha.sdk.client.transport.TransportResponse;
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent;
+import org.hyperledger.iroha.sdk.core.model.NetworkId;
+import org.hyperledger.iroha.sdk.core.util.HashLiteral;
+import org.hyperledger.iroha.sdk.tx.SignedTransaction;
+import org.junit.jupiter.api.Test;
 
-/** Exact, bounded Sumeragi HTTP surface tests. */
+/** Java consumers exercise the exact Kotlin-owned Sumeragi HTTP contract. */
 public final class SumeragiHttpTransportTests {
   @Test
   public void statusUsesOneExactBoundedJsonGet() {
@@ -43,19 +46,19 @@ public final class SumeragiHttpTransportTests {
     final OneResponseExecutor executor = new OneResponseExecutor(jsonResponse(body));
     final HttpClientTransport transport = transport(executor);
 
-    assertEquals(4, transport.getSumeragiStatus().join().protocolVersion());
+    assertEquals(4, transport.getSumeragiStatus().join().protocolVersion);
     assertEquals(1, executor.requests);
-    assertEquals("https://torii.example/api/v1/sumeragi/status", executor.last.uri().toString());
-    assertEquals("GET", executor.last.method());
-    assertArrayEquals(new byte[0], executor.last.body());
-    assertEquals(List.of("application/json"), executor.last.headers().get("Accept"));
+    assertEquals("https://torii.example/api/v1/sumeragi/status", executor.last.uri.toString());
+    assertEquals("GET", executor.last.method);
+    assertArrayEquals(new byte[0], executor.last.getBody());
+    assertEquals(Arrays.asList("application/json"), executor.last.getHeaders().get("Accept"));
     assertEquals(
-        org.hyperledger.iroha.android.client.transport.RequestReplayPolicy.ONE_SHOT,
-        executor.last.replayPolicy());
-    assertTrue(executor.last.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
+        org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy.ONE_SHOT,
+        executor.last.replayPolicy);
+    assertTrue(executor.last.getHeaders().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
     assertEquals(
-        Long.valueOf(SumeragiStatusModels.STATUS_JSON_MAX_BYTES),
-        executor.last.maximumResponseBytes());
+        Long.valueOf(SUMERAGI_STATUS_JSON_MAX_BYTES),
+        executor.last.maximumResponseBytes);
   }
 
   @Test
@@ -64,17 +67,17 @@ public final class SumeragiHttpTransportTests {
     final OneResponseExecutor executor = new OneResponseExecutor(jsonResponse(body));
     final HttpClientTransport transport = transport(executor);
 
-    assertEquals(1, transport.getSumeragiDiagnostics().join().txQueueCapacity().intValueExact());
-    assertEquals("https://torii.example/api/v1/sumeragi/diagnostics", executor.last.uri().toString());
-    assertEquals("GET", executor.last.method());
-    assertEquals(List.of("application/json"), executor.last.headers().get("Accept"));
+    assertEquals(1, transport.getSumeragiDiagnostics().join().getTxQueueCapacity().intValueExact());
+    assertEquals("https://torii.example/api/v1/sumeragi/diagnostics", executor.last.uri.toString());
+    assertEquals("GET", executor.last.method);
+    assertEquals(Arrays.asList("application/json"), executor.last.getHeaders().get("Accept"));
     assertEquals(
-        org.hyperledger.iroha.android.client.transport.RequestReplayPolicy.ONE_SHOT,
-        executor.last.replayPolicy());
-    assertTrue(executor.last.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
+        org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy.ONE_SHOT,
+        executor.last.replayPolicy);
+    assertTrue(executor.last.getHeaders().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
     assertEquals(
-        Long.valueOf(SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES),
-        executor.last.maximumResponseBytes());
+        Long.valueOf(SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES),
+        executor.last.maximumResponseBytes);
   }
 
   @Test
@@ -82,28 +85,28 @@ public final class SumeragiHttpTransportTests {
     final byte[] body = statusJson().getBytes(StandardCharsets.UTF_8);
     final byte[] diagnosticsBody = diagnosticsJson().getBytes(StandardCharsets.UTF_8);
     assertThrows(
-        "status endpoint must reject a diagnostics-shaped payload",
         RuntimeException.class,
         () ->
             transport(
                     new OneResponseExecutor(
                         jsonResponse(diagnosticsBody)))
                 .getSumeragiStatus()
-                .join());
+                .join(),
+        "status endpoint must reject a diagnostics-shaped payload");
     assertThrows(
-        "diagnostics endpoint must reject a status-shaped payload",
         RuntimeException.class,
         () ->
             transport(new OneResponseExecutor(jsonResponse(body)))
                 .getSumeragiDiagnostics()
-                .join());
+                .join(),
+        "diagnostics endpoint must reject a status-shaped payload");
 
     for (final Map<String, List<String>> headers :
-        List.<Map<String, List<String>>>of(
-            Map.of("Content-Type", List.of("Application/JSON; charset=utf-8")),
-            Map.of(
+        Arrays.<Map<String, List<String>>>asList(
+            headers("Content-Type", Arrays.asList("Application/JSON; charset=utf-8")),
+            headers(
                 "content-type",
-                List.of("application/json; charset=\"UTF-8\"; profile=exact")))) {
+                Arrays.asList("application/json; charset=\"UTF-8\"; profile=exact")))) {
       final TransportResponse statusResponse =
           new TransportResponse(200, body, "", headers, null, false);
       assertEquals(
@@ -111,7 +114,7 @@ public final class SumeragiHttpTransportTests {
           transport(new OneResponseExecutor(statusResponse))
               .getSumeragiStatus()
               .join()
-              .protocolVersion());
+              .protocolVersion);
       final TransportResponse diagnosticsResponse =
           new TransportResponse(200, diagnosticsBody, "", headers, null, false);
       assertEquals(
@@ -119,18 +122,18 @@ public final class SumeragiHttpTransportTests {
           transport(new OneResponseExecutor(diagnosticsResponse))
               .getSumeragiDiagnostics()
               .join()
-              .txQueueCapacity());
+              .getTxQueueCapacity());
     }
 
     for (final Map<String, List<String>> headers :
-        List.<Map<String, List<String>>>of(
+        Arrays.<Map<String, List<String>>>asList(
             Collections.emptyMap(),
-            Map.of("Content-Type", List.of("application/json", "application/json")),
-            Map.of("Content-Type", List.of("application/problem+json")),
-            Map.of("Content-Type", List.of("application/json, text/plain")),
-            Map.of("Content-Type", List.of("application/json;")),
-            Map.of("Content-Type", List.of("application/json; charset")),
-            Map.of("Content-Type", List.of("application/json; profile=\"a,b\"")))) {
+            headers("Content-Type", Arrays.asList("application/json", "application/json")),
+            headers("Content-Type", Arrays.asList("application/problem+json")),
+            headers("Content-Type", Arrays.asList("application/json, text/plain")),
+            headers("Content-Type", Arrays.asList("application/json;")),
+            headers("Content-Type", Arrays.asList("application/json; charset")),
+            headers("Content-Type", Arrays.asList("application/json; profile=\"a,b\"")))) {
       final TransportResponse statusResponse =
           new TransportResponse(200, body, "", headers, null, false);
       assertThrows(
@@ -146,31 +149,31 @@ public final class SumeragiHttpTransportTests {
                   .join());
     }
     for (final List<String> lengths :
-        List.<List<String>>of(
+        Arrays.<List<String>>asList(
             Collections.emptyList(),
-            List.of("+" + body.length),
-            List.of("0" + body.length),
-            List.of(Integer.toString(body.length + 1)),
-            List.of(Integer.toString(body.length), Integer.toString(body.length)))) {
+            Arrays.asList("+" + body.length),
+            Arrays.asList("0" + body.length),
+            Arrays.asList(Integer.toString(body.length + 1)),
+            Arrays.asList(Integer.toString(body.length), Integer.toString(body.length)))) {
       final TransportResponse response =
           new TransportResponse(
               200,
               body,
               "",
-              Map.of("Content-Type", List.of("application/json"), "Content-Length", lengths),
+              headers("Content-Type", Arrays.asList("application/json"), "Content-Length", lengths),
               null,
               false);
       assertThrows(
           RuntimeException.class,
           () -> transport(new OneResponseExecutor(response)).getSumeragiStatus().join());
     }
-    final byte[] oversized = new byte[(int) SumeragiStatusModels.STATUS_JSON_MAX_BYTES + 1];
+    final byte[] oversized = new byte[(int) SUMERAGI_STATUS_JSON_MAX_BYTES + 1];
     final TransportResponse oversizedResponse =
         new TransportResponse(
             200,
             oversized,
             "",
-            Map.of("Content-Type", List.of("application/json")),
+            headers("Content-Type", Arrays.asList("application/json")),
             null,
             false);
     assertThrows(
@@ -266,7 +269,7 @@ public final class SumeragiHttpTransportTests {
           public CompletableFuture<ClientResponse> submitTransaction(
               final SignedTransaction transaction) {
             return CompletableFuture.completedFuture(
-                new ClientResponse(202, new byte[0], "accepted"));
+                new ClientResponse(202, new byte[0], "accepted", null, null));
           }
         };
     assertThrows(RuntimeException.class, () -> defaultClient.getSumeragiStatus().join());
@@ -275,7 +278,7 @@ public final class SumeragiHttpTransportTests {
     final OneResponseExecutor executor =
         new OneResponseExecutor(jsonResponse(statusJson().getBytes(StandardCharsets.UTF_8)));
     final HttpClientTransport invalid =
-        HttpClientTransport.withExecutor(
+        new HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -290,7 +293,7 @@ public final class SumeragiHttpTransportTests {
     final OneResponseExecutor executor =
         new OneResponseExecutor(jsonResponse(statusJson().getBytes(StandardCharsets.UTF_8)));
     final HttpClientTransport missing =
-        HttpClientTransport.withExecutor(
+        new HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -299,7 +302,7 @@ public final class SumeragiHttpTransportTests {
     assertEquals(0, executor.requests);
 
     final HttpClientTransport fallback =
-        HttpClientTransport.withExecutor(
+        new HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -311,7 +314,7 @@ public final class SumeragiHttpTransportTests {
   }
 
   private static HttpClientTransport transport(final HttpTransportExecutor executor) {
-    return HttpClientTransport.withExecutor(
+    return new HttpClientTransport(
         executor,
         ClientConfig.builder()
             .setBaseUri(URI.create("https://torii.example/api"))
@@ -325,7 +328,7 @@ public final class SumeragiHttpTransportTests {
     network[network.length - 1] |= 1;
     return new OperatorSigningContext(
         NetworkId.fromBytes(network),
-        "ed0120" + "66".repeat(32),
+        "ed0120" + repeat("66", 32),
         message -> {
           final byte[] signature = new byte[64];
           java.util.Arrays.fill(signature, (byte) 0x55);
@@ -333,14 +336,38 @@ public final class SumeragiHttpTransportTests {
         });
   }
 
+  private static String repeat(final String value, final int count) {
+    final StringBuilder result = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) {
+      result.append(value);
+    }
+    return result.toString();
+  }
+
+  private static Map<String, List<String>> headers(
+      final String name, final List<String> values) {
+    return Collections.singletonMap(name, values);
+  }
+
+  private static Map<String, List<String>> headers(
+      final String firstName,
+      final List<String> firstValues,
+      final String secondName,
+      final List<String> secondValues) {
+    final Map<String, List<String>> result = new LinkedHashMap<>();
+    result.put(firstName, firstValues);
+    result.put(secondName, secondValues);
+    return result;
+  }
+
   private static TransportResponse jsonResponse(final byte[] body) {
     return new TransportResponse(
         200,
         body,
         "ok",
-        Map.of(
-            "Content-Type", List.of("application/json"),
-            "Content-Length", List.of(Integer.toString(body.length))),
+        headers(
+            "Content-Type", Arrays.asList("application/json"),
+            "Content-Length", Arrays.asList(Integer.toString(body.length))),
         null,
         false);
   }
@@ -363,7 +390,7 @@ public final class SumeragiHttpTransportTests {
         + "\"last_committed_height\":0,\"last_committed_subject\":null,"
         + "\"height_context\":{\"epoch\":0,\"epoch_end_height\":1,"
         + "\"mode\":{\"mode\":\"permissioned\",\"details\":null},"
-        + "\"epoch_seed\":\"" + "00".repeat(32) + "\","
+        + "\"epoch_seed\":\"" + repeat("00", 32) + "\","
         + "\"validator_count\":4,\"quorum\":{\"min_signers\":3,\"total_power\":4}},"
         + "\"last_commit_qc\":null,"
         + "\"liveness\":{\"generation\":0,\"prepare_quorums\":[],"

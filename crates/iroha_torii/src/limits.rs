@@ -1,7 +1,8 @@
 //! Rate limiting and API token utilities for Torii.
 //!
-//! Implements a sharded token-bucket rate limiter keyed by a caller identity (API token or
-//! authority id). This protects the node from abuse without introducing gas/fees on read endpoints.
+//! Implements both bounded dynamic-key and immutable preseeded-key sharded token-bucket limiters.
+//! They are keyed by a caller identity (API token or authority id) and protect the node from abuse
+//! without introducing gas/fees on read endpoints.
 
 #![allow(clippy::redundant_pub_crate)]
 use axum::http::HeaderMap;
@@ -86,6 +87,12 @@ impl ApiTokenDigestSet {
     pub(crate) fn is_empty(&self) -> bool {
         self.digests.is_empty()
     }
+    /// Enumerate the authenticated principal keys used to seed fixed limiter buckets.
+    pub(crate) fn rate_limit_keys(&self) -> impl Iterator<Item = String> + '_ {
+        self.digests
+            .iter()
+            .map(|digest| ApiTokenPrincipal(*digest).rate_limit_key())
+    }
     /// Authenticate one token digest without early exit at a matching entry.
     #[must_use]
     pub(crate) fn authenticate(&self, token: &str) -> Option<ApiTokenPrincipal> {
@@ -103,9 +110,22 @@ impl ApiTokenDigestSet {
 pub struct RateLimiter {
     inner: Arc<ShardedLimiter>,
 }
+/// Shared limiter whose complete key set is fixed at construction time.
+///
+/// Missing keys are always rejected and never allocate or evict a bucket. This
+/// is crate-private because its keys identify authenticated principals and must
+/// not be exposed through diagnostics.
+#[derive(Clone)]
+pub(crate) struct FixedKeyRateLimiter {
+    inner: Arc<FixedKeyShardedLimiter>,
+}
 struct ShardedLimiter {
     disabled: bool,
     shards: Vec<Mutex<InnerLimiter>>,
+}
+struct FixedKeyShardedLimiter {
+    disabled: bool,
+    shards: Vec<Mutex<FixedKeyInnerLimiter>>,
 }
 #[derive(Clone)]
 struct InnerLimiter {
@@ -114,6 +134,11 @@ struct InnerLimiter {
     buckets: HashMap<String, TokenBucket>,
     order: VecDeque<String>,
     max_buckets: usize,
+}
+struct FixedKeyInnerLimiter {
+    rate_per_sec: f64,
+    burst: f64,
+    buckets: HashMap<String, TokenBucket>,
 }
 #[derive(Clone, Copy)]
 struct TokenBucket {
@@ -332,14 +357,67 @@ impl ShardedLimiter {
         Self { disabled, shards }
     }
     fn shard_index_for(&self, key: &str) -> usize {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let shard_count = u64::try_from(self.shards.len()).expect("shard count fits in u64");
-        usize::try_from(hasher.finish() % shard_count).expect("shard index fits in usize")
+        shard_index_for_key(key, self.shards.len())
     }
     fn shard_for(&self, key: &str) -> &Mutex<InnerLimiter> {
         &self.shards[self.shard_index_for(key)]
     }
+}
+impl FixedKeyShardedLimiter {
+    fn new(rate_per_sec: Option<f64>, burst: f64, mut keys: Vec<String>) -> Self {
+        keys.sort_unstable();
+        keys.dedup();
+        let disabled = rate_per_sec.is_none();
+        let rate_per_sec = rate_per_sec.unwrap_or(0.0);
+        let shard_count = keys
+            .len()
+            .max(1)
+            .div_ceil(MIN_BUCKETS_PER_SHARD)
+            .min(DEFAULT_RATE_LIMITER_SHARDS)
+            .max(1);
+        let mut shard_sizes = vec![0_usize; shard_count];
+        let assignments = keys
+            .into_iter()
+            .map(|key| {
+                let shard = shard_index_for_key(&key, shard_count);
+                shard_sizes[shard] += 1;
+                (shard, key)
+            })
+            .collect::<Vec<_>>();
+        let mut shards = shard_sizes
+            .into_iter()
+            .map(|size| FixedKeyInnerLimiter {
+                rate_per_sec,
+                burst,
+                buckets: HashMap::with_capacity(size),
+            })
+            .collect::<Vec<_>>();
+        let now = Instant::now();
+        for (shard, key) in assignments {
+            let previous = shards[shard].buckets.insert(
+                key,
+                TokenBucket {
+                    tokens: burst,
+                    last: now,
+                    pending_reservations: 0,
+                },
+            );
+            debug_assert!(previous.is_none(), "fixed limiter keys were deduplicated");
+        }
+        Self {
+            disabled,
+            shards: shards.into_iter().map(Mutex::new).collect(),
+        }
+    }
+    fn shard_for(&self, key: &str) -> &Mutex<FixedKeyInnerLimiter> {
+        &self.shards[shard_index_for_key(key, self.shards.len())]
+    }
+}
+fn shard_index_for_key(key: &str, shard_count: usize) -> usize {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let shard_count = u64::try_from(shard_count).expect("shard count fits in u64");
+    usize::try_from(hasher.finish() % shard_count).expect("shard index fits in usize")
 }
 impl InnerLimiter {
     fn new(rate_per_sec: f64, burst: f64, max_buckets: usize) -> Self {
@@ -525,6 +603,26 @@ impl PendingRateLimitReservation {
         }
     }
 }
+impl FixedKeyInnerLimiter {
+    fn allow_repeated(&mut self, key: &str, count: usize, now: Instant) -> bool {
+        let Some(bucket) = self.buckets.get_mut(key) else {
+            return false;
+        };
+        if count == 0 {
+            return true;
+        }
+        let required = count as f64;
+        if required > self.burst {
+            return false;
+        }
+        InnerLimiter::refill_bucket(self.rate_per_sec, self.burst, bucket, now);
+        if bucket.tokens < required {
+            return false;
+        }
+        bucket.tokens -= required;
+        true
+    }
+}
 impl RateLimiter {
     /// Create a new limiter. If `rate_per_sec` is None or 0, the limiter allows all.
     pub fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
@@ -701,6 +799,51 @@ impl RateLimiter {
     #[cfg(test)]
     #[allow(clippy::unused_async)]
     pub(crate) async fn bucket_count(&self) -> usize {
+        self.inner
+            .shards
+            .iter()
+            .map(|shard| shard.lock().buckets.len())
+            .sum()
+    }
+}
+impl FixedKeyRateLimiter {
+    /// Create a requests-per-minute limiter for one immutable set of keys.
+    pub(crate) fn new_per_minute(
+        rate_per_minute: Option<u32>,
+        burst: Option<u32>,
+        keys: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let rate = rate_per_minute.and_then(|value| {
+            (value > 0).then_some(f64::from(value) / Duration::from_secs(60).as_secs_f64())
+        });
+        let burst = burst.unwrap_or_else(|| rate_per_minute.unwrap_or(0)).max(1) as f64;
+        Self {
+            inner: Arc::new(FixedKeyShardedLimiter::new(
+                rate,
+                burst,
+                keys.into_iter().collect(),
+            )),
+        }
+    }
+    /// Consume one token for a known key.
+    #[allow(clippy::unused_async)]
+    pub(crate) async fn allow(&self, key: &str) -> bool {
+        self.allow_repeated(key, 1).await
+    }
+    /// Atomically consume `count` tokens for one known key.
+    ///
+    /// Missing keys are rejected without insertion. Rejection never consumes a
+    /// partial debit, including when `count` exceeds the configured burst.
+    #[allow(clippy::unused_async)]
+    pub(crate) async fn allow_repeated(&self, key: &str, count: usize) -> bool {
+        let mut shard = self.inner.shard_for(key).lock();
+        if self.inner.disabled {
+            return shard.buckets.contains_key(key);
+        }
+        shard.allow_repeated(key, count, Instant::now())
+    }
+    #[cfg(test)]
+    fn bucket_count(&self) -> usize {
         self.inner
             .shards
             .iter()
@@ -1420,6 +1563,128 @@ mod tests {
         assert!(limiter.allow("a").await);
         // Third should be limited
         assert!(!limiter.allow("a").await);
+    }
+    #[tokio::test]
+    async fn configured_token_digests_seed_exact_authenticated_limiter_keys() {
+        let tokens = ApiTokenDigestSet::from_tokens(["first-token", "second-token", "first-token"]);
+        let limiter =
+            FixedKeyRateLimiter::new_per_minute(Some(1), Some(1), tokens.rate_limit_keys());
+        assert_eq!(limiter.bucket_count(), 2);
+        for token in ["first-token", "second-token"] {
+            let key = tokens
+                .authenticate(token)
+                .expect("configured token")
+                .rate_limit_key();
+            assert!(!key.contains(token));
+            assert!(limiter.allow(&key).await);
+            assert!(!limiter.allow(&key).await);
+            assert!(!limiter.allow(token).await);
+        }
+        assert!(
+            !limiter
+                .allow(&ApiTokenPrincipal::from_token("unknown-token").rate_limit_key())
+                .await
+        );
+        assert_eq!(limiter.bucket_count(), 2);
+        assert_eq!(ApiTokenDigestSet::default().rate_limit_keys().count(), 0);
+    }
+    #[tokio::test]
+    async fn fixed_key_limiter_empty_set_rejects_without_growth() {
+        let limiter =
+            FixedKeyRateLimiter::new_per_minute(Some(60), Some(1), std::iter::empty::<String>());
+        assert!(!limiter.allow("unknown").await);
+        assert!(!limiter.allow_repeated("unknown", 0).await);
+        assert_eq!(limiter.bucket_count(), 0);
+    }
+    #[tokio::test]
+    async fn fixed_key_limiter_disabled_rate_still_enforces_membership() {
+        let limiter = FixedKeyRateLimiter::new_per_minute(
+            None,
+            None,
+            ["known".to_owned(), "known".to_owned()],
+        );
+        for _ in 0..100 {
+            assert!(limiter.allow("known").await);
+            assert!(limiter.allow_repeated("known", 10_000).await);
+        }
+        assert!(!limiter.allow("unknown").await);
+        assert!(!limiter.allow_repeated("unknown", 0).await);
+        assert_eq!(limiter.bucket_count(), 1);
+    }
+    #[tokio::test]
+    async fn fixed_key_limiter_unknown_churn_cannot_reset_a_bucket() {
+        let limiter = FixedKeyRateLimiter::new_per_minute(Some(1), Some(1), ["victim".to_owned()]);
+        assert!(limiter.allow("victim").await);
+        assert!(!limiter.allow("victim").await);
+        for index in 0..10_000 {
+            assert!(!limiter.allow(&format!("unknown-{index}")).await);
+        }
+        assert_eq!(limiter.bucket_count(), 1);
+        assert!(!limiter.allow("victim").await);
+    }
+    #[tokio::test]
+    async fn fixed_key_limiter_clones_share_depletion() {
+        let limiter =
+            FixedKeyRateLimiter::new_per_minute(Some(1), Some(1), ["principal".to_owned()]);
+        let clone = limiter.clone();
+        assert!(limiter.allow("principal").await);
+        assert!(!clone.allow("principal").await);
+        assert_eq!(clone.bucket_count(), 1);
+    }
+    #[tokio::test]
+    async fn fixed_key_limiter_preseeds_every_same_shard_key_without_eviction() {
+        const KEY_COUNT: usize = MIN_BUCKETS_PER_SHARD + 1;
+        const SHARD_COUNT: usize = 2;
+        let keys = (0_usize..)
+            .map(|index| format!("same-shard-{index}"))
+            .filter(|key| shard_index_for_key(key, SHARD_COUNT) == 0)
+            .take(KEY_COUNT)
+            .collect::<Vec<_>>();
+        let limiter = FixedKeyRateLimiter::new_per_minute(Some(1), Some(1), keys.iter().cloned());
+        assert_eq!(limiter.inner.shards.len(), SHARD_COUNT);
+        assert_eq!(limiter.bucket_count(), KEY_COUNT);
+        for key in &keys {
+            assert!(
+                limiter.allow(key).await,
+                "configured key was evicted: {key}"
+            );
+        }
+        for key in &keys {
+            assert!(!limiter.allow(key).await, "configured bucket reset: {key}");
+        }
+        assert_eq!(limiter.bucket_count(), KEY_COUNT);
+    }
+    #[tokio::test]
+    async fn fixed_key_limiter_maps_remain_independent_under_configured_key_churn() {
+        let keys = (0..DEFAULT_MAX_BUCKETS + 257)
+            .map(|index| format!("configured-{index}"))
+            .collect::<Vec<_>>();
+        let ordinary = FixedKeyRateLimiter::new_per_minute(Some(1), Some(1), keys.iter().cloned());
+        let control = FixedKeyRateLimiter::new_per_minute(Some(1), Some(1), keys.iter().cloned());
+        assert_eq!(ordinary.bucket_count(), keys.len());
+        assert_eq!(control.bucket_count(), keys.len());
+
+        let victim = &keys[0];
+        assert!(ordinary.allow(victim).await);
+        assert!(!ordinary.allow(victim).await);
+        for key in keys.iter().skip(1) {
+            assert!(ordinary.allow(key).await);
+            assert!(control.allow(key).await);
+        }
+        assert!(!ordinary.allow(victim).await);
+        assert!(control.allow(victim).await);
+        assert!(!control.allow(victim).await);
+        assert!(!ordinary.allow(victim).await);
+        assert_eq!(ordinary.bucket_count(), keys.len());
+        assert_eq!(control.bucket_count(), keys.len());
+    }
+    #[tokio::test]
+    async fn fixed_key_limiter_additional_debit_is_atomic() {
+        let limiter = FixedKeyRateLimiter::new_per_minute(Some(1), Some(3), ["batch".to_owned()]);
+        assert!(limiter.allow("batch").await);
+        assert!(!limiter.allow_repeated("batch", 3).await);
+        assert!(limiter.allow_repeated("batch", 2).await);
+        assert!(!limiter.allow("batch").await);
     }
     #[test]
     fn per_minute_rates_preserve_fractional_refill_boundaries() {

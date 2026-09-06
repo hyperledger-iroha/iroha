@@ -46,7 +46,8 @@ challenge, then binds the exact parent CommitQC and successor snapshot. The
 retained current anchor authorizes one exact epoch/roster at or before its
 boundary; the independently verified boundary QC emits its exact successor as
 the next retained anchor, so advances compose across multiple epochs. A
-same-height anchor must name the exact boundary block/context/artifact. The same
+same-height anchor must name the exact block/context/artifact in both message
+and epoch-boundary authorization. The same
 BLS-normal equations pass a Rust-derived Iroha QC fixture in both outer fields.
 
 The statement commitment covers the complete constrained semantic bundle. It
@@ -116,3 +117,12 @@ canonical R1CS byte lengths and SHA-256 identities. All earlier epoch Phase-2
 transcripts, PK/VK pairs, fixed verifiers, and deployments are invalid; the two
 curve Phase-1 ceremonies and the four message-circuit definitions are not
 changed by this circuit-specific repair.
+
+Message authorization additionally binds the checkpoint block, context, and
+finality artifact when the message finality height equals the retained
+checkpoint height. Focused tests cover matching and independently mismatched
+identities in both outer fields while retaining authorization for later blocks
+in the same epoch. This consistency repair changes all four message R1CS
+definitions without changing their positive KAT public values. The manifest's
+message constraint counts are historical pending recount; fresh R1CS identities,
+Phase-2 artifacts, verifiers, deployments, and independent audits remain required.

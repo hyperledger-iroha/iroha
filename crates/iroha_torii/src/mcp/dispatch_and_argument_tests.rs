@@ -2710,14 +2710,6 @@ fn extract_height_argument_requires_canonical_path_field() {
     assert_eq!(height, "7");
 }
 #[test]
-fn extract_view_argument_requires_canonical_path_field() {
-    let args = norito::json!({
-        "path": { "view": 3 }
-    });
-    let view = extract_view_argument(args.as_object().expect("object")).expect("view");
-    assert_eq!(view, "3");
-}
-#[test]
 fn build_iso20022_payload_body_accepts_only_canonical_base64_bytes() {
     let xml = b"<Document>ok</Document>";
     let body_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, xml);
@@ -2771,24 +2763,6 @@ fn extract_rwa_id_argument_requires_canonical_path_field() {
     assert_eq!(rwa_id, "rwa-001");
 }
 #[test]
-fn extract_bundle_id_hex_argument_requires_canonical_path_field() {
-    let args = norito::json!({
-        "path": { "bundle_id_hex": "deadbeef" }
-    });
-    let bundle_id =
-        extract_bundle_id_hex_argument(args.as_object().expect("object")).expect("bundle id");
-    assert_eq!(bundle_id, "deadbeef");
-}
-#[test]
-fn extract_certificate_id_hex_argument_requires_canonical_path_field() {
-    let args = norito::json!({
-        "path": { "certificate_id_hex": "cafe1234" }
-    });
-    let certificate_id = extract_certificate_id_hex_argument(args.as_object().expect("object"))
-        .expect("certificate id");
-    assert_eq!(certificate_id, "cafe1234");
-}
-#[test]
 fn extract_transaction_hash_argument_requires_canonical_path_field() {
     let args = norito::json!({
         "path": { "hash": "deadbeef" }
@@ -2835,7 +2809,6 @@ fn canonical_path_and_hash_extractors_reject_retired_aliases() {
             norito::json!({ "block_height": 7 }),
             extract_height_argument,
         ),
-        (norito::json!({ "view": 3 }), extract_view_argument),
         (
             norito::json!({ "definition_id": "definition" }),
             extract_definition_id_argument,
@@ -2849,38 +2822,6 @@ fn canonical_path_and_hash_extractors_reject_retired_aliases() {
         (norito::json!({ "id": "nft" }), extract_nft_id_argument),
         (norito::json!({ "rwa_id": "rwa" }), extract_rwa_id_argument),
         (norito::json!({ "id": "rwa" }), extract_rwa_id_argument),
-        (
-            norito::json!({ "bundle_id_hex": "deadbeef" }),
-            extract_bundle_id_hex_argument,
-        ),
-        (
-            norito::json!({ "bundle_id": "deadbeef" }),
-            extract_bundle_id_hex_argument,
-        ),
-        (
-            norito::json!({ "path": { "bundle_id": "deadbeef" } }),
-            extract_bundle_id_hex_argument,
-        ),
-        (
-            norito::json!({ "certificate_id_hex": "cafe1234" }),
-            extract_certificate_id_hex_argument,
-        ),
-        (
-            norito::json!({ "certificate_id": "cafe1234" }),
-            extract_certificate_id_hex_argument,
-        ),
-        (
-            norito::json!({ "id": "cafe1234" }),
-            extract_certificate_id_hex_argument,
-        ),
-        (
-            norito::json!({ "path": { "certificate_id": "cafe1234" } }),
-            extract_certificate_id_hex_argument,
-        ),
-        (
-            norito::json!({ "path": { "id": "cafe1234" } }),
-            extract_certificate_id_hex_argument,
-        ),
         (
             norito::json!({ "hash": "deadbeef" }),
             extract_transaction_hash_argument,

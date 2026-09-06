@@ -12,6 +12,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -24,6 +25,96 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SumeragiDiagnosticsModelsTest {
+    @Test
+    fun `diagnostics own nested JSON and all caller supplied vectors`() {
+        val nested = mutableListOf<JsonElement>(JsonPrimitive(7))
+        val members = mutableMapOf<String, JsonElement>("values" to JsonArray(nested))
+        val lanes = mutableListOf(JsonObject(members))
+        val aliases = mutableListOf("lane-a")
+        val nativeRows = mutableListOf(application(3))
+        val autonomousRows = mutableListOf(autonomousExecution(3))
+        val value = diagnostics(
+            laneCommitments = lanes,
+            aliases = aliases,
+            nativeRows = nativeRows,
+            autonomousRows = autonomousRows,
+        )
+        val wire = Json.encodeToString(value)
+        val hash = value.hashCode()
+
+        nested.clear()
+        members.clear()
+        lanes.clear()
+        aliases.clear()
+        nativeRows.clear()
+        autonomousRows.clear()
+
+        assertEquals(wire, Json.encodeToString(value))
+        assertEquals(hash, value.hashCode())
+        assertEquals(value, SumeragiDiagnosticsStatus.parseJson(wire))
+        assertFailsWith<UnsupportedOperationException> {
+            (value.laneCommitments as MutableList<JsonObject>).clear()
+        }
+        assertFailsWith<UnsupportedOperationException> {
+            (value.laneGovernanceSealedAliases as MutableList<String>).clear()
+        }
+        assertFailsWith<UnsupportedOperationException> {
+            (value.nativeAmxParticipantApplications as MutableList<SumeragiNativeAmxParticipantApplication>).clear()
+        }
+        assertFailsWith<UnsupportedOperationException> {
+            (value.autonomousLaneExecutions as MutableList<SumeragiAutonomousLaneExecution>).clear()
+        }
+        val entry = value.laneCommitments.single().entries.single()
+        assertFailsWith<UnsupportedOperationException> {
+            (entry as MutableMap.MutableEntry<String, JsonElement>).setValue(JsonPrimitive(8))
+        }
+    }
+
+    @Test
+    fun `NPoS seed ownership survives input and returned collection mutations`() {
+        val seed = MutableList(32) { 1 }
+        val value = SumeragiNposDiagnostics(BigInteger.TEN, seed, BigInteger.ONE, BigInteger.ZERO)
+        val wire = Json.encodeToString(value)
+        val hash = value.hashCode()
+        seed.fill(0)
+        assertEquals(List(32) { 1 }, value.epochSeed)
+        assertEquals(wire, Json.encodeToString(value))
+        assertEquals(hash, value.hashCode())
+        assertEquals(value, Json.decodeFromString<SumeragiNposDiagnostics>(wire))
+        assertFailsWith<UnsupportedOperationException> {
+            (value.epochSeed as MutableList<Int>)[0] = 0
+        }
+    }
+
+    @Test
+    fun `diagnostics reject oversized vectors before traversing caller contents`() {
+        val oversized = object : AbstractList<JsonObject>() {
+            override val size: Int = SUMERAGI_DIAGNOSTIC_LANES_MAX + 1
+            override fun get(index: Int): JsonObject = error("oversized input must not be traversed")
+        }
+        assertFailsWith<IllegalArgumentException> { diagnostics(laneCommitments = oversized) }
+        var nested: JsonElement = JsonPrimitive(1)
+        repeat(125) { nested = JsonArray(listOf(nested)) }
+        val boundary = diagnostics(laneCommitments = listOf(JsonObject(mapOf("nested" to nested))))
+        assertEquals(boundary, SumeragiDiagnosticsStatus.parseJson(Json.encodeToString(boundary)))
+        nested = JsonArray(listOf(nested))
+        assertFailsWith<IllegalArgumentException> {
+            diagnostics(laneCommitments = listOf(JsonObject(mapOf("nested" to nested))))
+        }
+    }
+
+    @Test
+    fun `diagnostics reject Java supplied null elements even in singleton vectors`() {
+        @Suppress("UNCHECKED_CAST")
+        val nativeRows = listOf<SumeragiNativeAmxParticipantApplication?>(null) as
+            List<SumeragiNativeAmxParticipantApplication>
+        @Suppress("UNCHECKED_CAST")
+        val autonomousRows = listOf<SumeragiAutonomousLaneExecution?>(null) as
+            List<SumeragiAutonomousLaneExecution>
+        assertFailsWith<IllegalArgumentException> { diagnostics(nativeRows = nativeRows) }
+        assertFailsWith<IllegalArgumentException> { diagnostics(autonomousRows = autonomousRows) }
+    }
+
     @Test
     fun `diagnostics byte parser rejects malformed UTF-8 instead of replacing it`() {
         assertFails {
@@ -69,10 +160,10 @@ class SumeragiDiagnosticsModelsTest {
     @Test
     fun `native participant row enforces carrier state geometry and group bound`() {
         assertFailsWith<IllegalArgumentException> {
-            application(3).copy(applicationBlockHash = null)
+            application(3, applicationBlockHash = null)
         }
         assertFailsWith<IllegalArgumentException> {
-            application(3).copy(sourceCount = 4_097)
+            application(3, sourceCount = 4_097)
         }
 
         val geometryError =
@@ -83,14 +174,14 @@ class SumeragiDiagnosticsModelsTest {
         )) {
             assertEquals(
                 state,
-                application(3).copy(
+                application(3,
                     applicationBlockHeight = null,
                     applicationBlockHash = null,
                     state = state,
                 ).state,
             )
             val error = assertFailsWith<IllegalArgumentException> {
-                application(3).copy(state = state)
+                application(3, state = state)
             }
             assertEquals(geometryError, error.message)
         }
@@ -98,9 +189,9 @@ class SumeragiDiagnosticsModelsTest {
             SumeragiNativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING,
             SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED,
         )) {
-            assertEquals(state, application(3).copy(state = state).state)
+            assertEquals(state, application(3, state = state).state)
             val error = assertFailsWith<IllegalArgumentException> {
-                application(3).copy(
+                application(3,
                     applicationBlockHeight = null,
                     applicationBlockHash = null,
                     state = state,
@@ -113,7 +204,7 @@ class SumeragiDiagnosticsModelsTest {
     @Test
     fun `native participant diagnostics preserve complete u64 numeric tokens`() {
         val max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-        val row = application(3).copy(
+        val row = application(3,
             dataspaceId = max,
             participantHeight = max,
             participantView = max,
@@ -153,8 +244,8 @@ class SumeragiDiagnosticsModelsTest {
     fun `native participant diagnostics order full-width dataspaces exactly`() {
         val high = BigInteger.ONE.shiftLeft(63)
         val max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-        val lower = application(3).copy(dataspaceId = high)
-        val upper = application(3).copy(dataspaceId = max)
+        val lower = application(3, dataspaceId = high)
+        val upper = application(3, dataspaceId = max)
 
         assertEquals(
             listOf(lower, upper),
@@ -169,10 +260,10 @@ class SumeragiDiagnosticsModelsTest {
     fun `native participant diagnostics reject u64 overflow and predecessor wraparound`() {
         val overflow = BigInteger.ONE.shiftLeft(64)
         assertFailsWith<IllegalArgumentException> {
-            application(3).copy(dataspaceId = overflow)
+            application(3, dataspaceId = overflow)
         }
         assertFailsWith<IllegalArgumentException> {
-            application(3).copy(
+            application(3,
                 participantHeight = BigInteger.ONE,
                 predecessorHeight = overflow.subtract(BigInteger.ONE),
             )
@@ -563,7 +654,12 @@ class SumeragiDiagnosticsModelsTest {
         }
     }
 
-    private fun diagnostics(): SumeragiDiagnosticsStatus =
+    private fun diagnostics(
+        laneCommitments: List<JsonObject> = emptyList(),
+        aliases: List<String> = emptyList(),
+        nativeRows: List<SumeragiNativeAmxParticipantApplication> = listOf(application(3)),
+        autonomousRows: List<SumeragiAutonomousLaneExecution> = listOf(autonomousExecution(3)),
+    ): SumeragiDiagnosticsStatus =
         SumeragiDiagnosticsStatus(
             pipelineExecution = pipeline(),
             txQueueDepth = BigInteger.ZERO,
@@ -575,18 +671,18 @@ class SumeragiDiagnosticsModelsTest {
             txQueueSaturatedByBytes = false,
             txQueueSaturatedByAge = false,
             txQueueOldestQueuedAgeMs = BigInteger.ZERO,
-            laneCommitments = emptyList(),
+            laneCommitments = laneCommitments,
             dataspaceCommitments = emptyList(),
             laneSettlementCommitments = emptyList(),
             laneRelayEnvelopes = emptyList(),
             lanePayloadOwnerships = emptyList(),
             committedLaneBlocks = emptyList(),
             laneBlockSessions = emptyList(),
-            laneGovernanceSealedTotal = 0,
-            laneGovernanceSealedAliases = emptyList(),
+            laneGovernanceSealedTotal = aliases.size.toLong(),
+            laneGovernanceSealedAliases = aliases,
             laneGovernance = emptyList(),
-            nativeAmxParticipantApplications = listOf(application(3)),
-            autonomousLaneExecutions = listOf(autonomousExecution(3)),
+            nativeAmxParticipantApplications = nativeRows,
+            autonomousLaneExecutions = autonomousRows,
         )
 
     private fun pipeline(): SumeragiPipelineExecutionStatus {
@@ -612,22 +708,33 @@ class SumeragiDiagnosticsModelsTest {
         )
     }
 
-    private fun application(laneId: Long): SumeragiNativeAmxParticipantApplication =
+    private fun application(
+        laneId: Long,
+        dataspaceId: BigInteger = BigInteger.valueOf(8),
+        participantHeight: BigInteger = BigInteger.valueOf(8),
+        participantView: BigInteger = BigInteger.ONE,
+        predecessorHeight: BigInteger = BigInteger.valueOf(7),
+        sourceCount: Long = 2,
+        applicationBlockHeight: BigInteger? = BigInteger.valueOf(15),
+        applicationBlockHash: String? = hash(0x77),
+        state: SumeragiNativeAmxParticipantApplicationState =
+            SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED,
+    ): SumeragiNativeAmxParticipantApplication =
         SumeragiNativeAmxParticipantApplication(
             laneId = laneId,
-            dataspaceId = BigInteger.valueOf(8),
+            dataspaceId = dataspaceId,
             laneIncarnation = hash(0x51 + laneId.toInt()),
-            participantHeight = BigInteger.valueOf(8),
-            participantView = BigInteger.ONE,
-            predecessorHeight = BigInteger.valueOf(7),
+            participantHeight = participantHeight,
+            participantView = participantView,
+            predecessorHeight = predecessorHeight,
             predecessorDescriptorHash = hash(0x61),
             descriptorHash = hash(0x71),
             proposalHash = hash(0x73),
             settlementHash = hash(0x75),
-            sourceCount = 2,
-            applicationBlockHeight = BigInteger.valueOf(15),
-            applicationBlockHash = hash(0x77),
-            state = SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED,
+            sourceCount = sourceCount,
+            applicationBlockHeight = applicationBlockHeight,
+            applicationBlockHash = applicationBlockHash,
+            state = state,
         )
 
     private fun autonomousExecution(

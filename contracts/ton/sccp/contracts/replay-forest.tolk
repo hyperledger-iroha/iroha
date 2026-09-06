@@ -130,12 +130,14 @@ fun sccpReplayLoadWitnessV1(
 }
 
 fun sccpReplayOperationIsInbound(operation: uint8): bool {
-    return operation == 0x30 || operation == 0x32 || operation == 0x34 || operation == 0x36 ||
-    operation == 0x37;
+    // Bridge/master/wallet mint admission: SORA -> TON.
+    return operation == 0x30 || operation == 0x32 || operation == 0x34;
 }
 
 fun sccpReplayOperationIsOutbound(operation: uint8): bool {
-    return operation == 0x31 || operation == 0x33 || operation == 0x35;
+    // Burn, authorization, debit/lock and rejected-lock refund: TON -> SORA.
+    return operation == 0x31 || operation == 0x33 || operation == 0x35 || operation == 0x36 ||
+    operation == 0x37;
 }
 
 /// Hash the exact final-V1 TON replay domain.
@@ -291,6 +293,9 @@ fun sccpReplayParentV1(level: int, left: uint256, right: uint256): uint256 {
 }
 
 fun sccpReplayOccupiedLeafV1(key: uint256, recordDigest: uint256): uint256 {
+    // A SHA-256 replay key may canonically be all-zero. An occupied record
+    // digest may not: zero is reserved for non-membership witnesses.
+    assert (recordDigest != 0) throw SccpErrors.InvalidReplayRecord;
     val preimage = beginCell()
         .storeSlice("SCCP-REPLAY-SMT-V1".literalSlice())
         .storeUint(0x11, 8)
@@ -458,15 +463,38 @@ fun emptySccpReplayForestV1(): Cell<SccpReplayForestV1> {
     }.toCell();
 }
 
-fun sccpReplayValidateForestV1(forest: SccpReplayForestV1) {
+/// Check contract-owned append-only state without scanning unrelated shards.
+/// Canonical initialization and admission preserve every stored root; each
+/// accessed root is checked separately by sccpReplayShardRootV1.
+fun sccpReplayValidateRuntimeForestV1(forest: SccpReplayForestV1) {
     assert (
         forest.updateSequence == forest.leafCount &&
         ((forest.leafCount == 0) == forest.nonemptyShardRoots.isEmpty())
     ) throw SccpErrors.InvalidReplayForest;
 }
 
+/// Fully validate a supplied forest, including every stored shard root.
+fun sccpReplayValidateForestV1(forest: SccpReplayForestV1) {
+    sccpReplayValidateRuntimeForestV1(forest);
+    var entry = forest.nonemptyShardRoots.findFirst();
+    var nonemptyShardRootCount = 0;
+    while (entry.isFound) {
+        val root = entry.loadValue();
+        assert (
+            root != 0 && root != SCCP_REPLAY_EMPTY_ROOT_V1
+        ) throw SccpErrors.InvalidReplayForest;
+        nonemptyShardRootCount += 1;
+        entry = forest.nonemptyShardRoots.iterateNext(entry);
+    }
+    assert (
+        forest.updateSequence == forest.leafCount &&
+        ((forest.leafCount == 0) == forest.nonemptyShardRoots.isEmpty()) &&
+        forest.leafCount >= nonemptyShardRootCount as uint64
+    ) throw SccpErrors.InvalidReplayForest;
+}
+
 fun sccpReplayShardRootV1(forest: SccpReplayForestV1, shard: uint8): uint256 {
-    sccpReplayValidateForestV1(forest);
+    sccpReplayValidateRuntimeForestV1(forest);
     if (!forest.nonemptyShardRoots.exists(shard)) {
         return SCCP_REPLAY_EMPTY_ROOT_V1;
     }
@@ -499,7 +527,8 @@ fun sccpReplayAdmitV1(
         );
         assert (oldRoot == currentRoot) throw SccpErrors.InvalidReplayPath;
         assert (
-            newRoot != 0 && newRoot != oldRoot && forest.leafCount != 0xffffffffffffffff &&
+            newRoot != 0 && newRoot != SCCP_REPLAY_EMPTY_ROOT_V1 && newRoot != oldRoot &&
+            forest.leafCount != 0xffffffffffffffff &&
             forest.updateSequence != 0xffffffffffffffff
         ) throw SccpErrors.ReplayCounterExhausted;
         forest.nonemptyShardRoots.set(shard, newRoot);

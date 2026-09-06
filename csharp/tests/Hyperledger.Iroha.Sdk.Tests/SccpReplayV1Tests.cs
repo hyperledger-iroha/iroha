@@ -9,34 +9,34 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class SccpReplayV1Tests
 {
     [Fact]
-    public void SharedReplayForestGoldenAndCanonicalWitnessesMatch()
+    public void LocalFinalV1ReplayVectorAndCanonicalWitnessesMatch()
     {
         var domainHash = SccpReplayV1.DomainHash(
             SccpNetworkV1.SoraTaira,
             SccpNetworkV1.EthereumMainnet,
-            SccpReplayBoundaryV1.SoraOutboundLock,
+            SccpReplayBoundaryV1.EvmDestinationMint,
             7,
             Repeated(0x44, 32),
-            SccpReplayActorV1.Route());
+            SccpReplayActorV1.Evm(Repeated(0x33, 20)));
         Assert.Equal(
-            "de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d",
+            "ebc495541ef2265beebe7ee9e4e8764595c2a55ed67dc6d0a8ff69ccd3ff3228",
             SccpV1.LowerHex(domainHash));
 
         var key = SccpReplayV1.ReplayKey(domainHash, Repeated(0x11, 32));
         Assert.Equal(
-            "139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b",
+            "035bcebe9423edd4f1b945bae54905e0f0860bcc54718d372b1a58797ce614d4",
             SccpV1.LowerHex(key));
-        Assert.Equal(19, key[0]);
+        Assert.Equal(3, key[0]);
 
         var recordDigest = SccpReplayV1.RecordDigest(
-            SccpReplayBoundaryV1.SoraOutboundLock,
+            SccpReplayBoundaryV1.EvmDestinationMint,
             Repeated(0x11, 32),
             Repeated(0x22, 32),
             9,
             SccpReplayPrincipalV1.Evm(Repeated(0x33, 20)),
             Repeated(0x55, 32));
         Assert.Equal(
-            "31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5",
+            "bb0a7e99f5d2d136375e46ba231903611366ea85ec0e10130488a085fa05bf4f",
             SccpV1.LowerHex(recordDigest));
 
         var empty = SccpReplayV1.EmptyHashes();
@@ -52,10 +52,10 @@ public sealed class SccpReplayV1Tests
             new byte[32],
             new byte[32],
             []);
-        Assert.True(SccpReplayV1.RootFromWitness(key, null, emptyWitness).MatchesExpectedRoot);
+        Assert.True(SccpReplayV1.RootFromWitness(key, new byte[32], emptyWitness).MatchesExpectedRoot);
 
         var occupiedRoot = SccpV1.DecodeLowerHex(
-            "d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849");
+            "ec10fe878a6429557c7af279b8cb6fa5cc51165f4e6a54fb27ed6ad8525caf91");
         var occupiedWitness = new SccpSparseMerkleWitnessV1(
             occupiedRoot,
             recordDigest,
@@ -72,7 +72,7 @@ public sealed class SccpReplayV1Tests
             reservedBitmap,
             [Repeated(0xaa, 32)]);
         Assert.Throws<ArgumentException>(() =>
-            SccpReplayV1.RootFromWitness(key, null, reservedWitness));
+            SccpReplayV1.RootFromWitness(key, new byte[32], reservedWitness));
 
         var explicitDefaultBitmap = new byte[32];
         explicitDefaultBitmap[31] = 1;
@@ -82,7 +82,183 @@ public sealed class SccpReplayV1Tests
             explicitDefaultBitmap,
             [empty[0]]);
         Assert.Throws<ArgumentException>(() =>
-            SccpReplayV1.RootFromWitness(key, null, explicitDefaultWitness));
+            SccpReplayV1.RootFromWitness(key, new byte[32], explicitDefaultWitness));
+
+        Assert.True(SccpReplayV1.VerifyAgainstCurrentRoot(
+            new byte[32],
+            new byte[32],
+            emptyWitness,
+            empty[SccpReplayV1.Depth]).MatchesExpectedRoot);
+        var zeroExpectedWitness = new SccpSparseMerkleWitnessV1(
+            new byte[32], new byte[32], new byte[32], []);
+        Assert.False(SccpReplayV1.RootFromWitness(
+            new byte[32], new byte[32], zeroExpectedWitness).MatchesExpectedRoot);
+        Assert.Throws<ArgumentException>(() => SccpReplayV1.VerifyAgainstCurrentRoot(
+            new byte[32], new byte[32], zeroExpectedWitness, new byte[32]));
+
+        var zeroSiblingBitmap = new byte[32];
+        zeroSiblingBitmap[31] = 1;
+        var zeroSiblingWitness = new SccpSparseMerkleWitnessV1(
+            empty[SccpReplayV1.Depth],
+            new byte[32],
+            zeroSiblingBitmap,
+            [new byte[32]]);
+        var zeroSiblingRoot = SccpReplayV1.RootFromWitness(
+            new byte[32], new byte[32], zeroSiblingWitness).Root;
+        var boundZeroSiblingWitness = new SccpSparseMerkleWitnessV1(
+            zeroSiblingRoot,
+            new byte[32],
+            zeroSiblingBitmap,
+            [new byte[32]]);
+        Assert.True(SccpReplayV1.VerifyAgainstCurrentRoot(
+            new byte[32], new byte[32], boundZeroSiblingWitness, zeroSiblingRoot).MatchesExpectedRoot);
+        Assert.Throws<ArgumentException>(() => SccpReplayV1.VerifyAgainstCurrentRoot(
+            new byte[32], new byte[32], boundZeroSiblingWitness, Repeated(0x77, 32)));
+    }
+
+    [Fact]
+    public void ReplayOperationsBindPrincipalKindsDirectionsAndDefinedEnums()
+    {
+        Assert.Equal(0x35, (byte)SccpReplayBoundaryV1.TonWalletBurnAuthorization);
+        Assert.Equal(0x36, (byte)SccpReplayBoundaryV1.TonWalletBurnLock);
+        Assert.Equal(0x37, (byte)SccpReplayBoundaryV1.TonWalletBurnRefund);
+
+        var tonActor = SccpReplayActorV1.Ton(0, Repeated(0x66, 32));
+        foreach (var operation in new[]
+        {
+            SccpReplayBoundaryV1.TonBridgeInboundMint,
+            SccpReplayBoundaryV1.TonMasterMint,
+            SccpReplayBoundaryV1.TonWalletMintCredit,
+        })
+        {
+            _ = SccpReplayV1.DomainHash(
+                SccpNetworkV1.SoraTaira,
+                SccpNetworkV1.TonMainnet,
+                operation,
+                7,
+                Repeated(0x44, 32),
+                tonActor);
+        }
+        foreach (var operation in new[]
+        {
+            SccpReplayBoundaryV1.TonBridgeOutboundBurn,
+            SccpReplayBoundaryV1.TonMasterBurn,
+            SccpReplayBoundaryV1.TonWalletBurnAuthorization,
+            SccpReplayBoundaryV1.TonWalletBurnLock,
+            SccpReplayBoundaryV1.TonWalletBurnRefund,
+        })
+        {
+            _ = SccpReplayV1.DomainHash(
+                SccpNetworkV1.TonMainnet,
+                SccpNetworkV1.SoraTaira,
+                operation,
+                7,
+                Repeated(0x44, 32),
+                tonActor);
+            Assert.Throws<ArgumentException>(() => SccpReplayV1.DomainHash(
+                SccpNetworkV1.SoraTaira,
+                SccpNetworkV1.TonMainnet,
+                operation,
+                7,
+                Repeated(0x44, 32),
+                tonActor));
+        }
+
+        Assert.Throws<ArgumentException>(() => SccpReplayV1.RecordDigest(
+            SccpReplayBoundaryV1.SoraOutboundLock,
+            Repeated(0x11, 32),
+            Repeated(0x22, 32),
+            9,
+            SccpReplayPrincipalV1.Evm(Repeated(0x33, 20)),
+            Repeated(0x55, 32)));
+        Assert.Throws<ArgumentException>(() => SccpReplayV1.DomainHash(
+            SccpNetworkV1.SoraTaira,
+            SccpNetworkV1.EthereumMainnet,
+            (SccpReplayBoundaryV1)0xff,
+            7,
+            Repeated(0x44, 32),
+            SccpReplayActorV1.Route()));
+        Assert.Throws<ArgumentOutOfRangeException>(() => SccpReplayV1.RecordDigest(
+            (SccpReplayBoundaryV1)0xff,
+            Repeated(0x11, 32),
+            Repeated(0x22, 32),
+            9,
+            SccpReplayPrincipalV1.Evm(Repeated(0x33, 20)),
+            Repeated(0x55, 32)));
+    }
+
+    [Fact]
+    public void SoraReplayPrincipalRequiresCanonicalCompactNoritoBytes()
+    {
+        const string account =
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+        var canonical = new TransactionEncodingContext(account).EncodeAccountId(account);
+        _ = SccpReplayPrincipalV1.SoraAccount(canonical);
+        Assert.Throws<ArgumentException>(() =>
+            SccpReplayPrincipalV1.SoraAccount([.. canonical, 0]));
+        var overlongLength = new byte[canonical.Length + 1];
+        canonical.AsSpan(0, 4).CopyTo(overlongLength);
+        overlongLength[4] = (byte)(canonical[4] | 0x80);
+        overlongLength[5] = 0;
+        canonical.AsSpan(5).CopyTo(overlongLength.AsSpan(6));
+        Assert.Throws<ArgumentException>(() =>
+            SccpReplayPrincipalV1.SoraAccount(overlongLength));
+
+        var compactEd25519 = new byte[33];
+        compactEd25519[0] = 0;
+        compactEd25519.AsSpan(1).Fill(0x33);
+        _ = SccpReplayPrincipalV1.SoraAccount(
+            EncodeMultisigAccountId(compactEd25519));
+
+        Assert.Throws<ArgumentException>(() =>
+            SccpReplayPrincipalV1.SoraAccount(
+                EncodeSingleAccountId([0, .. Repeated(0x33, 31)])));
+        Assert.Throws<ArgumentException>(() =>
+            SccpReplayPrincipalV1.SoraAccount(
+                EncodeSingleAccountId([1, 0x04, .. Repeated(0x33, 32)])));
+        Assert.Throws<ArgumentException>(() =>
+            SccpReplayPrincipalV1.SoraAccount(
+                EncodeMultisigAccountId([0, .. new byte[32]])));
+    }
+
+    private static byte[] EncodeSingleAccountId(byte[] compactPublicKey)
+    {
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteUInt32LittleEndian(0);
+        writer.WriteField(EncodeCompactPublicKey(compactPublicKey));
+        return writer.ToArray();
+    }
+
+    private static byte[] EncodeMultisigAccountId(byte[] compactPublicKey)
+    {
+        var member = new CanonicalNoritoWriter();
+        member.WriteField(EncodeCompactPublicKey(compactPublicKey));
+        var weight = new CanonicalNoritoWriter();
+        weight.WriteUInt16LittleEndian(1);
+        member.WriteField(weight.ToArray());
+
+        var policy = new CanonicalNoritoWriter();
+        policy.WriteField([1]);
+        var threshold = new CanonicalNoritoWriter();
+        threshold.WriteUInt16LittleEndian(1);
+        policy.WriteField(threshold.ToArray());
+        var members = new CanonicalNoritoWriter();
+        members.WriteSequenceLength(1);
+        members.WriteField(member.ToArray());
+        policy.WriteField(members.ToArray());
+
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteUInt32LittleEndian(1);
+        writer.WriteField(policy.ToArray());
+        return writer.ToArray();
+    }
+
+    private static byte[] EncodeCompactPublicKey(byte[] compactPublicKey)
+    {
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength(checked((ulong)compactPublicKey.Length));
+        writer.WriteByteElements(compactPublicKey);
+        return writer.ToArray();
     }
 
     [Fact]

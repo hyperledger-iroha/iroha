@@ -91,8 +91,7 @@ fn remittance_batch() -> TransitionBatch {
 fn combined_batch() -> TransitionBatch {
     let mut governance = governance_batch();
     let mut remit = remittance_batch();
-    governance.public_inputs.old_root = remit.public_inputs.old_root;
-    governance.public_inputs.new_root = remit.public_inputs.new_root;
+    governance.public_inputs = remit.public_inputs;
     governance.transitions.append(&mut remit.transitions);
     governance.metadata.extend(remit.metadata);
     governance.sort();
@@ -110,13 +109,13 @@ fn assert_strict_state_profile_rejects(mut batch: TransitionBatch) {
     assert!(matches!(
         prover.prove(&batch),
         Err(Error::InvalidProofSemantics {
-            profile: "transfer_state_transition",
+            profile: "state_transition",
             ..
         })
     ));
 }
 #[test]
-fn opaque_governance_flow_fails_closed_under_transfer_semantics() {
+fn governance_metadata_flow_fails_closed_without_a_tree_witness() {
     assert_strict_state_profile_rejects(governance_batch());
 }
 #[test]

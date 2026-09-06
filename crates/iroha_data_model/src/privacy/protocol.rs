@@ -4251,13 +4251,24 @@ pub fn validate_privacy_compiled_profile_catalog_archive_v1(
 /// Maximum accepted size of one canonical privacy capability archive.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
 /// Maximum elements accepted in any sequence while decoding a capability archive.
-pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize = PrivacyProtocolIdV1::COUNT;
+///
+/// Qualification embeds the 48 receipts, 54 artifacts, audit dispositions, and
+/// signature/key byte sequences. The twelve-row catalog cardinality is enforced
+/// by semantic validation; it is not a bound on every nested sequence.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize = 16 * 1024;
 /// Maximum cumulative elements accepted while decoding a capability archive.
-pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1: usize = PrivacyProtocolIdV1::COUNT;
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1: usize =
+    PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1;
 /// Maximum bytes accepted in one length-delimited capability-archive field.
-pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1: usize =
+    PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1;
 /// Maximum cumulative allocation permitted while decoding a capability archive.
-pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize = 256 * 1024;
+///
+/// The decoder charges nested field slices, aligned copies, and owned values
+/// cumulatively. A complete signed qualification therefore requires more than
+/// its archive length; this fixed 4 MiB budget still bounds hostile allocations.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize =
+    16 * PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1;
 /// Maximum data-dependent nesting depth permitted in a capability archive.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1: usize = 32;
 /// Stable result codes returned by every native privacy capability validator.

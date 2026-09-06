@@ -13,6 +13,8 @@
 mod adapter;
 #[cfg(unix)]
 mod consensus_threshold;
+/// Independently authenticated hardware custody statements; not a production signer adapter.
+pub mod custody;
 mod envelope;
 #[cfg(unix)]
 mod journal;

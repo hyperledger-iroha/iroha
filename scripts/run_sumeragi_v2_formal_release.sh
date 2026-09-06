@@ -20,8 +20,10 @@ source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
 if [[ -z "${CARGO_TARGET_DIR:-}" \
   && -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
   && -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  # Resolve macOS's /tmp alias while retaining Linux's canonical temporary root.
+  formal_invocation_base="$(cd -- /tmp && pwd -P)"
   formal_invocation_root="$(
-    mktemp -d /private/tmp/iroha-sumeragi-v2-formal.XXXXXX
+    mktemp -d "$formal_invocation_base/iroha-sumeragi-v2-formal.XXXXXX"
   )"
   mkdir -m 0700 -- \
     "$formal_invocation_root/target" \

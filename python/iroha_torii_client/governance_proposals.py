@@ -1044,6 +1044,9 @@ class GovernanceSccpSoraFinalityAnchor:
     source_network: GovernanceSccpNetwork
     protocol_version: int
     chain_id_hash: str
+    epoch: int
+    epoch_end_height: int
+    roster_commitment: str
     checkpoint_height: int
     checkpoint_block_hash: str
     checkpoint_context_id: str
@@ -1057,6 +1060,9 @@ class GovernanceSccpSoraFinalityAnchor:
                 "source_network",
                 "protocol_version",
                 "chain_id_hash",
+                "epoch",
+                "epoch_end_height",
+                "roster_commitment",
                 "checkpoint_height",
                 "checkpoint_block_hash",
                 "checkpoint_context_id",
@@ -1080,9 +1086,18 @@ class GovernanceSccpSoraFinalityAnchor:
         chain_hash = _upper_hex(record["chain_id_hash"], f"{context}.chain_id_hash", 32)
         if chain_hash != _SCCP_TAIRA_CHAIN_ID_HASH:
             raise TypeError(f"{context}.chain_id_hash is not the Taira chain commitment")
+        epoch = _sccp_uint(record["epoch"], f"{context}.epoch", positive=True)
+        epoch_end_height = _sccp_uint(
+            record["epoch_end_height"], f"{context}.epoch_end_height"
+        )
+        roster_commitment = _upper_hex(
+            record["roster_commitment"], f"{context}.roster_commitment", 32
+        )
         checkpoint_height = _sccp_uint(
             record["checkpoint_height"], f"{context}.checkpoint_height", positive=True
         )
+        if checkpoint_height > epoch_end_height:
+            raise TypeError(f"{context}.checkpoint_height exceeds its epoch end height")
         checkpoint_hash = _upper_hex(
             record["checkpoint_block_hash"], f"{context}.checkpoint_block_hash", 32
         )
@@ -1094,13 +1109,18 @@ class GovernanceSccpSoraFinalityAnchor:
             f"{context}.checkpoint_finality_artifact_hash",
             32,
         )
-        if len({chain_hash, checkpoint_hash, context_id, artifact_hash}) != 4:
+        if len(
+            {chain_hash, roster_commitment, checkpoint_hash, context_id, artifact_hash}
+        ) != 5:
             raise TypeError(f"{context} reuses a consensus hash role")
         return cls(
             version,
             source,
             protocol,
             chain_hash,
+            epoch,
+            epoch_end_height,
+            roster_commitment,
             checkpoint_height,
             checkpoint_hash,
             context_id,

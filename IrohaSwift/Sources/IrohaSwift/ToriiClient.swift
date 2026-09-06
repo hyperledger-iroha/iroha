@@ -27846,7 +27846,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         // Fail before network I/O when the bridge is absent, stale, or missing
-        // any of the exact five privacy ABI23 symbols.
+        // any of the exact six privacy ABI23 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         var request = try makeRequest(
             path: "/v1/privacy/capabilities",
@@ -27890,7 +27890,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         guard !data.isEmpty else { throw ToriiClientError.emptyBody }
-        return try PrivacyNativeBridge.validateExact12CapabilityManifestV1(data)
+        return try PrivacyExact12CapabilityManifestV1.fromAuthenticatedToriiResponseV1(data)
     }
 
     /// Fetch consensus-derived SCCP capabilities.

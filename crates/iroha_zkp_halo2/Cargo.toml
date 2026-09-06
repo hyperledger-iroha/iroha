@@ -45,7 +45,6 @@ bench = ["full"]
 # Mirror Norito derive cfgs so the derive macro can see destination-crate features
 schema-structural = ["full", "dep:iroha_schema", "norito/schema-structural"]
 parallel = ["full", "dep:rayon"]
-goldilocks_backend = ["full"]
 
 [[bench]]
 name = "bench_ipa"

@@ -108,7 +108,6 @@ metal = [
 ivm_zk_tests = []
 ## Dev-only test gate used by vrf_verify_chain.rs; declared to silence unexpected-cfg warnings.
 ivm_vrf_tests = []
-goldilocks_backend = ["iroha_zkp_halo2/goldilocks_backend"]
 
 [[bin]]
 name = "koto"

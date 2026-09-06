@@ -4407,10 +4407,10 @@ pub(crate) enum QueuePlanGossipAdmission {
     /// Exact quorum certificate authenticating this transaction and immutable routing plan.
     Certified(Arc<Vec<u8>>),
 }
-// TODO: Commit QueuePlanSynced admission intent in transaction-author-signed,
-// consensus-visible data. Certificate gossip closes honest handoff reordering,
-// but an optional transport attachment cannot prevent a Byzantine relay from
-// stripping that intent and presenting the same signed transaction as ordinary.
+// QueuePlanSynced admission intent is transaction-author-signed and consensus-visible.
+// Both gossip receive paths reject that intent without its quorum certificate;
+// candidate selection and block admission enforce the same autonomous-owner boundary.
+// Stripping the transport certificate cannot downgrade the signed admission intent.
 /// Process-local candidate fence; dropping it releases only its exact queued hashes.
 pub(crate) struct GlobalQueueSelectionLease {
     queue: Weak<Queue>,

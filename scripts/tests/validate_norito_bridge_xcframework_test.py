@@ -220,6 +220,15 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
                     self.validate()
 
+    def test_rejects_manifest_missing_authoritative_privacy_capability_validator(self) -> None:
+        self.payload["required_symbols"] = [
+            symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+            if symbol != "iroha_privacy_validate_exact12_capability_manifest_v1"
+        ]
+        self.write_manifest()
+        with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+            self.validate()
+
     def test_repository_provenance_rejects_dirty_source_without_allowance(self) -> None:
         self.payload["source_tree_dirty"] = True
         self.write_manifest()

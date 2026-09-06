@@ -25,7 +25,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_seal_contracts.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "27c0c82b79198fc4098adce94956cfcc8a0dd77f7425581df8011c81cea618b3"
+    "b4f5a95f869df278f06b50a1fc50651fde7b69ba5a6cb21ab01454e2182efecc"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (
@@ -82,7 +82,7 @@ API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
         ),
     ),
     (
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/"
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/client/"
         "SumeragiHttpTransportTests.java",
         (
             "public void responsesAcceptParametersAndRejectMalformedContentTypesLengthsAndBodies()",
@@ -270,7 +270,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         ),
     ),
     (
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/"
         "SumeragiV2WireFixtureTests.java",
         (
             "public final class SumeragiV2WireFixtureTests",
@@ -285,10 +285,10 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "observed_test_count=34",
             "ExactCertificateCardinalityTests",
             "SumeragiV2WireFixtureTests'",
-            "observed_test_count=44",
+            "observed_test_count=50",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=43",
-            "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests",
+            "observed_test_count=48",
+            "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests",
         ),
     ),
     (
@@ -297,7 +297,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             '"IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift"',
             '"IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift"',
             '"kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt"',
-            '"java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java"',
+            '"kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTests.java"',
             '"python/iroha_torii_client/tests/exact_certificate_cardinality_test.py"',
         ),
     ),
@@ -316,8 +316,8 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '("swift", 34)',
-            '("kotlin", 44)',
-            '("java", 43)',
+            '("kotlin", 50)',
+            '("java", 48)',
         ),
     ),
     (

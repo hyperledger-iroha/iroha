@@ -440,7 +440,7 @@
           ]
         },
         {
-          "path": "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SumeragiHttpTransportTests.java",
+          "path": "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/client/SumeragiHttpTransportTests.java",
           "required_tokens": [
             "public void responsesAcceptParametersAndRejectMalformedContentTypesLengthsAndBodies()",
             "status endpoint must reject a diagnostics-shaped payload",
@@ -660,7 +660,7 @@
           ]
         },
         {
-          "path": "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java",
+          "path": "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTests.java",
           "required_tokens": [
             "public final class SumeragiV2WireFixtureTests",
             "private static final String FIXTURE_RELATIVE_PATH = \"fixtures/sumeragi_v2/wire_v2.tsv\";",
@@ -674,10 +674,10 @@
             "observed_test_count=34",
             "ExactCertificateCardinalityTests",
             "SumeragiV2WireFixtureTests'",
-            "observed_test_count=44",
+            "observed_test_count=50",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=43",
-            "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests"
+            "observed_test_count=48",
+            "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests"
           ]
         },
         {
@@ -686,7 +686,7 @@
             "\"IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift\"",
             "\"IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift\"",
             "\"kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt\"",
-            "\"java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java\"",
+            "\"kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTests.java\"",
             "\"python/iroha_torii_client/tests/exact_certificate_cardinality_test.py\""
           ]
         },
@@ -705,8 +705,8 @@
           "path": "scripts/write_sumeragi_v2_release_receipt.py",
           "required_tokens": [
             "(\"swift\", 34)",
-            "(\"kotlin\", 44)",
-            "(\"java\", 43)"
+            "(\"kotlin\", 50)",
+            "(\"java\", 48)"
           ]
         },
         {
@@ -6868,7 +6868,8 @@
           "symbol": "build_canonical_executed_block_response",
           "required_tokens": [
             "validate_canonical_executed_block_request",
-            "get_block_without_merge_sidecar",
+            "read_block_body(height)",
+            "map_err(CanonicalRecoveryReadError::storage)?",
             "canonical_executed_block_matches_need",
             "block.encode_wire()",
             "CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS",
@@ -6954,7 +6955,8 @@
             "canonical_executed_block_need_for_height",
             "collect_lane_application_repair_need",
             "BTreeMap",
-            "get_block_without_merge_sidecar",
+            "read_block_body(height)",
+            "map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?",
             ".get(&(application_block_height, application_block_hash))",
             "preflight_native_amx_participant_application_evidence_repair",
             "needs.into_values().collect()",

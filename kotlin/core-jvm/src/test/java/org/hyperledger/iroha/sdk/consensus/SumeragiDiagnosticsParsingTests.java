@@ -1,13 +1,18 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package org.hyperledger.iroha.android.consensus;
+package org.hyperledger.iroha.sdk.consensus;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
+import kotlinx.serialization.json.Json;
+import kotlinx.serialization.json.JsonObject;
+import kotlinx.serialization.json.JsonArray;
+import kotlinx.serialization.json.JsonElement;
+import kotlinx.serialization.json.JsonPrimitive;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,10 +20,9 @@ import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import org.hyperledger.iroha.android.client.JsonEncoder;
-import org.hyperledger.iroha.android.client.JsonParser;
-import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
-import org.junit.Test;
+import org.hyperledger.iroha.sdk.client.JsonEncoder;
+import org.hyperledger.iroha.sdk.client.JsonParser;
+import org.junit.jupiter.api.Test;
 
 /** Strict operational diagnostics parsing tests. */
 public final class SumeragiDiagnosticsParsingTests {
@@ -26,38 +30,38 @@ public final class SumeragiDiagnosticsParsingTests {
   public void parserPreservesTypedNativeAndAutonomousRowsAndFullU64Values() {
     final String maximum = "18446744073709551615";
     final SumeragiDiagnosticsStatus parsed =
-        SumeragiDiagnosticsModels.parseDiagnostics(
+        SumeragiDiagnosticsStatus.parseJson(
             diagnosticsJson("[]", "[]", "[]", nativeRow(maximum), autonomousRow(maximum)));
 
-    assertEquals(new BigInteger(maximum), parsed.txQueueMaxRetainedBytes());
+    assertEquals(new BigInteger(maximum), parsed.getTxQueueMaxRetainedBytes());
     assertEquals(
         new BigInteger(maximum),
-        parsed.nativeAmxParticipantApplications().get(0).dataspaceId());
+        parsed.getNativeAmxParticipantApplications().get(0).getDataspaceId());
     assertEquals(
-        new BigInteger(maximum), parsed.autonomousLaneExecutions().get(0).dataspaceId());
+        new BigInteger(maximum), parsed.getAutonomousLaneExecutions().get(0).getDataspaceId());
     assertEquals(
-        SumeragiDiagnosticsModels.NativeAmxParticipantApplicationState.DURABLY_APPLIED,
-        parsed.nativeAmxParticipantApplications().get(0).state());
+        SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED,
+        parsed.getNativeAmxParticipantApplications().get(0).getState());
     assertEquals(
-        SumeragiDiagnosticsModels.AutonomousLaneExecutionStage
+        SumeragiAutonomousLaneExecutionStage
             .KURA_WSV_APPLICATION_RECEIPT_DURABLE,
-        parsed.autonomousLaneExecutions().get(0).highestDurableStage());
+        parsed.getAutonomousLaneExecutions().get(0).getHighestDurableStage());
   }
 
   @Test
   public void parserRejectsMalformedUtf8UnknownMissingAndNoncanonicalIntegers() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> SumeragiDiagnosticsModels.parseDiagnostics(new byte[0]));
+        () -> SumeragiDiagnosticsStatus.parseJson(new byte[0]));
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            SumeragiDiagnosticsModels.parseDiagnostics(
-                new byte[(int) SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES + 1]));
+            SumeragiDiagnosticsStatus.parseJson(
+                new byte[(int) SumeragiStatusModelsKt.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES + 1]));
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            SumeragiDiagnosticsModels.parseDiagnostics(
+            SumeragiDiagnosticsStatus.parseJson(
                 new byte[] {0x7b, 0x22, (byte) 0xc3, 0x28}));
     final String payload = diagnosticsJson("[]", "[]", "[]", "", "");
     assertRejected(payload.replaceFirst("\\{", "{\"legacy_round\":1,"));
@@ -81,7 +85,7 @@ public final class SumeragiDiagnosticsParsingTests {
 
     assertEquals(
         BigInteger.valueOf(3600),
-        SumeragiDiagnosticsModels.parseDiagnostics(current).npos().epochLengthBlocks());
+        SumeragiDiagnosticsStatus.parseJson(current).getNpos().getEpochLengthBlocks());
     for (final String retired :
         new String[] {"vrf_commit_deadline_offset", "vrf_reveal_deadline_offset"}) {
       final String hostile =
@@ -95,17 +99,17 @@ public final class SumeragiDiagnosticsParsingTests {
   public void parserDeepFreezesEveryAllowedOpaqueDiagnosticsValue() {
     final String opaque = "[{\"nested\":[{\"value\":1}]}]";
     final SumeragiDiagnosticsStatus parsed =
-        SumeragiDiagnosticsModels.parseDiagnostics(
+        SumeragiDiagnosticsStatus.parseJson(
             diagnosticsJson(opaque, "[]", "[]", "", ""));
-    final List<Object> lanes = (List<Object>) parsed.laneCommitments();
-    final Map<String, Object> row = (Map<String, Object>) lanes.get(0);
-    final List<Object> nested = (List<Object>) row.get("nested");
-    final Map<String, Object> leaf = (Map<String, Object>) nested.get(0);
+    final List<JsonObject> lanes = parsed.getLaneCommitments();
+    final Map<String, JsonElement> row = lanes.get(0);
+    final List<JsonElement> nested = (JsonArray) row.get("nested");
+    final Map<String, JsonElement> leaf = (JsonObject) nested.get(0);
 
     assertThrows(UnsupportedOperationException.class, () -> lanes.clear());
-    assertThrows(UnsupportedOperationException.class, () -> row.put("other", 2L));
+    assertThrows(UnsupportedOperationException.class, () -> row.put("other", Json.Default.parseToJsonElement("2")));
     assertThrows(UnsupportedOperationException.class, () -> nested.clear());
-    assertThrows(UnsupportedOperationException.class, () -> leaf.put("value", 2L));
+    assertThrows(UnsupportedOperationException.class, () -> leaf.put("value", Json.Default.parseToJsonElement("2")));
   }
 
   @Test
@@ -115,23 +119,23 @@ public final class SumeragiDiagnosticsParsingTests {
     final String relay = "[{\"settlement_commitment\":" + groupJson + "}]";
     final String payload = diagnosticsJson("[]", "[" + groupJson + "]", relay, "", "");
     final SumeragiDiagnosticsStatus parsed =
-        SumeragiDiagnosticsModels.parseDiagnostics(payload);
-    assertEquals(1, parsed.laneSettlementCommitments().size());
-    assertEquals(1, parsed.laneRelayEnvelopes().size());
+        SumeragiDiagnosticsStatus.parseJson(payload);
+    assertEquals(1, parsed.getLaneSettlementCommitments().size());
+    assertEquals(1, parsed.getLaneRelayEnvelopes().size());
 
     final String legacy = groupJson.replaceFirst("\"version\":2", "\"version\":1");
     final RuntimeException error =
         assertThrows(
             RuntimeException.class,
             () ->
-                SumeragiDiagnosticsModels.parseDiagnostics(
+                SumeragiDiagnosticsStatus.parseJson(
                     diagnosticsJson("[]", "[" + legacy + "]", "[]", "", "")));
     assertTrue(
         generateCauseMessages(error).contains("version must equal 2"));
   }
 
   private static void assertRejected(final String payload) {
-    assertThrows(RuntimeException.class, () -> SumeragiDiagnosticsModels.parseDiagnostics(payload));
+    assertThrows(RuntimeException.class, () -> SumeragiDiagnosticsStatus.parseJson(payload));
   }
 
   private static String diagnosticsJson(
@@ -220,7 +224,7 @@ public final class SumeragiDiagnosticsParsingTests {
   private static Map<String, Object> nativeReceiptGroupFixture() throws Exception {
     final Object fixture =
         JsonParser.parse(
-            Files.readString(nativeFixturePath(), StandardCharsets.UTF_8));
+            new String(Files.readAllBytes(nativeFixturePath()), StandardCharsets.UTF_8));
     final Map<String, Object> root = (Map<String, Object>) fixture;
     final Map<String, Object> golden = (Map<String, Object>) root.get("golden");
     return (Map<String, Object>) golden.get("receipt_group");

@@ -31,6 +31,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/autonomous_retired_attempt.rs"),
     Path("crates/iroha_core/src/kura/autonomous_application_evidence.rs"),
     Path("crates/iroha_core/src/kura/indexed_sidecar_io.rs"),
+    Path("crates/iroha_core/src/kura/consensus_storage_reads.rs"),
     Path("crates/iroha_core/src/kura/indexed_sidecar_rewrite.rs"),
     Path("crates/iroha_core/src/kura/lane_history_compaction.rs"),
     Path("crates/iroha_core/src/kura/prune_block_store_tail.rs"),
@@ -123,6 +124,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/autonomous_retired_attempt.rs'),
         Path('kura/autonomous_application_evidence.rs'),
         Path('kura/indexed_sidecar_io.rs'),
+        Path('kura/consensus_storage_reads.rs'),
         Path('kura/indexed_sidecar_rewrite.rs'),
         Path('kura/lane_history_compaction.rs'),
         Path('kura/prune_block_store_tail.rs'),
@@ -321,6 +323,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_ready_durable_validate_adapter_preview.rs'),
         Path('v2_recovered_lifecycle_sign_completion.rs'),
         Path('v2_wire_registry_and_authentication.rs'),
+        Path('tests/v2_adapter_leader_wire_consumer.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
         Path('tests/v2_adapter_main_02.rs'),
@@ -518,6 +521,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
         Path('v2_lane_work/canonical_executed_block_application_repair.rs'),
         Path('v2_lane_work/queue_plan_admission_handoff.rs'),
+        Path('v2_lane_work/signing_authority_tests.rs'),
         Path('v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs'),
         Path('v2_lane_work/typed_finality_handoff_tests.rs'),
         Path('v2_lane_work/terminal_retirement_journal_failure_test.rs'),
@@ -526,6 +530,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lane_work_observer_role.rs'),
         Path('tests/v2_lane_work_native_body_recovery.rs'),
         Path('tests/v2_lane_work_lifecycle_and_recovery_cases.rs'),
+        Path('v2_lane_work/strict_historical_read_tests.rs'),
         Path('v2_lane_work/canonical_executed_block_recovery_drift_test.rs'),
         Path('v2_lane_work/historical_recovery_and_carrier_tests.rs'),
         Path('v2_lane_work_autonomous_ready_durability_tests.rs'),
@@ -574,9 +579,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
 }
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
     Path("crates/iroha_config/src/parameters/actual.rs"): (Path("crates/iroha_config/src/parameters/actual/tests.rs"),),
-    Path("crates/iroha_core/src/snapshot.rs"): (
-        Path("crates/iroha_core/src/snapshot/support_policy_tests.rs"),
-    ),
     Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
         Path(
             "integration_tests/tests/sumeragi_v2_runner/"
@@ -630,8 +632,9 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 71
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 16
+# Snapshot support tests remain a leaf, so the exact partition has 55 roots and 15 nested parents.
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 70
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 15
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 55
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS

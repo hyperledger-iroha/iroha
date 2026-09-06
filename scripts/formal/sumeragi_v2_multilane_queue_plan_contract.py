@@ -422,7 +422,7 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS = (
             "validate_queue_plan_ttl_fixture(&fixture)",
             "QueuePlanSynced external execution must be rejected before voting",
             "assert_external_queue_plan_role_rejected(error.as_ref())",
-            ".contains_key(&fixture.signed_hash)",
+            ".contains_key(&fixture.stateless_cache_key)",
         ),
     ),
     (

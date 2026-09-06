@@ -14132,6 +14132,9 @@ pub mod isi {
             account_state_hash: account.account_state_hash,
             code_hash: account.code_hash,
             data_hash: account.data_hash,
+            last_transaction_hash: account.last_transaction_hash,
+            last_transaction_lt: account.last_transaction_lt,
+            storage_last_transaction_lt: account.storage_last_transaction_lt,
         }
     }
     fn ton_breaker_replay_readback(
@@ -21072,6 +21075,40 @@ pub mod isi {
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
 
         #[test]
+        fn ton_breaker_account_conversion_binds_authenticated_transaction_coordinates() {
+            let (_, _, record) = crate::state::ton_breaker_hydration_fixture_for_testing();
+            let expected = record.route_account;
+            let native = iroha_sccp::TonAccountStateReadbackV1 {
+                address: expected.address,
+                shard_block_id: iroha_sccp::TonBlockIdExtV1 {
+                    workchain: expected.shard_block.workchain,
+                    shard: expected.shard_block.shard,
+                    seqno: expected.shard_block.seqno,
+                    root_hash: expected.shard_block.root_hash,
+                    file_hash: expected.shard_block.file_hash,
+                },
+                registered_masterchain_seqno: expected.registered_masterchain_seqno,
+                shard_state_root_hash: expected.shard_state_hash,
+                account_state_hash: expected.account_state_hash,
+                code_hash: expected.code_hash,
+                data_hash: expected.data_hash,
+                last_transaction_hash: expected.last_transaction_hash,
+                last_transaction_lt: expected.last_transaction_lt,
+                storage_last_transaction_lt: expected.storage_last_transaction_lt,
+            };
+            assert_eq!(ton_breaker_account_readback(native), expected);
+            for field in 0..3 {
+                let mut changed = record.clone();
+                match field {
+                    0 => changed.route_account.last_transaction_hash[0] ^= 1,
+                    1 => changed.route_account.last_transaction_lt -= 1,
+                    _ => changed.route_account.storage_last_transaction_lt += 1,
+                }
+                assert_ne!(changed.computed_digest(), record.observation_digest);
+            }
+        }
+
+        #[test]
         fn ton_breaker_transition_enforces_full_cas_monotonicity_and_one_way_latch() {
             assert_eq!(
                 ton_breaker_disabled_latch_transition_v1([0; 32], None, 1, 10, false),
@@ -26581,7 +26618,7 @@ pub mod isi {
         fn sccp_bridge_proof_for_receipt_test(
             artifact: &SccpReceiptArtifactFixture,
         ) -> BridgeProof {
-            let height = artifact.public_inputs.finality_height;
+            let height = artifact.material.public_inputs().finality_height;
             BridgeProof {
                 range: BridgeProofRange {
                     start_height: height.saturating_add(u64::from(artifact.proof_seed)),
@@ -29211,7 +29248,7 @@ pub mod isi {
                     "the first instruction must make observable overlay changes"
                 );
                 assert_ne!(
-                    staged.route_liabilities, baseline.route_liabilities,
+                    staged.liabilities, baseline.liabilities,
                     "the outbound lock must stage exact route-liability accounting"
                 );
                 instruction
@@ -31817,10 +31854,6 @@ seiyaku GovernanceLifecycle {
         }
         #[derive(Debug, Clone, PartialEq, Eq)]
         struct SccpOutboundMutationSnapshot {
-            route_liabilities: BTreeMap<
-                iroha_data_model::bridge::SccpRouteKeyV1,
-                iroha_data_model::bridge::SccpRouteLiabilityV1,
-            >,
             pending: BTreeMap<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
             locators: BTreeMap<[u8; 32], SccpOutboundMessageKeyV1>,
             ordered_index: BTreeSet<SccpOutboundMessageIndexKeyV1>,
@@ -31841,12 +31874,6 @@ seiyaku GovernanceLifecycle {
             let sender_asset = AssetId::new(settlement_asset.clone(), sender.clone());
             let custody_asset = AssetId::new(settlement_asset, custody);
             SccpOutboundMutationSnapshot {
-                route_liabilities: stx
-                    .world
-                    .sccp_route_liabilities
-                    .iter()
-                    .map(|(key, liability)| (key.clone(), *liability))
-                    .collect(),
                 pending: stx
                     .world
                     .sccp_outbound_pending_messages
@@ -31888,10 +31915,6 @@ seiyaku GovernanceLifecycle {
                 crate::state::SccpVerifierWorkV1,
                 crate::state::SccpVerifierWorkV1,
             ),
-            route_liabilities: BTreeMap<
-                iroha_data_model::bridge::SccpRouteKeyV1,
-                iroha_data_model::bridge::SccpRouteLiabilityV1,
-            >,
             custody_balance: Quantity,
             recipient_balance: Quantity,
             holders: Option<BTreeSet<AccountId>>,
@@ -31926,12 +31949,6 @@ seiyaku GovernanceLifecycle {
             let recipient_asset = AssetId::new(settlement_asset.clone(), recipient.clone());
             SccpInboundMutationSnapshot {
                 verifier_work: stx.sccp_verifier_work_for_testing(),
-                route_liabilities: stx
-                    .world
-                    .sccp_route_liabilities
-                    .iter()
-                    .map(|(key, liability)| (key.clone(), *liability))
-                    .collect(),
                 custody_balance: sccp_asset_balance(stx, &custody_asset),
                 recipient_balance: sccp_asset_balance(stx, &recipient_asset),
                 holders: stx
@@ -32174,60 +32191,42 @@ seiyaku GovernanceLifecycle {
             ensure_sccp_route_escrow_account(&route_key, &asset, stx)
                 .expect("create the reserved SCCP protocol escrow fixture");
             if !custody_amount.is_zero() {
-                let scale_factor = 10_u128
-                    .checked_pow(payload_amount_scale)
-                    .expect("governed SCCP payload scale fits the u128 fixture domain");
-                let scaled_amount = custody_amount
-                    .try_mul_decimal(&Numeric::new(scale_factor, 0))
-                    .expect("SCCP custody fixture amount scales exactly");
-                assert_eq!(
-                    scaled_amount.scale(),
-                    0,
-                    "SCCP custody fixture amount must be exact at the governed payload scale"
-                );
-                let payload_amount = scaled_amount
-                    .as_numeric()
+                let custody_asset = AssetId::new(asset.clone(), custody.clone());
+                crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                    &mut stx.world,
+                    &custody_asset,
+                    &custody_amount,
+                )
+                .expect("seed the SCCP protocol escrow fixture directly");
+                stx.world
+                    .increase_asset_total_amount(&asset, &custody_amount)
+                    .expect("account for the directly seeded SCCP escrow supply");
+                let numeric = custody_amount.as_numeric();
+                let scale_delta = payload_amount_scale
+                    .checked_sub(numeric.scale())
+                    .expect("custody fixture precision fits the governed payload scale");
+                let payload_amount = numeric
                     .try_mantissa_u128()
-                    .expect("scaled SCCP custody fixture amount fits payload units");
+                    .expect("custody fixture has a nonnegative u128 mantissa")
+                    .checked_mul(
+                        10_u128
+                            .checked_pow(scale_delta)
+                            .expect("governed route scale multiplier fits u128"),
+                    )
+                    .expect("custody fixture payload units fit u128");
                 assert!(
                     payload_amount <= max_outstanding_liability,
                     "SCCP custody fixture amount must fit the immutable route liability cap"
                 );
-                let sender_asset = AssetId::new(asset.clone(), ALICE_ID.clone());
-                Mint::asset_quantity(custody_amount.clone(), sender_asset.clone())
-                    .execute(&ALICE_ID, stx)
-                    .expect("fund SCCP outbound sender fixture");
-                crate::smartcontracts::isi::asset::isi::execute_sccp_outbound_route_lock(
-                    stx,
-                    &ALICE_ID,
-                    &route_key,
-                    &asset,
-                    payload_amount,
-                    custody_amount.clone(),
-                )
-                .expect("lock the SCCP custody fixture through the canonical outbound path");
-                let liability = stx
-                    .world
-                    .sccp_route_liabilities
-                    .get(&route_key)
-                    .copied()
-                    .expect("canonical outbound lock creates a route liability");
-                assert_eq!(liability.outstanding_liability, payload_amount);
-                let liability_quantity = Quantity::from_canonical_numeric(
-                    Numeric::try_new(liability.outstanding_liability, payload_amount_scale)
-                        .expect("fixture liability is representable at its governed scale"),
-                )
-                .expect("fixture liability is a non-negative quantity");
-                assert_eq!(liability_quantity, custody_amount);
-                assert_eq!(
-                    sccp_asset_balance(stx, &AssetId::new(asset.clone(), custody.clone()),),
-                    liability_quantity,
-                    "SCCP fixture escrow must exactly back its route liability"
+                stx.world.sccp_route_liabilities.insert(
+                    route_key,
+                    iroha_data_model::bridge::SccpRouteLiabilityV1::new(payload_amount)
+                        .expect("nonzero custody fixture creates a liability row"),
                 );
                 assert_eq!(
-                    sccp_asset_balance(stx, &sender_asset),
-                    Quantity::zero(),
-                    "canonical outbound lock must move the entire fixture amount into escrow"
+                    sccp_asset_balance(stx, &custody_asset),
+                    custody_amount,
+                    "direct fixture seeding must exactly back its route liability"
                 );
             } else {
                 assert!(

@@ -1,25 +1,18 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package org.hyperledger.iroha.android.consensus;
+package org.hyperledger.iroha.sdk.consensus;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.BodyState;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.ConsensusMode;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.Phase;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.ProgressTransition;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.QueueKind;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.WorkStage;
-import org.hyperledger.iroha.android.util.HashLiteral;
-import org.junit.Test;
+import org.hyperledger.iroha.sdk.core.util.HashLiteral;
+import org.junit.jupiter.api.Test;
 
 /** Fail-closed authoritative status model and parser tests. */
 public final class SumeragiStatusModelsTests {
@@ -30,24 +23,24 @@ public final class SumeragiStatusModelsTests {
   public void parserPreservesCompleteTypedV4SnapshotAndFullU64Range() {
     final String maximum = "18446744073709551615";
     final SumeragiV2Status status =
-        SumeragiStatusModels.parseStatus(statusJson(maximum, maximum, maximum));
+        SumeragiV2Status.parseJson(statusJson(maximum, maximum, maximum));
 
-    assertEquals(4, status.protocolVersion());
-    assertEquals(new BigInteger(maximum), status.view());
-    assertEquals(new BigInteger(maximum), status.liveness().noProgressAgeMs());
+    assertEquals(4, status.protocolVersion);
+    assertEquals(new BigInteger(maximum), status.view);
+    assertEquals(new BigInteger(maximum), status.liveness.noProgressAgeMs);
     assertEquals(
         new BigInteger(maximum),
-        status.lastCommitQc().certificate().executionCommitment().executedBlockWireLen());
-    assertEquals(Phase.PREPARE, status.phase());
-    assertEquals(BodyState.VALIDATED, status.bodyState());
-    assertEquals(ConsensusMode.PERMISSIONED, status.heightContext().mode());
-    assertEquals(WorkStage.COMPLETE, status.liveness().work().validation());
-    assertEquals(QueueKind.NETWORK_INGRESS, status.liveness().queues().get(0).queue());
+        status.lastCommitQc.certificate.executionCommitment.executedBlockWireLen);
+    assertEquals(SumeragiStatusPhase.PREPARE, status.phase);
+    assertEquals(SumeragiStatusBodyState.VALIDATED, status.bodyState);
+    assertEquals(SumeragiStatusConsensusMode.PERMISSIONED, status.heightContext.mode);
+    assertEquals(SumeragiStatusWorkStage.COMPLETE, status.liveness.work.validation);
+    assertEquals(SumeragiStatusQueueKind.NETWORK_INGRESS, status.liveness.queues.get(0).queue);
     assertEquals(
-        ProgressTransition.PREPARE_VOTE_ADMITTED,
-        status.liveness().lastProgress().transition());
-    assertNull(status.lockedPrepareQc());
-    assertFalse(status.restartRequired());
+        SumeragiStatusProgressTransition.PREPARE_VOTE_ADMITTED,
+        status.liveness.lastProgress.transition);
+    assertNull(status.lockedPrepareQc);
+    assertFalse(status.restartRequired);
   }
 
   @Test
@@ -60,13 +53,13 @@ public final class SumeragiStatusModelsTests {
                 "\"kagemusha_top_up_root\":\""
                     + kagemushaTopUpRoot
                     + "\",\"kagemusha_top_up_count\":1000,");
-    final SumeragiStatusModels.ExecutionCommitment commitment =
-        SumeragiStatusModels.parseStatus(canonicalPayload)
-            .lastCommitQc()
-            .certificate()
-            .executionCommitment();
-    assertEquals(BigInteger.valueOf(1_000), commitment.kagemushaTopUpCount());
-    assertEquals(kagemushaTopUpRoot, commitment.kagemushaTopUpRoot());
+    final SumeragiStatusExecutionCommitment commitment =
+        SumeragiV2Status.parseJson(canonicalPayload)
+            .lastCommitQc
+            .certificate
+            .executionCommitment;
+    assertEquals(BigInteger.valueOf(1_000), commitment.kagemushaTopUpCount);
+    assertEquals(kagemushaTopUpRoot, commitment.kagemushaTopUpRoot);
 
     assertRejected(
         canonicalPayload.replace("kagemusha_top_up_count", "topup_anchor_count"));
@@ -91,15 +84,15 @@ public final class SumeragiStatusModelsTests {
   public void byteParserRejectsMalformedUtf8UnicodeAndExcessiveDepth() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> SumeragiStatusModels.parseStatus(new byte[0]));
+        () -> SumeragiV2Status.parseJson(new byte[0]));
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            SumeragiStatusModels.parseStatus(
-                new byte[(int) SumeragiStatusModels.STATUS_JSON_MAX_BYTES + 1]));
+            SumeragiV2Status.parseJson(
+                new byte[(int) SumeragiStatusModelsKt.SUMERAGI_STATUS_JSON_MAX_BYTES + 1]));
     assertThrows(
         IllegalArgumentException.class,
-        () -> SumeragiStatusModels.parseStatus(new byte[] {0x7b, 0x22, (byte) 0xc3, 0x28}));
+        () -> SumeragiV2Status.parseJson(new byte[] {0x7b, 0x22, (byte) 0xc3, 0x28}));
     assertRejected("{\"x\":\"" + '\ud800' + "\"}");
 
     final StringBuilder nested = new StringBuilder("{\"x\":");
@@ -139,7 +132,7 @@ public final class SumeragiStatusModelsTests {
     assertRejected(payload.replace("\"lane_finality_manifest\": null,", ""));
     final String laneRoot = hash(0x38);
     final SumeragiV2Status withLane =
-        SumeragiStatusModels.parseStatus(
+        SumeragiV2Status.parseJson(
             payload.replace(
                 "\"lane_finality_manifest\": null",
                 "\"lane_finality_manifest\":{\"root\":\""
@@ -147,12 +140,12 @@ public final class SumeragiStatusModelsTests {
                     + "\",\"leaf_count\":1}"));
     assertEquals(
         laneRoot,
-        withLane.lastCommitQc().certificate().executionCommitment()
-            .laneFinalityManifest().root());
+        withLane.lastCommitQc.certificate.executionCommitment
+            .laneFinalityManifest.root);
     assertEquals(
         BigInteger.ONE,
-        withLane.lastCommitQc().certificate().executionCommitment()
-            .laneFinalityManifest().leafCount());
+        withLane.lastCommitQc.certificate.executionCommitment
+            .laneFinalityManifest.leafCount);
     for (int count : new int[] {0, 1_025}) {
       assertRejected(
           payload.replace(
@@ -180,14 +173,14 @@ public final class SumeragiStatusModelsTests {
   public void collectionsAreImmutableAndOperationalFieldsAreRejected() {
     final String payload = statusJson("2", "123", "19");
     final SumeragiV2Status status =
-        SumeragiStatusModels.parseStatus(payload.getBytes(StandardCharsets.UTF_8));
-    assertThrows(UnsupportedOperationException.class, () -> status.liveness().queues().clear());
-    assertTrue(status.lastCommitQc() != null);
+        SumeragiV2Status.parseJson(payload.getBytes(StandardCharsets.UTF_8));
+    assertThrows(UnsupportedOperationException.class, () -> status.liveness.queues.clear());
+    assertTrue(status.lastCommitQc != null);
     assertRejected(payload.replaceFirst("\\{", "{\"lane_settlement_commitments\":[],"));
   }
 
   private static void assertRejected(final String payload) {
-    assertThrows(RuntimeException.class, () -> SumeragiStatusModels.parseStatus(payload));
+    assertThrows(RuntimeException.class, () -> SumeragiV2Status.parseJson(payload));
   }
 
   private static String statusJson(

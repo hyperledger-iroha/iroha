@@ -14,13 +14,13 @@ from ._account_id import decode_canonical_i105_account_id
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
-SCCP_DOMAIN_TRON = 3
+SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_TON = 4
 
-SCCP_CODEC_CANONICAL_TEXT = 0
-SCCP_CODEC_EVM_ADDRESS20 = 1
-SCCP_CODEC_TRON_ADDRESS21 = 2
-SCCP_CODEC_TON_ACCOUNT36 = 3
+SCCP_CODEC_CANONICAL_TEXT = 1
+SCCP_CODEC_EVM_ADDRESS20 = 2
+SCCP_CODEC_TRON_ADDRESS21 = 5
+SCCP_CODEC_TON_ACCOUNT36 = 7
 _SCCP_JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
 SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1 = "ivm_proved_record_sccp_message_v1"
 SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1 = 1_000_000_000
@@ -412,6 +412,452 @@ def _binary(value: Any, label: str) -> bytes:
     if not isinstance(value, (bytes, bytearray, memoryview)):
         raise TypeError(f"{label} must be bytes-like")
     return bytes(value)
+
+
+SCCP_REPLAY_SMT_DEPTH_V1 = 248
+SCCP_REPLAY_BOUNDARIES_V1 = MappingProxyType(
+    {
+        "sora_outbound_lock": 0x01,
+        "sora_inbound_release": 0x02,
+        "evm_source_burn": 0x10,
+        "evm_destination_mint": 0x11,
+        "tron_source_burn": 0x20,
+        "tron_destination_mint": 0x21,
+        "ton_bridge_inbound_mint": 0x30,
+        "ton_bridge_outbound_burn": 0x31,
+        "ton_master_mint": 0x32,
+        "ton_master_burn": 0x33,
+        "ton_wallet_mint_credit": 0x34,
+        "ton_wallet_burn_authorization": 0x35,
+        "ton_wallet_burn_lock": 0x36,
+        "ton_wallet_burn_refund": 0x37,
+    }
+)
+_SCCP_REPLAY_BOUNDARY_TAGS_V1 = frozenset(SCCP_REPLAY_BOUNDARIES_V1.values())
+_SCCP_REPLAY_MAGIC_V1 = b"SCCP-REPLAY-SMT-V1"
+
+
+@dataclass(frozen=True)
+class SccpReplayWitnessRootV1:
+    """One strictly reconstructed final-V1 replay witness root."""
+
+    root: bytes
+    expected_root: bytes
+    shard: int
+
+    @property
+    def matches_expected_root(self) -> bool:
+        """Return whether the reconstructed and claimed roots are identical."""
+
+        return self.root == self.expected_root
+
+
+def _replay_fixed_bytes(
+    value: Any, length: int, label: str, *, nonzero: bool = True
+) -> bytes:
+    if isinstance(value, str):
+        if re.fullmatch(rf"0x[0-9a-f]{{{length * 2}}}", value) is None:
+            raise ValueError(f"{label} must be canonical lowercase 0x-prefixed hex")
+        result = bytes.fromhex(value[2:])
+    else:
+        result = _binary(value, label)
+    if len(result) != length or (nonzero and not any(result)):
+        qualifier = "nonzero " if nonzero else ""
+        raise ValueError(f"{label} must be {qualifier}{length} bytes")
+    return result
+
+
+def _replay_boundary(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} must be an integer tag")
+    if value not in _SCCP_REPLAY_BOUNDARY_TAGS_V1:
+        raise ValueError(f"{label} is unsupported")
+    return value
+
+
+def _replay_profile(value: Any, label: str) -> str:
+    if not isinstance(value, str) or value not in _NETWORKS:
+        raise ValueError(f"{label} must name a final-V1 production network")
+    return value
+
+
+def _replay_actor(value: Any, label: str) -> Tuple[int, bytes]:
+    record = _mapping(value, label)
+    kind = record.get("kind")
+    if kind == "route":
+        _exact_fields(record, frozenset({"kind"}), label)
+        return 0, b""
+    if kind in ("evm", "tron"):
+        _exact_fields(record, frozenset({"kind", "address"}), label)
+        return (1 if kind == "evm" else 2), _replay_fixed_bytes(
+            record["address"], 20, f"{label}.address"
+        )
+    if kind == "ton":
+        _exact_fields(record, frozenset({"kind", "workchain", "account"}), label)
+        workchain = _integer(
+            record["workchain"], f"{label}.workchain", -(1 << 31), (1 << 31) - 1
+        )
+        return 3, workchain.to_bytes(4, "big", signed=True) + _replay_fixed_bytes(
+            record["account"], 32, f"{label}.account"
+        )
+    raise ValueError(f"{label} has a noncanonical actor shape")
+
+
+def _replay_principal(value: Any, label: str) -> Tuple[int, bytes]:
+    record = _mapping(value, label)
+    kind = record.get("kind")
+    if kind == "sora_account":
+        _exact_fields(record, frozenset({"kind", "canonical_bytes"}), label)
+        payload = _binary(record["canonical_bytes"], f"{label}.canonical_bytes")
+        if not payload or len(payload) > 0xFFFF:
+            raise ValueError(f"{label}.canonical_bytes has an invalid length")
+        return 0, payload
+    if kind in ("evm", "tron"):
+        _exact_fields(record, frozenset({"kind", "address"}), label)
+        return (1 if kind == "evm" else 2), _replay_fixed_bytes(
+            record["address"], 20, f"{label}.address"
+        )
+    if kind == "ton":
+        _exact_fields(record, frozenset({"kind", "workchain", "account"}), label)
+        workchain = _integer(
+            record["workchain"], f"{label}.workchain", -(1 << 31), (1 << 31) - 1
+        )
+        return 3, workchain.to_bytes(4, "big", signed=True) + _replay_fixed_bytes(
+            record["account"], 32, f"{label}.account"
+        )
+    raise ValueError(f"{label} has a noncanonical principal shape")
+
+
+def _replay_principal_kind(boundary: int) -> int:
+    if boundary in (0x01, 0x02):
+        return 0
+    if boundary in (0x10, 0x11):
+        return 1
+    if boundary in (0x20, 0x21):
+        return 2
+    if 0x30 <= boundary <= 0x37:
+        return 3
+    raise ValueError("unsupported SCCP replay boundary")
+
+
+def _replay_direction_is_valid(
+    source: str, target: str, boundary: int, actor_kind: int
+) -> bool:
+    if boundary == 0x01:
+        return source == "sora-taira" and target != source and actor_kind == 0
+    if boundary == 0x02:
+        return target == "sora-taira" and source != target and actor_kind == 0
+    if boundary in (0x10, 0x11):
+        destination = boundary == 0x11
+        external = target if destination else source
+        return (
+            actor_kind == 1
+            and external in ("ethereum-mainnet", "bsc-mainnet")
+            and (source if destination else target) == "sora-taira"
+        )
+    if boundary in (0x20, 0x21):
+        return actor_kind == 2 and (
+            (boundary == 0x21 and source == "sora-taira" and target == "tron-mainnet")
+            or (boundary == 0x20 and source == "tron-mainnet" and target == "sora-taira")
+        )
+    sora_to_ton = boundary in (0x30, 0x32, 0x34)
+    ton_to_sora = boundary in (0x31, 0x33, 0x35, 0x36, 0x37)
+    return actor_kind == 3 and (
+        (sora_to_ton and source == "sora-taira" and target == "ton-mainnet")
+        or (ton_to_sora and source == "ton-mainnet" and target == "sora-taira")
+    )
+
+
+def _replay_sha256(*parts: bytes) -> bytes:
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(part)
+    return digest.digest()
+
+
+def sccp_replay_domain_hash_v1(value: Any) -> bytes:
+    """Hash one exact final-V1 SCCP replay domain."""
+
+    record = _exact_fields(
+        value,
+        frozenset(
+            {
+                "source_profile",
+                "target_profile",
+                "boundary",
+                "route_revision",
+                "route_configuration_hash",
+                "actor",
+            }
+        ),
+        "SCCP replay domain",
+    )
+    source = _replay_profile(record["source_profile"], "SCCP replay source_profile")
+    target = _replay_profile(record["target_profile"], "SCCP replay target_profile")
+    boundary = _replay_boundary(record["boundary"], "SCCP replay boundary")
+    revision = _integer(record["route_revision"], "SCCP replay route_revision", 1, (1 << 32) - 1)
+    actor_kind, actor = _replay_actor(record["actor"], "SCCP replay actor")
+    if not _replay_direction_is_valid(source, target, boundary, actor_kind):
+        raise ValueError("SCCP replay domain has an invalid boundary, direction, or actor")
+    return _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        b"\x00",
+        _NETWORKS[source][0].to_bytes(4, "big"),
+        _NETWORKS[target][0].to_bytes(4, "big"),
+        bytes((boundary,)),
+        revision.to_bytes(4, "big"),
+        _replay_fixed_bytes(
+            record["route_configuration_hash"], 32, "SCCP replay route_configuration_hash"
+        ),
+        bytes((actor_kind,)),
+        len(actor).to_bytes(2, "big"),
+        actor,
+    )
+
+
+def sccp_replay_key_v1(domain_hash: Any, replay_id: Any) -> bytes:
+    """Derive the complete 256-bit replay key."""
+
+    return _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        b"\x01",
+        _replay_fixed_bytes(domain_hash, 32, "SCCP replay domain hash"),
+        _replay_fixed_bytes(replay_id, 32, "SCCP replay id"),
+    )
+
+
+def sccp_replay_record_digest_v1(value: Any) -> bytes:
+    """Hash one exact occupied final-V1 SCCP replay record."""
+
+    record = _exact_fields(
+        value,
+        frozenset(
+            {
+                "operation",
+                "replay_id",
+                "payload_sha256",
+                "amount",
+                "principal",
+                "auxiliary_identity_sha256",
+            }
+        ),
+        "SCCP replay record",
+    )
+    operation = _replay_boundary(record["operation"], "SCCP replay operation")
+    amount = _integer(record["amount"], "SCCP replay amount", 1, _MAX_U128)
+    principal_kind, principal = _replay_principal(
+        record["principal"], "SCCP replay principal"
+    )
+    if principal_kind != _replay_principal_kind(operation):
+        raise ValueError("SCCP replay operation and principal kind are inconsistent")
+    principal_digest = _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        bytes((0x03, principal_kind)),
+        len(principal).to_bytes(2, "big"),
+        principal,
+    )
+    auxiliary = _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        bytes((0x04, operation)),
+        _replay_fixed_bytes(
+            record["auxiliary_identity_sha256"],
+            32,
+            "SCCP replay auxiliary identity SHA-256",
+        ),
+    )
+    result = _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        bytes((0x02, operation)),
+        _replay_fixed_bytes(record["replay_id"], 32, "SCCP replay id"),
+        _replay_fixed_bytes(record["payload_sha256"], 32, "SCCP replay payload SHA-256"),
+        amount.to_bytes(16, "big"),
+        principal_digest,
+        auxiliary,
+    )
+    if not any(result):
+        raise ValueError("SCCP occupied replay record digest must be nonzero")
+    return result
+
+
+def _sccp_replay_parent_hash_v1(level: int, left: bytes, right: bytes) -> bytes:
+    return _replay_sha256(
+        _SCCP_REPLAY_MAGIC_V1,
+        b"\x12",
+        level.to_bytes(2, "big"),
+        left,
+        right,
+    )
+
+
+def sccp_replay_empty_hashes_v1() -> Tuple[bytes, ...]:
+    """Return all 249 canonical empty hashes in leaf-up order."""
+
+    hashes = [_replay_sha256(_SCCP_REPLAY_MAGIC_V1, b"\x10")]
+    for level in range(SCCP_REPLAY_SMT_DEPTH_V1):
+        hashes.append(_sccp_replay_parent_hash_v1(level, hashes[level], hashes[level]))
+    return tuple(hashes)
+
+
+def sccp_replay_root_from_witness_v1(
+    key_value: Any, record_digest: Any, witness_value: Any
+) -> SccpReplayWitnessRootV1:
+    """Strictly reconstruct one compressed membership or non-membership witness."""
+
+    key = _replay_fixed_bytes(key_value, 32, "SCCP replay key", nonzero=False)
+    witness = _exact_fields(
+        witness_value,
+        frozenset(
+            {"expected_shard_root", "prior_record_digest", "sibling_bitmap", "siblings"}
+        ),
+        "SCCP sparse-Merkle witness",
+    )
+    expected = _replay_fixed_bytes(
+        witness["expected_shard_root"],
+        32,
+        "SCCP witness expected shard root",
+        nonzero=False,
+    )
+    prior = _replay_fixed_bytes(
+        witness["prior_record_digest"],
+        32,
+        "SCCP witness prior record digest",
+        nonzero=False,
+    )
+    bitmap = _replay_fixed_bytes(
+        witness["sibling_bitmap"], 32, "SCCP witness sibling bitmap", nonzero=False
+    )
+    if bitmap[0] != 0:
+        raise ValueError("SCCP witness bitmap has reserved high bits")
+    siblings = tuple(
+        _replay_fixed_bytes(item, 32, f"SCCP witness sibling[{index}]", nonzero=False)
+        for index, item in enumerate(_list(witness["siblings"], "SCCP witness siblings"))
+    )
+    if sum(bin(byte).count("1") for byte in bitmap) != len(siblings) or len(siblings) > 248:
+        raise ValueError("SCCP witness sibling count does not match its bitmap")
+    empty = sccp_replay_empty_hashes_v1()
+    digest = _replay_fixed_bytes(
+        record_digest, 32, "SCCP prior record digest", nonzero=False
+    )
+    if digest != prior:
+        raise ValueError("SCCP witness prior record digest mismatch")
+    if not any(digest):
+        current = empty[0]
+    else:
+        current = _replay_sha256(_SCCP_REPLAY_MAGIC_V1, b"\x11", key, digest)
+    supplied = 0
+    for level in range(SCCP_REPLAY_SMT_DEPTH_V1):
+        bitmap_set = bitmap[31 - level // 8] & (1 << (level % 8)) != 0
+        sibling = siblings[supplied] if bitmap_set else empty[level]
+        if bitmap_set:
+            supplied += 1
+            if sibling == empty[level]:
+                raise ValueError("SCCP witness explicitly encodes a default sibling")
+        key_set = key[31 - level // 8] & (1 << (level % 8)) != 0
+        current = (
+            _sccp_replay_parent_hash_v1(level, sibling, current)
+            if key_set
+            else _sccp_replay_parent_hash_v1(level, current, sibling)
+        )
+    return SccpReplayWitnessRootV1(current, expected, key[0])
+
+
+def sccp_replay_verify_against_current_root_v1(
+    key_value: Any,
+    record_digest: Any,
+    witness_value: Any,
+    current_root_value: Any,
+) -> SccpReplayWitnessRootV1:
+    """Verify a replay witness against the exact current shard root."""
+
+    current = _replay_fixed_bytes(
+        current_root_value, 32, "SCCP current shard root", nonzero=False
+    )
+    result = sccp_replay_root_from_witness_v1(key_value, record_digest, witness_value)
+    if result.expected_root != current or result.root != current:
+        raise ValueError("SCCP replay witness does not match the current shard root")
+    return result
+
+
+def sccp_replay_accumulator_occupy_v1(
+    state_value: Any, domain_value: Any, record_value: Any, witness_value: Any
+) -> Mapping[str, Any]:
+    """Purely apply one final-V1 empty-to-occupied replay transition."""
+
+    state = _exact_fields(
+        state_value,
+        frozenset({"nonempty_shard_roots", "leaf_count", "update_sequence"}),
+        "SCCP replay accumulator",
+    )
+    roots = state["nonempty_shard_roots"]
+    if not isinstance(roots, Mapping):
+        raise TypeError("SCCP replay accumulator roots must be a mapping")
+    canonical_roots: Dict[int, bytes] = {}
+    empty_root = sccp_replay_empty_hashes_v1()[-1]
+    for shard, root in roots.items():
+        if isinstance(shard, bool) or not isinstance(shard, int) or not 0 <= shard <= 0xFF:
+            raise ValueError("SCCP replay accumulator shard must fit u8")
+        parsed = _replay_fixed_bytes(
+            root,
+            32,
+            "SCCP replay accumulator shard root",
+            nonzero=False,
+        )
+        if parsed == empty_root:
+            raise ValueError("SCCP replay accumulator must omit canonical empty roots")
+        canonical_roots[shard] = parsed
+    leaf_count = _integer(state["leaf_count"], "SCCP replay leaf_count", 0, _MAX_U64)
+    update_sequence = _integer(
+        state["update_sequence"], "SCCP replay update_sequence", 0, _MAX_U64
+    )
+    if (
+        (leaf_count == 0) != (not canonical_roots)
+        or leaf_count < len(canonical_roots)
+        or update_sequence != leaf_count
+        or leaf_count == _MAX_U64
+    ):
+        raise ValueError("invalid SCCP replay accumulator state")
+    domain = _mapping(domain_value, "SCCP replay domain")
+    record = _mapping(record_value, "SCCP replay record")
+    if record.get("operation") != domain.get("boundary"):
+        raise ValueError("SCCP replay operation does not match its forest boundary")
+    domain_hash = sccp_replay_domain_hash_v1(domain)
+    replay_id = _replay_fixed_bytes(record.get("replay_id"), 32, "SCCP replay id")
+    key = sccp_replay_key_v1(domain_hash, replay_id)
+    shard = key[0]
+    current_root = canonical_roots.get(shard, empty_root)
+    witness = _mapping(witness_value, "SCCP sparse-Merkle witness")
+    if any(_replay_fixed_bytes(
+        witness.get("prior_record_digest"), 32, "SCCP witness prior record digest", nonzero=False
+    )):
+        raise ValueError("SCCP replay leaf is already occupied")
+    old = sccp_replay_verify_against_current_root_v1(
+        key, bytes(32), witness, current_root
+    )
+    digest = sccp_replay_record_digest_v1(record)
+    occupied_witness = dict(witness)
+    occupied_witness["prior_record_digest"] = digest
+    occupied_witness["expected_shard_root"] = current_root
+    new_root = sccp_replay_root_from_witness_v1(key, digest, occupied_witness).root
+    canonical_roots[shard] = new_root
+    return MappingProxyType(
+        {
+            "nonempty_shard_roots": MappingProxyType(dict(sorted(canonical_roots.items()))),
+            "leaf_count": leaf_count + 1,
+            "update_sequence": update_sequence + 1,
+            "delta": MappingProxyType(
+                {
+                    "domain_hash": domain_hash,
+                    "shard": shard,
+                    "key": key,
+                    "record_digest": digest,
+                    "old_root": old.root,
+                    "new_root": new_root,
+                    "leaf_count": leaf_count + 1,
+                    "update_sequence": update_sequence + 1,
+                }
+            ),
+        }
+    )
 
 
 def _lower_hex(
@@ -849,6 +1295,9 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
                 "source_network",
                 "protocol_version",
                 "chain_id_hash",
+                "epoch",
+                "epoch_end_height",
+                "roster_commitment",
                 "checkpoint_height",
                 "checkpoint_block_hash",
                 "checkpoint_context_id",
@@ -867,9 +1316,18 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
     chain_hash = bytes.fromhex(_upper_hex(record["chain_id_hash"], f"{label}.chain_id_hash", 32))
     if chain_hash != _SORA_TAIRA_CHAIN_ID_HASH:
         raise ValueError(f"{label}.chain_id_hash is not the Taira chain commitment")
+    epoch = _integer(record["epoch"], f"{label}.epoch", 1, _U64_MASK)
+    epoch_end_height = _integer(
+        record["epoch_end_height"], f"{label}.epoch_end_height", 0, _U64_MASK
+    )
+    roster_commitment = bytes.fromhex(
+        _upper_hex(record["roster_commitment"], f"{label}.roster_commitment", 32)
+    )
     checkpoint_height = _integer(
         record["checkpoint_height"], f"{label}.checkpoint_height", 1, _U64_MASK
     )
+    if checkpoint_height > epoch_end_height:
+        raise ValueError(f"{label}.checkpoint_height exceeds its epoch end height")
     checkpoint_hash = bytes.fromhex(
         _upper_hex(record["checkpoint_block_hash"], f"{label}.checkpoint_block_hash", 32)
     )
@@ -883,7 +1341,13 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
             32,
         )
     )
-    roles = (chain_hash, checkpoint_hash, context_id, finality_artifact_hash)
+    roles = (
+        chain_hash,
+        roster_commitment,
+        checkpoint_hash,
+        context_id,
+        finality_artifact_hash,
+    )
     if len(set(roles)) != len(roles):
         raise ValueError(f"{label} reuses a consensus hash role")
     canonical = (
@@ -891,6 +1355,9 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
         + bytes((source[1],))
         + protocol_version.to_bytes(2, "little")
         + chain_hash
+        + epoch.to_bytes(8, "little")
+        + epoch_end_height.to_bytes(8, "little")
+        + roster_commitment
         + checkpoint_height.to_bytes(8, "little")
         + checkpoint_hash
         + context_id
@@ -2386,7 +2853,7 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
 def _validate_codec_value(
     record: Mapping[str, Any], codec_field: str, value_field: str, domain: Optional[int] = None
 ) -> None:
-    codec = _integer(record[codec_field], f"SCCP transfer.{codec_field}", 0, 3)
+    codec = _integer(record[codec_field], f"SCCP transfer.{codec_field}", 1, 7)
     if codec not in SCCP_CODEC_KEYS:
         raise ValueError(f"SCCP transfer.{codec_field} is unsupported or retired")
     if domain is not None:
@@ -2804,6 +3271,8 @@ __all__ = [
     "SCCP_NETWORK_PROFILES",
     "SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1",
     "SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1",
+    "SCCP_REPLAY_SMT_DEPTH_V1",
+    "SCCP_REPLAY_BOUNDARIES_V1",
     "SccpRegistryLimits",
     "SccpResourceLimits",
     "SccpCapabilities",
@@ -2812,8 +3281,16 @@ __all__ = [
     "SccpSoraOutboundExecutionPolicy",
     "SccpRecentMessages",
     "SccpRecentCursor",
+    "SccpReplayWitnessRootV1",
     "normalize_sccp_codec_value",
     "sccp_source_event_digest",
+    "sccp_replay_domain_hash_v1",
+    "sccp_replay_key_v1",
+    "sccp_replay_record_digest_v1",
+    "sccp_replay_empty_hashes_v1",
+    "sccp_replay_root_from_witness_v1",
+    "sccp_replay_verify_against_current_root_v1",
+    "sccp_replay_accumulator_occupy_v1",
     "normalize_sccp_capabilities",
     "normalize_sccp_registry",
     "normalize_sccp_recent_messages",

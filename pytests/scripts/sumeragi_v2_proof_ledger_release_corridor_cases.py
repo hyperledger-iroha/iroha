@@ -4321,9 +4321,10 @@ def test_formal_workflows_use_fresh_private_external_layouts() -> None:
             r"(?m)^\s*(?:run:\s*)?(?:command\s+)?cargo(?:\s|$)", formal_job
         ) is None
         assert (
-            "mktemp -d /private/tmp/iroha-sumeragi-v2-formal.XXXXXX"
+            'mktemp -d "$invocation_base/iroha-sumeragi-v2-formal.XXXXXX"'
             in formal_job
         )
+        assert 'invocation_base="$(cd -- /tmp && pwd -P)"' in formal_job
         for variable in (
             "CARGO_TARGET_DIR",
             "IROHA_RELEASE_ARTIFACT_ROOT",
@@ -4335,7 +4336,7 @@ def test_formal_workflows_use_fresh_private_external_layouts() -> None:
             "VERUS_INSTALL_ROOT",
         ):
             assert f"printf '{variable}=%s\\n'" in formal_job
-        assert formal_job.index("mktemp -d /private/tmp") < formal_job.index(
+        assert formal_job.index('mktemp -d "$invocation_base/') < formal_job.index(
             "bash scripts/formal/install_sumeragi_v2_tlapm.sh"
         )
         assert formal_job.index(
@@ -4352,7 +4353,8 @@ def test_formal_workflows_use_fresh_private_external_layouts() -> None:
     assert re.search(
         r"(?m)^\s*(?:run:\s*)?(?:command\s+)?cargo(?:\s|$)", chaos_job
     ) is None
-    assert "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX" in chaos_job
+    assert 'invocation_base="$(cd -- /tmp && pwd -P)"' in chaos_job
+    assert 'mktemp -d "$invocation_base/iroha-sumeragi-v2-chaos.XXXXXX"' in chaos_job
     for variable in (
         "CARGO_TARGET_DIR",
         "IROHA_RELEASE_ARTIFACT_ROOT",
@@ -4360,7 +4362,7 @@ def test_formal_workflows_use_fresh_private_external_layouts() -> None:
         "SUMERAGI_V2_CHAOS_EVIDENCE_DIR",
     ):
         assert f"printf '{variable}=%s\\n'" in chaos_job
-    assert chaos_job.index("mktemp -d /private/tmp") < chaos_job.index(
+    assert chaos_job.index('mktemp -d "$invocation_base/') < chaos_job.index(
         "run: bash scripts/run_sumeragi_v2_100k_chaos.sh"
     )
     assert "steps.chaos_layout.outputs.artifact_root" in chaos_job

@@ -173,6 +173,14 @@ public sealed class PrivacyNativeTests
             "iroha_privacy_validate_compiled_profile_catalog_v1",
             validator.GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
                 .EntryPoint);
+        var capabilityValidator = typeof(PrivacyNative).GetMethod(
+            "NativeValidateExact12CapabilityManifest",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(capabilityValidator);
+        Assert.Equal(
+            "iroha_privacy_validate_exact12_capability_manifest_v1",
+            capabilityValidator!.GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
+                .EntryPoint);
         var fixtureQuery = typeof(PrivacyNative).GetMethod(
             "NativeExact12FixtureBundle",
             BindingFlags.NonPublic | BindingFlags.Static);

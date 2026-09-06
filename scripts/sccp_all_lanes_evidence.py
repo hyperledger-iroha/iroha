@@ -99,7 +99,6 @@ def main(argv: list[str] | None = None) -> int:
             evidence=evidence,
             evidence_bytes=evidence_bytes,
             validator_path=rust_validator,
-            environment="production",
         )
         if signature_validator_hash != verified_validator_executable_hash:
             raise SccpReleaseError(
@@ -124,7 +123,6 @@ def main(argv: list[str] | None = None) -> int:
             trust_policy,
             trust_policy_path=args.trust_policy,
             evidence_path=args.evidence,
-            environment="production",
         )
         if executable_hash != verified_validator_executable_hash:
             raise SccpReleaseError(

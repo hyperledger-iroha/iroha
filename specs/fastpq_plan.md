@@ -1,9 +1,11 @@
 # FASTPQ Prover Work Breakdown
 
 This document captures the FASTPQ-ISI V1 implementation and its release
-boundary. V1 deliberately exposes only witnessed transfers and opaque metadata
-carriers; unsupported supply, permission, and non-membership variants are not
-retained in the wire or trace schema.
+boundary. The sole operation catalog contains Transfer, Mint, Burn, RoleGrant,
+RoleRevoke, and MetaSet. The production state-transition gate currently admits
+only witnessed transfers; the supply, permission, and metadata tree relations
+remain incomplete and those operations fail closed in that profile. Authenticated
+AXT statements separately admit witnessed transfers or opaque metadata carriers.
 
 Cryptographic qualification note (2026-08-29): the sole canonical parameter
 record targets 128-bit aggregate qROM security with six independently generated
@@ -16,7 +18,7 @@ records the calculation and blockers.
 ## Implemented release boundary
 
 - Public `Prover::prove`, `verify`, and `verify_with_limits` select the
-  `TransferStateTransition` profile explicitly. A non-empty batch must contain
+  `StateTransition` profile explicitly. A non-empty batch must contain
   only Transfer rows backed by canonical transfer transcripts and complete
   touched-balance-tree update witnesses. An empty batch is accepted only when
   `old_root == new_root`.
@@ -34,12 +36,13 @@ records the calculation and blockers.
   current residue vector. Removing
   that replay would be a protocol break; a future succinct profile must move
   every accepted-state relation into authenticated public input and AIR.
-- MetaSet batches fail closed in the public state-transition profile. The V1
-  operation enum contains only Transfer and MetaSet; old experimental mint,
-  burn, and role encodings are rejected during decoding. The release wire
-  indices are `16` for Transfer and `17` for MetaSet, deliberately disjoint
-  from every pre-release index (`0..=5`) so removal cannot relabel an old
-  operation as a supported one.
+- Mint, Burn, RoleGrant, RoleRevoke, and MetaSet batches fail closed in the public
+  state-transition profile. The sole V1 operation wire indices are Transfer=32,
+  Mint=33, Burn=34, RoleGrant=35, RoleRevoke=36, and MetaSet=37. Role variants bind
+  exact 32-byte role/permission identifiers and a u64 epoch. Both the experimental
+  indices `0..=5` and the superseded two-operation indices `16/17` are rejected;
+  there is no compatibility decoder. Wire representation and trace projections
+  alone do not qualify an operation's production tree relation.
 - AXT verification selects `AxtTransferClaim` or `AxtOpaqueEffect` only after a
   canonical outer `AxtFastpqBinding` is authenticated and exactly matched. The
   opaque profile accepts MetaSet carrier rows only; its public roots are
@@ -80,16 +83,20 @@ records the calculation and blockers.
 - Each row encodes only the V1 statement surface:
   - `key_limbs[i]`: base-256 limbs (7 bytes, little-endian) of the canonical key path.
   - `value_old_limbs[i]`, `value_new_limbs[i]`: same packing for pre/post values.
-  - Selector columns: `s_active`, `s_transfer`, `s_meta_set`.
-  - Auxiliary columns: `delta = value_new - value_old` on transfer rows and `metadata_hash_limb_0` through `metadata_hash_limb_7`.
+  - Selector columns: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, and `s_perm`.
+  - Asset columns: canonical `asset_id_limb_{i}` for numeric operations.
+  - Auxiliary columns: numeric `delta = value_new - value_old`, `running_asset_delta`, `supply_counter`, and six `metadata_hash_limb_0` through `metadata_hash_limb_5`.
+  - Permission projection columns: `perm_hash`, `permission_membership_before`, `permission_membership_after`, `permission_non_membership_before`, and `permission_non_membership_after`. These projections and the lookup accumulator are not authenticated permission tree proofs.
   - Transfer witness projection columns per level `ℓ`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`. These columns exist only when the batch contains a Transfer row; metadata-only proofs do not allocate or commit 128 zero SMT columns.
   - Metadata columns: `dsid`, `slot`.
 - **Deterministic ordering.** Stable-sort rows lexicographically by
   `(key_bytes, op_rank)`; rows with an equal key and operation retain their
   supplied order without carrying a redundant ordinal in the wire type.
-  `op_rank` mapping: `transfer=0`, `meta_set=1`. Persist the full BLAKE2b-256 hash of
+  `op_rank` mapping: Transfer=0, Mint=1, Burn=2, RoleGrant=3, RoleRevoke=4,
+  MetaSet=5. Persist the full BLAKE2b-256 hash of
   `fastpq:v1:ordering || canonical_norito(sorted_transitions)`. Canonical
-  Norito length framing keeps trailing zero bytes distinct.
+  Norito length framing keeps trailing zero bytes distinct. Ordering commits the
+  fixed default V1 Norito layout, regardless of an enclosing decode context.
 - Implemented base residues enforce selector booleanity/relations, transfer row deltas, active-prefix shape, and metadata/dsid/slot stability. Generic Merkle hashing and boundary totals are enforced by deterministic witness replay rather than a succinct AIR relation.
 - `N_trace = 2^k` (`pow2_ceiling` of row count); `N_eval = N_trace * 2^b` where `b` is the blowup exponent.
 - Provide fixtures and property tests:
@@ -102,21 +109,19 @@ records the calculation and blockers.
 | Column Group      | Names                                                                                  | Description                                                                                                           |
 | ----------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Activity          | `s_active`                                                                               | 1 for real rows, 0 for padding.                                                                                       |
-| Main              | `key_limbs[i]`, `value_old_limbs[i]`, `value_new_limbs[i]`                               | Packed Goldilocks elements (little-endian, 7-byte limbs).                                                             |
-| Selectors         | `s_transfer`, `s_meta_set`                                                                | 0/1. `s_active` equals their sum.                                                                                      |
-| Auxiliary         | `delta`, `metadata_hash_limb_0..7`                                                       | Transfer delta and stable metadata are constrained.                                                                   |
+| Main              | `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`, `asset_id_limb_{i}`             | Packed Goldilocks elements (little-endian, 7-byte limbs).                                                             |
+| Selectors         | `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`     | 0/1. `s_active` equals the six operation selectors; `s_perm` equals the two role selectors.                              |
+| Auxiliary         | `delta`, `running_asset_delta`, `supply_counter`, `metadata_hash_limb_0..5`                  | Numeric delta and stable metadata enter AIR; asset/supply totals require replay and authenticated tree relations.        |
+| Permission        | `perm_hash`, `permission_membership_before/after`, `permission_non_membership_before/after` | Trace projections; no table-bound membership/non-membership argument is implemented.                                   |
 | SMT               | `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`                                    | Transfer-batch-only projection of validated witnesses; generic AIR hashing/non-membership is not implemented.         |
 | Metadata          | `dsid`, `slot`                                                                           | Constant across rows.                                                                                                 |
 
-The metadata map is canonically Norito-encoded and committed with raw
-Blake2b-256 over `u64_le(domain_len) || domain || u64_le(metadata_len) ||
-metadata`, using the domain `fastpq:v1:metadata-commitment:blake2b-256`.
-The 32 digest bytes are injected without field reduction as eight little-endian
-`u32` limbs, and every limb is constrained to remain constant across the trace.
-This replaces the collision-prone single Goldilocks-field projection. Because
-the trace schema and commitments change, this is a first-release hard cut:
-proofs and binary/golden proof artifacts produced with the single
-`metadata_hash` column must be regenerated.
+The metadata map is encoded with the fixed default V1 Norito layout and committed
+with the six-lane Goldilocks digest under the typed role
+`fastpq:v1:trace-metadata`, phase `commitment`, and final catalog/protocol/profile
+identities. Its six canonical field words populate the metadata columns directly;
+every word is constrained to remain constant across the trace. Alternative
+metadata hash constructions or column shapes are not accepted as this V1 trace.
 
 ### Implemented math and deferred constraints
 - **Field packing:** bytes are chunked into 7-byte limbs (little-endian). Each limb `limb_j = Σ_{k=0}^{6} byte_{7j+k} * 256^k`; reject limbs ≥ Goldilocks modulus.
@@ -129,14 +134,14 @@ proofs and binary/golden proof artifacts produced with the single
 ## V1 — STARK Prover Core
 
 ### Objectives
-- Build dense-MDS Poseidon Merkle commitments over trace and LDE evaluation vectors. Parameters: Goldilocks `x^7` S-box, rate=2, capacity=1, full rounds=8, partial rounds=57, and the constants pinned by `artifacts/poseidon/constants.ron`.
+- Build typed six-lane Poseidon Merkle commitments over trace and LDE evaluation vectors. Each independently parameterized lane uses the Goldilocks `x^7` S-box, width=3, rate=2, eight full rounds and 57 partial rounds; lane IVs/constants and the parameter digest are pinned by `fastpq_isi::poseidon_digest384`.
 - Low-degree extension: evaluate each column on the multiplicative coset
   `D = { o · g^i | i = 0 .. N_eval-1 }`, where `N_eval = 2^{k+b}` divides the
   2-adic capacity of Goldilocks, `g` is the pinned root of exact order
   `N_eval`, and `o = omega_coset` is the pinned nonzero offset outside that
   subgroup. The sole compiled parameter record fixes this geometry; the
   parameter identifier is bound into transcript initialization.
-- Composition commitment: combine the 16 implemented residues with 16
+- Composition commitment: combine the 20 implemented residues with 20
   independently sampled coefficients. Proving and verifier-side derivation
   first require every residue to vanish on the canonical base trace; the raw
   LDE composition is then committed for low-degree testing.
@@ -148,9 +153,9 @@ proofs and binary/golden proof artifacts produced with the single
   point; an x-free linear combination of sibling values is not a valid
   low-degree check.
   The implemented prover/verifier now uses strided multiplicative cosets,
-  inverse-subgroup decomposition, the round domain point, and adaptive final
-  arity without repeat-last padding. It stops while the complete terminal domain
-  still contains 2--16 evaluations, opens that single authenticated leaf, and
+  inverse-subgroup decomposition and the round domain point without repeat-last
+  padding. For the canonical power-of-two binary geometry, it stops when the
+  complete terminal domain contains two evaluations, opens that authenticated leaf, and
   inverse-interpolates it to reject coefficients at or above the verifier-owned
   reduced bound. The initial exclusive composition bound is conservatively
   `2 * N_trace`, matching the maximum quadratic degree of the V1 residue ledger.
@@ -171,6 +176,8 @@ proofs and binary/golden proof artifacts produced with the single
       air_composition_root: GoldilocksDigest384V1,
       lde_root: GoldilocksDigest384V1,
       lde_domain_size: u32,
+      lookup_grand_product: u64,
+      lookup_challenge: u64,
       alphas: Vec<u64>,
       betas: Vec<GoldilocksFp4V1>,
       fri_layers: Vec<GoldilocksDigest384V1>,
@@ -218,23 +225,24 @@ proofs and binary/golden proof artifacts produced with the single
   caps proof material, query counts, path depth, transition count, and payload
   size before that work begins; the 1k-row CPU/GPU parity case and 20k-row
   benchmark workloads remain outside the serialized fixture set.
-- The release batch, proof, and public-I/O carriers have explicit
-  `TransitionBatchV1`, `ProofV1`, and `PublicIOV1` Norito schema identities.
-  Pre-release schema headers are rejected, so removed ordinals and
-  lookup/version fields cannot shift an old payload into the smaller release
-  layouts.
+- The release batch, proof, and public-I/O carriers have explicit Norito schema
+  identities `fastpq_prover::batch::FastpqStateTransitionBatchV1`,
+  `fastpq_prover::proof::FastpqStateTransitionProofV1`, and
+  `fastpq_prover::proof::FastpqStateTransitionPublicIoV1`. Pre-release schema
+  headers are rejected. The final proof includes both lookup accumulator and
+  lookup challenge fields; their presence does not establish permission membership.
 
 ### Implemented residue accounting
 
 | Residues | Count | Implemented check |
 |----------|------:|-------------------|
-| Selector booleanity | 3 | Every V1 selector is 0 or 1. |
-| Selector relations | 1 | Active equals the Transfer-plus-MetaSet selector sum. |
+| Selector booleanity | 8 | Active, six operation selectors, and permission selector are 0 or 1. |
+| Selector relations | 2 | Active equals the six-operation selector sum; permission equals the two-role selector sum. |
 | Active prefix | 1 | An inactive row cannot be followed by an active row. |
-| Transfer delta | 1 | Full fixed-width post-minus-pre value on Transfer rows. |
-| Stable statement data | 10 | Eight metadata commitment limbs, `dsid`, and `slot` remain stable. |
+| Numeric delta | 1 | Fixed-width post-minus-pre value on Transfer/Mint/Burn rows. |
+| Stable statement data | 8 | Six metadata commitment limbs, `dsid`, and `slot` remain stable. |
 
-The 16 residues above are the complete implemented AIR composition schema.
+The 20 residues above are the complete implemented AIR composition schema.
 They do not constrain generic SMT node hashing/non-membership or old/new-root
 boundary totals; V1 transfer verification deterministically replays those
 witness checks from the caller-carried batch.
@@ -249,7 +257,9 @@ low-degree commitment and is not required to vanish at every LDE point.
 - **Byte packing:** base-256 (7-byte limbs, little-endian). Unit tests live beside
   `fastpq_prover/src/packing.rs`.
 - **Field encoding:** canonical Goldilocks (little-endian 64-bit limb, reject ≥ p).
-  `GoldilocksFp4V1` values encode four canonical limbs in 32 bytes; native-STARK
+  `GoldilocksFp4V1` values encode four canonical limbs in exactly 32 bytes without
+  inner struct framing; archive and slice decoding reject noncanonical coefficients.
+  Native-STARK
   commitments and Merkle siblings use `GoldilocksDigest384V1`, which encodes six
   canonical lanes in 48 bytes and rejects alternate representatives during
   construction and decoding.
@@ -263,24 +273,27 @@ low-degree commitment and is not required to vanish at every LDE point.
   1. Initialize the six-lane Poseidon transcript from the canonical Norito
      encoding of `protocol_version`, `parameter`, and `public_io` under
      `fastpq:v1:init`.
+     The encoder fixes the default V1 layout independently of ambient decode flags.
   2. Absorb `trace_root` under `fastpq:v1:trace_root`, then derive one
      `fastpq:v1:column_mix:<i>` base-field challenge per trace column.
   3. Absorb `lde_root`, `trace_root` (`fastpq:v1:roots`).
-  4. Derive exactly 16 V1 composition challenges `α_j`
+  4. Derive the base-field lookup challenge `γ` under `fastpq:v1:gamma`, then
+     exactly 20 base-field V1 composition challenges `α_j`
      (`fastpq:v1:alpha:<j>`), one for each current constraint residue. Coefficients
      are never reused across residues.
   5. Absorb `air_trace_root`, `air_composition_root` (`fastpq:v1:air_roots`).
-  6. For each nonterminal FRI layer root, absorb
+  6. Absorb `lookup_grand_product` under `fastpq:v1:lookup:product`.
+  7. For each nonterminal FRI layer root, absorb
      `fastpq:v1:fri_layer:<round>` and derive the corresponding Fp4 challenge
      `fastpq:v1:beta:<round>`; absorb the terminal root under
      `fastpq:v1:fri:final`.
-  7. Derive deduplicated query indices with rejection sampling under
+  8. Derive deduplicated query indices with rejection sampling under
      `fastpq:v1:query_index:<counter>`.
 
   Tags are lowercase ASCII; verifiers reject mismatches before sampling challenges. The
-  `v1_raw_transcript_64.bin` fixture pins the resulting transcript bytes within
-  the public verifier's admitted geometry. Larger-scale performance evidence is
-  captured separately by the release benchmarks.
+  `v1_raw_transcript_64.bin` fixture pins the resulting raw cryptographic transcript
+  bytes; its mixed-operation carrier is not a production state-transition proof.
+  Larger-scale performance evidence is captured separately by release benchmarks.
 - **Versioning:** `protocol_version = 1` is the only release protocol. The
   `parameter` name selects one exact record from the compiled canonical
   catalogue, which the prover and verifier use directly. There is no secondary
@@ -290,10 +303,13 @@ low-degree commitment and is not required to vanish at every LDE point.
 
 ## Permission commitment status
 
-`perm_root` is authenticated statement context only. V1 has no role operation,
-permission witness column, lookup product, or permission-mutation proof type.
-Adding one requires a new explicitly constrained first-release schema rather
-than reviving the removed experimental lookup scaffolding.
+`perm_root` is authenticated statement context only. RoleGrant/RoleRevoke are
+final wire operations, and the trace includes their permission projections.
+The proof commits a deterministic lookup accumulator over selected `perm_hash`
+LDE entries using `γ`; it has no table-side product, constrained running-product
+boundaries, or authenticated permission-tree path. The production state profile
+therefore rejects both role operations. Completing those relations and binding
+them to public permission roots remain required first-release work.
 
 ## Transfer touched-balance tree
 
@@ -355,13 +371,35 @@ proof semantics profile.
 - Preprocessing trace commitment: six-lane Poseidon-x7 Goldilocks digest over
   typed column leaves, binary nodes, parameter identity, and exact trace shape.
 
+### Admission limits and fixture scope
+
+The production verifier's default approximate proof-payload cap remains
+512 KiB; AXT also caps its encoded FASTPQ payload at 1 MiB before the model's
+outer blob limit. These are admission limits, not guarantees that every trace
+within the parameter set's maximum row geometry fits a deployed action.
+The final 64-row mixed raw fixture has 136 query openings, a 1,026,222-byte
+admission estimate, and a 1,136,406-byte Norito frame. Its test explicitly requires
+the default verifier to reject that size, then performs complete raw verification
+with a fixed 2 MiB diagnostic cap through a test/dev-tools-only entry point.
+It cannot be admitted as a production state-transition or AXT payload by those
+defaults.
+
+The two-row witnessed remittance smoke uses the sole canonical parameter set
+and fits the unchanged production limits. Its 16-point evaluation domain is
+exhaustively queried because sampling uses `min(136, domain_size)`. That smoke
+demonstrates accepted behavior and determinism only; it is not a 128-bit qROM
+security proof. Production qualification still requires a reviewed argument for
+the actual verifier, a justified supported batch-shape envelope, coherent proof
+and outer-payload limits, and measured final-artifact resource bounds.
+
 ## Stage Definitions of Done (DoD)
 - **Stage 1 DoD**
   - Canonical packing unit vectors merged.
   - This implementation-coupled plan records the exact V1 columns and symbolic constraints.
   - Ordering hash recorded in PublicIO and verified via fixtures.
   - Transfer touched-balance witness generation and key-derived path binding implemented.
-  - Non-membership, permission mutation, and supply operations are outside V1.
+  - Non-membership, permission mutation, and supply operations remain unavailable
+    in the production state profile until their final V1 tree relations are complete.
 - **V1 Prover DoD**
   - Transcript spec implemented; tag/order unit tests and the binary V1 proof fixture pin the transcript.
   - Dense-MDS Poseidon constants and the Goldilocks `x^7` S-box are pinned in prover and verifier with endianness and former-collision tests across architectures.
@@ -369,7 +407,7 @@ proof semantics profile.
     the 128-bit aggregate arithmetic target, while production qualification
     remains unavailable until independent review is registered. Proof
     size/RAM/latency must be measured from release runs.
-    **TODO:** land the empirical 16-residue Monte Carlo characterization described in Appendix A.
+    **TODO:** land the empirical 20-residue Monte Carlo characterization described in Appendix A.
 - **Stage 3 DoD**
   - Scheduler API (`SubmitProofRequest`, `ProofResult`) documented with idempotency keys.
   - Proof artifacts stored content-addressably with retry/backoff.
@@ -1093,7 +1131,9 @@ so Stage 7 telemetry has real GPU data.
 ### Resolved Design Decisions
 - ZK disabled (correctness-only) in P1; revisit in future stage.
 - Permission-table membership, absent-key proofs, and generic delete semantics
-  are outside V1; no reserved columns or compatibility variants remain.
+  are not implemented in the production state profile. The sole six-operation
+  catalog and its supply/permission trace projections do not substitute for
+  authenticated tree relations; no compatibility operation decoder remains.
 
 Use this document as the canonical reference; update it alongside source code, fixtures, and appendices to avoid drift.
 
@@ -1145,7 +1185,7 @@ protocol-specific reduction or digest review.
 
 ### Rejection-sampling follow-up
 
-**TODO:** add the planned Monte Carlo harness for the implemented 16-residue
+**TODO:** add the planned Monte Carlo harness for the implemented 20-residue
 composition and report its measured behavior as diagnostic evidence. It does
 not replace the exact aggregate calculator or independent qualification.
 Semantic adversarial coverage is deterministic instead: unsupported
@@ -1195,9 +1235,10 @@ V1 uses the same deterministic preparation pipeline in prover and verifier:
    second transform for commitment hashing.【crates/fastpq_prover/src/trace.rs:1701】
 4. **Commit coefficient columns.** The backend hashes each named coefficient
    vector into a six-lane leaf and folds those leaves under the typed `Trace`
-   Merkle role to produce `trace_root`. Optional GPU Merkle dispatch must match
-   the scalar result and uses the deterministic CPU fallback after an allowed
-   runtime dispatch failure.【crates/fastpq_prover/src/backend.rs:2534】
+   Merkle role to produce `trace_root`. The current typed six-lane commitment
+   helpers execute the scalar implementation; their execution-mode argument
+   does not establish six-lane GPU dispatch or parity.
+   【crates/fastpq_prover/src/backend.rs:2534】
 5. **Bind and commit LDE/AIR material.** After absorbing `trace_root`, the
    transcript derives one base-field column-mix coefficient per LDE column. The
    backend combines those columns row-wise, commits `lde_root`, commits the
@@ -1212,6 +1253,11 @@ determinism, and separation of the resulting commitments. The JSON fixture
 changes only under an explicit `FASTPQ_UPDATE_FIXTURES=1` regeneration.
 
 ### Poseidon fallback controls
+
+The captures and controls in this section describe the accelerator tooling and
+scalar-Poseidon microbenchmark paths. They are not qualification evidence for
+the final six-lane native-STARK commitment pipeline. Final Metal/CUDA dispatch,
+byte parity, and protocol-artifact-bound measurements remain required.
 
 - The prover now exposes a dedicated Poseidon pipeline override (`zk.fastpq.poseidon_mode`, env `FASTPQ_POSEIDON_MODE`, CLI `--fastpq-poseidon-mode`) so operators can mix GPU FFT/LDE with CPU Poseidon hashing on devices that fail to reach the Stage 7 <900 ms target. Supported values mirror the execution-mode knob (`auto`, `cpu`, `gpu`), defaulting to the global mode when unspecified. The runtime threads this value through the lane config (`FastpqPoseidonMode`) and propagates it into the prover (`Prover::canonical_with_modes`) so overrides are deterministic and auditable in config dumps.【crates/iroha_config/src/parameters/user.rs:1488】【crates/fastpq_prover/src/proof.rs:138】【crates/iroha_core/src/fastpq/lane.rs:123】
 - Telemetry exports the resolved pipeline mode via the `fastpq_poseidon_pipeline_total{requested,resolved,path,device_class,chip_family,gpu_kind}` counter. `sorafs`/operator dashboards can therefore confirm when a rollout is running the batched GPU path (`path="gpu"`) versus forced CPU execution (`path="cpu_forced"`) or a runtime downgrade (`path="cpu_fallback"`). The CLI probe installs automatically in `irohad`, so release bundles and live telemetry share the same evidence stream.【crates/iroha_telemetry/src/metrics.rs:4780】【crates/irohad/src/main.rs:2504】
@@ -1243,12 +1289,14 @@ The Stage 7 capture tooling already handles CUDA: wrap every `fastpq_cuda_benc
 
 ### Column order
 The hashing pipeline consumes columns in this deterministic order:
-1. Selector flags: `s_active`, `s_transfer`, `s_meta_set`.
-2. Packed limb columns (each zero-padded to the trace length): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`.
-3. Auxiliary scalars: `delta`, `metadata_hash_limb_0` through `metadata_hash_limb_7`, `dsid`, `slot`.
-4. For batches containing Transfer rows, sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`. This group is absent for metadata-only batches.
+1. Selector flags: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`.
+2. Packed limb columns (each zero-padded to the trace length): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`, `asset_id_limb_{i}`.
+3. Auxiliary scalars: `delta`, `running_asset_delta`, `metadata_hash_limb_0` through `metadata_hash_limb_5`.
+4. Trailing columns: `supply_counter`, `perm_hash`, `permission_membership_before`, `permission_membership_after`, `permission_non_membership_before`, `permission_non_membership_after`, `dsid`, `slot`.
+5. For batches containing Transfer rows, sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`. This group is absent for metadata-only batches.
 
-`trace::column_hashes` walks the columns in exactly this order. Any schema or
+`trace::column_names_for_batch` defines this order for trace construction and
+the six-lane native commitments. Any schema or
 order change is a proof/fixture hard cut and must regenerate the binary proof
 fixture.【crates/fastpq_prover/src/trace.rs:474】
 
@@ -1261,8 +1309,10 @@ V1 fixes the Fiat–Shamir catalog below to keep challenge generation determinis
 | `fastpq:v1:trace_root` | Commit the trace Merkle root before column-mix challenges. |
 | `fastpq:v1:column_mix:<i>` | Sample one base-field LDE column-mix coefficient per trace column. |
 | `fastpq:v1:roots` | Commit the LDE and trace Merkle roots, in that order. |
-| `fastpq:v1:alpha:<i>` | Sample one composition-polynomial challenge for each of the 16 residues (`i = 0..15`). |
+| `fastpq:v1:gamma` | Sample the base-field permission lookup accumulator challenge. |
+| `fastpq:v1:alpha:<i>` | Sample one base-field composition-polynomial challenge for each of the 20 residues (`i = 0..19`). |
 | `fastpq:v1:air_roots` | Commit the AIR-trace and AIR-composition roots, in that order. |
+| `fastpq:v1:lookup:product` | Commit the deterministic lookup accumulator before FRI. |
 | `fastpq:v1:beta:<round>` | Sample the folding challenge for each FRI round. |
 | `fastpq:v1:fri_layer:<round>` | Commit the Merkle root for each FRI layer. |
 | `fastpq:v1:fri:final` | Record the final FRI layer before opening queries. |

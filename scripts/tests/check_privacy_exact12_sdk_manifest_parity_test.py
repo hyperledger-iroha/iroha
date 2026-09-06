@@ -87,7 +87,7 @@ def test_missing_sdk_paths_report_not_ready_but_remain_fail_closed(tmp_path: Pat
         assert result["gates"]["fail_closed_without_admission"] is True
 
 
-def test_sixth_privacy_export_is_rejected(tmp_path: Path) -> None:
+def test_unreviewed_privacy_export_is_rejected(tmp_path: Path) -> None:
     root = _minimal_safe_tree(tmp_path)
     bridge = root / MODULE.RUST_BRIDGE
     bridge.write_text(
@@ -95,8 +95,51 @@ def test_sixth_privacy_export_is_rejected(tmp_path: Path) -> None:
         + '\n#[unsafe(no_mangle)] pub extern "C" fn iroha_privacy_capabilities_v1() {}\n',
         encoding="utf-8",
     )
-    with pytest.raises(MODULE.AuditError, match="exact approved five"):
+    with pytest.raises(MODULE.AuditError, match="exact approved six"):
         MODULE.audit(root)
+
+
+def test_missing_native_capability_validator_is_rejected(tmp_path: Path) -> None:
+    root = _minimal_safe_tree(tmp_path)
+    bridge = root / MODULE.RUST_BRIDGE
+    bridge.write_text(
+        bridge.read_text(encoding="utf-8").replace(
+            '#[unsafe(no_mangle)] pub extern "C" fn '
+            'iroha_privacy_validate_exact12_capability_manifest_v1() {}',
+            '',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(MODULE.AuditError, match="exact approved six"):
+        MODULE.audit(root)
+
+
+@pytest.mark.parametrize(
+    ("file_kind", "needle", "replacement"),
+    (
+        ("native", "RequireValidCapabilityArchive(snapshot);", "SkipEvidence(snapshot);"),
+        ("native", "NativeValidateExact12CapabilityManifest(", "UncheckedManifestStatus("),
+        ("native", "if (status != 0)", "if (status == 0)"),
+        (
+            "model",
+            "PrivacyNative.RequireValidCapabilityArchive(archive);",
+            "SkipEvidence(archive);",
+        ),
+    ),
+)
+def test_csharp_native_evidence_validation_cannot_be_removed(
+    monkeypatch: pytest.MonkeyPatch, file_kind: str, needle: str, replacement: str
+) -> None:
+    contract = next(contract for contract in MODULE.SDK_CONTRACTS if contract.name == "csharp")
+    sources = {
+        path: (ROOT / path).read_text(encoding="utf-8")
+        for path in (*contract.model_files, *contract.native_files, *contract.transaction_files)
+    }
+    target = contract.native_files[0] if file_kind == "native" else contract.model_files[0]
+    assert needle in sources[target]
+    sources[target] = sources[target].replace(needle, replacement)
+    monkeypatch.setattr(MODULE, "_read", lambda _root, path: sources.get(path, ""))
+    assert MODULE._sdk_result(ROOT, contract)["gates"]["native_canonical_manifest_validation"] is False
 
 
 def test_incomplete_rust_bridge_platform_closure_is_rejected(tmp_path: Path) -> None:
@@ -106,7 +149,28 @@ def test_incomplete_rust_bridge_platform_closure_is_rejected(tmp_path: Path) -> 
         'include!("platform_jni/part_1.rs");\n',
         encoding="utf-8",
     )
-    with pytest.raises(MODULE.AuditError, match="exact three-part inventory"):
+    with pytest.raises(MODULE.AuditError, match="exact approved inventory"):
+        MODULE.audit(root)
+
+
+def test_private_settlement_bridge_cannot_hide_an_unreviewed_privacy_export(tmp_path: Path) -> None:
+    root = _minimal_safe_tree(tmp_path)
+    _write(
+        root / "crates/connect_norito_bridge/src/platform_jni/private_settlement.rs",
+        '#[unsafe(no_mangle)] pub extern "C" fn iroha_privacy_unchecked_v1() {}\n',
+    )
+    with pytest.raises(MODULE.AuditError, match="exact approved six"):
+        MODULE.audit(root)
+
+
+def test_unreviewed_rust_bridge_include_is_rejected(tmp_path: Path) -> None:
+    root = _minimal_safe_tree(tmp_path)
+    platform_jni = root / MODULE._RUST_BRIDGE_PLATFORM_JNI
+    platform_jni.write_text(
+        platform_jni.read_text(encoding="utf-8") + 'include!("platform_jni/unchecked.rs");\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(MODULE.AuditError, match="exact approved inventory"):
         MODULE.audit(root)
 
 
@@ -294,6 +358,12 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
         ),
         (
             MODULE._SWIFT_BRIDGE,
+            ".privacyExact12CapabilityManifestValidationStatusV1(archive)",
+            ".uncheckedCapabilityManifestStatusV1(archive)",
+            "native_canonical_manifest_validation",
+        ),
+        (
+            MODULE._SWIFT_BRIDGE,
             "localCatalog = try compiledProfileCatalogV1()",
             "localCatalog = Data()",
             "native_canonical_manifest_validation",
@@ -400,8 +470,8 @@ def test_swift_cutover_hostile_source_regressions_fail_closed(
         ),
         (
             MODULE._JVM_KOTLIN_TRANSPORT,
-            "class HttpClientTransport(",
-            "// PrivacyCapabilitySnapshotJsonV1\nclass HttpClientTransport(",
+            "class HttpClientTransport private constructor(",
+            "// PrivacyCapabilitySnapshotJsonV1\nclass HttpClientTransport private constructor(",
             "transaction_admission_guard",
         ),
         (

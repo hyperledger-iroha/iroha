@@ -3,21 +3,22 @@ use crate::{
     state::{State as CoreState, StateReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf, sha256};
 use iroha_data_model::{
     NetworkId,
     block::{
         BlockHeader, SignedBlock,
-        consensus_v2::SumeragiV2Status,
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
+        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, SumeragiV2Status},
     },
     bridge::{
         BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment,
         BridgeFinalityAttestationBodyV1, BridgeFinalityAttestationV1,
         BridgeFinalityAttestationValidationError, BridgeFinalityBundle, BridgeFinalityProof,
-        SccpGovernedRouteV1, SccpLaneIdV1, SccpOutboundMessageKeyV1, SccpReplayAccumulatorIdV1,
-        SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1, SccpReplayForestV1,
-        SccpReplayPrincipalV1, SccpReplayRecordV1, SccpRouteKeyV1,
+        SccpGovernedRouteV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageKeyV1,
+        SccpReplayAccumulatorIdV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1,
+        SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1, SccpRouteKeyV1,
+        SccpSoraFinalityAnchorV1, sccp_sora_taira_chain_id_hash_v1,
     },
     isi::InstructionBox,
     name::Name,
@@ -50,6 +51,34 @@ pub struct VerifiedV2FinalityArtifact {
     artifact: V2FinalityArtifact,
     retained_header: BlockHeader,
 }
+/// Failure to derive an SCCP SORA anchor from authenticated Sumeragi-v2 finality.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum SccpSoraFinalityAnchorBuildError {
+    /// The authenticated finality belongs to another genesis lineage.
+    #[error("SCCP finality anchor must use the exact SORA Taira network identity")]
+    NetworkIdentity,
+    /// SCCP does not admit election epoch zero.
+    #[error("SCCP finality anchor epoch must be nonzero")]
+    EpochZero,
+    /// The checkpoint lies beyond its authenticated epoch window.
+    #[error("SCCP finality anchor checkpoint exceeds its authenticated epoch end")]
+    CheckpointAfterEpochEnd,
+    /// Ordinary production finality must authenticate the exact parent decision.
+    #[error("SCCP finality anchor requires an authenticated parent CommitQC")]
+    MissingParentCommitQc,
+    /// Snapshot-bootstrap finality is not an admissible SCCP trust anchor.
+    #[error("SCCP finality anchor cannot use a snapshot bootstrap")]
+    SnapshotBootstrap,
+    /// The authenticated roster or aligned PoP inventory is not canonically hashable.
+    #[error("SCCP finality anchor has an invalid authenticated roster")]
+    InvalidAuthenticatedRoster,
+    /// The derived anchor failed its closed final-V1 model validation.
+    #[error("derived SCCP finality anchor is invalid")]
+    InvalidDerivedAnchor,
+}
+
+const SCCP_SORA_ROSTER_SEMANTIC_DOMAIN_V1: &[u8] = b"iroha:sumeragi:v2:roster-semantic:final-v1";
+
 impl VerifiedV2FinalityArtifact {
     /// Fully verify an untrusted artifact against its exact retained header.
     ///
@@ -85,12 +114,104 @@ impl VerifiedV2FinalityArtifact {
     pub const fn retained_header(&self) -> &BlockHeader {
         &self.retained_header
     }
+    /// Derive the exact epoch-aware SCCP SORA anchor from verified finality.
+    ///
+    /// The election epoch, epoch end, ordered roster, and aligned proofs of
+    /// possession come only from this unforgeable verified-finality capability.
+    /// Genesis and snapshot-bootstrap artifacts are deliberately ineligible.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the artifact is not ordinary Taira finality,
+    /// its SCCP epoch window is inadmissible, or its authenticated roster cannot
+    /// be projected into the fixed 31-slot final-V1 commitment.
+    pub fn sccp_sora_finality_anchor_v1(
+        &self,
+    ) -> Result<SccpSoraFinalityAnchorV1, SccpSoraFinalityAnchorBuildError> {
+        let artifact = &self.artifact;
+        let context = &artifact.height_context;
+        if context.network_id != iroha_sccp::sccp_taira_finality_network_id_v1() {
+            return Err(SccpSoraFinalityAnchorBuildError::NetworkIdentity);
+        }
+        if context.epoch == 0 {
+            return Err(SccpSoraFinalityAnchorBuildError::EpochZero);
+        }
+        if artifact.height > context.epoch_end_height {
+            return Err(SccpSoraFinalityAnchorBuildError::CheckpointAfterEpochEnd);
+        }
+        if context.parent_commit_qc.is_none() {
+            return Err(SccpSoraFinalityAnchorBuildError::MissingParentCommitQc);
+        }
+        if context.snapshot_bootstrap.is_some() {
+            return Err(SccpSoraFinalityAnchorBuildError::SnapshotBootstrap);
+        }
+        let roster_commitment =
+            sccp_sora_roster_commitment_v1(&context.roster, &artifact.validator_set_pops)
+                .ok_or(SccpSoraFinalityAnchorBuildError::InvalidAuthenticatedRoster)?;
+        let anchor = SccpSoraFinalityAnchorV1 {
+            version: 1,
+            source_network: SccpNetworkV1::SoraTaira,
+            protocol_version: PROTOCOL_VERSION,
+            chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            roster_commitment,
+            checkpoint_height: artifact.height,
+            checkpoint_block_hash: <[u8; 32]>::from(Hash::from(self.retained_header.hash())),
+            checkpoint_context_id: <[u8; 32]>::from(Hash::from(artifact.context_id().0)),
+            checkpoint_finality_artifact_hash: <[u8; 32]>::from(Hash::new(
+                norito::codec::Encode::encode(artifact),
+            )),
+        };
+        anchor
+            .validate()
+            .map_err(|_| SccpSoraFinalityAnchorBuildError::InvalidDerivedAnchor)?;
+        Ok(anchor)
+    }
     fn from_kura_verified(block_header: BlockHeader, artifact: V2FinalityArtifact) -> Self {
         Self {
             artifact,
             retained_header: block_header,
         }
     }
+}
+
+fn sccp_sora_roster_commitment_v1(
+    roster: &[iroha_data_model::block::consensus_v2::ValidatorPower],
+    validator_set_pops: &[Vec<u8>],
+) -> Option<[u8; 32]> {
+    if roster.is_empty()
+        || roster.len() > MAX_VALIDATORS_PER_HEIGHT
+        || roster.len() != validator_set_pops.len()
+    {
+        return None;
+    }
+    let validator_count = u32::try_from(roster.len()).ok()?;
+    let mut preimage = Vec::with_capacity(
+        SCCP_SORA_ROSTER_SEMANTIC_DOMAIN_V1.len()
+            + 1
+            + core::mem::size_of::<u32>()
+            + MAX_VALIDATORS_PER_HEIGHT * 64,
+    );
+    preimage.extend_from_slice(SCCP_SORA_ROSTER_SEMANTIC_DOMAIN_V1);
+    preimage.push(u8::try_from(PROTOCOL_VERSION).ok()?);
+    preimage.extend_from_slice(&validator_count.to_le_bytes());
+    for (entry, pop) in roster.iter().zip(validator_set_pops) {
+        let (algorithm, public_key) = entry.validator.public_key().try_to_bytes().ok()?;
+        if algorithm != Algorithm::BlsNormal || public_key.len() != 48 || pop.len() != 96 {
+            return None;
+        }
+        preimage.extend_from_slice(&sha256(public_key));
+        preimage.extend_from_slice(&sha256(pop));
+    }
+    preimage.resize(
+        SCCP_SORA_ROSTER_SEMANTIC_DOMAIN_V1.len()
+            + 1
+            + core::mem::size_of::<u32>()
+            + MAX_VALIDATORS_PER_HEIGHT * 64,
+        0,
+    );
+    Some(*Hash::new(preimage).as_ref())
 }
 /// Narrow read-only surface used by bridge finality proof builders.
 ///
@@ -3160,6 +3281,99 @@ mod tests {
             Some(iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(
                 fixture.request,
             ))
+        );
+    }
+    #[test]
+    fn verified_finality_derives_epoch_aware_sora_anchor_and_rejects_boundaries() {
+        let genesis_fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let genesis_finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&genesis_fixture.bundle.finality_proof)
+                .expect("exact height-one finality proof");
+        let genesis_verified = VerifiedV2FinalityArtifact::verify_for_header(
+            genesis_finality.block_header,
+            genesis_finality.finality_artifact,
+        )
+        .expect("exact height-one finality verifies");
+        assert_eq!(
+            genesis_verified.sccp_sora_finality_anchor_v1(),
+            Err(SccpSoraFinalityAnchorBuildError::MissingParentCommitQc)
+        );
+
+        let fixture = genesis_fixture.with_exact_finalized_successor();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact height-two finality proof");
+        let verified = VerifiedV2FinalityArtifact::verify_for_header(
+            finality.block_header,
+            finality.finality_artifact,
+        )
+        .expect("exact height-two finality verifies");
+        let anchor = verified
+            .sccp_sora_finality_anchor_v1()
+            .expect("ordinary verified finality derives an SCCP anchor");
+        assert_eq!(anchor.epoch, 1);
+        assert_eq!(anchor.epoch_end_height, 10);
+        assert_ne!(anchor.roster_commitment, [0; 32]);
+        assert_eq!(anchor.checkpoint_height, 2);
+        assert_eq!(
+            anchor.checkpoint_block_hash,
+            <[u8; 32]>::from(Hash::from(verified.retained_header().hash()))
+        );
+        assert_eq!(
+            anchor.checkpoint_context_id,
+            <[u8; 32]>::from(Hash::from(verified.artifact().context_id().0))
+        );
+        assert_eq!(
+            anchor.checkpoint_finality_artifact_hash,
+            <[u8; 32]>::from(Hash::new(norito::codec::Encode::encode(
+                verified.artifact(),
+            )))
+        );
+        assert_eq!(
+            iroha_data_model::bridge::canonical_sccp_sora_finality_anchor_bytes_v1(anchor)
+                .expect("derived anchor has canonical bytes")
+                .len(),
+            188,
+            "canonical epoch-aware SORA finality anchor wire length"
+        );
+
+        let assert_internal_boundary_rejected =
+            |mutate: fn(&mut V2FinalityArtifact), expected: SccpSoraFinalityAnchorBuildError| {
+                let header = verified.retained_header().clone();
+                let mut artifact = verified.artifact().clone();
+                mutate(&mut artifact);
+                let boundary = VerifiedV2FinalityArtifact::from_kura_verified(header, artifact);
+                assert_eq!(boundary.sccp_sora_finality_anchor_v1(), Err(expected));
+            };
+        assert_internal_boundary_rejected(
+            |artifact| artifact.height_context.epoch = 0,
+            SccpSoraFinalityAnchorBuildError::EpochZero,
+        );
+        assert_internal_boundary_rejected(
+            |artifact| artifact.height_context.epoch_end_height = artifact.height - 1,
+            SccpSoraFinalityAnchorBuildError::CheckpointAfterEpochEnd,
+        );
+        assert_internal_boundary_rejected(
+            |artifact| {
+                artifact.height_context.snapshot_bootstrap = Some(
+                    iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor {
+                        snapshot_height: artifact.height - 1,
+                        snapshot_block_hash: artifact
+                            .subject
+                            .parent_block_hash
+                            .expect("height-two artifact has a parent"),
+                        snapshot_block_creation_time_ms: 1,
+                        snapshot_state_hash: Hash::new(b"inadmissible SCCP snapshot boundary"),
+                    },
+                );
+            },
+            SccpSoraFinalityAnchorBuildError::SnapshotBootstrap,
+        );
+        assert_internal_boundary_rejected(
+            |artifact| {
+                artifact.validator_set_pops.pop();
+            },
+            SccpSoraFinalityAnchorBuildError::InvalidAuthenticatedRoster,
         );
     }
     #[test]

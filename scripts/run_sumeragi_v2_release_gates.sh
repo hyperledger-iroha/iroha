@@ -4123,8 +4123,8 @@ if [[ "$profile" == "--release" ]]; then
     129
     88
     34
-    44
-    43
+    50
+    48
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do

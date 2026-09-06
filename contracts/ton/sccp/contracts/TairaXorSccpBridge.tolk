@@ -38,8 +38,8 @@ fun assertBridgeConfiguration(storage: BridgeStorage): BridgeConfig {
     val codeHashes = hashes.tail.load().deploymentCodeHashes.load();
     val pending = storage.pending.load();
     val replay = storage.replay.load();
-    sccpReplayValidateForestV1(replay.inboundMint.load());
-    sccpReplayValidateForestV1(replay.outboundBurn.load());
+    sccpReplayValidateRuntimeForestV1(replay.inboundMint.load());
+    sccpReplayValidateRuntimeForestV1(replay.outboundBurn.load());
     assert (getNetworkGlobalId() == config.expectedGlobalId) throw SccpErrors.WrongNetwork;
     assert (
         storage.routeConfigurationHash == hashes.routeConfigurationHash &&

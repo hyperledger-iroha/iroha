@@ -36,6 +36,17 @@ This crate hosts cross-component tests for Iroha.
 - For faster local full runs, `scripts/run_full_tests.sh --fast` routes all cargo calls through `scripts/cargo_fast.sh`; add `--fast-zero-debug` and `--no-incremental` when you want the more aggressive local-throughput mode.
 
 ## Fixtures
+
+The native SoraFS repair corridor runs with
+`IROHA_TEST_REQUIRE_NETWORK=1 cargo test --locked -p integration_tests --test core_api sorafs_repair_ledger:: -- --nocapture`.
+It uses four NPoS voting validators with mandatory DA/RBC, submits duplicate
+reports and competing claims through different peers, revokes an active owner,
+rejects stale completion, and verifies one terminal result plus byte-identical
+finalized task/counter/event projections before and after a validator restart.
+This is native-ledger qualification; provider storage execution, lease-expiry
+timing, slash/appeal orchestration and production evidence require their own
+tests and deployment runs.
+
 - IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
 - Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:

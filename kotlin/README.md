@@ -292,6 +292,11 @@ fields and tags, and current Native AMX V2 evidence. The parsers reject
 status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
 participant rows, and inconsistent carrier identities.
 
+Diagnostics are immutable values for Kotlin and Java callers. Construction owns
+the NPoS seed, evidence vectors and nested JSON maps/arrays; changing supplied
+collections cannot change validated evidence. Constructors enforce unsigned
+counters, vector limits and the parser's nesting bound.
+
 ### KAGEMUSHA peer transports
 
 `KagemushaNoritoV1` is the canonical KAGEMUSHA wire codec. Kotlin/JVM and Android

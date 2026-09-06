@@ -11,9 +11,8 @@ fn captured_codec_schema_identities() {
     crate::captured_schema_tests::assert_bidirectional::<super::TransferSmtWitness>(
         "iroha_data_model::fastpq::TransferSmtWitness",
     );
-    crate::captured_schema_tests::assert_bidirectional::<super::FastpqTransitionBatch>(
-        "iroha_data_model::fastpq::FastpqTransitionBatch",
-    );
+    // The final V1 transition batch deliberately replaces the captured pre-release frame.
+    // `transition_batch_schema_rejects_the_pre_release_header` covers its identity.
     crate::captured_schema_tests::assert_bidirectional::<super::FastpqStateTransition>(
         "iroha_data_model::fastpq::FastpqStateTransition",
     );

@@ -2005,7 +2005,6 @@ def _sdk_dependency_material() -> tuple[bytes, bytes, bytes, bytes, dict[str, by
             "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
             "79n14ral3mx1ozqr3csh2u872/gradle-9.3.0-bin.zip.ok"
         ): b"",
-        "gradle/java-gradle-wrapper.properties": wrapper,
         "gradle/kotlin-gradle-wrapper.properties": wrapper,
         "node/node_modules/.package-lock.json": installed_lock,
         "node/node_modules/fixture/index.js": b"export const fixture = true;\n",

@@ -12,6 +12,13 @@ does not replace the normative protocol contract in
 `specs/sorafs/migration_ledger.md`. It connects those authorities to the
 current implementation, tests, documentation, and external promotion evidence.
 
+The accepted 2026-09-06 completion plan is executed through the
+[V1 implementation goals](v1_implementation_goals.md). Those goals define the
+current target and dependency order; this ledger retains observed implementation
+and evidence state. In particular, G02 must replace the currently implemented
+software-only SoraFS promotion profile with the plan's HSM/PKCS#11/KMS custody
+requirements. Existing software-profile passes do not close that new requirement.
+
 Repository conformance and production readiness are deliberately separate. A
 row marked `local-complete` has a reviewed implementation and local validation
 surface. A row marked `evidence-pending` still requires genuine output from the
@@ -25,6 +32,51 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `status=ready`, `summary_file_count=17`, and
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
+
+## 2026-09-06 execution checkpoint
+
+G01 is active under the [implementation goals](v1_implementation_goals.md).
+Source inspection confirms that the dependency expectation already contains
+`blake3==1.0.9`, the four native ledger domains and finalized event queries
+exist, and the SDK reference/DAG validators, quarantine AEAD and integer privacy
+accounting require qualification rather than duplicate implementations.
+
+The current slice fixes three release boundaries:
+
+- `scripts/release_manifest_signing.py` now retains every output ancestor and
+  created output descriptor across external execution. Directory/symlink
+  replacement cannot redirect publication; rollback scrubs its own retained
+  failed outputs without deleting replacement files. Thirteen new regressions
+  cover races, all three output parents, partial writes and unsupported hosts.
+- `scripts/check_release_feature_graph.py` verifies the reviewed source seal
+  before Cargo metadata reads repository configuration. Two new regressions
+  prove altered `.cargo/config.toml` never reaches Cargo through either shipping
+  entrypoint. The source seal itself is unchanged; mutable source drift remains
+  a release blocker until the actual candidate is reviewed and sealed.
+- `.github/workflows/sorafs-orchestrator-sdk.yml` restores canonical Kotlin-owned
+  Java/Kotlin native validation with a fresh ABI-23 bridge and fixture generator,
+  pre/post artifact authentication, and all five required Gradle tasks. The new
+  bounded `scripts/check_sorafs_mobile_parity_reports.py` rejects missing tasks,
+  empty or forged counts, failures/errors/skips, unsafe XML, linked or changing
+  reports, and resource exhaustion. A manifest-only upload cannot establish
+  executed parity. Its 31 tests pass, and independent inspection accepted four
+  existing Gradle report shapes.
+
+The combined current-tree run passes **714 tests** across
+`release_manifest_signing_test.py`, `release_sorafs_cli_test.py`,
+`check_sorafs_release_automation_test.py`,
+`check_sorafs_mobile_parity_reports_test.py`, `check_sorafs_stale_docs_test.py`,
+and `check_sorafs_public_interface_hard_cut_test.py`, using Python 3.12.14 with
+the exact `scripts/requirements.txt` pins. The signing shell integration and
+focused source-integrity regressions also pass. These are local script/contract
+results; the native CI job, full workspace/SDK matrix and production deployment
+have not been executed by this slice.
+
+The broad release-helper baseline is still being evaluated. Source-budget
+findings, the reviewed-source seal mismatch, provider-ingest contract drift,
+dirty OpenAPI manifests and the software-only custody profile remain explicit
+follow-on work. No production lane, foundational envelope or readiness claim
+is created by these repairs.
 
 ## Authority and shared contract
 
@@ -157,9 +209,11 @@ producer/filesystem hardening. This is local source validation only; external
 allocation-flood qualification and deployment evidence remain open.
 
 Those changes close only the source projection and package inventory gaps. The
-`governance_dag` lane remains `open`: the repository still supplies no
-concrete deployment-owned backend registry or vendor-linked broker executable,
-genuine production backends, or supervision evidence, no clean five-target
+`governance_dag` lane remains `open`: the packaged
+`sorafs_external_software_signer` supplies concrete signer-role adapters, but
+does not supply the complete authenticated Kubo/head and sealed-store backend
+assembly, the newly required HSM custody qualification, or supervision
+evidence. There are still no qualified clean five-target
 release artifacts and smokes, and no L1 deployment qualification or L2
 promotion evidence. The current supported packaging choice is a thin
 deployment-owned binary statically linked to its reviewed registry; choosing a

@@ -1641,7 +1641,6 @@ fn proof_processing_context_hash(
         cfg!(feature = "zk-halo2") as u8,
         cfg!(feature = "zk-halo2-ipa") as u8,
         cfg!(feature = "zk-stark") as u8,
-        cfg!(feature = "goldilocks_backend") as u8,
         cfg!(feature = "circuit-params") as u8,
     ]);
     hasher.update(

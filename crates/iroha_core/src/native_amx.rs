@@ -3681,3 +3681,6 @@ impl NativeAmxSessionCache {
 mod tests {
     include!("native_amx/tests.rs");
 }
+#[cfg(test)]
+#[path = "native_amx/participant_application_role_tests.rs"]
+mod participant_application_role_tests;

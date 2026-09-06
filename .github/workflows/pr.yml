@@ -557,7 +557,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          invocation_root="$(mktemp -d /private/tmp/iroha-sumeragi-v2-formal.XXXXXX)"
+          invocation_base="$(cd -- /tmp && pwd -P)"
+          invocation_root="$(mktemp -d "$invocation_base/iroha-sumeragi-v2-formal.XXXXXX")"
           chmod 700 "$invocation_root"
           mkdir -m 700 \
             "$invocation_root/target" \

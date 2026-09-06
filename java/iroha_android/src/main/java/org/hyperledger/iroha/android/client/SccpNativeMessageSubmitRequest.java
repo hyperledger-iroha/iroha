@@ -7,7 +7,12 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 
-/** Exact native-proof request payload for {@code POST /v1/bridge/messages}. */
+/**
+ * Exact first-release native-proof request payload for {@code POST /v1/bridge/messages}.
+ *
+ * <p>Detached signed submission is outside this surface; only unsigned preparation is
+ * representable.
+ */
 final class SccpNativeMessageSubmitRequest {
   private final String authority;
   private final FeePaymentIntent feePayment;

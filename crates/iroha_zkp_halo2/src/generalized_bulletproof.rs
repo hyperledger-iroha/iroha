@@ -174,11 +174,14 @@ fn clear_secret_bytes(bytes: &mut [u8]) {
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *bytes);
     #[cfg(test)]
-    SECRET_BYTE_CLEAR_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    SECRET_BYTE_CLEAR_CALLS.with(|count| count.set(count.get() + 1));
 }
 #[cfg(test)]
-static SECRET_BYTE_CLEAR_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+std::thread_local! {
+    // Byte owners are used throughout the proof crate. Count only the current
+    // test thread so unrelated parallel proofs cannot corrupt cleanup assertions.
+    static SECRET_BYTE_CLEAR_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
 /// Fixed-size secret byte buffer cleared on normal return and unwind.
 struct SecretBytes<const N: usize>([u8; N]);
 impl<const N: usize> Drop for SecretBytes<N> {

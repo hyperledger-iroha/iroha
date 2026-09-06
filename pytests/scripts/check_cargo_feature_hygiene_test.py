@@ -41,6 +41,16 @@ def test_rejects_unclassified_explicit_feature_omitted_from_default() -> None:
     )
 
 
+def test_rejects_removed_algebraic_ipa_feature() -> None:
+    for package in ("iroha_zkp_halo2", "ivm", "iroha_core", "iroha_torii"):
+        document = copy.deepcopy(_guarded_document(package))
+        document["features"]["goldilocks_backend"] = []
+        assert any(
+            "Cargo feature `goldilocks_backend` is unclassified" in error
+            for error in _guarded_errors(package, document)
+        ), package
+
+
 def test_rejects_unclassified_implicit_optional_dependency_feature() -> None:
     document = copy.deepcopy(_guarded_document("iroha_core"))
     document["dependencies"]["new_optional_backend"] = {

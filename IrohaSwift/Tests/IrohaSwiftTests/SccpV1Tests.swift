@@ -46,6 +46,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(SccpCodecV1.allCases.map(\.rawValue), [0, 1, 2, 3])
         XCTAssertNil(SccpNetworkV1(rawValue: "solana-mainnet-beta"))
         XCTAssertEqual(SccpNetworkV1.allCases.map(\.tag), [0x40, 0x41, 0x42, 0x43, 0x44])
+        XCTAssertEqual(SccpNetworkV1.allCases.map(\.domainId), [0, 1, 2, 5, 4])
         for tag in UInt8.min...UInt8.max where !(0x40...0x44).contains(tag) {
             XCTAssertNil(SccpNetworkV1.fromTag(tag))
         }
@@ -63,33 +64,32 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(SccpPayloadKindV1.allCases, [.transfer])
     }
 
-    func testReplayForestMatchesSharedGoldenAndRejectsMalleableWitnesses() throws {
-        // Keep in lockstep with fixtures/sccp/replay_forest_v1.json.
+    func testLocalFinalV1ReplayVectorRejectsMalleableWitnesses() throws {
         let domainHash = try SccpReplayV1.domainHash(
             source: .soraTaira,
             target: .ethereumMainnet,
-            boundary: .soraOutboundLock,
+            boundary: .evmDestinationMint,
             routeRevision: 7,
             routeConfigurationHash: Data(repeating: 0x44, count: 32),
-            actor: .route
+            actor: try .evm(Data(repeating: 0x33, count: 20))
         )
         XCTAssertEqual(
             SccpV1.encodeLowerHex(domainHash),
-            "de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d"
+            "ebc495541ef2265beebe7ee9e4e8764595c2a55ed67dc6d0a8ff69ccd3ff3228"
         )
 
         let replayID = Data(repeating: 0x11, count: 32)
         let key = try SccpReplayV1.replayKey(domainHash: domainHash, replayId: replayID)
         XCTAssertEqual(
             SccpV1.encodeLowerHex(key),
-            "139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b"
+            "035bcebe9423edd4f1b945bae54905e0f0860bcc54718d372b1a58797ce614d4"
         )
-        XCTAssertEqual(key.first, 19)
+        XCTAssertEqual(key.first, 3)
 
         var amount = Data(repeating: 0, count: 16)
         amount[15] = 9
         let recordDigest = try SccpReplayV1.recordDigest(
-            operation: .soraOutboundLock,
+            operation: .evmDestinationMint,
             replayId: replayID,
             payloadSHA256: Data(repeating: 0x22, count: 32),
             amountScale9BE: amount,
@@ -98,7 +98,7 @@ final class SccpV1Tests: XCTestCase {
         )
         XCTAssertEqual(
             SccpV1.encodeLowerHex(recordDigest),
-            "31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5"
+            "bb0a7e99f5d2d136375e46ba231903611366ea85ec0e10130488a085fa05bf4f"
         )
 
         let empty = SccpReplayV1.emptyHashes()
@@ -119,13 +119,13 @@ final class SccpV1Tests: XCTestCase {
         )
         let nonmembership = try SccpReplayV1.rootFromWitness(
             key: key,
-            recordDigest: nil,
+            recordDigest: Data(repeating: 0, count: 32),
             witness: emptyWitness
         )
         XCTAssertTrue(nonmembership.matchesExpectedRoot)
 
         let occupiedExpected = try SccpV1.decodeLowerHex(
-            "d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849"
+            "ec10fe878a6429557c7af279b8cb6fa5cc51165f4e6a54fb27ed6ad8525caf91"
         )
         let occupiedWitness = try SccpSparseMerkleWitnessV1(
             expectedShardRoot: occupiedExpected,
@@ -151,7 +151,7 @@ final class SccpV1Tests: XCTestCase {
         )
         XCTAssertThrowsError(try SccpReplayV1.rootFromWitness(
             key: key,
-            recordDigest: nil,
+            recordDigest: Data(repeating: 0, count: 32),
             witness: reservedWitness
         ))
 
@@ -165,8 +165,121 @@ final class SccpV1Tests: XCTestCase {
         )
         XCTAssertThrowsError(try SccpReplayV1.rootFromWitness(
             key: key,
-            recordDigest: nil,
+            recordDigest: Data(repeating: 0, count: 32),
             witness: explicitDefaultWitness
+        ))
+
+        XCTAssertNoThrow(try SccpReplayV1.verifyAgainstCurrentRoot(
+            key: Data(repeating: 0, count: 32),
+            recordDigest: Data(repeating: 0, count: 32),
+            witness: emptyWitness,
+            currentRoot: empty[SccpReplayV1.depth]
+        ))
+        let zeroExpectedWitness = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: Data(repeating: 0, count: 32),
+            priorRecordDigest: Data(repeating: 0, count: 32),
+            siblingBitmap: Data(repeating: 0, count: 32),
+            siblings: []
+        )
+        XCTAssertFalse(try SccpReplayV1.rootFromWitness(
+            key: Data(repeating: 0, count: 32),
+            recordDigest: Data(repeating: 0, count: 32),
+            witness: zeroExpectedWitness
+        ).matchesExpectedRoot)
+        XCTAssertThrowsError(try SccpReplayV1.verifyAgainstCurrentRoot(
+            key: Data(repeating: 0, count: 32),
+            recordDigest: Data(repeating: 0, count: 32),
+            witness: zeroExpectedWitness,
+            currentRoot: Data(repeating: 0, count: 32)
+        ))
+        var zeroSiblingBitmap = Data(repeating: 0, count: 32)
+        zeroSiblingBitmap[31] = 1
+        let zeroSiblingWitness = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: empty[SccpReplayV1.depth],
+            priorRecordDigest: Data(repeating: 0, count: 32),
+            siblingBitmap: zeroSiblingBitmap,
+            siblings: [Data(repeating: 0, count: 32)]
+        )
+        let zeroSiblingRoot = try SccpReplayV1.rootFromWitness(
+            key: Data(repeating: 0, count: 32),
+            recordDigest: Data(repeating: 0, count: 32),
+            witness: zeroSiblingWitness
+        ).root
+        let boundZeroSiblingWitness = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: zeroSiblingRoot,
+            priorRecordDigest: Data(repeating: 0, count: 32),
+            siblingBitmap: zeroSiblingBitmap,
+            siblings: [Data(repeating: 0, count: 32)]
+        )
+        XCTAssertNoThrow(try SccpReplayV1.verifyAgainstCurrentRoot(
+            key: Data(repeating: 0, count: 32),
+            recordDigest: Data(repeating: 0, count: 32),
+            witness: boundZeroSiblingWitness,
+            currentRoot: zeroSiblingRoot
+        ))
+        XCTAssertThrowsError(try SccpReplayV1.verifyAgainstCurrentRoot(
+            key: Data(repeating: 0, count: 32),
+            recordDigest: Data(repeating: 0, count: 32),
+            witness: boundZeroSiblingWitness,
+            currentRoot: Data(repeating: 0x77, count: 32)
+        ))
+    }
+
+    func testReplayOperationPrincipalAndTonDirectionAreExact() throws {
+        XCTAssertEqual(SccpReplayBoundaryV1.tonWalletBurnAuthorization.rawValue, 0x35)
+        XCTAssertEqual(SccpReplayBoundaryV1.tonWalletBurnLock.rawValue, 0x36)
+        XCTAssertEqual(SccpReplayBoundaryV1.tonWalletBurnRefund.rawValue, 0x37)
+        let tonActor = SccpReplayActorV1.ton(
+            workchain: 0,
+            account: Data(repeating: 0x66, count: 32)
+        )
+        for boundary in [
+            SccpReplayBoundaryV1.tonBridgeInboundMint,
+            .tonMasterMint,
+            .tonWalletMintCredit,
+        ] {
+            XCTAssertNoThrow(try SccpReplayV1.domainHash(
+                source: .soraTaira,
+                target: .tonMainnet,
+                boundary: boundary,
+                routeRevision: 7,
+                routeConfigurationHash: Data(repeating: 0x44, count: 32),
+                actor: tonActor
+            ))
+        }
+        for boundary in [
+            SccpReplayBoundaryV1.tonBridgeOutboundBurn,
+            .tonMasterBurn,
+            .tonWalletBurnAuthorization,
+            .tonWalletBurnLock,
+            .tonWalletBurnRefund,
+        ] {
+            XCTAssertNoThrow(try SccpReplayV1.domainHash(
+                source: .tonMainnet,
+                target: .soraTaira,
+                boundary: boundary,
+                routeRevision: 7,
+                routeConfigurationHash: Data(repeating: 0x44, count: 32),
+                actor: tonActor
+            ))
+            XCTAssertThrowsError(try SccpReplayV1.domainHash(
+                source: .soraTaira,
+                target: .tonMainnet,
+                boundary: boundary,
+                routeRevision: 7,
+                routeConfigurationHash: Data(repeating: 0x44, count: 32),
+                actor: tonActor
+            ))
+        }
+        var amount = Data(repeating: 0, count: 16)
+        amount[15] = 9
+        XCTAssertThrowsError(try SccpReplayV1.recordDigest(
+            operation: .soraOutboundLock,
+            replayId: Data(repeating: 0x11, count: 32),
+            payloadSHA256: Data(repeating: 0x22, count: 32),
+            amountScale9BE: amount,
+            principal: try .evm(Data(repeating: 0x33, count: 20)),
+            auxiliaryIdentitySHA256: Data(repeating: 0x55, count: 32)
         ))
     }
 
@@ -1013,11 +1126,14 @@ final class SccpV1Tests: XCTestCase {
         )
         let finalityAnchor = outboundProofPolicy.soraFinalityAnchor
         XCTAssertEqual(finalityAnchor.protocolVersion, 4)
+        XCTAssertEqual(finalityAnchor.epoch, 7)
+        XCTAssertEqual(finalityAnchor.epochEndHeight, 150)
+        XCTAssertEqual(finalityAnchor.rosterCommitment, Data(repeating: 0xa4, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
         XCTAssertEqual(
             finalityAnchor.anchorHash,
-            Data(hexString: "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3")
+            Data(hexString: "9E9D4E602028B7BA99AF5E47BE644FBB3524E6240C284867FAF9DFB85D873BA5")
         )
         let currentRequest = try SccpGroth16ProofRequestV1.parse(
             try proofRequestJSON(protocolVersion: 4)
@@ -1035,6 +1151,10 @@ final class SccpV1Tests: XCTestCase {
             { $0["protocol_version"] = 5 },
             { $0["protocol_version"] = "3" },
             { $0["protocol_version"] = true },
+            { $0["epoch"] = 0 },
+            { $0["epoch_end_height"] = 6 },
+            { $0["roster_commitment"] = $0["chain_id_hash"] },
+            { $0.removeValue(forKey: "epoch") },
             { $0["validator_set_epoch"] = 2 },
             { $0["checkpoint_context_id"] = String(repeating: "0", count: 64) },
             { $0["checkpoint_context_id"] = $0["chain_id_hash"] },
@@ -1640,7 +1760,7 @@ final class SccpV1Tests: XCTestCase {
         var wrongProjectionDomain = first
         var projection = wrongProjectionDomain["payload_projection"] as! [String: Any]
         var projectedTransfer = projection["Transfer"] as! [String: Any]
-        projectedTransfer["dest_domain"] = 5
+        projectedTransfer["dest_domain"] = 3
         projection["Transfer"] = projectedTransfer
         wrongProjectionDomain["payload_projection"] = projection
         XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [wrongProjectionDomain]])))
@@ -1960,6 +2080,13 @@ final class SccpV1Tests: XCTestCase {
         var crossFamilyBackend = try jsonObject(valid, mutableContainers: true)
         crossFamilyBackend["backend"] = "tron-groth16-bn254-v1"
         XCTAssertThrowsError(try SccpBridgeSubmitResponse.parse(jsonData(crossFamilyBackend)))
+        var tron = try jsonObject(valid, mutableContainers: true)
+        tron["backend"] = "tron-groth16-bn254-v1"
+        tron["counterparty_domain"] = 5
+        tron["counterparty_chain"] = "tron-mainnet"
+        XCTAssertNoThrow(try SccpBridgeSubmitResponse.parse(jsonData(tron)))
+        tron["counterparty_domain"] = 3
+        XCTAssertThrowsError(try SccpBridgeSubmitResponse.parse(jsonData(tron)))
     }
 
     private func capabilitiesJSON() -> Data {
@@ -2595,6 +2722,7 @@ final class SccpV1Tests: XCTestCase {
     private func finalityAnchor(protocolVersion: Int = 4) -> (object: [String: Any], hash: Data) {
         let chainId = Data(hexString: "fc56984b2be7431d840e21514d1883f0")!
         let chainHash = irohaKeccak256(chainId)
+        let rosterCommitment = Data(repeating: 0xa4, count: 32)
         let checkpoint = Data(repeating: 0xa1, count: 32)
         let contextId = Data(repeating: 0xa2, count: 32)
         let artifactHash = Data(repeating: 0xa3, count: 32)
@@ -2602,16 +2730,22 @@ final class SccpV1Tests: XCTestCase {
         appendUInt16LE(UInt16(protocolVersion), to: &canonical)
         canonical.append(chainHash)
         appendUInt64LE(7, to: &canonical)
+        appendUInt64LE(150, to: &canonical)
+        canonical.append(rosterCommitment)
+        appendUInt64LE(7, to: &canonical)
         canonical.append(checkpoint)
         canonical.append(contextId)
         canonical.append(artifactHash)
-        XCTAssertEqual(canonical.count, 140)
+        XCTAssertEqual(canonical.count, 188)
         let anchorHash = irohaKeccak256(Data("sccp:sora-finality-anchor:v1".utf8) + canonical)
         return ([
             "version": 1,
             "source_network": network("sora-taira"),
             "protocol_version": protocolVersion,
             "chain_id_hash": chainHash.hexEncodedString().uppercased(),
+            "epoch": 7,
+            "epoch_end_height": 150,
+            "roster_commitment": rosterCommitment.hexEncodedString().uppercased(),
             "checkpoint_height": 7,
             "checkpoint_block_hash": checkpoint.hexEncodedString().uppercased(),
             "checkpoint_context_id": contextId.hexEncodedString().uppercased(),

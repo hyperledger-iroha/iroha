@@ -71,6 +71,7 @@ APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
 )
 APPROVED_KAGEMUSHA_C_EXPORTS = (
@@ -149,11 +150,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-        "iroha_privacy_compiled_profile_catalog_v1",
-        "iroha_privacy_validate_compiled_profile_catalog_v1",
-        "iroha_privacy_exact12_fixture_bundle_v1",
-        "iroha_privacy_validate_exact12_fixture_bundle_v1",
-        "iroha_privacy_free_buffer",
+        *APPROVED_PRIVACY_C_EXPORTS,
     ),
     "node": (
         "connectNoritoBridgeAbiVersion",

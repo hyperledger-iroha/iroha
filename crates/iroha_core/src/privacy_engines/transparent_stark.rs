@@ -127,6 +127,11 @@ pub(crate) struct TransparentStarkWorkSecurityV1 {
 /// Canonical Goldilocks field element.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GoldilocksFieldV1(pub(crate) u64);
+impl zeroize::Zeroize for GoldilocksFieldV1 {
+    fn zeroize(&mut self) {
+        self.zeroize_v1();
+    }
+}
 impl GoldilocksFieldV1 {
     /// Additive identity.
     pub(crate) const ZERO: Self = Self(0);
@@ -236,6 +241,11 @@ impl GoldilocksFieldV1 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GoldilocksFp4V1 {
     coefficients: [GoldilocksFieldV1; GOLDILOCKS_FP4_DEGREE_V1],
+}
+impl zeroize::Zeroize for GoldilocksFp4V1 {
+    fn zeroize(&mut self) {
+        self.zeroize_v1();
+    }
 }
 impl GoldilocksFp4V1 {
     /// Additive identity.

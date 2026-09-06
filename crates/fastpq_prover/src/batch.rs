@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 ///
 /// An explicit name keeps the release wire format independent of Cargo features
 /// and Rust module refactors.
-pub const TRANSITION_BATCH_SCHEMA_NAME: &str = "fastpq_prover::batch::TransitionBatchV1";
+pub const TRANSITION_BATCH_SCHEMA_NAME: &str = "fastpq_prover::batch::FastpqStateTransitionBatchV1";
 /// Public inputs supplied by the host for a FASTPQ batch.
 #[derive(
     Debug,
@@ -78,8 +78,8 @@ impl StateTransition {
 /// FASTPQ selector describing the semantics of a transition row.
 #[derive(
     Debug,
-    Copy,
     Clone,
+    Copy,
     PartialEq,
     Eq,
     NoritoSerialize,
@@ -89,11 +89,39 @@ impl StateTransition {
 )]
 #[norito(tag = "kind", content = "payload")]
 pub enum OperationKind {
+    // The final V1 block starts at 32 so both the experimental 0..=5 wire and
+    // the superseded two-operation 16/17 wire fail decoding.
     /// Asset transfer between two existing accounts.
-    #[codec(index = 16)]
+    #[codec(index = 32)]
     Transfer,
+    /// Asset mint increasing the committed circulating supply.
+    #[codec(index = 33)]
+    Mint,
+    /// Asset burn decreasing the committed circulating supply.
+    #[codec(index = 34)]
+    Burn,
+    /// Grant one exact permission to a role at the bound epoch.
+    #[codec(index = 35)]
+    RoleGrant {
+        /// Canonical role identifier bytes.
+        role_id: [u8; 32],
+        /// Canonical permission identifier bytes.
+        permission_id: [u8; 32],
+        /// Epoch at which the grant becomes effective.
+        epoch: u64,
+    },
+    /// Revoke one exact permission from a role at the bound epoch.
+    #[codec(index = 36)]
+    RoleRevoke {
+        /// Canonical role identifier bytes.
+        role_id: [u8; 32],
+        /// Canonical permission identifier bytes.
+        permission_id: [u8; 32],
+        /// Epoch at which the revocation becomes effective.
+        epoch: u64,
+    },
     /// Opaque metadata effect whose meaning is authenticated by its outer statement.
-    #[codec(index = 17)]
+    #[codec(index = 37)]
     MetaSet,
 }
 impl OperationKind {
@@ -102,8 +130,18 @@ impl OperationKind {
     pub const fn rank(&self) -> u8 {
         match self {
             Self::Transfer => 0,
-            Self::MetaSet => 1,
+            Self::Mint => 1,
+            Self::Burn => 2,
+            Self::RoleGrant { .. } => 3,
+            Self::RoleRevoke { .. } => 4,
+            Self::MetaSet => 5,
         }
+    }
+
+    /// Return whether this row participates in the permission-tree relation.
+    #[inline]
+    pub const fn is_permission_selector(&self) -> bool {
+        matches!(self, Self::RoleGrant { .. } | Self::RoleRevoke { .. })
     }
 }
 /// A batch of state transitions representing a single DS proof input.
@@ -117,7 +155,7 @@ impl OperationKind {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
-#[norito(schema_name = "fastpq_prover::batch::TransitionBatchV1")]
+#[norito(schema_name = "fastpq_prover::batch::FastpqStateTransitionBatchV1")]
 pub struct TransitionBatch {
     /// Canonical parameter set name expected for this proof.
     pub parameter: String,
@@ -180,9 +218,43 @@ mod tests {
 
     #[test]
     fn operation_wire_indices_reject_the_pre_release_enum() {
-        assert_eq!(OperationKind::Transfer.encode(), 16_u32.to_le_bytes());
-        assert_eq!(OperationKind::MetaSet.encode(), 17_u32.to_le_bytes());
-        for retired in 0_u32..=5 {
+        assert_eq!(OperationKind::Transfer.encode(), 32_u32.to_le_bytes());
+        assert_eq!(OperationKind::Mint.encode(), 33_u32.to_le_bytes());
+        assert_eq!(OperationKind::Burn.encode(), 34_u32.to_le_bytes());
+        let role_id = [0x11; 32];
+        let permission_id = [0x22; 32];
+        let grant = OperationKind::RoleGrant {
+            role_id,
+            permission_id,
+            epoch: 9,
+        }
+        .encode();
+        let revoke = OperationKind::RoleRevoke {
+            role_id,
+            permission_id,
+            epoch: 10,
+        }
+        .encode();
+        assert_eq!(&grant[..4], 35_u32.to_le_bytes().as_slice());
+        assert_eq!(&revoke[..4], 36_u32.to_le_bytes().as_slice());
+        assert_eq!(OperationKind::MetaSet.encode(), 37_u32.to_le_bytes());
+        assert_eq!(
+            OperationKind::decode(&mut grant.as_slice()).expect("decode role grant"),
+            OperationKind::RoleGrant {
+                role_id,
+                permission_id,
+                epoch: 9,
+            }
+        );
+        assert_eq!(
+            OperationKind::decode(&mut revoke.as_slice()).expect("decode role revoke"),
+            OperationKind::RoleRevoke {
+                role_id,
+                permission_id,
+                epoch: 10,
+            }
+        );
+        for retired in 0_u32..32 {
             assert!(
                 OperationKind::decode(&mut retired.to_le_bytes().as_slice()).is_err(),
                 "retired pre-release operation index {retired} must not decode"
@@ -204,22 +276,27 @@ mod tests {
         assert_eq!(
             expected,
             [
-                0xe0, 0x07, 0xd2, 0xe7, 0xbb, 0x2f, 0x1a, 0x08, 0xfe, 0x51, 0x81, 0x5a, 0x98, 0x9e,
-                0x25, 0x2c,
+                0xd2, 0x0b, 0xd9, 0x47, 0x90, 0x6a, 0xec, 0x99, 0xda, 0x9b, 0x2c, 0x49, 0x33, 0x46,
+                0xb3, 0xa2,
             ]
         );
 
         let batch =
             TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
-        let mut encoded = norito::core::to_bytes(&batch).expect("encode release batch");
+        let encoded = norito::core::to_bytes(&batch).expect("encode release batch");
         assert_eq!(&encoded[6..22], expected.as_slice());
-        let pre_release =
-            norito::core::schema_hash_for_name("fastpq_prover::batch::TransitionBatch");
-        encoded[6..22].copy_from_slice(&pre_release);
-        assert!(
-            norito::decode_from_bytes::<TransitionBatch>(&encoded).is_err(),
-            "the pre-release batch schema must not decode as release V1"
-        );
+        for retired_name in [
+            "fastpq_prover::batch::TransitionBatch",
+            "fastpq_prover::batch::TransitionBatchV1",
+        ] {
+            let mut retired = encoded.clone();
+            let retired_schema = norito::core::schema_hash_for_name(retired_name);
+            retired[6..22].copy_from_slice(&retired_schema);
+            assert!(
+                norito::decode_from_bytes::<TransitionBatch>(&retired).is_err(),
+                "retired batch schema {retired_name} must not decode as final V1"
+            );
+        }
     }
     #[test]
     fn sort_orders_by_key() {
@@ -249,7 +326,7 @@ mod tests {
             b"key".to_vec(),
             vec![0],
             vec![1],
-            OperationKind::MetaSet,
+            OperationKind::Burn,
         ));
         batch.push(StateTransition::new(
             b"key".to_vec(),
@@ -257,13 +334,45 @@ mod tests {
             vec![2],
             OperationKind::Transfer,
         ));
+        batch.push(StateTransition::new(
+            b"key".to_vec(),
+            vec![3],
+            vec![4],
+            OperationKind::Mint,
+        ));
+        batch.push(StateTransition::new(
+            b"key".to_vec(),
+            vec![],
+            vec![4],
+            OperationKind::RoleGrant {
+                role_id: [0x11; 32],
+                permission_id: [0x22; 32],
+                epoch: 7,
+            },
+        ));
+        batch.push(StateTransition::new(
+            b"key".to_vec(),
+            vec![4],
+            vec![],
+            OperationKind::RoleRevoke {
+                role_id: [0x11; 32],
+                permission_id: [0x22; 32],
+                epoch: 8,
+            },
+        ));
+        batch.push(StateTransition::new(
+            b"key".to_vec(),
+            vec![4],
+            vec![5],
+            OperationKind::MetaSet,
+        ));
         batch.sort();
         let ranks: Vec<_> = batch
             .transitions
             .iter()
             .map(StateTransition::operation_rank)
             .collect();
-        assert_eq!(ranks, vec![0, 1]);
+        assert_eq!(ranks, vec![0, 1, 2, 3, 4, 5]);
     }
     #[test]
     fn stable_sort_and_norito_roundtrip_preserve_equal_row_order() {

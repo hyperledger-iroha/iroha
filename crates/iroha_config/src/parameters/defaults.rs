@@ -2261,27 +2261,33 @@ pub mod torii {
         /// Replay archive reads are unavailable until an operator supplies the
         /// complete signed three-replica production policy.
         pub const ENABLED: bool = false;
-        /// Complete checkpoint-set response buffered before verification.
+        /// Complete bounded checkpoint-set response.
         pub const MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
-        /// Maximum encoded bytes buffered for one independently verified snapshot.
+        /// Maximum encoded bytes in one independently verified snapshot.
         pub const MAX_SNAPSHOT_BYTES: Bytes = Bytes(32 * 1024 * 1024);
-        /// Maximum leaves retained by one in-memory snapshot.
+        /// Maximum leaves retained by one snapshot.
         pub const MAX_SNAPSHOT_LEAVES: usize = 256 * 1024;
         /// Maximum route/boundary accumulators in one checkpoint set.
         pub const MAX_ACCUMULATORS: usize = 4_096;
         /// Complete deadline for one pinned replica fetch.
         pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-        /// First-release response-size ceiling for one buffered response.
+        /// Delay between bounded refresh attempts after a replica is behind or unavailable.
+        pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+        /// First-release response-size ceiling.
         pub const MAX_RESPONSE_BYTES_HARD: u64 = 256 * 1024 * 1024;
-        /// First-release per-snapshot size ceiling, below the Norito archive limit.
+        /// First-release per-snapshot size ceiling.
         pub const MAX_SNAPSHOT_BYTES_HARD: u64 = 128 * 1024 * 1024;
         const _: () = assert!(MAX_SNAPSHOT_BYTES_HARD <= super::super::norito::MAX_ARCHIVE_LEN);
-        /// First-release per-snapshot in-memory leaf ceiling.
+        /// First-release per-snapshot leaf ceiling.
         pub const MAX_SNAPSHOT_LEAVES_HARD: u64 = 1024 * 1024;
         /// First-release checkpoint-set cardinality ceiling.
         pub const MAX_ACCUMULATORS_HARD: u64 = 65_536;
         /// First-release request deadline ceiling.
-        pub const REQUEST_TIMEOUT_HARD: Duration = Duration::from_secs(5 * 60);
+        pub const REQUEST_TIMEOUT_HARD: Duration = Duration::from_secs(60);
+        /// Smallest production refresh interval.
+        pub const REFRESH_INTERVAL_MIN: Duration = Duration::from_secs(1);
+        /// Largest production refresh interval.
+        pub const REFRESH_INTERVAL_HARD: Duration = Duration::from_secs(5 * 60);
     }
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {

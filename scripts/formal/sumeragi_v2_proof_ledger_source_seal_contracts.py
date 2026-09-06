@@ -607,6 +607,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/autonomous_retired_attempt.rs",
     "kura/autonomous_application_evidence.rs",
     "kura/indexed_sidecar_io.rs",
+    "kura/consensus_storage_reads.rs",
     "kura/indexed_sidecar_rewrite.rs",
     "kura/lane_history_compaction.rs",
     "kura/prune_block_store_tail.rs",
@@ -881,6 +882,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_ready_durable_validate_adapter_preview.rs',
         'v2_recovered_lifecycle_sign_completion.rs',
         'v2_wire_registry_and_authentication.rs',
+        'tests/v2_adapter_leader_wire_consumer.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
         'tests/v2_adapter_main_02.rs',
@@ -1086,6 +1088,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_lane_work.rs': (
         'v2_lane_work/canonical_executed_block_application_repair.rs',
         'v2_lane_work/queue_plan_admission_handoff.rs',
+        'v2_lane_work/signing_authority_tests.rs',
         'v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs',
         'v2_lane_work/typed_finality_handoff_tests.rs',
         'v2_lane_work/terminal_retirement_journal_failure_test.rs',
@@ -1094,6 +1097,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_observer_role.rs',
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
+        'v2_lane_work/strict_historical_read_tests.rs',
         'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
@@ -4866,7 +4870,7 @@ _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256 = {
         "3225baa482525897247541b84e14644ef34b81984195a1976c28c58561c38b1c"
     ),
     "effects::V2EffectExecutor::settle_apply_terminal_direct_broadcast": (
-        "21363eceed13f14853d3355754f9294f911e539111f8eea8478ff9e1495d6f6c"
+        "3f980d359d08ed1a285baceb24108f493e4e42a887d7f6c24e702e9d2f17eea2"
     ),
 }
 

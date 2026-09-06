@@ -20,10 +20,10 @@ EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
 EXPECTED_RETAINED_DIRECT_SHA256 = (
-    "af338fada6916a39d324e9c907abebf5137bec028e9d88ad75f91c4ae3d4ffb3"
+    "d8f7d0f388427eb4560f2b501c528fa92e2b87621a7cc7b5552cd1fa9d5c31cc"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "68c994ade75f8adb6a425bb74eed8f077dc9f1c0282feca10ba79ce2d1487dbb"
+    "ab639586711095532730c2cc629f29587a1da75c71dc62149e5a64726a3b2229"
 )
 EXPECTED_BLAKE3_BYTES = (
     0xF9, 0x08, 0xDA, 0x8B, 0x71, 0x82, 0xE5, 0xD3,
@@ -573,8 +573,8 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 'iroha_connect_ws_ticket_tool => "iroha.connect.session.create";',
             ),
             (
-                'effect: descriptor.effect,',
-                'effect: ToolEffect::Read,',
+                '        descriptor.effect,',
+                '        ToolEffect::Read,',
             ),
             (
                 'include_bytes!("mcp/manual_tool_descriptors_v1.json")',

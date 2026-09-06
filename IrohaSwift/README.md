@@ -1239,19 +1239,21 @@ transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
 complete envelope profile tuple both at construction and final encoding.
 
-ABI23 intentionally remains exactly the five approved privacy C exports. It
-has no manifest validator export: Swift performs the strict bounded canonical
-and semantic manifest decode, anchored by the native catalog getter and native
-catalog validator on every authority-bearing path. A Rust-native semantic
-manifest-validation claim therefore requires separate evidence and is not
-implied by this Swift lane.
+ABI23 requires exactly six privacy C exports, including
+`iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
+Torii archive to the canonical Rust validator before projecting its fields.
+Rust checks the complete release and deployment records, artifact counts,
+digests, audit signatures, and validator signatures. Every authority-bearing
+path also compares the selected tuple against the native local catalog.
+The managed decoder alone cannot establish production qualification; a bridge
+without the manifest validator is unavailable.
 `exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 23
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
-the zeroizing-free symbol, and successful typed probes. Generic
+the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
 

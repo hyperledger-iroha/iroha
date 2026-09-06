@@ -2315,7 +2315,7 @@ mod exact12_fixture {
                 )
             })?;
         let mut payload = TransactionPayload {
-            domain: TransactionDomain::Network(network_id(0xA5)),
+            domain: TransactionDomain::Network(envelope.statement.context().network_id),
             authority,
             creation_time_ms: 1_700_000_000_000_u64
                 .checked_add(row_offset)
