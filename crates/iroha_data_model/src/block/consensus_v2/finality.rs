@@ -31,6 +31,8 @@ pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot")]
 pub struct FinalizedNextEpochSnapshot {
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,
@@ -121,6 +123,8 @@ impl FinalizedNextEpochSnapshot {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact")]
 pub struct V2FinalityArtifact {
     /// Norito layout version; currently [`V2_FINALITY_ARTIFACT_VERSION`].
     pub format_version: u16,
@@ -1115,3 +1119,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_finality_schema_tests;

@@ -105,12 +105,31 @@ verify it without fetching confidential material.
 
 ## Private-note proof profile
 
-The audited profile is implemented under
+The settlement profile is implemented under
 `crates/iroha_core/src/privacy_engines/atomic_private_settlement/` and reuses the
 pinned IVM private-note STARK machinery. Its relation has exactly two input and
-three output slots. Private selectors activate real slots; inactive slots are
-domain-separated, zero-value, and non-spendable. The output roles are recipient,
-optional payer change, and sponsor reimbursement.
+three output slots. Activity is canonical from the private value: a positive
+input must prove membership in the old root, while a zero input is a virtual
+dummy and does not require a pre-existing leaf. Both slots retain the same
+hash/path topology and nonzero secret material. The AIR multiplies each of the input's 16 range-constrained value bytes
+by each computed-to-public root-byte difference and requires every product
+to be zero. A virtual dummy cannot
+contribute value, and its memo binds the current bundle, leg, slot, and private
+dummy domain. The wallet therefore spends a prior positive output with a fresh
+virtual dummy without bootstrapping another pool or depending on an earlier
+zero output's role memo. Output roles remain recipient, optional payer change,
+and sponsor reimbursement; inactive output slots carry zero value.
+
+The required public `audit_input_commitment` binds the exact two ordered input
+openings with SHA-256 inside the AIR. The statement stores the exact raw 32-byte
+digest; no hash-wrapper marker bit or normalization may alter it. Its private
+preimage contains each input's
+128-bit big-endian value, spending-authority digest, rho, blinding, and memo.
+The auditor recomputes the same commitment from the capsule and verifies that
+each `active` flag is equivalent to a positive value. Including honestly random
+rho and blinding prevents a public observer from testing pairs of public note
+commitments against this binding. A self-consistent capsule and a cooperating payer's signature
+cannot substitute different funding notes for those proved by the AIR.
 
 The relation enforces a balanced confidential transition and rejects the
 directional public-balance bridge. It binds the network, manifest proof-binding
@@ -165,8 +184,9 @@ different historical roster or authority height.
 
 The capsule includes the exact parties, asset, amount, memo, policy references,
 view data, note openings, and output-encryption openings required for audit. It
-does not contain spending authorities. Decryption returns a zeroizing buffer.
-The auditor recomputes every public binding, validates policy and height, then
+contains spending-authority digests but no spending secrets. Decryption returns
+a zeroizing buffer. The auditor recomputes every public binding, including the
+AIR input-opening commitment, validates policy and height, then
 signs through `crates/iroha_core/src/private_settlement/auditor.rs`. A
 deployment-owned credential-provider boundary keeps encryption and signing keys
 outside Iroha; Iroha independently checks the provider's governed public keys and

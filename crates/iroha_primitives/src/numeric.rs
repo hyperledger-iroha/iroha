@@ -58,7 +58,8 @@ pub const MAX_DECIMAL_PRODUCT_FACTORS: usize = 64;
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::Numeric")]
 pub struct Numeric {
     mantissa: BigInt,
     scale: u32,
@@ -78,7 +79,8 @@ pub struct Numeric {
     ffi_type(opaque)
 )]
 #[repr(transparent)]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::Quantity")]
 pub struct Quantity(Numeric);
 /// Maximum number of fractional digits accepted for XOR-denominated values.
 ///
@@ -99,7 +101,8 @@ pub const XOR_QUANTITY_SCALE: u32 = 9;
     ffi_type(opaque)
 )]
 #[repr(transparent)]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::XorQuantity")]
 pub struct XorQuantity(Quantity);
 /// Define maximum precision and scale for given number.
 ///
@@ -122,6 +125,8 @@ pub struct XorQuantity(Quantity);
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::NumericSpec")]
 pub struct NumericSpec {
     /// Count of decimal digits in the fractional part.
     /// Currently only positive scale up to 28 decimal points is supported.
@@ -2891,6 +2896,11 @@ impl core::fmt::Display for Numeric {
 }
 mod scale_ {
     /// Borrowed wire-compatible view of a numeric mantissa.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_primitives::numeric::scale_::BigIntView",
+        frame = "iroha_primitives::bigint::BigInt"
+    )]
     pub(super) struct BigIntView<'a>(
         /// Canonical bounded integer serialized by the view.
         pub(super) &'a crate::bigint::BigInt,
@@ -2916,6 +2926,8 @@ mod scale_ {
     #[derive(norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
     /// Internal helper used to encode/decode Numeric as `(mantissa, scale)`.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::numeric::scale_::NumericScaleHelper")]
     pub(super) struct NumericScaleHelper {
         /// Mantissa carried by the numeric helper.
         #[codec(compact)]
@@ -2927,6 +2939,8 @@ mod scale_ {
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode)]
     /// Borrowed wire-compatible view used to size a canonical numeric.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::numeric::scale_::NumericScaleHelperView")]
     pub(super) struct NumericScaleHelperView<'a> {
         /// Borrowed canonical mantissa.
         #[codec(compact)]
@@ -4888,3 +4902,7 @@ mod tests {
         assert!(case >= 200, "full-width corpus unexpectedly shrank");
     }
 }
+
+#[cfg(test)]
+#[path = "schema_identity/numeric.rs"]
+pub(crate) mod schema_identity;

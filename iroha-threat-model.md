@@ -10,7 +10,7 @@ In-scope (runtime / production surfaces):
 - Node bootstrap and component wiring (Torii + P2P + state/queue/config update actor): `crates/irohad/src/main.rs`
 - P2P transport and handshake surfaces: `crates/iroha_p2p/`
 - Configuration shapes and defaults (especially Torii auth defaults): `crates/iroha_config/src/parameters/{actual,defaults}.rs`
-- Client-facing config update DTO (what `/v1/configuration` can change): `crates/iroha_config/src/client_api.rs`
+- Client-facing config update DTO (what `/v1/configuration` can change): `crates/iroha_torii_shared/src/configuration.rs`
 - Deployment packaging basics: `Dockerfile`, and example configs in `defaults/` (do not use embedded example keys in production).
 
 Out-of-scope (unless explicitly requested):
@@ -52,7 +52,7 @@ Open questions that would materially change risk ranking:
   - Validation: body limits on some endpoints (e.g., transactions), Norito decoding, request signing for some app endpoints (canonical request headers). Evidence: `crates/iroha_torii/src/lib.rs` (`add_transaction_routes` uses `DefaultBodyLimit::max(...)`), `crates/iroha_torii/src/app_auth.rs` (`verify_canonical_request`).
 
 - Internet client → “Operator” routes (Torii)
-  - Data: config updates (`ConfigUpdateDTO`) and privileged operator/debug/profile reads (when enabled).
+  - Data: config updates (`ConfigurationUpdate`) and privileged operator/debug/profile reads (when enabled).
   - Channel: HTTP.
   - Guarantees: privileged operator routes use `.authenticated_operator(...)` with configured allowlisted signing keys. The canonical transcript binds the network, method, target, body hash, timestamp, and nonce; a bounded replay cache admits freshness exactly once. Evidence: `crates/iroha_torii/src/lib.rs`, `crates/iroha_torii/src/operator_signatures.rs`, and `crates/iroha_torii/src/app_auth.rs`.
   - Validation: DTO parsing is protected by the signed operator middleware; handlers such as `handle_post_configuration` can therefore delegate the already-authorized update to Kiso. Evidence: `crates/iroha_torii/src/routing.rs` (`handle_post_configuration`).
@@ -63,9 +63,9 @@ Open questions that would materially change risk ranking:
   - Guarantees: assumed trusted boundary; security depends on Torii correctly authenticating/authorizing requests before invoking privileged operations. Evidence: `crates/irohad/src/main.rs` (`Torii::new_with_handle(...)` wiring) and Torii handlers calling `routing::handle_*`.
 
 - Torii → Kiso (config update actor)
-  - Data: `ConfigUpdateDTO` can modify logging, P2P ACL, network/transport settings, SoraNet handshake, etc.
+  - Data: `ConfigurationUpdate` can modify logging, P2P ACL, network/transport settings, SoraNet handshake, etc.
   - Channel: in-process message/handle.
-  - Guarantees: authorization is expected at Torii boundary; update DTO itself is capability-bearing. Evidence: `crates/iroha_config/src/client_api.rs` (`ConfigUpdateDTO` fields include `network_acl`, `transport.norito_rpc`, `soranet_handshake`, etc).
+  - Guarantees: authorization is expected at Torii boundary; update DTO itself is capability-bearing. Evidence: `crates/iroha_torii_shared/src/configuration.rs` (`ConfigurationUpdate` fields include `network_acl`, `transport.norito_rpc`, `soranet_handshake`, etc).
 
 - Torii → Local disk (`./storage/torii`)
   - Data: webhook registry and queued deliveries; attachments and sanitizer metadata; GC/TTL behavior.
@@ -144,7 +144,7 @@ flowchart TD
 
 1. **Attacker goal: Take over node behavior via runtime config updates**
    1) Compromise an allowlisted operator key or exploit a defect in canonical signature, freshness, replay, or route-wiring enforcement on an internet-exposed Torii.
-   2) `POST /v1/configuration` with a `ConfigUpdateDTO` that loosens network ACLs or changes transport settings.  
+   2) `POST /v1/configuration` with a `ConfigurationUpdate` that loosens network ACLs or changes transport settings.
    3) Join as a peer or induce partition/misconfiguration; degrade consensus and/or route transactions through attacker-controlled infrastructure.  
    Impact: integrity and availability compromise of the node (and potentially the network).  
 
@@ -232,7 +232,7 @@ For this repo + clarified deployment context (internet-exposed public chain; ope
 | `crates/iroha_torii/src/operator_signatures.rs` | Allowlisted operator signatures, exact canonical transcript, freshness checks, and replay admission | TM-001, TM-004, TM-009 |
 | `crates/iroha_torii/src/operator_auth.rs` | First-credential bootstrap, WebAuthn session policy, and header-based mTLS checks; important for understanding ingress trust assumptions | TM-005 |
 | `crates/iroha_torii/src/routing.rs` | `/v1/configuration` handlers delegate to Kiso without additional auth; large surface area of handlers | TM-001, TM-003 |
-| `crates/iroha_config/src/client_api.rs` | Defines `ConfigUpdateDTO` capabilities (network ACLs, transport changes, handshake updates) | TM-001, TM-009 |
+| `crates/iroha_torii_shared/src/configuration.rs` | Defines `ConfigurationUpdate` capabilities (network ACLs, transport changes, handshake updates) | TM-001, TM-009 |
 | `crates/iroha_config/src/parameters/defaults.rs` | Default posture for API tokens/operator auth/Norito-RPC stage; attachment defaults | TM-003, TM-006, TM-008 |
 | `crates/iroha_torii/src/webhook.rs` | Outbound HTTP client and scheme support; SSRF surface; persistence and delivery worker | TM-002 |
 | `crates/iroha_torii/src/zk_attachments.rs` | Attachment sanitizer, decompression limits, persistence, tenant keying | TM-006 |

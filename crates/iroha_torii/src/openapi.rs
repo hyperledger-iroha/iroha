@@ -4463,6 +4463,56 @@ mod tests {
             std::panic::resume_unwind(payload);
         }
     }
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn account_capabilities_document_exact_public_bootstrap_policy() {
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/accounts/capabilities", "get");
+        assert_eq!(
+            operation["operationId"].as_str(),
+            Some("getAccountCapabilities")
+        );
+        assert!(operation.get("requestBody").is_none());
+        assert!(
+            operation["parameters"]
+                .as_array()
+                .expect("parameters")
+                .is_empty()
+        );
+        assert!(
+            operation["security"]
+                .as_array()
+                .expect("security")
+                .iter()
+                .any(|value| { value.as_object().is_some_and(Map::is_empty) })
+        );
+        let schemas = component_schemas(&document);
+        let schema = &schemas["AccountCapabilitiesV1"];
+        assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+        assert_eq!(schema["x-iroha-max-bytes"].as_u64(), Some(4096));
+        assert_eq!(
+            schema["properties"]["schema_version"]["const"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            schema["properties"]["default_signing"]["const"].as_str(),
+            Some("ed25519")
+        );
+        assert_eq!(
+            schema["properties"]["network_prefix"]["maximum"].as_u64(),
+            Some(65535)
+        );
+        assert_eq!(schema["required"].as_array().expect("required").len(), 5);
+        let node = openapi_operation(&document, "/v1/node/capabilities", "get");
+        assert!(
+            node["security"]
+                .as_array()
+                .expect("node security")
+                .iter()
+                .all(|value| { value.as_object().is_some_and(|object| !object.is_empty()) })
+        );
+    }
+
     #[test]
     fn generated_spec_includes_documented_paths() {
         let doc = generate_spec();

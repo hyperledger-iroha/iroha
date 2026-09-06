@@ -3,11 +3,12 @@
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, Status},
+    client::Client,
     data_model::{Level, isi::Log},
 };
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
+use iroha_torii_shared::status::Status;
 use norito::json::Value;
 use std::time::{Duration, Instant};
 use tokio::{task, time::sleep};

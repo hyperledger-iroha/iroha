@@ -11,6 +11,7 @@ use super::{
     facade::{AtomicPrivateSettlementProofErrorV1, prove_atomic_private_settlement_v1},
     relation::{
         AtomicPrivateSettlementInputWitnessV1, AtomicPrivateSettlementProverWitnessV1,
+        atomic_private_settlement_audit_input_commitment_v1,
         atomic_private_settlement_dummy_input_memo_digest_v1,
         atomic_private_settlement_output_memo_digests_v1, atomic_private_settlement_program_id_v1,
         internal_statement_v1,
@@ -558,6 +559,8 @@ fn validate_preparation_context_v1(
 /// Inactive slots receive their unique bundle-bound dummy memo here.  Active
 /// memo digests are owner-selected and retained.  The caller must have already
 /// populated each spending-authority digest from its spending secret.
+/// After this step, set the statement's `audit_input_commitment` with
+/// [`atomic_private_settlement_audit_input_commitment_v1`] before deriving outputs.
 ///
 /// # Errors
 ///
@@ -574,8 +577,14 @@ pub fn prepare_atomic_private_settlement_input_openings_v1(
     // Fixed output memos are immaterial to input-note validation.  Using one
     // closed non-zero placeholder avoids a circular dependency on the audit
     // plaintext commitment while retaining the settlement selectors.
-    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced([[1_u8; 32]; 3]);
+    let profile =
+        PrivateNoteRelationProfileV1::exact_three_output_balanced([[1_u8; 32]; 3], [1; 32]);
     for (index, opening) in openings.iter_mut().enumerate() {
+        if opening.active != (opening.value != 0)
+            || (opening.active && opening.dummy_domain.is_some())
+        {
+            return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
+        }
         if !opening.active {
             let dummy_domain = opening
                 .dummy_domain
@@ -668,7 +677,10 @@ pub fn prepare_atomic_private_settlement_outputs_v1(
     }
     let fixed_memos = atomic_private_settlement_output_memo_digests_v1(manifest, statement)
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
-    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(fixed_memos);
+    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+        fixed_memos,
+        statement.audit_input_commitment,
+    );
     let program_id = atomic_private_settlement_program_id_v1()
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
     let mut encrypted = Vec::with_capacity(PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1);
@@ -881,6 +893,9 @@ fn validate_public_artifacts(
     let audit_plaintext_commitment =
         private_settlement_audit_plaintext_commitment_v1(&audit_plaintext_bytes)
             .map_err(|_| AtomicPrivateSettlementWalletErrorV1::InvalidBundle)?;
+    let audit_input_commitment =
+        atomic_private_settlement_audit_input_commitment_v1(&audit_plaintext.inputs)
+            .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
     if statement.network_id != manifest.network_id
         || statement.bundle_id != manifest.bundle_id
         || statement.route != leg.route
@@ -890,6 +905,7 @@ fn validate_public_artifacts(
         || statement.audit_policy_digest != leg.audit_policy_digest
         || statement.audit_key_epoch != policy.body.key_epoch
         || statement.audit_plaintext_commitment != audit_plaintext_commitment
+        || statement.audit_input_commitment != audit_input_commitment
         || statement.audit_capsule_digest != capsule_digest
         || capsule.aad.network_id != statement.network_id
         || capsule.aad.bundle_id != statement.bundle_id
@@ -1269,6 +1285,29 @@ mod tests {
     }
 
     #[test]
+    fn input_preparation_rejects_noncanonical_activity() {
+        let fixture = sidecar_fixture();
+        for mutation in 0..3 {
+            let mut inputs = fixture.plaintext.inputs.clone();
+            match mutation {
+                0 => inputs[1].active = true,
+                1 => inputs[0].active = false,
+                2 => inputs[0].dummy_domain = Some(Hash::prehashed([0xEF; 32])),
+                _ => unreachable!(),
+            }
+            assert!(
+                prepare_atomic_private_settlement_input_openings_v1(
+                    &fixture.sidecar.manifest,
+                    &fixture.sidecar.payload.statement,
+                    &mut inputs,
+                )
+                .is_err(),
+                "activity must be the canonical positive-value predicate"
+            );
+        }
+    }
+
+    #[test]
     fn native_owner_bundle_produces_and_self_verifies_three_output_proof() {
         let fixture = sidecar_fixture();
         let manifest = fixture.sidecar.manifest.clone();
@@ -1326,9 +1365,15 @@ mod tests {
 
         let plaintext_commitment = plaintext.commitment().expect("audit plaintext commitment");
         statement.audit_plaintext_commitment = plaintext_commitment;
+        statement.audit_input_commitment =
+            atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)
+                .expect("audit input commitment");
         let output_memos = atomic_private_settlement_output_memo_digests_v1(&manifest, &statement)
             .expect("fixed settlement output memos");
-        let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(output_memos);
+        let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+            output_memos,
+            statement.audit_input_commitment,
+        );
         let program_id = atomic_private_settlement_program_id_v1().expect("settlement program");
         let mut output_rng = StdRng::seed_from_u64(0x4150_535f_5741_4c4c);
         let mut encrypted_outputs = Vec::with_capacity(plaintext.outputs.len());
@@ -1538,6 +1583,21 @@ mod tests {
                 .audit_capsule
                 .digest()
                 .expect("capsule digest")
+        );
+        let mut substituted_statement = sidecar.payload.statement.clone();
+        substituted_statement.audit_input_commitment = [0xE7; 32];
+        assert!(
+            encode_atomic_private_settlement_wallet_bundle_v1(
+                "bank-a-wallet-7",
+                &sidecar.manifest,
+                &substituted_statement,
+                &sidecar.payload.audit_capsule,
+                &sidecar.policy,
+                &fixture.plaintext,
+                &input_secrets(),
+            )
+            .is_err(),
+            "an owner bundle cannot wrap audit openings under a substituted AIR binding"
         );
     }
 

@@ -98,6 +98,8 @@ const RELEASE_PROFILE_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:release-profil
 #[norito(tag = "role", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactRoleV1")]
 pub enum KagemushaArtifactRoleV1 {
     /// Eq/Fp transparent IPA parameters.
     ParamsEq,
@@ -328,6 +330,8 @@ impl KagemushaArtifactRoleV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactBindingV1")]
 pub struct KagemushaArtifactBindingV1 {
     /// Artifact role.
     pub role: KagemushaArtifactRoleV1,
@@ -348,6 +352,8 @@ pub struct KagemushaArtifactBindingV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEvidenceFileV1")]
 pub struct KagemushaEvidenceFileV1 {
     /// SHA-256 of the exact evidence-file bytes.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -360,6 +366,8 @@ pub struct KagemushaEvidenceFileV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEnabledProfileV1")]
 pub struct KagemushaEnabledProfileV1 {
     /// Complete governed non-forking hardware-service profile.
     pub hardware_profile: super::KagemushaHardwareProfileV1,
@@ -387,6 +395,8 @@ pub struct KagemushaEnabledProfileV1 {
 #[norito(tag = "relation", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaQualifiedRelationV1")]
 pub enum KagemushaQualifiedRelationV1 {
     /// Create the first aggregate-balance state.
     Bootstrap,
@@ -412,6 +422,8 @@ pub enum KagemushaQualifiedRelationV1 {
 #[norito(tag = "helper", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaQualifiedHelperCircuitV1")]
 pub enum KagemushaQualifiedHelperCircuitV1 {
     /// Authenticate a ledger-issued mint authorization before mint finalization.
     MintAuthorization,
@@ -482,6 +494,8 @@ impl KagemushaQualifiedHelperCircuitV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHelperProtocolV1")]
 pub struct KagemushaHelperProtocolV1 {
     /// Helper circuit whose compiled protocols are identified.
     pub helper: KagemushaQualifiedHelperCircuitV1,
@@ -508,6 +522,8 @@ pub struct KagemushaHelperProtocolV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHelperQualificationV1")]
 pub struct KagemushaHelperQualificationV1 {
     /// Helper circuit measured by this record.
     pub helper: KagemushaQualifiedHelperCircuitV1,
@@ -608,6 +624,8 @@ impl KagemushaQualifiedRelationV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaRelationQualificationV1")]
 pub struct KagemushaRelationQualificationV1 {
     /// Relation measured by this record.
     pub relation: KagemushaQualifiedRelationV1,
@@ -643,6 +661,8 @@ pub struct KagemushaRelationQualificationV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaRecursiveDepthQualificationV1")]
 pub struct KagemushaRecursiveDepthQualificationV1 {
     /// Recursive transition depth exercised with real proofs.
     pub depth: u32,
@@ -662,6 +682,8 @@ pub struct KagemushaRecursiveDepthQualificationV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaAggregateBalanceQualificationV1")]
 pub struct KagemushaAggregateBalanceQualificationV1 {
     /// Independent payments created for the run.
     pub independent_payments: u32,
@@ -677,6 +699,8 @@ pub struct KagemushaAggregateBalanceQualificationV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaThermalQualificationV1")]
 pub struct KagemushaThermalQualificationV1 {
     /// Credits folded during the sustained run.
     pub folded_credits: u32,
@@ -694,6 +718,8 @@ pub struct KagemushaThermalQualificationV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEnvelopeQualificationV1")]
 pub struct KagemushaEnvelopeQualificationV1 {
     /// Largest complete raw three-message exchange.
     pub raw_complete_exchange_bytes: u32,
@@ -709,6 +735,8 @@ pub struct KagemushaEnvelopeQualificationV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProfileQualificationV1")]
 pub struct KagemushaProfileQualificationV1 {
     /// Exact enabled profile qualified by this record.
     pub profile: KagemushaEnabledProfileV1,
@@ -734,6 +762,8 @@ pub struct KagemushaProfileQualificationV1 {
 #[norito(tag = "case", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaAcceptanceCaseV1")]
 pub enum KagemushaAcceptanceCaseV1 {
     /// Receiver hardware remains recoverable under sustained inbox pressure.
     ReceiverInboxPressure,
@@ -1055,6 +1085,8 @@ impl KagemushaAcceptanceCaseV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaAcceptanceCaseEvidenceV1")]
 pub struct KagemushaAcceptanceCaseEvidenceV1 {
     /// Mandatory acceptance case.
     pub case: KagemushaAcceptanceCaseV1,
@@ -1068,6 +1100,8 @@ pub struct KagemushaAcceptanceCaseEvidenceV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReproducibleBuildV1")]
 pub struct KagemushaReproducibleBuildV1 {
     /// Stable identity of the independent builder/environment.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1090,6 +1124,8 @@ pub struct KagemushaReproducibleBuildV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEvidenceClosureV1")]
 pub struct KagemushaEvidenceClosureV1 {
     /// Exact immutable release-evidence manifest.
     pub evidence_manifest: KagemushaEvidenceFileV1,
@@ -1123,6 +1159,8 @@ pub struct KagemushaEvidenceClosureV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaInternalValidationReceiptV1")]
 pub struct KagemushaInternalValidationReceiptV1 {
     /// Receipt version.
     pub version: u16,
@@ -1173,6 +1211,8 @@ pub struct KagemushaInternalValidationReceiptV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseManifestV1")]
 pub struct KagemushaReleaseManifestV1 {
     /// Manifest version.
     pub version: u16,
@@ -1218,6 +1258,8 @@ pub struct KagemushaReleaseManifestV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAuthorityPolicyV1")]
 pub struct KagemushaReleaseAuthorityPolicyV1 {
     /// Policy format version.
     pub version: u16,
@@ -1234,6 +1276,8 @@ pub struct KagemushaReleaseAuthorityPolicyV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAttestationSubjectV1")]
 pub struct KagemushaReleaseAttestationSubjectV1 {
     /// Subject format version.
     pub version: u16,
@@ -1258,6 +1302,8 @@ pub struct KagemushaReleaseAttestationSubjectV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseApprovalPayloadV1")]
 pub struct KagemushaReleaseApprovalPayloadV1 {
     /// Cross-protocol replay separator.
     pub domain: String,
@@ -1269,6 +1315,8 @@ pub struct KagemushaReleaseApprovalPayloadV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseApprovalV1")]
 pub struct KagemushaReleaseApprovalV1 {
     /// Exact key selected by the locally trusted authority policy.
     pub public_key: PublicKey,
@@ -1280,6 +1328,8 @@ pub struct KagemushaReleaseApprovalV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAttestationV1")]
 pub struct KagemushaReleaseAttestationV1 {
     /// Attestation format version.
     pub version: u16,
@@ -1290,6 +1340,8 @@ pub struct KagemushaReleaseAttestationV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseSubjectV1")]
 struct KagemushaReleaseSubjectV1 {
     version: u16,
     source_tree_digest: [u8; 32],
@@ -1307,6 +1359,8 @@ struct KagemushaReleaseSubjectV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.release-vk-set-digest-subject")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaVkSetSubjectV1", frame = "iroha.kagemusha.v1.release-vk-set-digest-subject")]
 struct KagemushaVkSetSubjectV1 {
     version: u16,
     state_eq_protocol_digest: [u8; 32],
@@ -1317,24 +1371,32 @@ struct KagemushaVkSetSubjectV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.release-artifact-set-digest-subject")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactSetDigestSubjectV1", frame = "iroha.kagemusha.v1.release-artifact-set-digest-subject")]
 struct KagemushaArtifactSetDigestSubjectV1 {
     artifacts: Vec<KagemushaArtifactBindingV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.release-hardware-policy-digest-subject")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHardwarePolicyDigestSubjectV1", frame = "iroha.kagemusha.v1.release-hardware-policy-digest-subject")]
 struct KagemushaHardwarePolicyDigestSubjectV1 {
     enabled_profiles: Vec<KagemushaEnabledProfileV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.release-profile-qualification-digest-subject")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProfileQualificationDigestSubjectV1", frame = "iroha.kagemusha.v1.release-profile-qualification-digest-subject")]
 struct KagemushaProfileQualificationDigestSubjectV1 {
     qualification: KagemushaProfileQualificationV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.release-profile-digest-subject")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseProfileDigestSubjectV1", frame = "iroha.kagemusha.v1.release-profile-digest-subject")]
 struct KagemushaReleaseProfileDigestSubjectV1 {
     version: u16,
     halo2_k: u32,
@@ -2938,3 +3000,6 @@ mod inner_mint_artifact_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_kagemusha_release_v1_schema_tests;

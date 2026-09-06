@@ -547,7 +547,6 @@ java/iroha_android
 │   │       │       ├── KeystoreKeyProvider.java
 │   │       │       └── KeyGenParameters.java
 │   │       ├── gpu
-│   │       │   └── CudaAccelerators.java
 │   │       ├── model
 │   │       │   ├── Executable.java
 │   │       │   └── TransactionPayload.java
@@ -569,7 +568,6 @@ java/iroha_android
 │           ├── IrohaKeyManagerTests.java
 │           ├── client/HttpClientTransportTests.java
 │           ├── crypto/keystore/KeystoreKeyProviderTests.java
-│           ├── gpu/CudaAcceleratorsTests.java
 │           ├── norito/NoritoCodecAdapterTests.java
 │           └── tx/TransactionBuilderTests.java
 ├── src/test/resources
@@ -1438,17 +1436,10 @@ separately trusted expected value. StrongBox preferences are propagated to key
 generation (`STRONGBOX_REQUIRED` forces StrongBox and
 `STRONGBOX_PREFERRED` requests it), and backend errors are surfaced directly.
 
-To exercise CUDA acceleration on capable devices, launch the JVM with
-`-Diroha.cuda.enableNative=true` and ensure `libconnect_norito_bridge` is
-available on `java.library.path`. Without the flag the deterministic Java path remains
-active and no native library is loaded (avoiding security warnings in CI).
-
-Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
-`Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
-operator guide for native setup and the hardware-qualified smoke harness
-(`specs/sdk/android/gpu_operator_guide.md`). The ordinary JVM suite excludes
-that GPU-only class; the nightly CUDA lane selects it explicitly and any
-missing driver, JNI bridge, or CUDA result fails the lane.
+CUDA computation belongs to `org.hyperledger.iroha.sdk.gpu.CudaAccelerators`
+in `kotlin/core-jvm`. Both JVM languages use its explicit backend construction
+and five bounded batch operations. See the [CUDA bridge contract](../../specs/sdk/android/gpu_operator_guide.md)
+for native loading and the hardware qualification task.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
 wrapped export bundle (v4) using per-export salt/nonce. The bundle records the

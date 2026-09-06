@@ -9,7 +9,7 @@ use eyre::eyre;
 use iroha_config::{
     base::read::ConfigReader,
     parameters::{
-        actual::{self, IsoReferenceData, SorafsRolloutPhase},
+        actual::{self, IsoReferenceData},
         user,
     },
 };
@@ -30,6 +30,7 @@ use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     account::address::compliance_vectors::compliance_vectors_json, nexus::AssetPermissionManifest,
 };
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider,
     test_utils::{TestDataDirGuard, mk_minimal_root_cfg},
@@ -6946,7 +6947,7 @@ where
             let mut markdown_out: Option<PathBuf> = None;
             let mut label: Option<String> = None;
             let mut environment: Option<String> = None;
-            let mut phase = SorafsRolloutPhase::Ramp;
+            let mut phase = RolloutPhase::Ramp;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -6986,7 +6987,7 @@ where
                         let Some(value) = pending.next() else {
                             return Err("expected phase label after --phase".into());
                         };
-                        phase = SorafsRolloutPhase::parse(&value).ok_or_else(|| {
+                        phase = RolloutPhase::parse(&value).ok_or_else(|| {
                             format!("invalid rollout phase `{value}`; expected canary|ramp|default")
                         })?;
                     }
@@ -7056,7 +7057,7 @@ where
             let mut base_dir: Option<PathBuf> = None;
             let mut label: Option<String> = None;
             let mut environment = String::from("production");
-            let mut phase = SorafsRolloutPhase::Ramp;
+            let mut phase = RolloutPhase::Ramp;
             let mut log_path: Option<PathBuf> = None;
             let mut artifacts: Vec<soranet_rollout::ArtifactInput> = Vec::new();
             let mut key_path: Option<PathBuf> = None;
@@ -7086,7 +7087,7 @@ where
                         let Some(value) = pending.next() else {
                             return Err("expected phase label after --phase".into());
                         };
-                        phase = SorafsRolloutPhase::parse(&value).ok_or_else(|| {
+                        phase = RolloutPhase::parse(&value).ok_or_else(|| {
                             format!("invalid rollout phase `{value}`; expected canary|ramp|default")
                         })?;
                     }

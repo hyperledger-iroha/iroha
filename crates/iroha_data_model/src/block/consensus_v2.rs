@@ -170,6 +170,8 @@ pub type ValidatorIndex = u32;
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMode")]
 pub enum ConsensusMode {
     /// Every validator has voting power one.
     Permissioned,
@@ -219,6 +221,8 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ValidatorPower")]
 pub struct ValidatorPower {
     /// Validator identity and consensus public key.
     pub validator: PeerId,
@@ -233,6 +237,8 @@ pub struct ValidatorPower {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::DualQuorum")]
 pub struct DualQuorum {
     /// Required number of distinct validator signatures.
     pub min_signers: u32,
@@ -322,6 +328,8 @@ impl DualQuorum {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::DataAvailabilityLayout")]
 pub struct DataAvailabilityLayout {
     /// Payload encoding used before chunk dissemination.
     pub encoding: PayloadEncoding,
@@ -345,6 +353,8 @@ pub struct DataAvailabilityLayout {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadEncoding")]
 pub enum PayloadEncoding {
     /// Encode payload stripes with the deterministic RS16 layout.
     ReedSolomon16,
@@ -362,6 +372,8 @@ pub enum PayloadEncoding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters")]
 pub struct SumeragiV2GenesisContextParameters {
     /// Mandatory deterministic data-availability layout for proposal bodies.
     pub da_layout: DataAvailabilityLayout,
@@ -421,6 +433,8 @@ pub type GenesisActiveNexusLaneRecord = ((LaneId, AccountId), PublicLaneValidato
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor")]
 pub struct SnapshotBootstrapAnchor {
     /// Last audited hash-only ledger height represented by the snapshot.
     pub snapshot_height: Height,
@@ -438,6 +452,8 @@ pub struct SnapshotBootstrapAnchor {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord")]
 pub struct SnapshotV2BootstrapRecord {
     /// Record layout version; currently [`Self::VERSION`].
     pub version: u16,
@@ -481,6 +497,8 @@ impl SnapshotV2BootstrapRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContext")]
 pub struct HeightContext {
     /// Exact genesis-derived network identity used for replay protection.
     pub network_id: NetworkId,
@@ -715,6 +733,8 @@ impl HeightContext {
     }
 }
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContextIdentity")]
 struct HeightContextIdentity {
     identity_version: u16,
     network_id: NetworkId,
@@ -737,6 +757,8 @@ struct HeightContextIdentity {
     leader_seed: [u8; 32],
 }
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ParentCommitIdentity")]
 struct ParentCommitIdentity {
     context_id: HeightContextId,
     height: Height,
@@ -748,6 +770,8 @@ struct ParentCommitIdentity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContextId")]
 pub struct HeightContextId(
     /// Norito hash of the context's semantic identity projection.
     pub HashOf<HeightContext>,
@@ -756,6 +780,8 @@ pub struct HeightContextId(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusRound")]
 pub struct ConsensusRound {
     /// Context governing this round.
     pub context_id: HeightContextId,
@@ -777,6 +803,8 @@ pub struct ConsensusRound {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::GlobalPhase")]
 pub enum GlobalPhase {
     /// Certifies durable availability and deterministic validation.
     #[codec(index = 1)]
@@ -814,6 +842,8 @@ impl IntoSchema for GlobalPhase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::BlockSubject")]
 pub struct BlockSubject {
     /// Parent block hash, absent only for the genesis block.
     #[norito(required)]
@@ -827,6 +857,8 @@ pub struct BlockSubject {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1")]
 pub struct NativeAmxApplicationManifestMemberV1 {
     /// Zero-based index of the source entrypoint in the canonical external block payload.
     pub entrypoint_index: u64,
@@ -845,6 +877,8 @@ pub struct NativeAmxApplicationManifestMemberV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestLeafV1")]
 pub struct NativeAmxApplicationManifestLeafV1 {
     /// Exact leaf schema version. No legacy layout is decoded implicitly.
     pub version: u16,
@@ -953,6 +987,8 @@ pub fn native_amx_application_manifest_empty_root() -> Hash {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1")]
 pub struct MergeCarrierCommitmentV1 {
     /// Exact first-release projection version.
     pub version: u16,
@@ -988,6 +1024,8 @@ impl MergeCarrierCommitmentV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ExecutionCommitment")]
 pub struct ExecutionCommitment {
     /// Root of the witnessed pre-state values for keys changed by the block.
     pub parent_state_root: Hash,
@@ -1383,6 +1421,8 @@ pub fn decode_kagemusha_consensus_signature_envelope_v1(
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::Vote")]
 pub struct Vote {
     /// Round in which the vote was issued.
     pub round: ConsensusRound,
@@ -1479,6 +1519,8 @@ impl Vote {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::VoteSignaturePayload")]
 pub struct VoteSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -1497,6 +1539,8 @@ pub struct VoteSignaturePayload {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::QuorumCertificateRef")]
 pub struct QuorumCertificateRef {
     /// Certified round.
     pub round: ConsensusRound,
@@ -1530,6 +1574,8 @@ impl QuorumCertificateRef {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::QuorumCertificate")]
 pub struct QuorumCertificate {
     /// Certified round.
     pub round: ConsensusRound,
@@ -1642,6 +1688,8 @@ impl QuorumCertificate {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVote")]
 pub struct TimeoutVote {
     /// Round whose timer expired.
     pub round: ConsensusRound,
@@ -1701,6 +1749,8 @@ impl TimeoutVote {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVoteSignaturePayload")]
 pub struct TimeoutVoteSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -1714,6 +1764,8 @@ pub struct TimeoutVoteSignaturePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVoteGroup")]
 pub struct TimeoutVoteGroup {
     /// Highest `PrepareQC` reported by this group, or none when no lock exists.
     #[norito(required)]
@@ -1727,6 +1779,8 @@ pub struct TimeoutVoteGroup {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutCertificate")]
 pub struct TimeoutCertificate {
     /// Round whose timeout was certified.
     pub round: ConsensusRound,
@@ -1843,6 +1897,8 @@ impl TimeoutCertificate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutCertificateRef")]
 pub struct TimeoutCertificateRef {
     /// Timed-out round certified by the TC.
     pub round: ConsensusRound,
@@ -1861,6 +1917,8 @@ pub struct TimeoutCertificateRef {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ProposalJustification")]
 pub enum ProposalJustification {
     /// View-zero justification from the parent `CommitQC`.
     ParentCommit(ParentCommitJustification),
@@ -1871,6 +1929,8 @@ pub enum ProposalJustification {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ParentCommitJustification")]
 pub struct ParentCommitJustification {
     /// Parent `CommitQC`; absent only for the genesis block.
     #[norito(required)]
@@ -1880,6 +1940,8 @@ pub struct ParentCommitJustification {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutJustification")]
 pub struct TimeoutJustification {
     /// Certificate authorizing the new view.
     pub timeout_certificate: TimeoutCertificate,
@@ -1896,6 +1958,8 @@ pub struct TimeoutJustification {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadManifest")]
 pub struct PayloadManifest {
     /// Round for which the payload was proposed.
     pub round: ConsensusRound,
@@ -2172,6 +2236,8 @@ impl ValidatedPayloadManifest {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadChunk")]
 pub struct PayloadChunk {
     /// Manifest to which this chunk belongs.
     pub manifest_hash: HashOf<PayloadManifest>,
@@ -2232,6 +2298,8 @@ impl PayloadChunk {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadChunkSignaturePayload")]
 pub struct PayloadChunkSignaturePayload {
     /// Sumeragi protocol version.
     pub protocol_version: u16,
@@ -2269,6 +2337,8 @@ impl PayloadChunkSignaturePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::Proposal")]
 pub struct Proposal {
     /// Proposed round.
     pub round: ConsensusRound,
@@ -2384,6 +2454,8 @@ impl Proposal {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2Equivocation")]
 pub enum SumeragiV2Equivocation {
     /// Two different leader proposals for one round.
     Proposal {
@@ -2477,6 +2549,8 @@ impl IntoSchema for SumeragiV2Equivocation {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyRequest")]
 pub struct CertifiedBodyRequest {
     /// Round in which the body was proposed.
     pub round: ConsensusRound,
@@ -2522,6 +2596,8 @@ impl CertifiedBodyRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyResponse")]
 pub struct CertifiedBodyResponse {
     /// Hash of the exact request being answered.
     pub request_hash: HashOf<CertifiedBodyRequest>,
@@ -2614,6 +2690,8 @@ impl CertifiedBodyResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyResponseSignaturePayload")]
 pub struct CertifiedBodyResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -2635,6 +2713,8 @@ pub struct CertifiedBodyResponseSignaturePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateRequest")]
 pub struct CommitCertificateRequest {
     /// Consensus protocol revision included in the signed request.
     pub protocol_version: u16,
@@ -2696,6 +2776,8 @@ impl CommitCertificateRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateResponse")]
 pub struct CommitCertificateResponse {
     /// Hash of the exact signed request being answered.
     pub request_hash: HashOf<CommitCertificateRequest>,
@@ -2767,6 +2849,8 @@ impl CommitCertificateResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateResponseSignaturePayload")]
 pub struct CommitCertificateResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -2788,6 +2872,8 @@ pub struct CommitCertificateResponseSignaturePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::GlobalBeaconPartialSignature")]
 pub struct GlobalBeaconPartialSignature {
     /// Exact active height context and view whose candidate will carry the pulse.
     pub round: ConsensusRound,
@@ -2856,6 +2942,8 @@ pub const CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG: u32 = 10;
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload")]
 pub enum ConsensusMessageV2Payload {
     /// Leader proposal.
     #[codec(index = 0)]
@@ -2895,6 +2983,8 @@ pub enum ConsensusMessageV2Payload {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMessageV2")]
 pub struct ConsensusMessageV2 {
     /// Protocol version; must equal [`PROTOCOL_VERSION`].
     pub protocol_version: u16,
@@ -2910,6 +3000,8 @@ pub struct ConsensusMessageV2 {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2StatusPhase")]
 pub enum SumeragiV2StatusPhase {
     /// Waiting for the expected leader's proposal.
     AwaitingProposal,
@@ -2933,6 +3025,8 @@ pub enum SumeragiV2StatusPhase {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2BodyState")]
 pub enum SumeragiV2BodyState {
     /// No manifest or body is held locally.
     Missing,
@@ -2951,6 +3045,8 @@ pub enum SumeragiV2BodyState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2HeightContextStatus")]
 pub struct SumeragiV2HeightContextStatus {
     /// Finalized validator-election epoch.
     pub epoch: u64,
@@ -2969,6 +3065,8 @@ pub struct SumeragiV2HeightContextStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2CommitQcStatus")]
 pub struct SumeragiV2CommitQcStatus {
     /// Stable reference to the exact durable `CommitQC`.
     pub certificate: QuorumCertificateRef,
@@ -2992,6 +3090,8 @@ pub type SumeragiV2Generation = u64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2VoteQuorumStatus")]
 pub struct SumeragiV2VoteQuorumStatus {
     /// Exact height-context round whose vote pool is summarized.
     pub round: ConsensusRound,
@@ -3014,6 +3114,8 @@ pub struct SumeragiV2VoteQuorumStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2TimeoutQuorumStatus")]
 pub struct SumeragiV2TimeoutQuorumStatus {
     /// Exact round whose timeout votes are summarized.
     pub round: ConsensusRound,
@@ -3037,6 +3139,8 @@ pub struct SumeragiV2TimeoutQuorumStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2OutboundIntentKind")]
 pub enum SumeragiV2OutboundIntentKind {
     /// Leader proposal intent.
     Proposal,
@@ -3062,6 +3166,8 @@ pub enum SumeragiV2OutboundIntentKind {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2OutboundIntentStage")]
 pub enum SumeragiV2OutboundIntentStage {
     /// The intent is fenced behind a safety-WAL append.
     PendingPersistence,
@@ -3080,6 +3186,8 @@ pub enum SumeragiV2OutboundIntentStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2OutboundIntentStatus")]
 pub struct SumeragiV2OutboundIntentStatus {
     /// Protocol role of the retained intent.
     pub kind: SumeragiV2OutboundIntentKind,
@@ -3109,6 +3217,8 @@ pub struct SumeragiV2OutboundIntentStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2LocalWorkStage")]
 pub enum SumeragiV2LocalWorkStage {
     /// No work is required for the active height.
     #[default]
@@ -3124,6 +3234,8 @@ pub enum SumeragiV2LocalWorkStage {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2WorkStatus")]
 pub struct SumeragiV2WorkStatus {
     /// Local candidate construction or proposal-admission work.
     pub candidate: SumeragiV2LocalWorkStage,
@@ -3147,6 +3259,8 @@ pub struct SumeragiV2WorkStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QueueKind")]
 pub enum SumeragiV2QueueKind {
     /// Authenticated semantic-admission/equivocation table.
     Ingress,
@@ -3179,6 +3293,8 @@ pub enum SumeragiV2QueueKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QueueStatus")]
 pub struct SumeragiV2QueueStatus {
     /// Queue being summarized.
     pub queue: SumeragiV2QueueKind,
@@ -3206,6 +3322,8 @@ pub struct SumeragiV2QueueStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2ProgressTransition")]
 pub enum SumeragiV2ProgressTransition {
     /// A leader proposal entered the reducer.
     ProposalAdmitted,
@@ -3243,6 +3361,8 @@ pub enum SumeragiV2ProgressTransition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2ProgressTransitionStatus")]
 pub struct SumeragiV2ProgressTransitionStatus {
     /// Reducer generation which emitted the transition.
     pub generation: SumeragiV2Generation,
@@ -3262,6 +3382,8 @@ pub struct SumeragiV2ProgressTransitionStatus {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2LivenessBlocker")]
 pub enum SumeragiV2LivenessBlocker {
     /// The current view has not admitted its expected proposal.
     MissingProposal,
@@ -3291,6 +3413,8 @@ pub enum SumeragiV2LivenessBlocker {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2IgnoreReason")]
 pub enum SumeragiV2IgnoreReason {
     /// Input belongs to another height.
     WrongHeight,
@@ -3321,6 +3445,8 @@ pub enum SumeragiV2IgnoreReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2IgnoreCount")]
 pub struct SumeragiV2IgnoreCount {
     /// Reason whose occurrences are counted.
     pub reason: SumeragiV2IgnoreReason,
@@ -3339,6 +3465,8 @@ pub struct SumeragiV2IgnoreCount {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2LivenessStatus")]
 pub struct SumeragiV2LivenessStatus {
     /// Reducer generation which owns all reported volatile state.
     pub generation: SumeragiV2Generation,
@@ -3372,6 +3500,8 @@ pub struct SumeragiV2LivenessStatus {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QcResponse")]
 pub struct SumeragiV2QcResponse {
     /// Highest verified `PrepareQC` known to the reducer.
     #[norito(required)]
@@ -3388,6 +3518,8 @@ pub struct SumeragiV2QcResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2Status")]
 pub struct SumeragiV2Status {
     /// Active wire protocol version.
     pub protocol_version: u16,
@@ -4718,3 +4850,6 @@ mod terminal_height_context_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_consensus_v2_schema_tests;

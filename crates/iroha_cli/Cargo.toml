@@ -74,6 +74,8 @@ path = "src/bin/taira_fee_sponsor_program.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
+iroha_service_model = { workspace = true }
+soranet_incentives = { workspace = true }
 iroha = { workspace = true }
 iroha_sccp = { workspace = true }
 iroha_primitives = { workspace = true }
@@ -123,12 +125,12 @@ aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "al
 image = { version = "0.25.9", default-features = false, features = ["png", "gif"], optional = true }
 png = "0.18.0"
 pathdiff = "0.2.3"
+tempfile = { workspace = true }
 
 [build-dependencies]
 build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 iroha_test_samples = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }

@@ -1,0 +1,5 @@
+error: duplicate registration builder identity declaration
+ --> tests/ui_fail/registrable_builder_identity_duplicate.rs:6:1
+  |
+6 | #[registrable_builder(schema_name = "fixture::Second")]
+  | ^

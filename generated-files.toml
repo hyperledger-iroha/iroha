@@ -43,6 +43,21 @@ generated_source_extensions = [
 ]
 
 [[generated]]
+name = "sdk-operation-inventory"
+kind = "file"
+outputs = ["specs/sdk_operation_inventory.tsv"]
+generator = "python3 scripts/sdk_operation_inventory.py --write"
+generator_sources = [
+  "scripts/sdk_operation_inventory.py",
+  "scripts/sdk_operation_inventory.rs",
+]
+inputs = [
+  "crates/iroha_torii_shared/src/route_catalog.rs",
+  "crates/iroha_torii_shared/src/route_catalog/**/*.rs",
+]
+check = "python3 scripts/sdk_operation_inventory.py"
+
+[[generated]]
 name = "data-model-public-api"
 kind = "file"
 outputs = [

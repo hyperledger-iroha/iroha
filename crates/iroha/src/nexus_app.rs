@@ -710,7 +710,11 @@ fn ensure_authority_matches_public_key(
 mod tests {
     use super::*;
     use iroha_crypto::{KeyPair, Signature};
-    use iroha_data_model::{asset::AssetDefinitionId, prelude::Name};
+    use iroha_data_model::{
+        account::address::{self, ChainDiscriminantGuard},
+        asset::AssetDefinitionId,
+        prelude::Name,
+    };
     use iroha_primitives::json::Json;
     use norito::json::Value as JsonValue;
     use std::{cell::RefCell, rc::Rc};
@@ -969,6 +973,31 @@ mod tests {
     fn fixture_account(key: &str) -> AccountId {
         AccountId::parse_encoded(&fixture_string(key)).expect("fixture account")
     }
+    fn fixture_address_context() -> ChainDiscriminantGuard {
+        ChainDiscriminantGuard::enter(
+            u16::try_from(fixture_u64("account_chain_discriminant"))
+                .expect("fixture address discriminant fits u16"),
+        )
+    }
+    #[test]
+    fn nexus_app_fixture_address_context_is_scoped_and_strict() {
+        let _outer = ChainDiscriminantGuard::enter(42);
+        let literal = fixture_string("authority");
+        assert!(AccountId::parse_encoded(&literal).is_err());
+        {
+            let _fixture_context = fixture_address_context();
+            let account = fixture_account("authority");
+            assert_eq!(account.canonical_i105().expect("fixture address"), literal);
+            let foreign_literal = account
+                .to_account_address()
+                .expect("account address")
+                .to_i105_for_discriminant(42)
+                .expect("foreign address");
+            assert!(AccountId::parse_encoded(&foreign_literal).is_err());
+        }
+        assert_eq!(address::chain_discriminant(), 42);
+        assert!(AccountId::parse_encoded(&literal).is_err());
+    }
     fn fixture_transfer_input() -> NexusTransferInput {
         let authority = fixture_account("authority");
         let source_asset = fixture_string("source_asset_id");
@@ -1088,6 +1117,7 @@ mod tests {
     }
     #[test]
     fn nexus_app_transfer_payload_matches_shared_fixture() {
+        let _fixture_context = fixture_address_context();
         let public_key = PublicKey::from_bytes(
             Algorithm::Ed25519,
             &hex::decode(fixture_string("signing_public_key_hex")).expect("public key hex"),
@@ -1121,6 +1151,7 @@ mod tests {
     }
     #[test]
     fn nexus_app_signed_transaction_hash_matches_shared_fixture() {
+        let _fixture_context = fixture_address_context();
         let public_key = PublicKey::from_bytes(
             Algorithm::Ed25519,
             &hex::decode(fixture_string("signing_public_key_hex")).expect("public key hex"),
@@ -1209,6 +1240,7 @@ mod tests {
     }
     #[test]
     fn nexus_app_rejects_shared_fixture_approval_key_substitution() {
+        let _fixture_context = fixture_address_context();
         let account = fixture_account("authority");
         let configured_public_key = account.expect_single_signatory().clone();
         let error_case = fixture_error_case("approval signing key mismatch");

@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.privacy
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.security.KeyPairGenerator
@@ -41,7 +43,7 @@ class PrivacyCapabilitiesV1Test {
             .addHeader("Content-Type", "application/x-norito")
             .build()
         val executor = OneResponseExecutor(response)
-        val client = HttpClientTransport.withExecutor(
+        val client = HttpClientTransport(
             executor,
             signedConfig(),
         )
@@ -77,7 +79,7 @@ class PrivacyCapabilitiesV1Test {
                 .build()
         }
         val error = assertFailsWith<CompletionException> {
-            HttpClientTransport.withExecutor(
+            HttpClientTransport(
                 OneResponseExecutor(wrongMedia),
                 signedConfig(),
             ).getPrivacyCapabilities(canonicalAuth()).join()
@@ -130,7 +132,7 @@ class PrivacyCapabilitiesV1Test {
         val executor = OneResponseExecutor(
             response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"))),
         )
-        val client = HttpClientTransport.withExecutor(
+        val client = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
@@ -151,7 +153,7 @@ class PrivacyCapabilitiesV1Test {
             headers = mapOf("Content-Type" to listOf("application/x-norito")),
         )
         val missingContextExecutor = OneResponseExecutor(response)
-        val missingContextClient = HttpClientTransport.withExecutor(
+        val missingContextClient = HttpClientTransport(
             missingContextExecutor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )
@@ -161,7 +163,7 @@ class PrivacyCapabilitiesV1Test {
         assertEquals(0, missingContextExecutor.requestCount)
 
         val forgedHeaderExecutor = OneResponseExecutor(response)
-        val forgedHeaderClient = HttpClientTransport.withExecutor(
+        val forgedHeaderClient = HttpClientTransport(
             forgedHeaderExecutor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
@@ -175,7 +177,7 @@ class PrivacyCapabilitiesV1Test {
         assertEquals(0, forgedHeaderExecutor.requestCount)
 
         val admissionExecutor = OneResponseExecutor(response)
-        val admissionClient = HttpClientTransport.withExecutor(admissionExecutor, signedConfig())
+        val admissionClient = HttpClientTransport(admissionExecutor, signedConfig())
         assertFailsWith<CompletionException> {
             admissionClient.requirePrivacyExact12CapabilityAdmission(
                 PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1,
@@ -206,7 +208,7 @@ class PrivacyCapabilitiesV1Test {
         .build()
 
     private fun clientFor(response: TransportResponse): HttpClientTransport =
-        HttpClientTransport.withExecutor(
+        HttpClientTransport(
             OneResponseExecutor(response),
             signedConfig(),
         )
@@ -218,7 +220,7 @@ class PrivacyCapabilitiesV1Test {
 
     private fun canonicalAuth(): ToriiCanonicalRequestAuth = ToriiCanonicalRequestAuth(
         "alice@universal",
-        keyPair.private,
+        RequestSigner.ed25519(keyPair.private),
         1_700_000_000_000L,
         "privacy-capabilities-1",
     )

@@ -1771,6 +1771,7 @@ pub(crate) mod tests {
     #[test]
     fn deterministic_public_and_authorization_known_answers_are_stable() {
         let (public, authorization) = fixture();
+        // Pin the genesis-derived NetworkId and identical canonical genesis bytes.
         assert_eq!(
             (
                 hex::encode(
@@ -1781,9 +1782,9 @@ pub(crate) mod tests {
                 sha256_hex(authorization),
             ),
             (
-                "4c1b400e89426ebf404d853e32c9b7d4c8f494506c070585aef5f43fbc9ab6d9".to_owned(),
-                "d8f1bca69f01398f20da001f38adf9c3157f75ffa1d9f84372f0e7e6360be436".to_owned(),
-                "aae632f1e6f959eb3dd994dcec0f30c7a03313eb960f1e4d2f11746202bec0c6".to_owned(),
+                "6e6c49cd734cb573fb7a506816dc8ca09febd4b219279b9e68d68ef11320543e".to_owned(),
+                "9707670460bcc99e65052e24b5919c8edcdd2822ba360b1eda20430095cd320b".to_owned(),
+                "96091d8cc928d74fd94778b6a293d3b58b7961f40e99dbb1d0d061c1b1738fca".to_owned(),
             )
         );
     }

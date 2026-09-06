@@ -1340,9 +1340,10 @@ def test_release_runner_keeps_sdk_sources_private_and_budgets_before_build() -> 
     assert "build_efficiency_provenance_pipeline_status[1] != 0" in source
     assert (
         '"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py '
-        "\\\n    --require-objective"
+        "\\\n    2>&1 | tee"
         in source
     )
+    assert "--require-objective" not in source
     assert (
         'readonly source_budget_log="${release_source_bound_root}/source-file-budget.log"'
         in source

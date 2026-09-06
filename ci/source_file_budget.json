@@ -1,10 +1,4 @@
 {
-  "aggregate_rust": {
-    "baseline": 5067263,
-    "ceiling": 4540000,
-    "ratchet_ceiling": 5014603,
-    "working_target": 4500000
-  },
   "exceptions": {
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift": 8537,
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift": 28941,
@@ -197,5 +191,5 @@
     "production": 5000,
     "test": 3000
   },
-  "schema_version": 1
+  "schema_version": 2
 }

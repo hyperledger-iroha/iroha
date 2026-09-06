@@ -17,7 +17,6 @@ default = ["cli-orchestrator"]
 dev-tools = []
 cli-orchestrator = [
     "dep:iroha_config",
-    "dep:iroha_crypto",
     "dep:sha2",
     "dep:sorafs_chunker",
     "dep:sorafs_manifest",
@@ -26,21 +25,21 @@ cli-orchestrator = [
 local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
 
 [dependencies]
+iroha_service_model = { workspace = true }
 sorafs_car = { path = "../sorafs_car", features = ["manifest", "cli"] }
 norito = { path = "../norito", features = ["node-codec"], default-features = false }
 prost = "0.14.3"
 thiserror = "2.0.17"
 rust_decimal = { workspace = true }
 iroha_telemetry = { path = "../iroha_telemetry" }
-iroha_logger = { path = "../iroha_logger" }
+tracing = { workspace = true }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["application-model"] }
 iroha_primitives = { path = "../iroha_primitives" }
-iroha_core = { path = "../iroha_core", default-features = false, features = ["node"] }
+soranet_incentives = { workspace = true }
 blake3 = "1.8.2"
 hex = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
-ivm = { path = "../ivm" }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "net", "io-util", "fs"] }
 tonic = { version = "0.14.6", features = ["transport"] }
@@ -55,11 +54,12 @@ url = { workspace = true }
 iroha_version = { path = "../iroha_version" }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", optional = true }
-iroha_crypto = { path = "../iroha_crypto", optional = true, default-features = false, features = ["application"] }
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["application"] }
 iroha_config = { path = "../iroha_config", optional = true }
 toml = { workspace = true, optional = true }
 
 [dev-dependencies]
+iroha_logger = { workspace = true }
 futures = "0.3.31"
 tempfile = "3.23.0"
 hex = "0.4.3"

@@ -2,6 +2,8 @@
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1")]
 pub struct SoraInrouHostCapabilityRecordV1 {
     /// Schema version; must equal [`SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -119,6 +121,8 @@ impl SoraInrouHostCapabilityRecordV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "availability", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1")]
 pub enum SoraInrouReplicaHostAvailabilityV1 {
     /// The exact assigned host advert is currently eligible for this replica.
     Available,
@@ -136,6 +140,8 @@ impl SoraInrouReplicaHostAvailabilityV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraInrouReplicaPlacementV1")]
 pub struct SoraInrouReplicaPlacementV1 {
     /// One-based replica slot within the selected service revision.
     pub replica_slot: u16,
@@ -191,6 +197,8 @@ impl SoraInrouReplicaPlacementV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1")]
 pub struct SoraInrouServicePlacementRecordV1 {
     /// Schema version; must equal [`SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -303,6 +311,8 @@ impl SoraInrouServicePlacementRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSourceRecordV1")]
 pub struct SoraHfSourceRecordV1 {
     /// Schema version; must equal [`SORA_HF_SOURCE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -374,6 +384,8 @@ impl SoraHfSourceRecordV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseStatusV1")]
 pub enum SoraHfSharedLeaseStatusV1 {
     /// The pool is accepting joins against the current window.
     Active,
@@ -389,6 +401,8 @@ pub enum SoraHfSharedLeaseStatusV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseMemberStatusV1")]
 pub enum SoraHfSharedLeaseMemberStatusV1 {
     /// The account actively participates in the current window.
     Active,
@@ -400,6 +414,8 @@ pub enum SoraHfSharedLeaseMemberStatusV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseActionV1")]
 pub enum SoraHfSharedLeaseActionV1 {
     /// A brand new window was opened by a sponsor.
     CreateWindow,
@@ -420,6 +436,8 @@ pub enum SoraHfSharedLeaseActionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseQueuedWindowV1")]
 pub struct SoraHfSharedLeaseQueuedWindowV1 {
     /// Account that sponsored the queued window and prepaid its storage charge.
     pub sponsor_account_id: AccountId,
@@ -483,6 +501,8 @@ impl SoraHfSharedLeaseQueuedWindowV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeasePoolV1")]
 pub struct SoraHfSharedLeasePoolV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_POOL_VERSION_V1`].
     pub schema_version: u16,
@@ -594,6 +614,8 @@ impl SoraHfSharedLeasePoolV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseMemberV1")]
 pub struct SoraHfSharedLeaseMemberV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1`].
     pub schema_version: u16,
@@ -683,6 +705,8 @@ impl SoraHfSharedLeaseMemberV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseAuditEventV1")]
 pub struct SoraHfSharedLeaseAuditEventV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -796,6 +820,8 @@ impl SoraHfSharedLeaseAuditEventV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraModelArtifactAuditEventV1")]
 pub struct SoraModelArtifactAuditEventV1 {
     /// Schema version; must equal [`SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -858,6 +884,8 @@ impl SoraModelArtifactAuditEventV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentApartmentActionV1")]
 pub enum SoraAgentApartmentActionV1 {
     /// A new apartment was deployed.
     Deploy,
@@ -887,6 +915,8 @@ pub enum SoraAgentApartmentActionV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentRuntimeStatusV1")]
 pub enum SoraAgentRuntimeStatusV1 {
     /// Apartment lease is active and the process is considered runnable.
     Running,
@@ -897,6 +927,8 @@ pub enum SoraAgentRuntimeStatusV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentWalletSpendRequestV1")]
 pub struct SoraAgentWalletSpendRequestV1 {
     /// Caller-supplied, replay-safe request identifier.
     pub request_id: String,
@@ -911,6 +943,8 @@ pub struct SoraAgentWalletSpendRequestV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentWalletDailySpendEntryV1")]
 pub struct SoraAgentWalletDailySpendEntryV1 {
     /// Asset definition constrained by the apartment policy.
     pub asset_definition: String,
@@ -923,6 +957,8 @@ pub struct SoraAgentWalletDailySpendEntryV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentMailboxMessageV1")]
 pub struct SoraAgentMailboxMessageV1 {
     /// Deterministic message identifier.
     pub message_id: String,
@@ -941,6 +977,8 @@ pub struct SoraAgentMailboxMessageV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentArtifactAllowRuleV1")]
 pub struct SoraAgentArtifactAllowRuleV1 {
     /// Artifact hash that was approved.
     pub artifact_hash: String,
@@ -954,6 +992,8 @@ pub struct SoraAgentArtifactAllowRuleV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentAutonomyRunRecordV1")]
 pub struct SoraAgentAutonomyRunRecordV1 {
     /// Deterministic run identifier.
     pub run_id: String,
@@ -980,6 +1020,8 @@ pub struct SoraAgentAutonomyRunRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentPersistentStateV1")]
 pub struct SoraAgentPersistentStateV1 {
     /// Total bytes consumed by apartment-owned state.
     pub total_bytes: u64,
@@ -990,6 +1032,8 @@ pub struct SoraAgentPersistentStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentApartmentRecordV1")]
 pub struct SoraAgentApartmentRecordV1 {
     /// Schema version; must equal [`SORA_AGENT_APARTMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1374,6 +1418,8 @@ impl SoraAgentApartmentRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAgentApartmentAuditEventV1")]
 pub struct SoraAgentApartmentAuditEventV1 {
     /// Schema version; must equal [`SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1984,6 +2030,8 @@ fn validate_absolute_path(
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraActionV1")]
 pub enum SoraAppInfraActionV1 {
     /// First-time admission of an app topology.
     Deploy,
@@ -1994,6 +2042,8 @@ pub enum SoraAppInfraActionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppStaticSiteBindingV1")]
 pub struct SoraAppStaticSiteBindingV1 {
     /// Schema version; must equal [`SORA_APP_STATIC_SITE_BINDING_VERSION_V1`].
     pub schema_version: u16,
@@ -2069,6 +2119,8 @@ impl SoraAppStaticSiteBindingV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppRouteProjectionV1")]
 pub struct SoraAppRouteProjectionV1 {
     /// Schema version; must equal [`SORA_APP_ROUTE_PROJECTION_VERSION_V1`].
     pub schema_version: u16,
@@ -2114,6 +2166,8 @@ impl SoraAppRouteProjectionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraServiceRefV1")]
 pub struct SoraAppInfraServiceRefV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_SERVICE_REF_VERSION_V1`].
     pub schema_version: u16,
@@ -2195,6 +2249,8 @@ impl SoraAppInfraServiceRefV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraManifestV1")]
 pub struct SoraAppInfraManifestV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -2253,6 +2309,8 @@ impl SoraAppInfraManifestV1 {
 /// Exact authoritative app topology observed before a signed upgrade.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraExactCurrentRevisionPreconditionV1")]
 pub struct SoraAppInfraExactCurrentRevisionPreconditionV1 {
     /// Active app version observed by the signer.
     pub app_version: String,
@@ -2265,6 +2323,8 @@ pub struct SoraAppInfraExactCurrentRevisionPreconditionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "condition", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraMutationPreconditionV1")]
 pub enum SoraAppInfraMutationPreconditionV1 {
     /// A first deployment is valid only while the app name has no state.
     AppAbsent,
@@ -2275,6 +2335,8 @@ pub enum SoraAppInfraMutationPreconditionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraStateV1")]
 pub struct SoraAppInfraStateV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -2340,6 +2402,8 @@ impl SoraAppInfraStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraAuditEventV1")]
 pub struct SoraAppInfraAuditEventV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2402,6 +2466,8 @@ impl SoraAppInfraAuditEventV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceAuditEventV1")]
 pub struct SoraServiceAuditEventV1 {
     /// Schema version; must equal [`SORA_SERVICE_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2991,6 +3057,8 @@ impl SoraServiceAuditEventV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "health_status", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceHealthStatusV1")]
 pub enum SoraServiceHealthStatusV1 {
     /// Revision is still hydrating bundles or replay state.
     Hydrating,
@@ -3006,6 +3074,8 @@ pub enum SoraServiceHealthStatusV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceRuntimeStateV1")]
 pub struct SoraServiceRuntimeStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_RUNTIME_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -3056,6 +3126,8 @@ impl SoraServiceRuntimeStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1")]
 pub struct SoraInrouReplicaRuntimeStateV1 {
     /// Schema version; must equal [`SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -3167,6 +3239,8 @@ impl SoraInrouReplicaRuntimeStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraServiceMailboxMessageV1")]
 pub struct SoraServiceMailboxMessageV1 {
     /// Schema version; must equal [`SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1`].
     pub schema_version: u16,
@@ -3357,6 +3431,8 @@ impl SoraServiceMailboxMessageV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraRuntimeDeterministicValidatorHostV1")]
 pub struct SoraRuntimeDeterministicValidatorHostV1 {
     /// Active public lane whose validator record was selected.
     pub lane_id: LaneId,
@@ -3381,6 +3457,8 @@ impl SoraRuntimeDeterministicValidatorHostV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraOrderedMailboxStateMutationV1")]
 pub struct SoraOrderedMailboxStateMutationV1 {
     /// Schema version; must equal [`SORA_ORDERED_MAILBOX_STATE_MUTATION_VERSION_V1`].
     pub schema_version: u16,
@@ -3431,6 +3509,8 @@ impl SoraOrderedMailboxStateMutationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraOrderedMailboxResultV1")]
 pub struct SoraOrderedMailboxResultV1 {
     /// Schema version; must equal [`SORA_ORDERED_MAILBOX_RESULT_VERSION_V1`].
     pub schema_version: u16,
@@ -3528,6 +3608,8 @@ impl SoraOrderedMailboxResultV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraRuntimeReceiptV1")]
 pub struct SoraRuntimeReceiptV1 {
     /// Schema version; must equal [`SORA_RUNTIME_RECEIPT_VERSION_V1`].
     pub schema_version: u16,
@@ -3706,3 +3788,6 @@ impl SoraRuntimeReceiptV1 {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod captured_hosting_schema_tests;

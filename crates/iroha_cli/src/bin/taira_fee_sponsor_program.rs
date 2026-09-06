@@ -21,8 +21,9 @@ use iroha::{
         transaction::FeePaymentIntent,
     },
 };
-use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
+use iroha_config::parameters::defaults;
 use iroha_primitives::numeric::Quantity;
+use iroha_service_model::soranet::RolloutPhase;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -157,14 +158,14 @@ fn require_canonical_taira_identity(chain_id: &ChainId, chain_discriminant: u16)
 }
 fn default_alias_cache_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
     sorafs_manifest::alias_cache::AliasCachePolicy::new(
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
 fn read_norito_json<T>(path: &PathBuf, label: &str) -> Result<T>
@@ -288,7 +289,7 @@ fn main() -> Result<()> {
         soracloud_http_witness_file: None,
         sorafs_alias_cache: default_alias_cache_policy(),
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
-        sorafs_rollout_phase: SorafsRolloutPhase::default(),
+        sorafs_rollout_phase: RolloutPhase::default(),
     });
     let mut payload = client.try_build_transaction_payload_from_items(
         instructions,

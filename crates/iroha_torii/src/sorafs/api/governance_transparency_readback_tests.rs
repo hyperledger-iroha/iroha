@@ -1414,7 +1414,7 @@ async fn transparency_proof_token_verify_honors_api_token_enforcement() {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
         state.api_token_digests =
-            Arc::new(limits::ApiTokenDigestSet::from_tokens(["secret"]));
+            Arc::new(crate::limits::ApiTokenDigestSet::from_tokens(["secret"]));
     }
     let denied = handle_post_sorafs_transparency_token_verify(
         State(app.clone()),

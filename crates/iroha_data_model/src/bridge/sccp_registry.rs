@@ -306,6 +306,8 @@ pub enum SccpRouteValidationError {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpBn254G1PointV1")]
 pub struct SccpBn254G1PointV1 {
     /// Canonical big-endian base-field x coordinate.
     pub x: [u8; 32],
@@ -328,6 +330,8 @@ impl SccpBn254G1PointV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpBn254G2PointV1")]
 pub struct SccpBn254G2PointV1 {
     /// First x-coordinate Fq2 limb (`x[0]` in the Solidity verifier).
     pub x_c0: [u8; 32],
@@ -354,6 +358,8 @@ impl SccpBn254G2PointV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254IcV1")]
 pub struct SccpGroth16Bn254IcV1 {
     /// Constant IC point.
     pub constant: SccpBn254G1PointV1,
@@ -406,6 +412,8 @@ impl SccpGroth16Bn254IcV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254VerifyingKeyV1")]
 pub struct SccpGroth16Bn254VerifyingKeyV1 {
     /// Verifying-key schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -503,6 +511,8 @@ pub fn sccp_groth16_bn254_verifying_key_hash_v1(
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381IcV1")]
 pub struct SccpGroth16Bls12381IcV1 {
     /// Constant IC point.
     pub constant: [u8; 48],
@@ -559,6 +569,8 @@ impl SccpGroth16Bls12381IcV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381VerifyingKeyV1")]
 pub struct SccpGroth16Bls12381VerifyingKeyV1 {
     /// Verifying-key schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -648,6 +660,8 @@ pub fn sccp_groth16_bls12381_verifying_key_hash_v1(
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254SemanticCircuitV1")]
 pub struct SccpGroth16Bn254SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -669,6 +683,8 @@ pub struct SccpGroth16Bn254SemanticCircuitV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381SemanticCircuitV1")]
 pub struct SccpGroth16Bls12381SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -687,6 +703,8 @@ pub struct SccpGroth16Bls12381SemanticCircuitV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "profile", content = "commitments")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSemanticProofProfileV1")]
 pub enum SccpSemanticProofProfileV1 {
     /// Groth16 proof of canonical payload semantics, message inclusion, and
     /// Taira finality rooted in the governed SORA checkpoint.
@@ -768,6 +786,8 @@ impl SccpSemanticProofProfileV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSoraFinalityAnchorV1")]
 pub struct SccpSoraFinalityAnchorV1 {
     /// Anchor schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -818,6 +838,8 @@ impl SccpSoraFinalityAnchorV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpOutboundProofPolicyV1")]
 pub struct SccpOutboundProofPolicyV1 {
     /// Policy schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -876,6 +898,8 @@ impl SccpOutboundProofPolicyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpPortableVerifyingKeyRefV1")]
 pub struct SccpPortableVerifyingKeyRefV1 {
     /// Portable proof-backend registry namespace.
     pub backend: String,
@@ -919,6 +943,8 @@ impl SccpPortableVerifyingKeyRefV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSoraOutboundExecutionPolicyV1")]
 pub struct SccpSoraOutboundExecutionPolicyV1 {
     /// Policy schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -958,6 +984,8 @@ impl SccpSoraOutboundExecutionPolicyV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "activation", content = "direction")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpRouteActivationV1")]
 pub enum SccpRouteActivationV1 {
     /// The complete route is governed but admits no transfers.
     #[codec(index = 0)]
@@ -1037,6 +1065,8 @@ impl SccpRouteActivationV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpInboundFinalityCutoffV1")]
 pub struct SccpInboundFinalityCutoffV1 {
     /// Retained lane checkpoint whose validity interval contains the cutoff.
     pub trust_anchor_hash: [u8; 32],
@@ -1058,6 +1088,8 @@ impl SccpInboundFinalityCutoffV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpRouteKeyV1")]
 pub struct SccpRouteKeyV1 {
     /// Exact external-to-SORA lane.
     pub lane_id: SccpLaneIdV1,
@@ -1116,6 +1148,8 @@ impl SccpRouteKeyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpEvmDestinationDeploymentV1")]
 pub struct SccpEvmDestinationDeploymentV1 {
     /// Exact ERC-20 token contract address.
     pub token_address: [u8; 20],
@@ -1154,6 +1188,8 @@ pub struct SccpEvmDestinationDeploymentV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpTronDestinationDeploymentV1")]
 pub struct SccpTronDestinationDeploymentV1 {
     /// Raw TRC-20 contract address without the `0x41` network byte.
     pub token_address: [u8; 20],
@@ -1196,6 +1232,8 @@ pub struct SccpTronDestinationDeploymentV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpTonMintBreakerGuardianKeysV1")]
 pub struct SccpTonMintBreakerGuardianKeysV1 {
     /// Guardian key at canonical index zero.
     pub guardian_0: [u8; 32],
@@ -1268,6 +1306,8 @@ impl From<SccpTonMintBreakerGuardianKeysV1> for [[u8; 32]; 5] {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpTonDestinationDeploymentV1")]
 pub struct SccpTonDestinationDeploymentV1 {
     /// Canonical raw Jetton master contract address.
     pub jetton_master_address: SccpTonAddressV1,
@@ -1316,6 +1356,8 @@ pub struct SccpTonDestinationDeploymentV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "family", content = "deployment")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpDestinationDeploymentV1")]
 pub enum SccpDestinationDeploymentV1 {
     /// EVM deployment for Ethereum or BSC.
     #[codec(index = 0)]
@@ -1475,6 +1517,8 @@ impl SccpDestinationDeploymentV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSoraSettlementV1")]
 pub struct SccpSoraSettlementV1 {
     /// Canonical SORA-home asset definition locked and released by Core.
     pub asset_definition_id: AssetDefinitionId,
@@ -1545,6 +1589,8 @@ pub fn sccp_v1_taira_xor_asset_definition_id() -> AssetDefinitionId {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGovernedRouteV1")]
 pub struct SccpGovernedRouteV1 {
     /// Exact external-to-SORA lane governed by this record.
     pub lane_id: SccpLaneIdV1,
@@ -1819,6 +1865,8 @@ impl SccpGovernedRouteV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGovernedLaneV1")]
 pub struct SccpGovernedLaneV1 {
     /// Exact external-to-SORA lane.
     pub lane_id: SccpLaneIdV1,
@@ -2001,6 +2049,8 @@ impl SccpGovernedLaneV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpRegistryV1")]
 pub struct SccpRegistryV1 {
     /// Registry format version. First release accepts exactly `1`.
     pub version: u8,
@@ -5377,3 +5427,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_registry_schema_tests;

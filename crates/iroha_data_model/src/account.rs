@@ -56,6 +56,8 @@ mod model {
     /// ```
     #[derive(Clone, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::account::model::AccountId")]
     pub struct AccountId {
         /// Controller responsible for authorising account actions.
         pub controller: AccountController,

@@ -17,6 +17,7 @@ use iroha::{
         query::{
             asset::prelude::{FindAssetDefinitionById, FindAssetsByAccountId},
             block::prelude::FindBlocks,
+            dsl::IntoPredicate as _,
             sorafs::prelude::{
                 FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
             },
@@ -505,13 +506,10 @@ async fn wait_for_appeals(
         let mut appeals = Vec::with_capacity(network.peers().len());
         let mut failures = Vec::new();
         for (index, peer) in network.peers().iter().enumerate() {
-            match bob_client(peer)
-                .query(FindSorafsModerationAppeal::new(
-                    CASE_ID.to_owned(),
-                    ROUND_ID.to_owned(),
-                ))
-                .execute_single()
-            {
+            match bob_client(peer).query_single(FindSorafsModerationAppeal::new(
+                CASE_ID.to_owned(),
+                ROUND_ID.to_owned(),
+            )) {
                 Ok(appeal) => appeals.push(appeal),
                 Err(error) => failures.push(format!("peer {index}: {error}")),
             }
@@ -623,28 +621,22 @@ fn settlement_observation(
     voting_asset_id: &AssetDefinitionId,
     include_carpenter_challenge: bool,
 ) -> Result<SettlementObservation> {
-    let case = client
-        .query(FindSorafsModerationCase::new(
-            CASE_ID.to_owned(),
-            ROUND_ID.to_owned(),
-        ))
-        .execute_single()?;
-    let alice_challenge = client
-        .query(FindSorafsModerationChallenge::new(
-            CASE_ID.to_owned(),
-            ROUND_ID.to_owned(),
-            ALICE_CHALLENGE_ID.to_owned(),
-        ))
-        .execute_single()?;
+    let case = client.query_single(FindSorafsModerationCase::new(
+        CASE_ID.to_owned(),
+        ROUND_ID.to_owned(),
+    ))?;
+    let alice_challenge = client.query_single(FindSorafsModerationChallenge::new(
+        CASE_ID.to_owned(),
+        ROUND_ID.to_owned(),
+        ALICE_CHALLENGE_ID.to_owned(),
+    ))?;
     let carpenter_challenge = include_carpenter_challenge
         .then(|| {
-            client
-                .query(FindSorafsModerationChallenge::new(
-                    CASE_ID.to_owned(),
-                    ROUND_ID.to_owned(),
-                    CARPENTER_CHALLENGE_ID.to_owned(),
-                ))
-                .execute_single()
+            client.query_single(FindSorafsModerationChallenge::new(
+                CASE_ID.to_owned(),
+                ROUND_ID.to_owned(),
+                CARPENTER_CHALLENGE_ID.to_owned(),
+            ))
         })
         .transpose()?;
     let balances = [
@@ -654,8 +646,7 @@ fn settlement_observation(
         voting_asset_balance(client, voting_asset_id, &SAMPLE_GENESIS_ACCOUNT_ID)?,
     ];
     let total_quantity = client
-        .query(FindAssetDefinitionById::new(voting_asset_id.clone()))
-        .execute_single()?
+        .query_single(FindAssetDefinitionById::new(voting_asset_id.clone()))?
         .total_quantity()
         .clone();
     Ok(SettlementObservation {

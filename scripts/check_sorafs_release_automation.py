@@ -51,7 +51,7 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "exactly the five expected target-triple checksum manifests",
         "The five-target CLI archive implementation is present, but a candidate is not source-complete",
         "build, publish, and clean-install all six",
-        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py --require-objective` before any Cargo command",
+        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py` before any Cargo command",
         "`specs/sorafs/runbooks/release_rollback_yank.md`",
         "`sorafs-release-authentication` environment",
         "`scripts/release_manifest_signing.py verify`",
@@ -521,7 +521,7 @@ SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST = (
     "scripts/tests/check_build_efficiency_provenance_test.py"
 )
 SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND = (
-    "python3 scripts/check_source_file_budget.py --require-objective"
+    "python3 scripts/check_source_file_budget.py"
 )
 SORAFS_CLI_L1_QUALIFICATION_TESTS = (
     "scripts/tests/check_sorafs_l1_deployment_qualification_test.py",

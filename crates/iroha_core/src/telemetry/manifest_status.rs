@@ -1,5 +1,5 @@
 use crate::governance::manifest::GovernanceRules;
-use iroha_telemetry::metrics::{
+use iroha_torii_shared::status::{
     NexusLaneManifestValidatorBindingStatus, NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuStatus,
 };
 

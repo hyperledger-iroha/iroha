@@ -31,6 +31,8 @@ use iroha_data_model::{
     },
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
+#[cfg(unix)]
+use iroha_primitives::fs::secure_no_follow_nonblocking_flags;
 use json_preflight::{JsonDomEnvelopeV1, preflight_json_dom};
 use rand::{TryRngCore, rngs::OsRng};
 use reqwest::{
@@ -1672,7 +1674,7 @@ fn read_bounded_regular(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, fs::M
         let mut options = fs::OpenOptions::new();
         options
             .read(true)
-            .custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
+            .custom_flags(secure_no_follow_nonblocking_flags());
         let mut file = options.open(path)?;
         let before = file.metadata()?;
         if !before.is_file() || before.len() == 0 || before.len() > maximum || before.nlink() != 1 {
@@ -1736,195 +1738,6 @@ compile_error!("Musubi secure fetch-file reads are not qualified for this Androi
     ))
 ))]
 compile_error!("Musubi secure fetch-file reads are not qualified for this Unix target");
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-const fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android", target_os = "macos")),
-    any(
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(target_os = "macos")]
-const fn platform_no_follow_flag() -> i32 {
-    // O_NOFOLLOW rejects a substituted final component; the opened descriptor then remains the
-    // sole read authority even if an ancestor or the directory entry is replaced concurrently.
-    0x100
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "mips",
-        target_arch = "mips32r6",
-        target_arch = "mips64",
-        target_arch = "mips64r6"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x80
-}
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "sparc", target_arch = "sparc64")
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4000
-}
-#[cfg(any(
-    target_os = "android",
-    all(
-        target_os = "linux",
-        not(any(
-            target_arch = "mips",
-            target_arch = "mips32r6",
-            target_arch = "mips64",
-            target_arch = "mips64r6",
-            target_arch = "sparc",
-            target_arch = "sparc64"
-        ))
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x800
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4
-}
-#[cfg(unix)]
-/// Return the qualified flags for a nonblocking, final-component no-follow open.
-pub(crate) const fn secure_no_follow_nonblocking_flags() -> i32 {
-    platform_no_follow_flag() | platform_nonblocking_flag()
-}
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-const fn platform_directory_only_flag() -> i32 {
-    0x200000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-const fn platform_directory_only_flag() -> i32 {
-    0x4000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-const fn platform_directory_only_flag() -> i32 {
-    0x10000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-const fn platform_directory_only_flag() -> i32 {
-    0x4000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-const fn platform_directory_only_flag() -> i32 {
-    0x10000
-}
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const fn platform_directory_only_flag() -> i32 {
-    0x0010_0000
-}
-#[cfg(target_os = "freebsd")]
-const fn platform_directory_only_flag() -> i32 {
-    0x0002_0000
-}
-#[cfg(target_os = "dragonfly")]
-const fn platform_directory_only_flag() -> i32 {
-    0x0800_0000
-}
-#[cfg(target_os = "openbsd")]
-const fn platform_directory_only_flag() -> i32 {
-    0x0002_0000
-}
-#[cfg(target_os = "netbsd")]
-const fn platform_directory_only_flag() -> i32 {
-    0x0020_0000
-}
-/// Return the qualified flags for a nonblocking, no-follow directory open.
-#[cfg(unix)]
-pub(crate) const fn secure_directory_open_flags() -> i32 {
-    secure_no_follow_nonblocking_flags() | platform_directory_only_flag()
-}
 fn read_json_response(
     response: HttpResponse,
     maximum: u64,

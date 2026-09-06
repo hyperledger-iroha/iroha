@@ -10017,9 +10017,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     }
 }
 
-/// Return the exact KAGEMUSHA Core coordinator contract to the signed-app JNI adapter.
-///
-/// The generic Kotlin SDK entry point below delegates to the same implementation.
+/// Return the exact KAGEMUSHA Core coordinator contract to the Kotlin Android SDK.
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10027,7 +10025,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jintArray {
@@ -10048,7 +10046,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeC
     output.into_raw()
 }
 
-/// Open the qualified KAGEMUSHA Core coordinator from the signed-app JNI adapter.
+/// Open the qualified KAGEMUSHA Core coordinator through the Kotlin Android SDK.
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10056,7 +10054,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeC
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     storage_path: jni::objects::JString<'_>,
@@ -10082,7 +10080,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeO
     }
 }
 
-/// Invoke one closed KAGEMUSHA Core coordinator method from the signed-app JNI adapter.
+/// Invoke one closed KAGEMUSHA Core coordinator method through the Kotlin Android SDK.
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10090,7 +10088,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeO
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     handle: jni::sys::jlong,
@@ -10194,57 +10192,6 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeI
         }
     }
     output.into_raw()
-}
-
-/// Return the native coordinator contract to the generic Kotlin Android SDK.
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1(
-    env: jni::JNIEnv<'_>,
-    class: jni::objects::JClass<'_>,
-) -> jni::sys::jintArray {
-    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1(env, class)
-}
-
-/// Open the same qualified native coordinator through the generic Kotlin Android SDK.
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1(
-    env: jni::JNIEnv<'_>,
-    class: jni::objects::JClass<'_>,
-    storage_path: jni::objects::JString<'_>,
-) -> jni::sys::jlong {
-    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1(env, class, storage_path)
-}
-
-/// Invoke the closed coordinator schema through the generic Kotlin Android SDK.
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1(
-    env: jni::JNIEnv<'_>,
-    class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-    method: jni::sys::jint,
-    fields: jni::objects::JObjectArray<'_>,
-) -> jni::sys::jobjectArray {
-    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(
-        env, class, handle, method, fields,
-    )
 }
 
 #[cfg(any(

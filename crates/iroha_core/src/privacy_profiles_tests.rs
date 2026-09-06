@@ -573,18 +573,18 @@ mod tests {
             }
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-                    "feac88e1d075fc7bad3b4b2352c54b8bf2a662c891983cefd748d4991dfb9fba".to_owned(),
-                    "e5a225abf2469b70927d91c275d28e589d0cd0ddc87fbd6f265f908542d4f688".to_owned(),
-                    "7a948e91b038acca4bfb57615dfda10e4aae4cb56c61529cf6b76d6735eb6773".to_owned(),
+                    "755bd48dd1ec364da87e9fdc82cb8145bab2ae3422e602acde39f4659a3470c8".to_owned(),
+                    "4bd1d4ed3304d873d3111f0c37a1151df9ac48c99b3e2a760be93f0656ef76a2".to_owned(),
+                    "b566ed92037f905cda0ee5f295ba2c1e70e006398bdedf7f57aac99e5758167d".to_owned(),
                     "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
-                    "1b523e15f99cbaf3a363d200e5ed376f5e73f81fbcc195f5b716a1029c3e116e".to_owned(),
+                    "ef48407e9fffa1d18f32321136e616ba24a38febefd3700736c8507e9a97d3d3".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV1 => (
                     "6265e763be8e1f62feb4e34a0b9fe0f4ca7748be2ca5d0ad334996a029b42197".to_owned(),
-                    "c218ced8912700bba150ed28e0fdc3fadcd5d35743ea022da66100e097322c93".to_owned(),
-                    "69fbd26aeaea84ef2b790addb168c78b7d66121304f2d0e4fe02969f582c2807".to_owned(),
+                    "c7bee6a60c069cf303c3bc9022a52fe59e1af6dd28ee114dab47718ac0b54129".to_owned(),
+                    "175934207a8a851284551a4f494b07b0b045b2b8008d009564232f6a26d76a55".to_owned(),
                     "a6314323ab707a3766599aed2d109b3ada63acec793ff2a729c749cd951a332d".to_owned(),
-                    "1c05619415d25d0af914427c9c93abbf040a18ce867301b033ff1abc10c661e1".to_owned(),
+                    "7c254368cd3b41773cb92fea58df239745467d80aefcde365e224c058f88d87c".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };
@@ -1188,9 +1188,9 @@ mod tests {
             (
                 "8d5a2946c58314ac12d2968ffe9e8e0c672e3bbceefaaefad6a87420ea7dd212".to_owned(),
                 "b27b73d59151415e21b158c75ed9371cccd795655b604e4a6b53db621660b66e".to_owned(),
-                "53dba42ea22445f05a5986279320859f2e4622c930549a2c8e8ebbd8b39d9385".to_owned(),
+                "5f44e8a6a901ef33bc3c99d5400592f420f006877ae9904b758ee49a3226718f".to_owned(),
                 "2141dd88d579b2460cfb0f79f230bfb2f71663364d8700c8e7e6b3e8f57c5a2a".to_owned(),
-                "db654c139ee585ae99996b5617a3b0e663a83cef1635a79159c33d9c97ca2cbd".to_owned(),
+                "c294d7ddc1be131d273410ce3f191328ed589b7db37283b49b138658250f060c".to_owned(),
             ),
             "every consensus-critical Orchard profile binding is a pinned KAT"
         );

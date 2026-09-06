@@ -40,6 +40,8 @@ pub const SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1: usize =
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "boundary", content = "operation")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayBoundaryV1")]
 pub enum SccpReplayBoundaryV1 {
     /// SORA-side outbound lock/admission.
     #[codec(index = 0x01)]
@@ -114,6 +116,8 @@ impl SccpReplayBoundaryV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpTonAccountV1")]
 pub struct SccpTonAccountV1 {
     /// Signed TON workchain.
     pub workchain: i32,
@@ -137,6 +141,8 @@ impl SccpTonAccountV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "actor", content = "identity")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayActorV1")]
 pub enum SccpReplayActorV1 {
     /// Route-wide SORA accumulator; no contract actor is encoded.
     #[codec(index = 0)]
@@ -170,6 +176,8 @@ impl SccpReplayActorV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "principal", content = "identity")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayPrincipalV1")]
 pub enum SccpReplayPrincipalV1 {
     /// Canonical domainless SORA account identifier.
     #[codec(index = 0)]
@@ -206,6 +214,8 @@ impl SccpReplayPrincipalV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayDomainV1")]
 pub struct SccpReplayDomainV1 {
     /// Network where the economic operation originated.
     pub source_network: SccpNetworkV1,
@@ -227,6 +237,8 @@ pub struct SccpReplayDomainV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayAccumulatorIdV1")]
 pub struct SccpReplayAccumulatorIdV1 {
     /// Exact immutable governed route.
     pub route_key: SccpRouteKeyV1,
@@ -242,6 +254,8 @@ pub struct SccpReplayAccumulatorIdV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayRecordV1")]
 pub struct SccpReplayRecordV1 {
     /// Must equal the forest's boundary.
     pub operation: SccpReplayBoundaryV1,
@@ -263,6 +277,8 @@ pub struct SccpReplayRecordV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1")]
 pub struct SccpSparseMerkleWitnessV1 {
     /// Root against which the caller prepared this witness.
     pub expected_shard_root: [u8; 32],
@@ -305,6 +321,8 @@ impl SccpSparseMerkleWitnessV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayForestV1")]
 pub struct SccpReplayForestV1 {
     /// Shards whose roots differ from the canonical empty root.
     pub nonempty_shard_roots: BTreeMap<u8, [u8; 32]>,
@@ -330,6 +348,8 @@ impl Default for SccpReplayForestV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayDeltaV1")]
 pub struct SccpReplayDeltaV1 {
     /// Domain hash selecting the exact replay boundary.
     pub domain_hash: [u8; 32],
@@ -1217,3 +1237,6 @@ mod tests {
         assert_eq!(exhausted, before);
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_replay_schema_tests;

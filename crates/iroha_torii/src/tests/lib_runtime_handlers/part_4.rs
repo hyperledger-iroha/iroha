@@ -551,10 +551,12 @@ async fn queue_plan_outcome_unknown_validates_distinct_sealed_reveal_identities(
         })
         .expect("outcome-unknown response must carry its signed identity header")
         .value = signed_transaction_hash.to_string().into_bytes();
-    assert_eq!(
-        super::validate_queue_plan_outcome_unknown_evidence(&invalid_snapshot, &expected),
-        super::QueuePlanOutcomeUnknownEvidenceValidation::Invalid(
-            "error-envelope transaction hash does not match the submitted transaction"
+    assert!(
+        matches!(
+            super::validate_queue_plan_outcome_unknown_evidence(&invalid_snapshot, &expected),
+            super::QueuePlanOutcomeUnknownEvidenceValidation::Invalid(
+                "error-envelope transaction hash does not match the submitted transaction"
+            )
         ),
         "the outcome-evidence validator must compare the body tx_hash with the inner signed identity"
     );
@@ -2176,7 +2178,7 @@ async fn core_info_handlers_ok() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     let config_bytes = torii_body_bytes(resp, "config body").await;
-    let config: ConfigGetDTO =
+    let config: Configuration =
         norito::json::from_slice(&config_bytes).expect("decode config payload");
     assert!(
         !config

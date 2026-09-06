@@ -39,9 +39,10 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{prelude::*, transaction::IvmBytecode},
 };
-use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
+use iroha_config::parameters::defaults;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_i18n::{Bundle, Localizer, detect_language};
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
 use std::num::NonZeroU64;
 use std::{
@@ -56,9 +57,9 @@ use thiserror::Error;
 use tokio::runtime::Runtime;
 // For base64 Engine trait (decode)
 use base64::Engine as _;
+use iroha_service_model::soranet::AnonymityPolicy;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
-use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
@@ -687,6 +688,7 @@ impl Command {
     }
     fn allows_fallback_config_in_machine_mode(&self) -> bool {
         match self {
+            Self::App(app::Command::Sorafs(crate::commands::sorafs::Command::Toolkit(_))) => true,
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Contract(command) => command.allows_fallback_config(),
             _ => false,
@@ -951,6 +953,7 @@ mod app {
             Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
         };
         match command {
+            SorafsCommand::Toolkit(_) => true,
             SorafsCommand::Reserve(
                 ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
             ) => true,
@@ -976,7 +979,6 @@ mod app {
             | SorafsCommand::Storage(_)
             | SorafsCommand::Gateway(_)
             | SorafsCommand::Handshake(_)
-            | SorafsCommand::Toolkit(_)
             | SorafsCommand::GuardDirectory(_)
             | SorafsCommand::Appeals(_)
             | SorafsCommand::Gar(_)
@@ -1477,14 +1479,14 @@ fn try_fallback_config() -> Result<Config> {
         .wrap_err("failed to derive offline fallback Ed25519 key pair")?;
     let account = AccountId::new(key_pair.public_key().clone());
     let alias_cache = AliasCachePolicy::new(
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     );
     Ok(Config {
         chain,
@@ -1502,7 +1504,7 @@ fn try_fallback_config() -> Result<Config> {
         soracloud_http_witness_file: None,
         sorafs_alias_cache: alias_cache,
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
-        sorafs_rollout_phase: SorafsRolloutPhase::Default,
+        sorafs_rollout_phase: RolloutPhase::Default,
     })
 }
 #[cfg(test)]

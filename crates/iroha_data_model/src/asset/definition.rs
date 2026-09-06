@@ -152,6 +152,9 @@ mod model {
         IntoSchema,
         RegistrableBuilder,
     )]
+    #[registrable_builder(
+        schema_name = "iroha_data_model::asset::definition::model::NewAssetDefinition"
+    )]
     #[display("{id} {spec}{mintable}")]
     #[allow(clippy::multiple_inherent_impl)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
@@ -845,6 +848,37 @@ mod validation_tests {
             .expect("derive checked asset-definition fixture owner");
         AccountId::new(key_pair.public_key().clone())
     }
+
+    #[test]
+    fn registration_builder_schema_identity_matches_capture() {
+        // Controlled pre-declaration report: be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd.
+        let nominal = "iroha_data_model::asset::definition::model::NewAssetDefinition";
+        let expected: [u8; 16] = hex::decode("d4baef586e5ae708c1a038ef0e73041f")
+            .expect("captured schema hash")
+            .try_into()
+            .expect("16-byte hash");
+        assert_eq!(
+            <NewAssetDefinition as norito::NoritoSchema>::nominal_name(),
+            nominal
+        );
+        assert_eq!(
+            <NewAssetDefinition as norito::NoritoSchema>::frame_name(),
+            nominal
+        );
+        assert_eq!(
+            norito::schema::identity::frame_hash::<NewAssetDefinition>(),
+            expected
+        );
+        assert_eq!(
+            <NewAssetDefinition as norito::NoritoSerialize>::schema_hash(),
+            expected
+        );
+        assert_eq!(
+            <NewAssetDefinition as norito::NoritoDeserialize>::schema_hash(),
+            expected
+        );
+    }
+
     #[test]
     fn confidential_policy_discards_transitions_outside_the_v1_state_machine() {
         for (mode, previous_mode, new_mode) in [

@@ -135,7 +135,7 @@ class SccpRecentQueryValidationTest {
     }
 
     private fun transport(executor: CountingExecutor): HttpClientTransport =
-        HttpClientTransport.withExecutor(
+        HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))

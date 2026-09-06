@@ -3,6 +3,8 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
@@ -69,7 +71,7 @@ class HttpClientTransportGovernanceTest {
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor = executor,
             config = ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -80,7 +82,7 @@ class HttpClientTransportGovernanceTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_100L,
             "governance-read",
         )
@@ -178,7 +180,7 @@ class HttpClientTransportGovernanceTest {
                 "Content-Length" to listOf(responseFrame.size.toString()),
             ),
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor = executor,
             config = ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -188,7 +190,7 @@ class HttpClientTransportGovernanceTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_100L,
             "parliament-casting-proof",
         )
@@ -229,7 +231,7 @@ class HttpClientTransportGovernanceTest {
                 "Content-Encoding" to listOf("gzip"),
             ),
         )
-        val encodedTransport = HttpClientTransport.withExecutor(
+        val encodedTransport = HttpClientTransport(
             encodedExecutor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
@@ -252,7 +254,7 @@ class HttpClientTransportGovernanceTest {
             statusCode = 404,
             body = ByteArray(0),
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -262,7 +264,7 @@ class HttpClientTransportGovernanceTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_100L,
             "parliament-casting-context",
         )
@@ -288,7 +290,7 @@ class HttpClientTransportGovernanceTest {
     fun parliamentCastingProofPagingDurablyAdvancesStaleAnchorBeyondSixtyThreeHeights() {
         val responseFrame = castingProofResponseFrame()
         val executor = SequenceResponseExecutor(responseFrame)
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -296,7 +298,7 @@ class HttpClientTransportGovernanceTest {
                 .build(),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        val auth = ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private))
         val firstContext = ByteArray(32) { 0x11 }
         val secondContext = ByteArray(32) { 0x22 }
         val terminalContext = ByteArray(32) { 0x33 }
@@ -364,7 +366,7 @@ class HttpClientTransportGovernanceTest {
     @Test
     fun parliamentCastingProofPagingRejectsNativeAdvancePastPageBound() {
         val executor = SequenceResponseExecutor(castingProofResponseFrame())
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
@@ -378,7 +380,7 @@ class HttpClientTransportGovernanceTest {
                 "66".repeat(32),
                 7,
                 ByteArray(32) { 0x11 },
-                ToriiCanonicalRequestAuth("alice@universal", keyPair.private),
+                ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private)),
                 ParliamentTimedOvnCastingProofPageVerifierV1 { _, _, _ ->
                     ParliamentTimedOvnCastingProofPageVerificationV1(
                         BigInteger.valueOf(71),

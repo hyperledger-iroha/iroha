@@ -1,9 +1,9 @@
 # Android Attestation Reference Bundles
 
 This directory contains deterministic mock attestation bundles that exercise the
-`android_keystore_attestation` harness with non-Google trust anchors. Each
+Kotlin-owned `iroha-attestation` command with non-Google trust anchors. Each
 subdirectory mirrors the documented bundle layout (`chain.pem`, `challenge.hex`,
-`alias.txt`, `trust_root_<vendor>.pem`, `notes.md`). The certificates were
+`alias.txt` and `trust_root_<vendor>.pem`). The certificates were
 minted with `scripts/android_mock_attestation_der.py` so the harness and CI
 pipelines can rehearse Huawei/AOSP-style deployments without depending on
 physical hardware.
@@ -15,9 +15,15 @@ physical hardware.
 
 Matching ZIP archives of the trust roots live alongside each bundle and are also
 mirrored under `fixtures/android/trust_roots/` (named `trust_root_bundle_huawei.zip`
-and `trust_root_bundle_osp.zip`). The attestation harness automatically loads
-`trust_root_*.pem`/`trust_root_bundle_*.zip` files that are colocated with a bundle,
-so the fixtures can be verified by pointing `--bundle-dir` at the directory with no
-additional root flags. Directories supplied via `--trust-root-dir` now unpack the
-same `trust_root_bundle_*.zip` archives, allowing CI and local rehearsals to reuse
-the shared packs without duplicating PEM files.
+and `trust_root_bundle_osp.zip`). The command never discovers trusted roots, aliases, challenges or identity
+commitments from an untrusted evidence directory. Tests supply the fixture root
+through an explicit `--trust-root`, `--trust-root-dir` or `--trust-root-bundle`
+argument and pass the known challenge, alias SPKI commitment, governed revocation
+snapshot hash and evaluation time separately. `--bundle-dir` selects evidence
+only. Trusted root directories can contain nested certificate files and ZIPs;
+ZIP members are read with bounds and are never extracted.
+
+Run `cd kotlin && ./gradlew :tools:test --console=plain` for the canonical Java
+consumer assertions against the Kotlin command. The repository launcher
+`scripts/android_keystore_attestation.sh` builds and executes this same command.
+Passing these mock fixtures does not qualify physical StrongBox hardware.

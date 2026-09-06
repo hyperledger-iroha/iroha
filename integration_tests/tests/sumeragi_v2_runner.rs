@@ -2885,7 +2885,7 @@ fn fixture_account(seed_marker: u8) -> Result<AccountId> {
         .wrap_err("derive deterministic v2-runner test account")?;
     Ok(AccountId::new(key_pair.public_key().clone()))
 }
-async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha::client::Status>> {
+async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha_torii_shared::status::Status>> {
     let mut statuses = Vec::with_capacity(peers.len());
     for peer in peers {
         statuses.push(
@@ -2953,7 +2953,7 @@ async fn wait_for_normal_statuses(
     peers: &[NetworkPeer],
     min_blocks: u64,
     timeout: Duration,
-) -> Result<Vec<iroha::client::Status>> {
+) -> Result<Vec<iroha_torii_shared::status::Status>> {
     let deadline = Instant::now() + timeout;
     loop {
         let observation = match normal_statuses(peers).await {

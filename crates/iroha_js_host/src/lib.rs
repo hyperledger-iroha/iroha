@@ -191,6 +191,7 @@ use iroha_primitives::{
         derive_gateway_hosts_with_profile,
     },
 };
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
 use kaigi_zk::empty_roster_root_hash;
 #[cfg(test)]
 use kaigi_zk::{
@@ -259,8 +260,8 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
-    RolloutPhase, TransportPolicy, WriteModeHint, fetch_via_gateway,
+    FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
+    fetch_via_gateway,
     proxy::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
@@ -13207,6 +13208,7 @@ mod tests {
             validation_fee_payout_recipient_share,
         },
     };
+    use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
         NoritoDeserialize,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
@@ -13223,9 +13225,8 @@ mod tests {
         StorageClass, StreamTokenBodyV1, StreamTokenV1,
     };
     use sorafs_orchestrator::{
-        AnonymityPolicy, GatewayCarVerification, OrchestratorConfig, PolicyOverride, PolicyReport,
-        PolicyStatus, RolloutPhase, TransportPolicy, prelude::BrowserExtensionManifest,
-        proxy::ProxyMode,
+        GatewayCarVerification, OrchestratorConfig, PolicyOverride, PolicyReport, PolicyStatus,
+        prelude::BrowserExtensionManifest, proxy::ProxyMode,
     };
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
     use tempfile::tempdir;

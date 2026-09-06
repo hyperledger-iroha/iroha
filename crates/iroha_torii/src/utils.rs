@@ -2863,10 +2863,11 @@ pub mod extractors {
         -> iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
             use iroha_data_model::kagemusha::{
                 KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
-                KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
-                KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
-                KagemushaPastaStateCommitmentV1, KagemushaRedemptionStatementV1,
-                KagemushaRedemptionVoucherV1, kagemusha_liability_pool_id_v1,
+                KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+                KAGEMUSHA_WIRE_VERSION_V1, KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
+                KagemushaHardwareTerminalBodyV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
+                KagemushaOutboxReservationV1, KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
+                KagemushaRedemptionVoucherV1, KagemushaTrustedCommitTimeV1, kagemusha_liability_pool_id_v1,
             };
 
             assert_eq!(
@@ -2877,6 +2878,9 @@ pub mod extractors {
             let network_id = kagemusha_ingress_network();
             let asset = kagemusha_ingress_asset();
             let asset_incarnation = kagemusha_ingress_asset_incarnation();
+            let commit_evidence = KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
+                time_evidence_commitment: [0x5A; 32],
+            });
             let statement = KagemushaRedemptionStatementV1 {
                 version: KAGEMUSHA_WIRE_VERSION_V1,
                 lifecycle: KagemushaLifecycleBindingV1 {
@@ -2899,37 +2903,87 @@ pub mod extractors {
                     policy_epoch: 1,
                     operation_kind: KagemushaOperationKindV1::RedeemSplit,
                     request_id: [0; 32],
+                    receiver_lane_commitment: [0; 32],
                     credit_id: [0; 32],
                     ciphertext_digest: [0; 32],
                 },
                 amount: 12_000,
                 beneficiary: kagemusha_ingress_account(0x53),
                 terminal_nullifier: [0x54; 32],
-                sender_before_commitment: KagemushaPastaStateCommitmentV1 {
-                    eq: [0x55; 32],
-                    ep: [0x56; 32],
-                },
-                sender_after_commitment: KagemushaPastaStateCommitmentV1 {
-                    eq: [0x57; 32],
-                    ep: [0x58; 32],
-                },
                 redemption_commitment: [0x59; 32],
                 redemption_id: [0; 32],
-                committed_at_ms: 9_000,
-                hardware_transition_commitment: [0x5A; 32],
+                commit_evidence,
             }
             .seal_redemption_id()
             .expect("seal redemption identity");
+            let reservation = KagemushaOutboxReservationV1 {
+                reservation_id: [0x16; 32],
+                operation_kind: KagemushaOperationKindV1::RedeemSplit,
+                reserved_outbox_bytes: KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+                issued_at_ms: 8_000,
+                expires_at_ms: 10_000,
+            };
+            let terminal_body = KagemushaHardwareTerminalBodyV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                candidate_envelope_digest: [0x17; 32],
+                lifecycle_binding_digest: statement
+                    .lifecycle
+                    .canonical_digest()
+                    .expect("redemption lifecycle digest"),
+                transition_nullifier: statement.terminal_nullifier,
+                outbox_reservation_commitment: reservation
+                    .canonical_commitment()
+                    .expect("redemption outbox reservation"),
+                commit_evidence,
+                hardware_profile_id: statement.lifecycle.hardware_profile_id,
+                policy_epoch: statement.lifecycle.policy_epoch,
+                private_successor_commitment: [0x18; 32],
+                private_journal_commitment: [0x19; 32],
+                private_recovery_commitment: [0x1A; 32],
+            };
+            let commit_certificate = KagemushaCommitCertificateV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                certificate_id: [0; 32],
+                candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+                lifecycle_binding_digest: terminal_body.lifecycle_binding_digest,
+                transition_nullifier: terminal_body.transition_nullifier,
+                outbox_reservation_commitment: terminal_body.outbox_reservation_commitment,
+                commit_evidence,
+                hardware_profile_id: terminal_body.hardware_profile_id,
+                policy_epoch: terminal_body.policy_epoch,
+                hardware_terminal_commitment: [0; 32],
+            }
+            .seal_with_terminal_body(&terminal_body)
+            .expect("redemption terminal certificate");
             let voucher = KagemushaRedemptionVoucherV1 {
                 version: KAGEMUSHA_WIRE_VERSION_V1,
-                proof: kagemusha_ingress_paired_proof(
-                    statement
+                proof: KagemushaRedemptionProofV1 {
+                    version: KAGEMUSHA_WIRE_VERSION_V1,
+                    eq_protocol_digest: [0x1B; 32],
+                    ep_protocol_digest: [0x1C; 32],
+                    semantic_digest: statement
                         .canonical_digest()
                         .expect("redemption statement digest"),
-                    KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
-                    0x5B,
-                ),
+                    candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+                    commit_certificate_digest: commit_certificate
+                        .canonical_digest_against(
+                            &statement.lifecycle,
+                            statement.commit_evidence,
+                            statement.terminal_nullifier,
+                        )
+                        .expect("redemption certificate digest"),
+                    eq_deferred_audit: [0x1D; 32],
+                    ep_deferred_audit: [0x1E; 32],
+                    // Ingress tests validate public shape and maximum payload admission;
+                    // these bytes do not claim cryptographic proof qualification.
+                    eq_proof: vec![0xA1; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
+                    ep_proof: vec![0xB2; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
+                    eq_history: vec![0xC3; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                    ep_history: vec![0xD4; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                },
                 statement,
+                commit_certificate,
+                artifact_manifest_digest: [0x63; 32],
             };
             let request = iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
                 version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
@@ -4236,6 +4290,33 @@ pub mod extractors {
                 >(&invalid),
                 Err(KagemushaCanonicalNoritoDecodeError::Invalid(_))
             ));
+        }
+        #[cfg(feature = "app_api")]
+        #[test]
+        fn kagemusha_norito_redemption_rejects_substituted_terminal_bindings() {
+            use iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1;
+
+            let valid = kagemusha_ingress_redemption_fixture();
+            let mut changed_certificate = valid.clone();
+            changed_certificate.voucher.commit_certificate.candidate_envelope_digest[0] ^= 1;
+            let mut changed_proof = valid.clone();
+            changed_proof.voucher.proof.commit_certificate_digest[0] ^= 1;
+            let mut missing_manifest = valid;
+            missing_manifest.voucher.artifact_manifest_digest = [0; 32];
+            for (label, request) in [
+                ("substituted terminal certificate", changed_certificate),
+                ("substituted proof certificate binding", changed_proof),
+                ("missing released artifact manifest", missing_manifest),
+            ] {
+                let bytes = norito::encode_canonical(&request).expect("encode invalid fixture");
+                assert!(
+                    matches!(
+                        decode_kagemusha_canonical_norito::<KagemushaRedemptionRequestV1>(&bytes),
+                        Err(KagemushaCanonicalNoritoDecodeError::Invalid(_))
+                    ),
+                    "{label} must fail shared ingress validation"
+                );
+            }
         }
         #[cfg(feature = "app_api")]
         #[tokio::test]

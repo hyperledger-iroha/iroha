@@ -48,8 +48,8 @@ fn conn_scheme_flags_every_catalogued_websocket_upgrade() {
         route_catalog::streaming::BLOCKS_WS,
         route_catalog::connect::WEBSOCKET,
         route_catalog::sorafs::REPUTATION_EVENTS_WEBSOCKET,
-        route_catalog::application_api::SORAFS_ORDERBOOK_EVENTS_WS_GET,
-        route_catalog::application_api::SORAFS_RESERVE_EVENTS_WS_GET,
+        route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_WS_GET,
+        route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_WS_GET,
     ];
     for descriptor in websocket_routes {
         let mut request = complete_websocket_upgrade_request();

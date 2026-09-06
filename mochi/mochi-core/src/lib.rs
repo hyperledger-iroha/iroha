@@ -40,7 +40,6 @@ pub use dashboard::{
 };
 pub use genesis::{sample_cabbage_definition_id, sample_rose_definition_id};
 pub use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
-pub use iroha_telemetry::metrics::{Status as TelemetryStatus, TxGossipSnapshot};
 pub use logs::{LifecycleEvent, LogStreamKind, PeerLogEvent, PeerLogStream};
 pub use secret::SecretString;
 pub use state::{

@@ -4262,6 +4262,7 @@ pub(crate) mod tests {
                 .collect(),
             encrypted_outputs: encrypted_outputs.clone(),
             audit_plaintext_commitment: hash(0x38),
+            audit_input_commitment: [0x3A; 32],
             audit_capsule_digest: hash(0x39),
             audit_policy_digest: policy.policy_digest,
             audit_key_epoch: policy.body.key_epoch,
@@ -4290,7 +4291,7 @@ pub(crate) mod tests {
         )
         .expect("dummy input memo");
         let provisional_relation =
-            PrivateNoteRelationProfileV1::exact_three_output_balanced([[0xD1; 32]; 3]);
+            PrivateNoteRelationProfileV1::exact_three_output_balanced([[0xD1; 32]; 3], [1; 32]);
         for opening in &mut plaintext.inputs {
             let note = PrivateNotePlaintextV1::new_profiled_input_v1(
                 opening.value,
@@ -4308,10 +4309,15 @@ pub(crate) mod tests {
 
         let plaintext_commitment = plaintext.commitment().expect("plaintext commitment");
         statement.audit_plaintext_commitment = plaintext_commitment;
+        statement.audit_input_commitment = crate::privacy_engines::atomic_private_settlement::
+            atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)
+                .expect("audit input commitment");
         let output_memos = atomic_private_settlement_output_memo_digests_v1(&manifest, &statement)
             .expect("fixed output memos");
-        let settlement_relation =
-            PrivateNoteRelationProfileV1::exact_three_output_balanced(output_memos);
+        let settlement_relation = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+            output_memos,
+            statement.audit_input_commitment,
+        );
         let program_id = atomic_private_settlement_program_id_v1().expect("settlement program");
         let mut output_rng = StdRng::seed_from_u64(0x4150_535f_4f55_5450);
         encrypted_outputs.clear();

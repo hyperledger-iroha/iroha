@@ -47,8 +47,9 @@ pub(crate) use fixture::{
 };
 pub(crate) use relation::{
     IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1, IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1,
-    PrivateNoteRelationProfileV1, derive_profiled_input_commitment_v1,
-    derive_profiled_output_commitment_v1, preflight_private_note_relation_with_profile_v1,
+    PrivateNoteRelationProfileV1, derive_private_note_input_openings_commitment_v1,
+    derive_profiled_input_commitment_v1, derive_profiled_output_commitment_v1,
+    preflight_private_note_relation_with_profile_v1,
 };
 pub use relation::{
     IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteRelationErrorV1,

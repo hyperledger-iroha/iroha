@@ -153,7 +153,7 @@ use iroha_sccp::{
     sccp_payload_projection,
 };
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::Status;
+use iroha_torii_shared::status::Status;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
 use iroha_torii_shared::sumeragi_evidence_api::{
@@ -42893,19 +42893,10 @@ mod explorer_lookup_tests {
             "derive explorer lookup block leader fixture key",
         );
         let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(txs)
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified.header());
-        let valid: ValidBlock = unverified
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let mut committed = valid.commit_unchecked().unpack(|_| {});
-        if let Some(route_plans) = route_plans {
+        let execution_context = route_plans.map(|route_plans| {
             use iroha_data_model::block::{
-                BlockExecutionContextBundle, ExternalExecutionContext,
-                ExternalExecutionRouteLeg, ExternalExecutionRouteRole,
+                BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
+                ExternalExecutionRouteRole,
             };
             assert_eq!(route_plans.len(), hashes.len());
             let contexts = hashes
@@ -42941,8 +42932,18 @@ mod explorer_lookup_tests {
                     )
                 })
                 .collect();
-            committed.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
-        }
+            BlockExecutionContextBundle::new(contexts)
+        });
+        let unverified = BlockBuilder::new(txs)
+            .chain(0, state.view().latest_block().as_deref())
+            .with_execution_context(execution_context)
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, state_block, committed);
         (state, hashes)
     }
@@ -62290,7 +62291,8 @@ mod space_directory_manifest_helper_tests {
             public_only,
         )
         .await
-        .expect_err("mixed public/restricted account summary must be hidden");
+        .err()
+        .expect("mixed public/restricted account summary must be hidden");
         assert_eq!(summary.into_response().status(), StatusCode::NOT_FOUND);
     }
     routing_test! { sync manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows
@@ -73130,9 +73132,9 @@ pub async fn handle_status(
                     "status metrics could not reach a fresh classified frontier: {error}"
                 ),
             })?;
-    let mut status = Status::from(metrics);
+    let mut status = metrics.status_snapshot();
     ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
-    status.nexus = Some(iroha_telemetry::metrics::NexusStatus::from_routing_policy(
+    status.nexus = Some(iroha_torii_shared::status::NexusStatus::from(
         &nexus_routing_policy,
     ));
     iroha_logger::debug!(

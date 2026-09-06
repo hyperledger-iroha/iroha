@@ -1,0 +1,458 @@
+[
+  {
+    "case": "unit",
+    "deserialize_hash": "e28fc27febbc873199ea9b789ba8a93f",
+    "frame_hex": "4e5254300000e28fc27febbc873199ea9b789ba8a93f000000000000000000000000000000000000",
+    "frame_name": "()",
+    "nominal": "()",
+    "serialize_hash": "e28fc27febbc873199ea9b789ba8a93f"
+  },
+  {
+    "case": "bool",
+    "deserialize_hash": "688fb8cf0a0979152cac609565259d9a",
+    "frame_hex": "4e5254300000688fb8cf0a0979152cac609565259d9a0001000000000000003660c067cded83ac0001",
+    "frame_name": "bool",
+    "nominal": "bool",
+    "serialize_hash": "688fb8cf0a0979152cac609565259d9a"
+  },
+  {
+    "case": "char",
+    "deserialize_hash": "0feed28954af18eedd09b6d35f34f940",
+    "frame_hex": "4e52543000000feed28954af18eedd09b6d35f34f940000400000000000000faf9cbd393d1477e00bb030000",
+    "frame_name": "char",
+    "nominal": "char",
+    "serialize_hash": "0feed28954af18eedd09b6d35f34f940"
+  },
+  {
+    "case": "u8",
+    "deserialize_hash": "fea335e6a1805df38c2ce0b987922b4c",
+    "frame_hex": "4e5254300000fea335e6a1805df38c2ce0b987922b4c0001000000000000005e9e0f301e18d7230007",
+    "frame_name": "u8",
+    "nominal": "u8",
+    "serialize_hash": "fea335e6a1805df38c2ce0b987922b4c"
+  },
+  {
+    "case": "u16",
+    "deserialize_hash": "129edcf33860ef9d47e6b473749837ff",
+    "frame_hex": "4e5254300000129edcf33860ef9d47e6b473749837ff00020000000000000021937668438e567e000700",
+    "frame_name": "u16",
+    "nominal": "u16",
+    "serialize_hash": "129edcf33860ef9d47e6b473749837ff"
+  },
+  {
+    "case": "u32",
+    "deserialize_hash": "81196fc71ec9839091581a286f5a10d6",
+    "frame_hex": "4e525430000081196fc71ec9839091581a286f5a10d60004000000000000005ffadcf0af312ca50007000000",
+    "frame_name": "u32",
+    "nominal": "u32",
+    "serialize_hash": "81196fc71ec9839091581a286f5a10d6"
+  },
+  {
+    "case": "u64",
+    "deserialize_hash": "0da5719e8724b7b5f4ad745dc147a2a2",
+    "frame_hex": "4e52543000000da5719e8724b7b5f4ad745dc147a2a20008000000000000008f7504e5566a3a04000700000000000000",
+    "frame_name": "u64",
+    "nominal": "u64",
+    "serialize_hash": "0da5719e8724b7b5f4ad745dc147a2a2"
+  },
+  {
+    "case": "u128",
+    "deserialize_hash": "76314336a727c496fa29f6d47d076c52",
+    "frame_hex": "4e525430000076314336a727c496fa29f6d47d076c5200100000000000000050a4d77c8ce159ff00000000000000000007000000000000000000000000000000",
+    "frame_name": "u128",
+    "nominal": "u128",
+    "serialize_hash": "76314336a727c496fa29f6d47d076c52"
+  },
+  {
+    "case": "usize",
+    "deserialize_hash": "4bfc2646708471512c83e35bff6da6f0",
+    "frame_hex": "4e52543000004bfc2646708471512c83e35bff6da6f00008000000000000008f7504e5566a3a04000700000000000000",
+    "frame_name": "usize",
+    "nominal": "usize",
+    "serialize_hash": "4bfc2646708471512c83e35bff6da6f0"
+  },
+  {
+    "case": "i8",
+    "deserialize_hash": "2073088ecd144fe738c646928c25f875",
+    "frame_hex": "4e52543000002073088ecd144fe738c646928c25f87500010000000000000068fecf57d3f5547000f9",
+    "frame_name": "i8",
+    "nominal": "i8",
+    "serialize_hash": "2073088ecd144fe738c646928c25f875"
+  },
+  {
+    "case": "i16",
+    "deserialize_hash": "ea34193891ddbf9a7ff391c81850fa17",
+    "frame_hex": "4e5254300000ea34193891ddbf9a7ff391c81850fa17000200000000000000ab38ec6546ba509700f9ff",
+    "frame_name": "i16",
+    "nominal": "i16",
+    "serialize_hash": "ea34193891ddbf9a7ff391c81850fa17"
+  },
+  {
+    "case": "i32",
+    "deserialize_hash": "c66fa635df66487308c6f573a577f724",
+    "frame_hex": "4e5254300000c66fa635df66487308c6f573a577f724000400000000000000c8c4ebcc3bc298b300f9ffffff",
+    "frame_name": "i32",
+    "nominal": "i32",
+    "serialize_hash": "c66fa635df66487308c6f573a577f724"
+  },
+  {
+    "case": "i64",
+    "deserialize_hash": "8083d9dd72b962c8e9f3201f0eb6b2eb",
+    "frame_hex": "4e52543000008083d9dd72b962c8e9f3201f0eb6b2eb000800000000000000f01ffe9f6373119700f9ffffffffffffff",
+    "frame_name": "i64",
+    "nominal": "i64",
+    "serialize_hash": "8083d9dd72b962c8e9f3201f0eb6b2eb"
+  },
+  {
+    "case": "i128",
+    "deserialize_hash": "9e5ef0e95a925eea052e829e3b4ea06b",
+    "frame_hex": "4e52543000009e5ef0e95a925eea052e829e3b4ea06b0010000000000000001777060f6979cf40000000000000000000f9ffffffffffffffffffffffffffffff",
+    "frame_name": "i128",
+    "nominal": "i128",
+    "serialize_hash": "9e5ef0e95a925eea052e829e3b4ea06b"
+  },
+  {
+    "case": "isize",
+    "deserialize_hash": "09f7fcba306f7eb9945f6e763727b848",
+    "frame_hex": "4e525430000009f7fcba306f7eb9945f6e763727b848000800000000000000f01ffe9f6373119700f9ffffffffffffff",
+    "frame_name": "isize",
+    "nominal": "isize",
+    "serialize_hash": "09f7fcba306f7eb9945f6e763727b848"
+  },
+  {
+    "case": "f32",
+    "deserialize_hash": "5b1eacc7eed4684245ad76e82b4ac7d8",
+    "frame_hex": "4e52543000005b1eacc7eed4684245ad76e82b4ac7d800040000000000000098273ace6bdda169000000a03f",
+    "frame_name": "f32",
+    "nominal": "f32",
+    "serialize_hash": "5b1eacc7eed4684245ad76e82b4ac7d8"
+  },
+  {
+    "case": "f64",
+    "deserialize_hash": "802b50c90d24fc38051225cf83e21b25",
+    "frame_hex": "4e5254300000802b50c90d24fc38051225cf83e21b2500080000000000000054a068ddf5f5464b00000000000000f43f",
+    "frame_name": "f64",
+    "nominal": "f64",
+    "serialize_hash": "802b50c90d24fc38051225cf83e21b25"
+  },
+  {
+    "case": "nonzero16",
+    "deserialize_hash": "da60b0e0eb96f8916f1dab7b9ceeb233",
+    "frame_hex": "4e5254300000da60b0e0eb96f8916f1dab7b9ceeb23300020000000000000021937668438e567e000700",
+    "frame_name": "core::num::nonzero::NonZero<u16>",
+    "nominal": "core::num::nonzero::NonZero<u16>",
+    "serialize_hash": "da60b0e0eb96f8916f1dab7b9ceeb233"
+  },
+  {
+    "case": "nonzero32",
+    "deserialize_hash": "554432c678f022c1acfcce972efbf3bd",
+    "frame_hex": "4e5254300000554432c678f022c1acfcce972efbf3bd0004000000000000005ffadcf0af312ca50007000000",
+    "frame_name": "core::num::nonzero::NonZero<u32>",
+    "nominal": "core::num::nonzero::NonZero<u32>",
+    "serialize_hash": "554432c678f022c1acfcce972efbf3bd"
+  },
+  {
+    "case": "nonzero64",
+    "deserialize_hash": "f4eddfc5ee57bd042c5a85746dca81a7",
+    "frame_hex": "4e5254300000f4eddfc5ee57bd042c5a85746dca81a70008000000000000008f7504e5566a3a04000700000000000000",
+    "frame_name": "core::num::nonzero::NonZero<u64>",
+    "nominal": "core::num::nonzero::NonZero<u64>",
+    "serialize_hash": "f4eddfc5ee57bd042c5a85746dca81a7"
+  },
+  {
+    "case": "string",
+    "deserialize_hash": "8394f71228a9b0f14029b969050bd7c3",
+    "frame_hex": "4e52543000008394f71228a9b0f14029b969050bd7c30004000000000000004ed090125b4eb7140203616263",
+    "frame_name": "alloc::string::String",
+    "nominal": "alloc::string::String",
+    "serialize_hash": "8394f71228a9b0f14029b969050bd7c3"
+  },
+  {
+    "case": "borrowed_str",
+    "deserialize_hash": "8394f71228a9b0f14029b969050bd7c3",
+    "frame_hex": "4e52543000008394f71228a9b0f14029b969050bd7c30004000000000000004ed090125b4eb7140203616263",
+    "frame_name": "alloc::string::String",
+    "nominal": "&str",
+    "serialize_hash": "8394f71228a9b0f14029b969050bd7c3"
+  },
+  {
+    "case": "cow_str",
+    "deserialize_hash": "8394f71228a9b0f14029b969050bd7c3",
+    "frame_hex": "4e52543000008394f71228a9b0f14029b969050bd7c30004000000000000004ed090125b4eb7140203616263",
+    "frame_name": "alloc::string::String",
+    "nominal": "alloc::borrow::Cow<'_, str>",
+    "serialize_hash": "8394f71228a9b0f14029b969050bd7c3"
+  },
+  {
+    "case": "boxed_str",
+    "deserialize_hash": "8394f71228a9b0f14029b969050bd7c3",
+    "frame_hex": "4e52543000008394f71228a9b0f14029b969050bd7c30004000000000000004ed090125b4eb7140203616263",
+    "frame_name": "alloc::string::String",
+    "nominal": "alloc::boxed::Box<str>",
+    "serialize_hash": "8394f71228a9b0f14029b969050bd7c3"
+  },
+  {
+    "case": "vec_borrowed_str",
+    "deserialize_hash": null,
+    "frame_hex": "4e5254300000f4f9305f0d2672157cd4c401f8846ec8000d00000000000000fb6dd4c2b1cb555f0201000000000000000403616263",
+    "frame_name": "alloc::vec::Vec<&str>",
+    "nominal": "alloc::vec::Vec<&str>",
+    "serialize_hash": "f4f9305f0d2672157cd4c401f8846ec8"
+  },
+  {
+    "case": "vec_cow_str",
+    "deserialize_hash": null,
+    "frame_hex": "4e5254300000db5354f83efc4855a787adde85df838b000d00000000000000fb6dd4c2b1cb555f0201000000000000000403616263",
+    "frame_name": "alloc::vec::Vec<alloc::borrow::Cow<'_, str>>",
+    "nominal": "alloc::vec::Vec<alloc::borrow::Cow<'_, str>>",
+    "serialize_hash": "db5354f83efc4855a787adde85df838b"
+  },
+  {
+    "case": "vec_boxed_str",
+    "deserialize_hash": "17ac83c535149abf923163cae900dce4",
+    "frame_hex": "4e525430000017ac83c535149abf923163cae900dce4000d00000000000000fb6dd4c2b1cb555f0201000000000000000403616263",
+    "frame_name": "alloc::vec::Vec<alloc::boxed::Box<str>>",
+    "nominal": "alloc::vec::Vec<alloc::boxed::Box<str>>",
+    "serialize_hash": "17ac83c535149abf923163cae900dce4"
+  },
+  {
+    "case": "box",
+    "deserialize_hash": "589d7ed8de161f353e160245167f28d4",
+    "frame_hex": "4e5254300000589d7ed8de161f353e160245167f28d4000500000000000000dc1a9a60ee170078020407000000",
+    "frame_name": "alloc::boxed::Box<u32>",
+    "nominal": "alloc::boxed::Box<u32>",
+    "serialize_hash": "589d7ed8de161f353e160245167f28d4"
+  },
+  {
+    "case": "rc",
+    "deserialize_hash": "288049ece8a778eed834c78f0cc08f04",
+    "frame_hex": "4e5254300000288049ece8a778eed834c78f0cc08f04000500000000000000dc1a9a60ee170078020407000000",
+    "frame_name": "alloc::rc::Rc<u32>",
+    "nominal": "alloc::rc::Rc<u32>",
+    "serialize_hash": "288049ece8a778eed834c78f0cc08f04"
+  },
+  {
+    "case": "arc",
+    "deserialize_hash": "d9bb2b22bcf1c7505bb743b3cffa0c12",
+    "frame_hex": "4e5254300000d9bb2b22bcf1c7505bb743b3cffa0c12000500000000000000dc1a9a60ee170078020407000000",
+    "frame_name": "alloc::sync::Arc<u32>",
+    "nominal": "alloc::sync::Arc<u32>",
+    "serialize_hash": "d9bb2b22bcf1c7505bb743b3cffa0c12"
+  },
+  {
+    "case": "cell",
+    "deserialize_hash": "8848ed37cebc95566e8c0d84c9d6e92a",
+    "frame_hex": "4e52543000008848ed37cebc95566e8c0d84c9d6e92a0004000000000000005ffadcf0af312ca50007000000",
+    "frame_name": "core::cell::Cell<u32>",
+    "nominal": "core::cell::Cell<u32>",
+    "serialize_hash": "8848ed37cebc95566e8c0d84c9d6e92a"
+  },
+  {
+    "case": "refcell",
+    "deserialize_hash": "246969dbf0d7f053f69a6d9585793711",
+    "frame_hex": "4e5254300000246969dbf0d7f053f69a6d95857937110004000000000000005ffadcf0af312ca50007000000",
+    "frame_name": "core::cell::RefCell<u32>",
+    "nominal": "core::cell::RefCell<u32>",
+    "serialize_hash": "246969dbf0d7f053f69a6d9585793711"
+  },
+  {
+    "case": "option",
+    "deserialize_hash": "b0e40b28f9b031b43b627201ce02ed84",
+    "frame_hex": "4e5254300000b0e40b28f9b031b43b627201ce02ed84000600000000000000114a3f48bd39548302010407000000",
+    "frame_name": "core::option::Option<u32>",
+    "nominal": "core::option::Option<u32>",
+    "serialize_hash": "b0e40b28f9b031b43b627201ce02ed84"
+  },
+  {
+    "case": "result",
+    "deserialize_hash": "ab366add07612e24637af102af0baeb7",
+    "frame_hex": "4e5254300000ab366add07612e24637af102af0baeb7000600000000000000006073aa4946cf3202010403616263",
+    "frame_name": "core::result::Result<u32, alloc::string::String>",
+    "nominal": "core::result::Result<u32, alloc::string::String>",
+    "serialize_hash": "ab366add07612e24637af102af0baeb7"
+  },
+  {
+    "case": "array",
+    "deserialize_hash": "275b42cf66e0eed3605e78c74e3014b1",
+    "frame_hex": "4e5254300000275b42cf66e0eed3605e78c74e3014b1000a000000000000002970ba6ce06785820204070000000408000000",
+    "frame_name": "[u32; 2]",
+    "nominal": "[u32; 2]",
+    "serialize_hash": "275b42cf66e0eed3605e78c74e3014b1"
+  },
+  {
+    "case": "vec",
+    "deserialize_hash": "a9350d21a39a031ec55262b48fa5b06c",
+    "frame_hex": "4e5254300000a9350d21a39a031ec55262b48fa5b06c000d00000000000000ea47982045b4ceee0201000000000000000407000000",
+    "frame_name": "alloc::vec::Vec<u32>",
+    "nominal": "alloc::vec::Vec<u32>",
+    "serialize_hash": "a9350d21a39a031ec55262b48fa5b06c"
+  },
+  {
+    "case": "deque",
+    "deserialize_hash": "b24f17331c95e54962952a3e82353534",
+    "frame_hex": "4e5254300000b24f17331c95e54962952a3e82353534000d00000000000000ea47982045b4ceee0201000000000000000407000000",
+    "frame_name": "alloc::collections::vec_deque::VecDeque<u32>",
+    "nominal": "alloc::collections::vec_deque::VecDeque<u32>",
+    "serialize_hash": "b24f17331c95e54962952a3e82353534"
+  },
+  {
+    "case": "list",
+    "deserialize_hash": "c438b6c87fa854074950dad22bf90897",
+    "frame_hex": "4e5254300000c438b6c87fa854074950dad22bf90897000d00000000000000ea47982045b4ceee0201000000000000000407000000",
+    "frame_name": "alloc::collections::linked_list::LinkedList<u32>",
+    "nominal": "alloc::collections::linked_list::LinkedList<u32>",
+    "serialize_hash": "c438b6c87fa854074950dad22bf90897"
+  },
+  {
+    "case": "heap",
+    "deserialize_hash": "299cf73033ebb2a2fa070c73273d5166",
+    "frame_hex": "4e5254300000299cf73033ebb2a2fa070c73273d5166000d00000000000000ea47982045b4ceee0201000000000000000407000000",
+    "frame_name": "alloc::collections::binary_heap::BinaryHeap<u32>",
+    "nominal": "alloc::collections::binary_heap::BinaryHeap<u32>",
+    "serialize_hash": "299cf73033ebb2a2fa070c73273d5166"
+  },
+  {
+    "case": "btreeset",
+    "deserialize_hash": "66d8071d1f4b67f92f84abb62621667f",
+    "frame_hex": "4e525430000066d8071d1f4b67f92f84abb62621667f000d00000000000000ea47982045b4ceee0201000000000000000407000000",
+    "frame_name": "alloc::collections::btree::set::BTreeSet<u32>",
+    "nominal": "alloc::collections::btree::set::BTreeSet<u32>",
+    "serialize_hash": "66d8071d1f4b67f92f84abb62621667f"
+  },
+  {
+    "case": "hashset",
+    "deserialize_hash": "cd30c266f6c692d409b9a6f0f9bbf61a",
+    "frame_hex": "4e5254300000cd30c266f6c692d409b9a6f0f9bbf61a000d00000000000000ea47982045b4ceee0201000000000000000407000000",
+    "frame_name": "std::collections::hash::set::HashSet<u32>",
+    "nominal": "std::collections::hash::set::HashSet<u32>",
+    "serialize_hash": "cd30c266f6c692d409b9a6f0f9bbf61a"
+  },
+  {
+    "case": "btreemap",
+    "deserialize_hash": "2b6fa13c4ed3eef017239e9c26e0378d",
+    "frame_hex": "4e52543000002b6fa13c4ed3eef017239e9c26e0378d001600000000000000459506da9a969a0b0201000000000000000407000000080800000000000000",
+    "frame_name": "alloc::collections::btree::map::BTreeMap<u32, u64>",
+    "nominal": "alloc::collections::btree::map::BTreeMap<u32, u64>",
+    "serialize_hash": "2b6fa13c4ed3eef017239e9c26e0378d"
+  },
+  {
+    "case": "hashmap",
+    "deserialize_hash": "06ffde8341c7706c1eb382f17a1194bc",
+    "frame_hex": "4e525430000006ffde8341c7706c1eb382f17a1194bc001600000000000000459506da9a969a0b0201000000000000000407000000080800000000000000",
+    "frame_name": "std::collections::hash::map::HashMap<u32, u64>",
+    "nominal": "std::collections::hash::map::HashMap<u32, u64>",
+    "serialize_hash": "06ffde8341c7706c1eb382f17a1194bc"
+  },
+  {
+    "case": "phantom",
+    "deserialize_hash": "c6a52d0f6b46ae36dcfc542671da3e38",
+    "frame_hex": "4e5254300000c6a52d0f6b46ae36dcfc542671da3e38000000000000000000000000000000000000",
+    "frame_name": "core::marker::PhantomData<u32>",
+    "nominal": "core::marker::PhantomData<u32>",
+    "serialize_hash": "c6a52d0f6b46ae36dcfc542671da3e38"
+  },
+  {
+    "case": "explicit_leaf",
+    "deserialize_hash": "9b09dc079cc4cdf2b91f4b5b586add01",
+    "frame_hex": "4e52543000009b09dc079cc4cdf2b91f4b5b586add01000500000000000000dc1a9a60ee170078020407000000",
+    "frame_name": "example.status.leaf",
+    "nominal": "norito_group_06::schema_identity::original::Leaf",
+    "serialize_hash": "9b09dc079cc4cdf2b91f4b5b586add01"
+  },
+  {
+    "case": "nested_explicit_leaf",
+    "deserialize_hash": "9326fc91fd56ed762d2ff1f6ae83b6e0",
+    "frame_hex": "4e52543000009326fc91fd56ed762d2ff1f6ae83b6e000100000000000000096dea039d215e85f0201000000000000000701050407000000",
+    "frame_name": "alloc::vec::Vec<core::option::Option<norito_group_06::schema_identity::original::Leaf>>",
+    "nominal": "alloc::vec::Vec<core::option::Option<norito_group_06::schema_identity::original::Leaf>>",
+    "serialize_hash": "9326fc91fd56ed762d2ff1f6ae83b6e0"
+  },
+  {
+    "case": "tuple2",
+    "deserialize_hash": "b7399dbcef1f090ab98abff0b72149e0",
+    "frame_hex": "4e5254300000b7399dbcef1f090ab98abff0b72149e0000a000000000000006ac3e12cf8fac0df0204000000000401000000",
+    "frame_name": "(u32, u32)",
+    "nominal": "(u32, u32)",
+    "serialize_hash": "b7399dbcef1f090ab98abff0b72149e0"
+  },
+  {
+    "case": "tuple3",
+    "deserialize_hash": "d5079233723ddc754206a9a6542d55c4",
+    "frame_hex": "4e5254300000d5079233723ddc754206a9a6542d55c4000f000000000000009ddaf8b7a6573dbb02040000000004010000000402000000",
+    "frame_name": "(u32, u32, u32)",
+    "nominal": "(u32, u32, u32)",
+    "serialize_hash": "d5079233723ddc754206a9a6542d55c4"
+  },
+  {
+    "case": "tuple4",
+    "deserialize_hash": "b810894dc50173888e9a58c77b5b793d",
+    "frame_hex": "4e5254300000b810894dc50173888e9a58c77b5b793d001400000000000000156461afa45ac7cd020400000000040100000004020000000403000000",
+    "frame_name": "(u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32)",
+    "serialize_hash": "b810894dc50173888e9a58c77b5b793d"
+  },
+  {
+    "case": "tuple5",
+    "deserialize_hash": "c429cab3d5026460c789e460e932dea0",
+    "frame_hex": "4e5254300000c429cab3d5026460c789e460e932dea0001900000000000000c7ab997fc1a068c20204000000000401000000040200000004030000000404000000",
+    "frame_name": "(u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32)",
+    "serialize_hash": "c429cab3d5026460c789e460e932dea0"
+  },
+  {
+    "case": "tuple6",
+    "deserialize_hash": "a5eb89dd64454335e991e1a704ce4949",
+    "frame_hex": "4e5254300000a5eb89dd64454335e991e1a704ce4949001e0000000000000024fc9ca20939537b02040000000004010000000402000000040300000004040000000405000000",
+    "frame_name": "(u32, u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32, u32)",
+    "serialize_hash": "a5eb89dd64454335e991e1a704ce4949"
+  },
+  {
+    "case": "tuple7",
+    "deserialize_hash": "a8cd3293aa9eeedad8ea14ddd3738e2d",
+    "frame_hex": "4e5254300000a8cd3293aa9eeedad8ea14ddd3738e2d00230000000000000021151d243d11ace8020400000000040100000004020000000403000000040400000004050000000406000000",
+    "frame_name": "(u32, u32, u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32, u32, u32)",
+    "serialize_hash": "a8cd3293aa9eeedad8ea14ddd3738e2d"
+  },
+  {
+    "case": "tuple8",
+    "deserialize_hash": "09aef4ca9623aba0fd43fa95dd229fc7",
+    "frame_hex": "4e525430000009aef4ca9623aba0fd43fa95dd229fc70028000000000000004f0172adff91328c0204000000000401000000040200000004030000000404000000040500000004060000000407000000",
+    "frame_name": "(u32, u32, u32, u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32, u32, u32, u32)",
+    "serialize_hash": "09aef4ca9623aba0fd43fa95dd229fc7"
+  },
+  {
+    "case": "tuple9",
+    "deserialize_hash": "484dc39c18c1c1baf07131c820d48453",
+    "frame_hex": "4e5254300000484dc39c18c1c1baf07131c820d48453002d0000000000000026f8fd3d37964adb02040000000004010000000402000000040300000004040000000405000000040600000004070000000408000000",
+    "frame_name": "(u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "serialize_hash": "484dc39c18c1c1baf07131c820d48453"
+  },
+  {
+    "case": "tuple10",
+    "deserialize_hash": "36d5f04ee0d81672415843f07d4c0e70",
+    "frame_hex": "4e525430000036d5f04ee0d81672415843f07d4c0e70003200000000000000c1d6916b63f8728d020400000000040100000004020000000403000000040400000004050000000406000000040700000004080000000409000000",
+    "frame_name": "(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "serialize_hash": "36d5f04ee0d81672415843f07d4c0e70"
+  },
+  {
+    "case": "tuple11",
+    "deserialize_hash": "415ed96d3f30d9e4b0bed2bc3381c0f2",
+    "frame_hex": "4e5254300000415ed96d3f30d9e4b0bed2bc3381c0f2003700000000000000f2f2d4e5fa9e9021020400000000040100000004020000000403000000040400000004050000000406000000040700000004080000000409000000040a000000",
+    "frame_name": "(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "serialize_hash": "415ed96d3f30d9e4b0bed2bc3381c0f2"
+  },
+  {
+    "case": "tuple12",
+    "deserialize_hash": "66bbc7b9e9b1f4ac105468556ec8efef",
+    "frame_hex": "4e525430000066bbc7b9e9b1f4ac105468556ec8efef003c00000000000000695192bb7d79a0fb020400000000040100000004020000000403000000040400000004050000000406000000040700000004080000000409000000040a000000040b000000",
+    "frame_name": "(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "nominal": "(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)",
+    "serialize_hash": "66bbc7b9e9b1f4ac105468556ec8efef"
+  }
+]

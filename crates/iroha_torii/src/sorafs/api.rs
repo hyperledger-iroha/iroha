@@ -32095,7 +32095,8 @@ mod advert_tests {
             app.sorafs_admission.clone(),
             None,
             None,
-        );
+        )
+        .expect("valid test gateway security configuration");
         app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
     }
@@ -41249,7 +41250,8 @@ mod advert_tests {
             inner_after.sorafs_admission.clone(),
             None,
             None,
-        );
+        )
+        .expect("valid test gateway security configuration");
         inner_after.sorafs_gateway_policy = Some(Arc::clone(&components_after.policy));
         inner_after.sorafs_gateway_tls_state = Some(Arc::clone(&components_after.tls_state));
         let state_after = Arc::new(inner_after);

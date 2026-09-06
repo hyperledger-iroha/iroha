@@ -8,6 +8,10 @@ use iroha_data_model::{
     transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+/// Public account-bootstrap network and signing policy.
+pub mod account_capabilities;
+/// Canonical node configuration snapshots and operator update records.
+pub mod configuration;
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
@@ -32,6 +36,8 @@ pub mod sorafs_hedging_billing_api;
 pub mod sorafs_moderation_api;
 /// Canonical response envelopes for the Sumeragi evidence audit API.
 pub mod sumeragi_evidence_api;
+/// Canonical node status response and capability snapshots.
+pub mod status;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 /// Response header binding a hosted Soracloud response to the served service name.
@@ -491,6 +497,8 @@ pub mod uri {
     pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
     /// Governance: read the active binding for a canonical contract address
     pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
+    /// Accounts: public bootstrap network identity and explicit signing default.
+    pub const ACCOUNTS_CAPABILITIES: &str = "/v1/accounts/capabilities";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Node: latest persisted query projection checkpoint descriptor

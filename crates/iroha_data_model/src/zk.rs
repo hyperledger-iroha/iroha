@@ -93,6 +93,8 @@ pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
 /// this enum. They have protocol-specific data-model types and must not be
 /// inferred from aliases or free-form catalog labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::BackendTag")]
 pub enum BackendTag {
     /// Halo2 IPA over Pasta curves.
     Halo2IpaPasta,
@@ -311,6 +313,8 @@ impl std::error::Error for OpenVerifyEnvelopeValidationError {}
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::OpenVerifyEnvelope")]
 pub struct OpenVerifyEnvelope {
     /// Backend tag string (e.g., `halo2-ipa-pasta`).
     pub backend: BackendTag,
@@ -518,6 +522,8 @@ pub fn open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::StarkFriOpenProofV1")]
 pub struct StarkFriOpenProofV1 {
     /// Version tag for format evolution.
     pub version: u16,
@@ -538,6 +544,8 @@ pub struct StarkFriOpenProofV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1", frame = "iroha.privacy.zk-ace.public-inputs.v1")]
 pub struct ZkAcePrivacyPublicInputsV1 {
     /// Public-input schema version.
     pub version: u16,
@@ -553,6 +561,8 @@ pub struct ZkAcePrivacyPublicInputsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::ZkAcePackedBytesV1")]
 pub struct ZkAcePackedBytesV1 {
     /// Original byte length before padding.
     pub length: u64,
@@ -1473,3 +1483,6 @@ mod tests {
         assert_json_roundtrip(&open_proof);
     }
 }
+
+#[cfg(test)]
+mod captured_zk_schema_tests;

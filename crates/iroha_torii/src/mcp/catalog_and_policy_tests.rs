@@ -1,5 +1,6 @@
 // MCP catalog, policy, authentication, and schema regressions.
 use super::*;
+use crate::McpDispatchRouterOwner;
 use crate::tests_runtime_handlers::{
     app_auth_test_guard, checked_torii_test_ed25519_keypair, mk_app_state_for_tests,
     mk_app_state_for_tests_with_world, signed_app_headers, world_with_account,

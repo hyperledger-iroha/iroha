@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client.stream
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -49,7 +51,7 @@ class ToriiEventStreamClientTest {
                 LocalSigningContext(networkId),
                 ToriiCanonicalRequestAuth(
                     "alice@universal",
-                    keyPair.private,
+                    RequestSigner.ed25519(keyPair.private),
                     timestampMs,
                     nonce,
                 ),

@@ -28,7 +28,7 @@ fn metrics_lifecycle() {
             .try_to_string()
             .expect("Should not fail for default")
     );
-    println!("{:?}", Status::from(&metrics));
+    println!("{:?}", metrics.status_snapshot());
     println!("{:?}", Status::default());
 }
 #[test]
@@ -38,43 +38,6 @@ fn sorafs_pin_resource_usage_exports_only_consensus_summary_values() {
     let exported = metrics.try_to_string().expect("metrics should serialize");
     assert!(exported.contains("torii_sorafs_pin_retained_manifests 17"));
     assert!(exported.contains("torii_sorafs_pin_live_content_bytes 4096"));
-}
-#[test]
-fn nexus_status_exports_optional_rule_dataspace() {
-    let policy = iroha_config::parameters::actual::LaneRoutingPolicy {
-        default_lane: iroha_data_model::LaneId::new(2),
-        default_dataspace: iroha_data_model::DataSpaceId::new(10),
-        rules: vec![
-            iroha_config::parameters::actual::LaneRoutingRule {
-                lane: iroha_data_model::LaneId::new(3),
-                dataspace: Some(iroha_data_model::DataSpaceId::new(11)),
-                matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
-                    account: Some("alice".to_owned()),
-                    instruction: Some("Register".to_owned()),
-                    description: Some("explicit dataspace".to_owned()),
-                },
-            },
-            iroha_config::parameters::actual::LaneRoutingRule {
-                lane: iroha_data_model::LaneId::new(4),
-                dataspace: None,
-                matcher: iroha_config::parameters::actual::LaneRoutingMatcher::default(),
-            },
-        ],
-    };
-    let status = NexusStatus::from_routing_policy(&policy);
-    assert_eq!(status.routing_policy.default_lane, 2);
-    assert_eq!(status.routing_policy.default_dataspace, 10);
-    assert_eq!(status.routing_policy.rules[0].lane, 3);
-    assert_eq!(status.routing_policy.rules[0].dataspace_id, Some(11));
-    assert_eq!(
-        status.routing_policy.rules[0]
-            .matcher
-            .description
-            .as_deref(),
-        Some("explicit dataspace")
-    );
-    assert_eq!(status.routing_policy.rules[1].lane, 4);
-    assert_eq!(status.routing_policy.rules[1].dataspace_id, None);
 }
 #[test]
 fn retired_pacemaker_metrics_are_not_exported() {
@@ -2230,7 +2193,7 @@ fn serialize_status_json() {
     expect_test::expect_file!["fixtures/status_snapshot.v1.json"].assert_eq(&format!("{actual}\n"));
 }
 #[test]
-fn status_from_metrics_includes_queue_and_block_liveness() {
+fn status_snapshot_includes_queue_and_block_liveness() {
     let metrics = Metrics::default();
     let now = current_unix_time_ms();
     metrics.queue_size.set(8);
@@ -2242,7 +2205,7 @@ fn status_from_metrics_includes_queue_and_block_liveness() {
     metrics
         .last_non_empty_block_committed_at_ms
         .set(now.saturating_sub(500));
-    let status = Status::from(&metrics);
+    let status = metrics.status_snapshot();
     assert!(status.observed_at_ms >= now);
     assert_eq!(status.queue_size, 8);
     assert_eq!(status.queue_queued, 5);
@@ -2254,4 +2217,30 @@ fn status_from_metrics_includes_queue_and_block_liveness() {
     );
     assert!(status.time_since_last_block_ms >= 250);
     assert!(status.time_since_last_non_empty_block_ms >= 500);
+}
+
+#[test]
+fn status_snapshot_reports_node_build_and_crypto_capabilities() {
+    let metrics = Metrics::default();
+    metrics.sm_openssl_preview.set(1);
+    let status = metrics.status_snapshot();
+    assert_eq!(status.build.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        status.build.git_commit_sha,
+        option_env!("VERGEN_GIT_SHA").unwrap_or("unknown")
+    );
+    assert_eq!(
+        status.build.dpn_validator_release_commit,
+        option_env!("IROHA_DPN_VALIDATOR_RELEASE_COMMIT").unwrap_or("unknown")
+    );
+    assert_eq!(
+        status.build.cargo_features,
+        option_env!("VERGEN_CARGO_FEATURES").unwrap_or("unknown")
+    );
+    assert_eq!(
+        status.build.target_triple,
+        option_env!("VERGEN_CARGO_TARGET_TRIPLE").unwrap_or("unknown")
+    );
+    assert_eq!(status.crypto.sm_helpers_available, cfg!(feature = "sm"));
+    assert!(status.crypto.sm_openssl_preview_enabled);
 }

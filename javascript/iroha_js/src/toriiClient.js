@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
 import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
+import { readAccountCapabilitiesResponseV1 } from "./accountCapabilities.js";
 import {
   resolveToriiClientConfig,
   extractConfidentialGasConfig,
@@ -1761,6 +1762,20 @@ export class ToriiClient {
         "ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
     }
+  }
+
+  /** Discover exact network identity and the explicit V1 account-signing default without credentials. */
+  async getAccountCapabilities(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getAccountCapabilities");
+    assertSupportedOptionKeys(rest, new Set([]), "getAccountCapabilities options");
+    const response = await this._request("GET", "/v1/accounts/capabilities", {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      redirect: "error",
+      disableRetries: true,
+      publicRequest: true,
+    });
+    return readAccountCapabilitiesResponseV1(response, { signal });
   }
 
   /** Fetch the universally compiled, asset-neutral KagemushaReadinessV1 projection. */
@@ -10907,7 +10922,10 @@ export class ToriiClient {
     const protocol = url.protocol.toLowerCase();
     const originMatches =
       url.host === this.#baseHost && protocol === this.#baseProtocol;
-    const initHeaders = this._createHeaders(options.headers);
+    // Bootstrap discovery must never inherit account, API, operator, or cookie credentials.
+    const initHeaders = options.publicRequest === true
+      ? { ...options.headers }
+      : this._createHeaders(options.headers);
     const operatorSigningContext = options.requireIsoOperatorAuth === true
       ? requireIsoOperatorSigningContext(options.operatorSigningContext, initHeaders)
       : resolveOperatorSigningContext(options.operatorSigningContext);
@@ -11009,6 +11027,7 @@ export class ToriiClient {
       method: methodUpper,
       headers: initHeaders,
       body: options.body,
+      ...(options.publicRequest === true ? { credentials: "omit" } : {}),
     };
     // Canonical authentication and caller-supplied nonce headers are one-shot.
     // It is unsafe to replay them after dispatch or to let Fetch follow a

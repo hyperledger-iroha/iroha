@@ -232,6 +232,14 @@ same decision. Unknown fields then use the same strict iterative subtree
 grammar, so an individually valid subtree cannot exceed the global limit by
 hiding beneath a typed outer object or array.
 
+JSON field dispatch uses one key hash implementation for compile-time constants,
+the scalar parser, and the tape parser. With `crc-key-hash`, the portable
+Castagnoli byte update and runtime-detected ARM CRC or x86 SSE4.2 update use
+the same accumulator convention and final mixing. Without that feature they
+all use FNV-1a. These hashes select JSON fields internally; they do not alter
+the serialized JSON or binary schema hashes. Key comparisons still guard
+against hash collisions.
+
 Typed JSON floating-point values must be finite. Norito rejects literals whose
 decimal exponent overflows `f64`; finite values are rendered with Ryu's
 locale-independent shortest-roundtrip representation, preserving their exact

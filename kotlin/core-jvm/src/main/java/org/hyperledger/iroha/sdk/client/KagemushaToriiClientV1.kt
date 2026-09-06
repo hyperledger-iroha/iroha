@@ -3,6 +3,8 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -21,9 +23,12 @@ import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
 /** Exact-route client for the sole first-release KAGEMUSHA reserve API. */
-class KagemushaToriiClientV1 private constructor(builder: Builder) {
+class KagemushaToriiClientV1 private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
+
     private val executor: HttpTransportExecutor =
-        builder.executor ?: PlatformHttpTransportExecutor.createDefault()
+        HttpTransportScope.create(builder.executor)
     private val baseUri: URI = requireBaseUri(builder.baseUri)
     private val timeout: Duration? = builder.timeout
     private val defaultHeaders: Map<String, String> =

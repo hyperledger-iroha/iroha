@@ -1,6 +1,6 @@
 //! Actor responsible for configuration state and its dynamic updates.
 //!
-//! Currently the API exposed by [`KisoHandle`] works only with [`ConfigGetDTO`], because no any
+//! Currently the API exposed by [`KisoHandle`] works only with [`Configuration`], because no any
 //! part of Iroha is interested in the whole state. However, the API could be extended in future.
 //!
 //! Mutable node-local settings publish committed snapshots through
@@ -12,16 +12,16 @@ use eyre::Result;
 use hex;
 use iroha_config::{
     base::WithOrigin,
-    client_api::{
-        ConfigGetDTO, ConfigUpdateDTO, Logger, NetworkAcl, ResumeHashDirective,
-        SoranetHandshakePowUpdate, SoranetHandshakeUpdate, TransportUpdate,
-    },
     parameters::actual::{
         Logger as LoggerConfig, NoritoRpcStage, Root as Config,
         SoranetHandshake as ActualSoranetHandshake, SoranetPow,
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown};
+use iroha_torii_shared::configuration::{
+    Configuration, ConfigurationUpdate, Logger, NetworkAcl, ResumeHashDirective,
+    SoranetHandshakePowUpdate, SoranetHandshakeUpdate, TransportUpdate,
+};
 use std::{num::NonZeroU32, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch};
 const DEFAULT_CHANNEL_SIZE: usize = 32;
@@ -62,11 +62,11 @@ impl KisoHandle {
             ),
         )
     }
-    /// Fetch the [`ConfigGetDTO`] from the actor's state.
+    /// Fetch the [`Configuration`] from the actor's state.
     ///
     /// # Errors
     /// If communication with actor fails.
-    pub async fn get_dto(&self) -> Result<ConfigGetDTO, Error> {
+    pub async fn get_dto(&self) -> Result<Configuration, Error> {
         let (tx, rx) = oneshot::channel();
         let msg = Message::GetDTO { respond_to: tx };
         let _ = self.actor.send(msg).await;
@@ -80,7 +80,7 @@ impl KisoHandle {
     ///
     /// # Errors
     /// If communication with actor fails.
-    pub async fn update_with_dto(&self, dto: ConfigUpdateDTO) -> Result<(), Error> {
+    pub async fn update_with_dto(&self, dto: ConfigurationUpdate) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
         let msg = Message::UpdateWithDTO {
             dto: Box::new(dto),
@@ -154,7 +154,7 @@ impl KisoHandle {
     /// The mock serves `get_dto` requests from the provided configuration snapshot and acknowledges
     /// updates/subscriptions with pre-seeded watch channels.
     pub fn mock(state: &Config) -> Self {
-        let dto = ConfigGetDTO::from(state);
+        let dto = Configuration::from(state);
         let (actor_sender, actor_receiver) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let logger = state.logger.clone();
         let network_acl = Actor::snapshot_network_acl(state);
@@ -183,7 +183,7 @@ async fn run_mock_actor(
     logger: LoggerConfig,
     network_acl: NetworkAcl,
     soranet_handshake: ActualSoranetHandshake,
-    dto: ConfigGetDTO,
+    dto: Configuration,
 ) {
     let (logger_tx, _) = watch::channel(logger);
     let (network_acl_tx, _) = watch::channel(network_acl);
@@ -245,10 +245,10 @@ async fn run_mock_actor(
 }
 enum Message {
     GetDTO {
-        respond_to: oneshot::Sender<ConfigGetDTO>,
+        respond_to: oneshot::Sender<Configuration>,
     },
     UpdateWithDTO {
-        dto: Box<ConfigUpdateDTO>,
+        dto: Box<ConfigurationUpdate>,
         respond_to: oneshot::Sender<Result<(), Error>>,
     },
     SubscribeOnLogLevel {
@@ -304,7 +304,7 @@ impl Actor {
     async fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::GetDTO { respond_to } => {
-                let dto = ConfigGetDTO::from(&self.state);
+                let dto = Configuration::from(&self.state);
                 let _ = respond_to.send(dto);
             }
             Message::UpdateWithDTO { dto, respond_to } => {
@@ -337,8 +337,8 @@ impl Actor {
         }
     }
     #[allow(clippy::too_many_lines)]
-    async fn apply_config_update(&mut self, dto: ConfigUpdateDTO) -> Result<(), Error> {
-        let ConfigUpdateDTO {
+    async fn apply_config_update(&mut self, dto: ConfigurationUpdate) -> Result<(), Error> {
+        let ConfigurationUpdate {
             logger,
             network_acl,
             network,
@@ -352,9 +352,12 @@ impl Actor {
         let mut notify_soranet_handshake = false;
         let Logger { level, filter } = logger;
         next.logger.level = level;
-        next.logger.filter = filter;
+        next.logger.filter = filter
+            .map(|value| value.parse())
+            .transpose()
+            .map_err(|error| Error::Validation(format!("invalid logger filter: {error}")))?;
         if let Some(acl) = network_acl {
-            let iroha_config::client_api::NetworkAcl {
+            let iroha_torii_shared::configuration::NetworkAcl {
                 allowlist_only,
                 allow_keys,
                 deny_keys,
@@ -398,8 +401,8 @@ impl Actor {
                 next.network.require_sm_openssl_preview_match = value;
             }
             if let Some(profile) = network.lane_profile {
-                next.network.lane_profile = profile;
-                let limits = profile.derived_limits();
+                next.network.lane_profile = profile.into();
+                let limits = next.network.lane_profile.derived_limits();
                 next.network.max_incoming = limits.max_incoming;
                 next.network.max_total_connections = limits.max_total_connections;
                 next.network.low_priority_bytes_per_sec = limits.low_priority_bytes_per_sec;
@@ -665,9 +668,6 @@ mod tests {
     use super::*;
     use iroha_config::{
         base::WithOrigin,
-        client_api::{
-            ComputePricingUpdate, Logger as LoggerDTO, NetworkUpdate, SoranetHandshakePuzzleUpdate,
-        },
         parameters::{
             actual::{
                 Acceleration, BlockSync, Common, Concurrency, Confidential, Connect,
@@ -691,6 +691,9 @@ mod tests {
     };
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
+    use iroha_torii_shared::configuration::{
+        ComputePricingUpdate, Logger as LoggerDTO, NetworkUpdate, SoranetHandshakePuzzleUpdate,
+    };
     use std::{
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
         path::PathBuf,
@@ -1915,7 +1918,7 @@ mod tests {
         let _err = tokio::time::timeout(Duration::from_millis(WATCH_LAG_MILLIS), recv.changed())
             .await
             .expect_err("Watcher should not be active initially");
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: NEW_LOG_LEVEL,
                 filter: Some("trace,trace,trace".parse().unwrap()),
@@ -1955,7 +1958,7 @@ mod tests {
         config.confidential.gas.per_commitment = 44;
         let expected_gas = config.confidential.gas;
         let (kiso, _) = KisoHandle::start(config);
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: iroha_logger::Level::DEBUG,
                 filter: None,
@@ -2022,7 +2025,7 @@ mod tests {
             initial_deny_cidrs.clone()
         );
         let replacement_key = checked_public_key();
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: Level::INFO,
                 filter: None,
@@ -2054,7 +2057,7 @@ mod tests {
         assert_eq!(updated.deny_keys.clone().unwrap(), initial_deny_keys);
         assert_eq!(updated.allow_cidrs.clone().unwrap(), initial_allow_cidrs);
         assert_eq!(updated.deny_cidrs.clone().unwrap(), initial_deny_cidrs);
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: Level::INFO,
                 filter: None,
@@ -2112,7 +2115,7 @@ mod tests {
                     .expect("Kiso request should remain active");
             }
         });
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: Level::INFO,
                 filter: None,
@@ -2185,7 +2188,7 @@ mod tests {
         assert_eq!(puzzle.time_cost, 3);
         assert_eq!(puzzle.lanes, 2);
         // Clear resume hash without touching other fields.
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: Level::INFO,
                 filter: None,
@@ -2240,7 +2243,7 @@ mod tests {
             }),
         };
         // Apply the update before any watchers are subscribed.
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: Level::INFO,
                 filter: None,
@@ -2305,7 +2308,7 @@ mod tests {
                 .send(Err("pow.revocation_store_path restart required".to_owned()))
                 .expect("rejected Kiso request should remain active");
         });
-        let handshake_update = |difficulty| ConfigUpdateDTO {
+        let handshake_update = |difficulty| ConfigurationUpdate {
             logger: LoggerDTO {
                 level: Level::INFO,
                 filter: None,
@@ -2378,7 +2381,7 @@ mod tests {
             "runtime rejection must not publish the staged snapshot"
         );
 
-        kiso.update_with_dto(ConfigUpdateDTO {
+        kiso.update_with_dto(ConfigurationUpdate {
             logger: LoggerDTO {
                 level: Level::DEBUG,
                 filter: None,
@@ -2406,7 +2409,7 @@ mod tests {
         let config = test_config();
         let (kiso, _) = KisoHandle::start(config);
         let err = kiso
-            .update_with_dto(ConfigUpdateDTO {
+            .update_with_dto(ConfigurationUpdate {
                 logger: LoggerDTO {
                     level: Level::INFO,
                     filter: None,
@@ -2429,7 +2432,7 @@ mod tests {
             "unexpected error: {err}"
         );
         let err = kiso
-            .update_with_dto(ConfigUpdateDTO {
+            .update_with_dto(ConfigurationUpdate {
                 logger: LoggerDTO {
                     level: Level::INFO,
                     filter: None,
@@ -2454,6 +2457,84 @@ mod tests {
         let dto = kiso.get_dto().await.expect("fetch updated dto");
         assert!(dto.network.require_sm_handshake_match);
         assert!(dto.network.require_sm_openssl_preview_match);
+    }
+    #[tokio::test]
+    async fn invalid_logger_filter_does_not_publish_or_change_configuration() {
+        let (kiso, _child) = KisoHandle::start(test_config());
+        let before = kiso.get_dto().await.expect("configuration before update");
+        let error = kiso
+            .update_with_dto(ConfigurationUpdate {
+                logger: LoggerDTO {
+                    level: Level::DEBUG,
+                    filter: Some("module=not-a-level".to_owned()),
+                },
+                network_acl: None,
+                network: None,
+                soranet_handshake: None,
+                transport: None,
+                compute_pricing: None,
+            })
+            .await
+            .expect_err("node must reject invalid tracing directives");
+        assert!(error.to_string().contains("invalid logger filter"));
+        let after = kiso.get_dto().await.expect("configuration after rejection");
+        assert_eq!(
+            norito::json::to_json(&before).expect("encode original configuration"),
+            norito::json::to_json(&after).expect("encode unchanged configuration"),
+        );
+    }
+    #[tokio::test]
+    async fn lane_profile_update_applies_runtime_derived_limits() {
+        let config = test_config();
+        let (logger_tx, _) = watch::channel(config.logger.clone());
+        let (network_acl_tx, _) = watch::channel(Actor::snapshot_network_acl(&config));
+        let (handshake_tx, _) = watch::channel(config.network.soranet_handshake.clone());
+        let (_, handle_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
+        let mut actor = Actor {
+            handle: handle_rx,
+            state: config,
+            logger_update: logger_tx,
+            network_acl_update: network_acl_tx,
+            soranet_handshake_update: handshake_tx,
+            soranet_handshake_applier: None,
+        };
+        for wire_profile in [
+            iroha_torii_shared::configuration::LaneProfile::Home,
+            iroha_torii_shared::configuration::LaneProfile::Core,
+        ] {
+            actor
+                .apply_config_update(ConfigurationUpdate {
+                    logger: LoggerDTO {
+                        level: Level::INFO,
+                        filter: None,
+                    },
+                    network_acl: None,
+                    network: Some(NetworkUpdate {
+                        lane_profile: Some(wire_profile),
+                        require_sm_handshake_match: None,
+                        require_sm_openssl_preview_match: None,
+                    }),
+                    soranet_handshake: None,
+                    transport: None,
+                    compute_pricing: None,
+                })
+                .await
+                .expect("wire profile update must use its runtime limits");
+            let expected: iroha_config::parameters::actual::LaneProfile = wire_profile.into();
+            let limits = expected.derived_limits();
+            let network = &actor.state.network;
+            assert_eq!(network.lane_profile, expected);
+            assert_eq!(network.max_incoming, limits.max_incoming);
+            assert_eq!(network.max_total_connections, limits.max_total_connections);
+            assert_eq!(
+                network.low_priority_bytes_per_sec,
+                limits.low_priority_bytes_per_sec
+            );
+            assert_eq!(
+                network.low_priority_rate_per_sec,
+                limits.low_priority_rate_per_sec
+            );
+        }
     }
     #[tokio::test]
     async fn config_update_is_atomic_on_handshake_error() {
@@ -2487,7 +2568,7 @@ mod tests {
         let initial_sig_id = actor.state.network.soranet_handshake.sig_id;
         let replacement_key = checked_public_key();
         let err = actor
-            .apply_config_update(ConfigUpdateDTO {
+            .apply_config_update(ConfigurationUpdate {
                 logger: LoggerDTO {
                     level: Level::DEBUG,
                     filter: None,
@@ -2588,7 +2669,7 @@ mod tests {
             .clone();
         let initial_transport_stage = actor.state.torii.transport.norito_rpc.stage;
         let err = actor
-            .apply_config_update(ConfigUpdateDTO {
+            .apply_config_update(ConfigurationUpdate {
                 logger: LoggerDTO {
                     level: Level::WARN,
                     filter: None,
@@ -2603,7 +2684,7 @@ mod tests {
                 network: None,
                 soranet_handshake: None,
                 transport: Some(TransportUpdate {
-                    norito_rpc: Some(iroha_config::client_api::NoritoRpcUpdate {
+                    norito_rpc: Some(iroha_torii_shared::configuration::NoritoRpcUpdate {
                         enabled: Some(!initial_transport_enabled),
                         require_mtls: Some(!initial_transport_require_mtls),
                         allowed_clients: Some(vec!["canary".to_string()]),
@@ -2675,7 +2756,7 @@ mod tests {
         invalid.cycles_per_unit =
             NonZeroU64::new(invalid.cycles_per_unit.get().saturating_mul(2)).expect("non-zero");
         let err = actor
-            .apply_config_update(ConfigUpdateDTO {
+            .apply_config_update(ConfigurationUpdate {
                 logger: LoggerDTO {
                     level: Level::INFO,
                     filter: None,
@@ -2706,7 +2787,7 @@ mod tests {
         )
         .expect("non-zero");
         actor
-            .apply_config_update(ConfigUpdateDTO {
+            .apply_config_update(ConfigurationUpdate {
                 logger: LoggerDTO {
                     level: Level::INFO,
                     filter: None,

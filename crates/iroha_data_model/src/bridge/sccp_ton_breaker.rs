@@ -27,6 +27,8 @@ const OBSERVATION_RECORD_DOMAIN_V1: &[u8] = b"iroha:sccp:ton-breaker-observation
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonBlockIdExtV1")]
 pub struct SccpTonBlockIdExtV1 {
     /// Signed workchain identifier.
     pub workchain: i32,
@@ -63,6 +65,8 @@ impl SccpTonBlockIdExtV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonFinalizedMasterchainBlockV1")]
 pub struct SccpTonFinalizedMasterchainBlockV1 {
     /// Exact finalized masterchain block.
     pub block_id: SccpTonBlockIdExtV1,
@@ -90,6 +94,8 @@ impl SccpTonFinalizedMasterchainBlockV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonAccountStateReadbackV1")]
 pub struct SccpTonAccountStateReadbackV1 {
     /// Exact basechain account opened by the proof.
     pub address: SccpTonAddressV1,
@@ -129,6 +135,8 @@ impl SccpTonAccountStateReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonReplayForestReadbackV1")]
 pub struct SccpTonReplayForestReadbackV1 {
     /// Absent only for the canonical empty forest.
     pub root_hash: Option<[u8; 32]>,
@@ -158,6 +166,8 @@ impl SccpTonReplayForestReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonBridgePendingReadbackV1")]
 pub struct SccpTonBridgePendingReadbackV1 {
     /// Pending mint dictionary root, absent exactly when its count is zero.
     pub mint_root_hash: Option<[u8; 32]>,
@@ -184,6 +194,8 @@ impl SccpTonBridgePendingReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonDeploymentReadbackV1")]
 pub struct SccpTonDeploymentReadbackV1 {
     /// Exact governed Jetton-master account.
     pub jetton_master_address: SccpTonAddressV1,
@@ -321,6 +333,8 @@ impl SccpTonDeploymentReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonRouteStorageReadbackV1")]
 pub struct SccpTonRouteStorageReadbackV1 {
     /// Exact storage schema version.
     pub storage_version: u8,
@@ -344,6 +358,8 @@ pub struct SccpTonRouteStorageReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonMasterStorageReadbackV1")]
 pub struct SccpTonMasterStorageReadbackV1 {
     /// Exact storage schema version.
     pub storage_version: u8,
@@ -376,6 +392,8 @@ pub struct SccpTonMasterStorageReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonBreakerObservationRecordV1")]
 pub struct SccpTonBreakerObservationRecordV1 {
     /// Exact governed route revision observed.
     pub route_key: SccpRouteKeyV1,
@@ -564,3 +582,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_ton_breaker_schema_tests;

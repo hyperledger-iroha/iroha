@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream
 import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
+import java.util.Collections
 import java.util.TreeMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -23,8 +24,16 @@ class TransportStreamResponse(
     private val rawBody: InputStream = body ?: ByteArrayInputStream(ByteArray(0))
     private val _headers: Map<String, List<String>> = copyHeaders(headers)
     private val closed = AtomicBoolean(false)
+    private val ioLock = Any()
 
     val body: InputStream = object : FilterInputStream(rawBody) {
+        override fun read(): Int = synchronized(ioLock) { requireOpen(); rawBody.read() }
+        override fun read(bytes: ByteArray, offset: Int, length: Int): Int = synchronized(ioLock) {
+            requireOpen()
+            rawBody.read(bytes, offset, length)
+        }
+        override fun skip(count: Long): Long = synchronized(ioLock) { requireOpen(); rawBody.skip(count) }
+        override fun available(): Int = synchronized(ioLock) { requireOpen(); rawBody.available() }
         @Throws(IOException::class)
         override fun close() {
             this@TransportStreamResponse.close()
@@ -36,10 +45,22 @@ class TransportStreamResponse(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         try {
-            rawBody.close()
-        } catch (_: IOException) {
+            // Cancel the underlying call before closing a body being read on another thread.
+            onClose?.run()
+        } finally {
+            // The transport cancellation above wakes a blocked read before disposal acquires
+            // this lock. Okio response sources cannot be read and closed concurrently.
+            synchronized(ioLock) {
+                try {
+                    rawBody.close()
+                } catch (_: IOException) {
+                }
+            }
         }
-        onClose?.run()
+    }
+
+    private fun requireOpen() {
+        if (closed.get()) throw IOException("HTTP response stream is closed")
     }
 
     companion object {
@@ -49,9 +70,9 @@ class TransportStreamResponse(
             for ((key, value) in source) {
                 val incoming = value.toList()
                 val existing = copy[key]
-                copy[key] = if (existing == null) incoming else existing + incoming
+                copy[key] = Collections.unmodifiableList(if (existing == null) incoming else existing + incoming)
             }
-            return copy
+            return Collections.unmodifiableMap(copy)
         }
     }
 }

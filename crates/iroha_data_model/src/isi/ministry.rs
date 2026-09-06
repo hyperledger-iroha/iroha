@@ -12,6 +12,8 @@ use norito::codec::{Decode, Encode};
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::ministry::SubmitAgendaProposal")]
 pub struct SubmitAgendaProposal {
     /// Canonical agenda proposal payload.
     pub proposal: AgendaProposalV1,
@@ -102,3 +104,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_ministry_schema_tests;

@@ -29,6 +29,8 @@ pub enum PrivacyActivationStatementLimitsError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofBytesV1")]
 pub struct PrivacyProofBytesV1 {
     /// Exact native proof encoding.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -85,6 +87,8 @@ impl PrivacyProofBytesV1 {
     feature = "json",
     norito(tag = "action", content = "proof", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::IrohaZkAmsProofV1")]
 pub enum IrohaZkAmsProofV1 {
     /// Setup-free masked Relaxed Spartan batch-admission proof.
     MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1),
@@ -134,6 +138,8 @@ impl IrohaZkAmsProofV1 {
     feature = "json",
     norito(tag = "protocol", content = "proof", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofV1", frame = "iroha.privacy.proof.v1")]
 pub enum PrivacyProofV1 {
     /// ZK-ACE post-quantum authorization proof.
     ZkAcePqAuthorizationV1(PrivacyProofBytesV1),
@@ -968,6 +974,8 @@ pub enum PrivacyProofValidationError {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofEnvelopeV1", frame = "iroha.privacy.proof-envelope.v1")]
 pub struct PrivacyProofEnvelopeV1 {
     /// Mandatory first-release wire marker; invalid markers fail decoding.
     pub wire_magic: PrivacyProofWireMagicV1,
@@ -2564,3 +2572,6 @@ mod exact12_fixture {
         Ok(output.into_bytes())
     }
 }
+
+#[cfg(test)]
+mod captured_proofs_schema_tests;

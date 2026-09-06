@@ -15,6 +15,8 @@ use norito::codec::{Decode, Encode};
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_liability::SccpRouteLiabilityV1")]
 pub struct SccpRouteLiabilityV1 {
     /// Exact outstanding liability in canonical route payload units.
     pub outstanding_liability: u128,
@@ -104,3 +106,6 @@ mod tests {
         assert_eq!(SccpRouteLiabilityV1::new(0), None);
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_liability_schema_tests;

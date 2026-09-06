@@ -139,6 +139,8 @@ pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyStatementContextV1")]
 pub struct PrivacyStatementContextV1 {
     /// Exact genesis-header-derived network identity.
     pub network_id: NetworkId,
@@ -208,6 +210,8 @@ impl PrivacyStatementContextV1 {
 #[norito(schema_name = "iroha.privacy.native-consensus-binding.v1")]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyNativeConsensusBindingV1", frame = "iroha.privacy.native-consensus-binding.v1")]
 pub struct PrivacyNativeConsensusBindingV1 {
     /// Exact genesis-header-derived network identity.
     pub network_id: NetworkId,
@@ -418,6 +422,8 @@ pub enum PrivacyNativeConsensusBindingValidationErrorV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyEncryptedOutputV1")]
 pub struct PrivacyEncryptedOutputV1 {
     /// Cryptographic recipient identity.
     pub recipient: PrivacyRecipientIdV1,
@@ -437,6 +443,8 @@ pub struct PrivacyEncryptedOutputV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "state", content = "value", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAcePolicyLifecycleV1")]
 pub enum PrivacyZkAcePolicyLifecycleV1 {
     /// The policy can authorize a matching proof action.
     #[cfg_attr(feature = "json", norito(rename = "active"))]
@@ -447,6 +455,8 @@ pub enum PrivacyZkAcePolicyLifecycleV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.privacy.zk-ace.policy-digest-material.v1")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAcePolicyDigestMaterialV1", frame = "iroha.privacy.zk-ace.policy-digest-material.v1")]
 struct PrivacyZkAcePolicyDigestMaterialV1 {
     policy_id: PrivacyPolicyIdV1,
     identity_commitment: PrivacyZkAceIdentityCommitmentV1,
@@ -464,6 +474,8 @@ struct PrivacyZkAcePolicyDigestMaterialV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAcePolicyRecordV1")]
 pub struct PrivacyZkAcePolicyRecordV1 {
     /// Stable lookup key for this policy lineage.
     pub policy_id: PrivacyPolicyIdV1,
@@ -796,6 +808,8 @@ pub fn validate_zk_ace_policy_revocation_v1(
 #[norito(schema_name = "iroha.privacy.zk-ace.authorization-statement.v1")]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1", frame = "iroha.privacy.zk-ace.authorization-statement.v1")]
 pub struct ZkAcePqAuthorizationStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -824,6 +838,8 @@ pub struct ZkAcePqAuthorizationStatementV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::AnonymousPgcKOutOfNStatementV1")]
 pub struct AnonymousPgcKOutOfNStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -853,6 +869,8 @@ pub struct AnonymousPgcKOutOfNStatementV1 {
     feature = "json",
     norito(tag = "bits", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyVeRangeBitLengthV1")]
 pub enum PrivacyVeRangeBitLengthV1 {
     /// 32-bit unsigned range.
     Bits32,
@@ -873,6 +891,8 @@ impl PrivacyVeRangeBitLengthV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::VeRangeTransparentRangeStatementV1")]
 pub struct VeRangeTransparentRangeStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -907,6 +927,8 @@ pub const ZK_AMS_REGISTRY_BOOTSTRAP_PAYLOAD_BYTES_V1: usize = 201;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAmsRegistryBootstrapV1")]
 pub struct PrivacyZkAmsRegistryBootstrapV1 {
     /// Credential issuer authorized to sign canonical PHCs.
     pub issuer_id: PrivacyIssuerIdV1,
@@ -1113,6 +1135,8 @@ pub enum PrivacyZkAmsRegistryBootstrapValidationError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAmsPersonhoodCredentialV1")]
 pub struct PrivacyZkAmsPersonhoodCredentialV1 {
     /// Closed credential wire version; must equal one.
     pub version: u8,
@@ -1165,6 +1189,8 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAmsPhcCanonicalPayloadV1")]
 pub struct PrivacyZkAmsPhcCanonicalPayloadV1(
     /// Exact closed credential payload.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1185,6 +1211,8 @@ impl PrivacyZkAmsPhcCanonicalPayloadV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAmsAdmissionAnchorV1")]
 pub struct PrivacyZkAmsAdmissionAnchorV1 {
     /// Hash of the canonical Personhood Credential.
     pub phc_hash: PrivacyZkAmsPhcHashV1,
@@ -1200,6 +1228,8 @@ pub struct PrivacyZkAmsAdmissionAnchorV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAmsBatchAdmissionV1")]
 pub struct PrivacyZkAmsBatchAdmissionV1 {
     /// Current admitted-identity registry root.
     pub account_registry_root: PrivacyRootV1,
@@ -1221,6 +1251,8 @@ pub struct PrivacyZkAmsBatchAdmissionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAmsProvisionAccountV1")]
 pub struct PrivacyZkAmsProvisionAccountV1 {
     /// Canonical admitted-identity registry root used for ring membership.
     pub account_registry_root: PrivacyRootV1,
@@ -1240,6 +1272,8 @@ pub struct PrivacyZkAmsProvisionAccountV1 {
     feature = "json",
     norito(tag = "action", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkAmsActionV1")]
 pub enum PrivacyZkAmsActionV1 {
     /// Settle one recursively accumulated admission batch.
     BatchAdmission(PrivacyZkAmsBatchAdmissionV1),
@@ -1250,6 +1284,8 @@ pub enum PrivacyZkAmsActionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::IrohaZkAmsStatementV1")]
 pub struct IrohaZkAmsStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -1280,6 +1316,8 @@ pub struct IrohaZkAmsStatementV1 {
     feature = "json",
     norito(tag = "document", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyCredentialDocumentTypeV1")]
 pub enum PrivacyCredentialDocumentTypeV1 {
     /// ISO/IEC 18013-5 `org.iso.18013.5.1.mDL` document.
     Iso18013_5Mdl,
@@ -1291,6 +1329,8 @@ pub enum PrivacyCredentialDocumentTypeV1 {
     feature = "json",
     norito(tag = "namespace", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyVegaMdlNamespaceV1")]
 pub enum PrivacyVegaMdlNamespaceV1 {
     /// The standard mDL namespace `org.iso.18013.5.1`.
     OrgIso18013_5_1,
@@ -1302,6 +1342,8 @@ pub enum PrivacyVegaMdlNamespaceV1 {
     feature = "json",
     norito(tag = "digest", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyVegaMdlDigestAlgorithmV1")]
 pub enum PrivacyVegaMdlDigestAlgorithmV1 {
     /// SHA-256 for issuer authentication, signed-item digests, and `H_dev`.
     Sha256,
@@ -1313,6 +1355,8 @@ pub enum PrivacyVegaMdlDigestAlgorithmV1 {
     feature = "json",
     norito(tag = "signature", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyVegaMdlSignatureAlgorithmV1")]
 pub enum PrivacyVegaMdlSignatureAlgorithmV1 {
     /// COSE algorithm `-7`: ECDSA over P-256 with SHA-256 (`ES256`).
     CoseSign1Es256,
@@ -1324,6 +1368,8 @@ pub enum PrivacyVegaMdlSignatureAlgorithmV1 {
     feature = "json",
     norito(tag = "state", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyVegaIssuerRecordLifecycleV1")]
 pub enum PrivacyVegaIssuerRecordLifecycleV1 {
     /// Credentials authenticated by this exact issuer revision may be verified.
     #[cfg_attr(feature = "json", norito(rename = "active"))]
@@ -1344,6 +1390,8 @@ pub enum PrivacyVegaIssuerRecordLifecycleV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyVegaIssuerRecordV1")]
 pub struct PrivacyVegaIssuerRecordV1 {
     /// Stable credential-issuer identity selecting this lineage.
     pub issuer_id: PrivacyIssuerIdV1,
@@ -1712,6 +1760,8 @@ pub fn validate_vega_issuer_revocation_v1(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyVegaMdlDateV1")]
 pub struct PrivacyVegaMdlDateV1 {
     /// Four-digit UTC year.
     pub year: u16,
@@ -1733,6 +1783,8 @@ pub struct PrivacyVegaMdlDateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::VegaExistingCredentialStatementV1")]
 pub struct VegaExistingCredentialStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -1889,6 +1941,8 @@ mod x509_key_usage_json_tests {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyX509KeyUsageV1")]
 pub struct PrivacyX509KeyUsageV1 {
     /// RFC 5280 digital-signature bit.
     pub digital_signature: PrivacyX509KeyUsageRequirementV1,
@@ -1906,6 +1960,8 @@ pub struct PrivacyX509KeyUsageV1 {
     feature = "json",
     norito(tag = "purpose", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyX509ExtendedKeyUsageV1")]
 pub enum PrivacyX509ExtendedKeyUsageV1 {
     /// TLS-style client authentication.
     ClientAuthentication,
@@ -1921,6 +1977,8 @@ pub enum PrivacyX509ExtendedKeyUsageV1 {
     feature = "json",
     norito(tag = "state", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkX509RecordLifecycleV1")]
 pub enum PrivacyZkX509RecordLifecycleV1 {
     /// The trust-anchor or certificate-policy revision is authoritative.
     #[cfg_attr(feature = "json", norito(rename = "active"))]
@@ -1937,6 +1995,8 @@ pub enum PrivacyZkX509RecordLifecycleV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkX509TrustAnchorRecordV1")]
 pub struct PrivacyZkX509TrustAnchorRecordV1 {
     /// Stable lookup key for this trust-store lineage.
     pub trust_anchor_id: PrivacyIssuerIdV1,
@@ -2095,6 +2155,8 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkX509CertificatePolicyRecordV1")]
 pub struct PrivacyZkX509CertificatePolicyRecordV1 {
     /// Exact trust-store lineage to which this policy belongs.
     pub trust_anchor_id: PrivacyIssuerIdV1,
@@ -2266,6 +2328,8 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyZkX509CrlRecordV1")]
 pub struct PrivacyZkX509CrlRecordV1 {
     /// Exact trust-store lineage whose certificate chain selects this CRL.
     pub trust_anchor_id: PrivacyIssuerIdV1,
@@ -3034,3 +3098,6 @@ pub fn validate_zk_x509_crl_revocation_v1(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod captured_credentials_schema_tests;

@@ -93,6 +93,7 @@ reed-solomon-erasure = { version = "6", default-features = false, features = ["s
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_torii = { workspace = true, default-features = false, features = ["node-api", "ws_integration_tests"] }
+iroha_torii_shared = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
@@ -105,6 +106,7 @@ iroha = { workspace = true }
 zk_ace_prover = { path = "../crates/zk_ace_prover", optional = true }
 
 [dev-dependencies]
+iroha_service_model = { workspace = true }
 iroha_logger = { workspace = true }
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }

@@ -34,47 +34,47 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-    let ballot_perm: Permission = CanSubmitGovernanceBallot {
-        referendum_id: "any".to_string(),
+    for referendum_id in ["missing", "closed"] {
+        let ballot_perm: Permission = CanSubmitGovernanceBallot {
+            referendum_id: referendum_id.to_string(),
+        }
+        .into();
+        Grant::account_permission(ballot_perm, ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant exact ballot permission");
     }
-    .into();
-    Grant::account_permission(ballot_perm, ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant ballot permission");
     // No referendum exists
     let ballot = CastPlainBallot {
         referendum_id: "missing".to_string(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 10_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(10).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 10_u64.into(),
+        duration_blocks: 10,
     };
     let err = ballot
         .clone()
         .execute(&ALICE_ID, &mut stx)
         .expect_err("ballot should fail when referendum is absent");
     assert!(
-        err.to_string().contains("referendum"),
+        err.to_string().contains("referendum not found"),
         "unexpected error: {err}"
     );
     // Insert a closed referendum and ensure rejection
-    stx.world.put_governance_referendum_for_testing(
+    stx.world.governance_referenda_mut().insert(
         "closed".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 0,
-            h_end: 0,
+            h_end: 5,
             status: iroha_core::state::GovernanceReferendumStatus::Closed,
-            final_tally: Some(iroha_core::state::GovernanceReferendumTallyV1::new(0, 0, 0)),
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
     let ballot_closed = CastPlainBallot {
         referendum_id: "closed".to_string(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 10_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(10).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 10_u64.into(),
+        duration_blocks: 10,
     };
     let err_closed = ballot_closed
         .execute(&ALICE_ID, &mut stx)

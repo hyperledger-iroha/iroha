@@ -74,11 +74,11 @@ use iroha_primitives::{
     time::TimeSource,
     unique_vec::UniqueVec,
 };
-use iroha_telemetry::metrics::Status;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, PEER_KEYPAIR, REAL_GENESIS_ACCOUNT_KEYPAIR,
     SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
+use iroha_torii_shared::status::Status;
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value as JsonValue};
@@ -3245,7 +3245,10 @@ impl ConsensusBootstrapProfile {
             .expect("test-network consensus profile must be canonical")
     }
 }
-fn status_reaches_block_height(status: &iroha::client::Status, target_height: u64) -> bool {
+fn status_reaches_block_height(
+    status: &iroha_torii_shared::status::Status,
+    target_height: u64,
+) -> bool {
     status.blocks >= target_height
 }
 async fn run_peer_bootstrap_stages<G, C, O, GV, CV, OV, E>(
@@ -3692,7 +3695,7 @@ impl Network {
         mnemonic: &str,
         role: &str,
     ) -> Result<()> {
-        let mut latest_status: Option<iroha::client::Status> = None;
+        let mut latest_status: Option<iroha_torii_shared::status::Status> = None;
         let status_timeout = {
             let configured = client_status_timeout_env();
             if configured == Duration::ZERO {

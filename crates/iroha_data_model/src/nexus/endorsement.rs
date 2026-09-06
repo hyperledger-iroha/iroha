@@ -13,6 +13,8 @@ pub const DOMAIN_ENDORSEMENT_VERSION_V1: u8 = 1;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::endorsement::DomainEndorsementScope")]
 pub struct DomainEndorsementScope {
     /// Optional dataspace the endorsement applies to.
     pub dataspace: Option<DataSpaceId>,
@@ -44,6 +46,8 @@ impl DomainEndorsementScope {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::endorsement::DomainEndorsementSignature")]
 pub struct DomainEndorsementSignature {
     /// Signer's public key (must belong to the configured committee).
     pub signer: PublicKey,
@@ -56,6 +60,8 @@ pub struct DomainEndorsementSignature {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::endorsement::DomainEndorsement")]
 pub struct DomainEndorsement {
     /// Version byte for forward evolution.
     pub version: u8,
@@ -91,6 +97,8 @@ impl DomainEndorsement {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::endorsement::DomainCommittee")]
 pub struct DomainCommittee {
     /// Stable committee identifier.
     pub committee_id: String,
@@ -115,6 +123,8 @@ impl DomainCommittee {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::endorsement::DomainEndorsementPolicy")]
 pub struct DomainEndorsementPolicy {
     /// Committee identifier this domain trusts.
     pub committee_id: String,
@@ -129,6 +139,8 @@ pub struct DomainEndorsementPolicy {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::endorsement::DomainEndorsementRecord")]
 pub struct DomainEndorsementRecord {
     /// Accepted endorsement payload.
     pub endorsement: DomainEndorsement,
@@ -191,3 +203,6 @@ mod tests {
         assert!(!committee.is_valid());
     }
 }
+
+#[cfg(test)]
+mod captured_endorsement_schema_tests;

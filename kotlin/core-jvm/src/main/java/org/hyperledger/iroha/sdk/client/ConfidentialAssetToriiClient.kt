@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.net.URI
 import java.time.Duration
 import java.util.Collections
@@ -14,9 +16,12 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
  * Every request is signed over its POST method, resolved path, and exact JSON body, and is marked
  * one-shot so transports cannot redirect or retry the signature.
  */
-class ConfidentialAssetToriiClient private constructor(builder: Builder) {
+class ConfidentialAssetToriiClient private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
 
-    private val executor: HttpTransportExecutor = builder.executor
+
+    private val executor: HttpTransportExecutor = HttpTransportScope.create(builder.executor)
     private val baseUri: URI = builder.baseUri
     private val localSigningContext: LocalSigningContext = checkNotNull(builder.localSigningContext) {
         "localSigningContext must be configured before building a confidential asset client"
@@ -111,7 +116,7 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
                 target,
                 body,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
             )
         } else {
             CanonicalRequestSigner.buildHeaders(
@@ -120,7 +125,7 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
                 target,
                 body,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
                 timestampMs,
                 nonce!!,
             )
@@ -178,7 +183,7 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
     }
 
     class Builder internal constructor() {
-        internal var executor: HttpTransportExecutor = PlatformHttpTransportExecutor.createDefault()
+        internal var executor: HttpTransportExecutor? = null
         internal var baseUri: URI = URI.create("http://localhost:8080")
         internal var localSigningContext: LocalSigningContext? = null
         internal var timeout: Duration? = Duration.ofSeconds(15)

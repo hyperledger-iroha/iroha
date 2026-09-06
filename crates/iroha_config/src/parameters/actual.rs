@@ -10942,95 +10942,23 @@ pub struct SorafsAliasCachePolicy {
 }
 impl_default!(SorafsAliasCachePolicy => {
         Self {
-            positive_ttl: Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-            refresh_window: Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-            hard_expiry: Duration::from_secs(defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-            negative_ttl: Duration::from_secs(defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-            revocation_ttl: Duration::from_secs(defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
+            positive_ttl: Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+            refresh_window: Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+            hard_expiry: Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+            negative_ttl: Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+            revocation_ttl: Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
             rotation_max_age: Duration::from_secs(
-                defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
+                iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
             ),
             successor_grace: Duration::from_secs(
-                defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
+                iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
             ),
             governance_grace: Duration::from_secs(
-                defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+                iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
             ),
         }
 });
-/// Staged anonymity rollout policy for SoraNet transports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(clippy::enum_variant_names)]
-pub enum SorafsAnonymityStage {
-    /// Require at least one PQ-capable guard (Stage A).
-    GuardPq,
-    /// Prefer PQ-capable relays for a super-majority (Stage B).
-    MajorityPq,
-    /// Enforce PQ-only SoraNet paths (Stage C).
-    StrictPq,
-}
-impl SorafsAnonymityStage {
-    /// Parses one exact canonical V1 policy label.
-    #[must_use]
-    pub fn parse(label: &str) -> Option<Self> {
-        match label {
-            "anon-guard-pq" => Some(Self::GuardPq),
-            "anon-majority-pq" => Some(Self::MajorityPq),
-            "anon-strict-pq" => Some(Self::StrictPq),
-            _ => None,
-        }
-    }
-    /// Returns the canonical label for the stage.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::GuardPq => "anon-guard-pq",
-            Self::MajorityPq => "anon-majority-pq",
-            Self::StrictPq => "anon-strict-pq",
-        }
-    }
-}
-/// High-level rollout phase controlling the staged PQ activation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SorafsRolloutPhase {
-    /// Canary phase – default to Stage A (guard PQ required).
-    #[default]
-    Canary,
-    /// Ramp phase – default to Stage B (majority PQ preferred).
-    Ramp,
-    /// Default phase – default to Stage C (strict PQ).
-    Default,
-}
-impl SorafsRolloutPhase {
-    /// Parses one exact canonical V1 rollout phase label.
-    #[must_use]
-    pub fn parse(label: &str) -> Option<Self> {
-        match label {
-            "canary" => Some(Self::Canary),
-            "ramp" => Some(Self::Ramp),
-            "default" => Some(Self::Default),
-            _ => None,
-        }
-    }
-    /// Returns the canonical label for the rollout phase.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Canary => "canary",
-            Self::Ramp => "ramp",
-            Self::Default => "default",
-        }
-    }
-    /// Returns the anonymity stage associated with the rollout phase.
-    #[must_use]
-    pub fn default_anonymity_policy(self) -> SorafsAnonymityStage {
-        match self {
-            Self::Canary => SorafsAnonymityStage::GuardPq,
-            Self::Ramp => SorafsAnonymityStage::MajorityPq,
-            Self::Default => SorafsAnonymityStage::StrictPq,
-        }
-    }
-}
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
 /// Gateway policy configuration for SoraFS delivery.
 #[derive(Debug, Clone)]
 pub struct SorafsGateway {
@@ -11047,9 +10975,9 @@ pub struct SorafsGateway {
     /// Client-facing rate limit configuration.
     pub rate_limit: SorafsGatewayRateLimit,
     /// High-level rollout phase controlling default anonymity policy.
-    pub rollout_phase: SorafsRolloutPhase,
+    pub rollout_phase: RolloutPhase,
     /// Optional staged anonymity policy override.
-    pub anonymity_policy: Option<SorafsAnonymityStage>,
+    pub anonymity_policy: Option<AnonymityPolicy>,
     /// Per-CID untrusted-host routing configuration.
     pub untrusted_hosting: SorafsGatewayUntrustedHosting,
     /// ACME automation configuration.
@@ -11067,10 +10995,10 @@ impl_default!(SorafsGateway => {
             salt_schedule_dir: None,
             site_bindings: SorafsGatewaySiteBindings::default(),
             rate_limit: SorafsGatewayRateLimit::default(),
-            rollout_phase: SorafsRolloutPhase::default(),
+            rollout_phase: RolloutPhase::default(),
             anonymity_policy: Some(
-                SorafsAnonymityStage::parse(defaults::sorafs::gateway::DEFAULT_ANONYMITY_POLICY)
-                    .unwrap_or_else(|| SorafsRolloutPhase::default().default_anonymity_policy()),
+                AnonymityPolicy::parse(defaults::sorafs::gateway::DEFAULT_ANONYMITY_POLICY)
+                    .unwrap_or_else(|| RolloutPhase::default().default_anonymity_policy()),
             ),
             untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
             acme: SorafsGatewayAcme::default(),
@@ -11081,7 +11009,7 @@ impl_default!(SorafsGateway => {
 impl SorafsGateway {
     /// Returns the effective anonymity policy, falling back to the rollout phase when unset.
     #[must_use]
-    pub fn effective_anonymity_policy(&self) -> SorafsAnonymityStage {
+    pub fn effective_anonymity_policy(&self) -> AnonymityPolicy {
         self.anonymity_policy
             .unwrap_or_else(|| self.rollout_phase.default_anonymity_policy())
     }

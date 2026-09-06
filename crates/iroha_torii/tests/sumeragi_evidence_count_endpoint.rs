@@ -1,6 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/evidence/count
 #![cfg(feature = "telemetry")]
+use super::sumeragi_evidence::make_phase_vote_evidence;
 use axum::{Router, extract::State, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -9,22 +10,7 @@ use iroha_core::{
     state::{State as CoreState, World},
     telemetry::StateTelemetry,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-use iroha_data_model::{
-    NetworkId,
-    block::{
-        BlockHeader,
-        consensus::{
-            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
-        },
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-            SumeragiV2Equivocation, ValidatorPower, Vote,
-        },
-    },
-    peer::PeerId,
-};
+use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
 use iroha_torii::handle_v1_sumeragi_evidence_count;
 use iroha_torii_shared::sumeragi_evidence_api::{
     SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES, SumeragiEvidenceCountResponse,
@@ -35,77 +21,6 @@ fn assert_exact_count_response_shape(value: &norito::json::Value) {
     let object = value.as_object().expect("evidence count response object");
     assert_eq!(object.len(), 1);
     assert!(object.contains_key("count"));
-}
-fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
-    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-        .expect("derive evidence fixture key");
-    let roster = vec![ValidatorPower {
-        validator: PeerId::new(key_pair.public_key().clone()),
-        power: 1,
-    }];
-    let context = HeightContext {
-        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed([seed; Hash::LENGTH]),
-        )),
-        protocol_version: PROTOCOL_VERSION,
-        height,
-        epoch: 0,
-        epoch_end_height: height,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-        roster,
-        nexus_amx_context_hash: Hash::new(b"evidence count nexus context"),
-        execution_policy_hash: Hash::new(b"evidence count execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 4,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 1024,
-            max_chunk_count: 512,
-        },
-        leader_seed: [seed; Hash::LENGTH],
-    };
-    let round = ConsensusRound {
-        context_id: context.id(),
-        height,
-        view: 0,
-    };
-    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"evidence count parent state"),
-        Hash::new(b"evidence count post state"),
-        Hash::new(b"evidence count ordinary writes"),
-        1,
-        Hash::new([seed]),
-    );
-    let vote = |subject_seed: u8| Vote {
-        round,
-        proposal_round: round,
-        phase: GlobalPhase::Prepare,
-        subject: BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
-                [subject_seed; Hash::LENGTH],
-            )),
-            payload_hash: Hash::new([subject_seed]),
-        },
-        execution_commitment,
-        signer: 0,
-        signature: vec![subject_seed; 96],
-    };
-    Evidence {
-        equivocation: SumeragiV2EquivocationEvidence {
-            context,
-            proofs_of_possession: vec![vec![seed; 96]],
-            conflict: SumeragiV2Equivocation::PhaseVote {
-                first: vote(seed),
-                second: vote(seed.wrapping_add(1)),
-            },
-        },
-    }
 }
 #[tokio::test]
 async fn evidence_count_endpoint_reports_increase() {

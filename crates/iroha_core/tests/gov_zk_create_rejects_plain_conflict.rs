@@ -4,24 +4,21 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World},
-    zk::hash_vk,
+    state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
     Registrable,
     account::Account,
     asset::AssetDefinition,
     block::BlockHeader,
-    confidential::ConfidentialStatus,
     domain::{Domain, DomainId},
-    isi::{verifying_keys, zk::CreateElection},
+    isi::zk::CreateElection,
     permission::Permission,
     prelude::Grant,
-    proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    zk::BackendTag,
+    proof::VerifyingKeyId,
 };
 use iroha_executor_data_model::permission::governance::CanManageParliament;
-use iroha_primitives::json::Json;
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 #[test]
 fn create_election_rejects_plain_conflict() {
@@ -46,36 +43,11 @@ fn create_election_rejects_plain_conflict() {
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
-    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
-    let vk_id = VerifyingKeyId::new("halo2/ipa", "vk-conflict");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        "vk-conflict",
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        [0x11; 32],
-        hash_vk(&vk_box),
-    );
-    vk_record.status = ConfidentialStatus::Active;
-    vk_record.gas_schedule_id = Some("halo2_default".to_string());
-    vk_record.key = Some(vk_box);
-    vk_record.vk_len = vk_record.key.as_ref().map_or(0_u32, |k| {
-        u32::try_from(k.bytes.len()).expect("vk length fits in u32")
-    });
-    let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    let vk_id = VerifyingKeyId::new("halo2/ipa", "unqualified");
     let perm_parliament: Permission = CanManageParliament.into();
-    Grant::account_permission(perm_vk, iroha_test_samples::ALICE_ID.clone())
-        .execute(&iroha_test_samples::ALICE_ID, &mut stx)
-        .expect("grant vk permission");
     Grant::account_permission(perm_parliament, iroha_test_samples::ALICE_ID.clone())
         .execute(&iroha_test_samples::ALICE_ID, &mut stx)
         .expect("grant parliament permission");
-    verifying_keys::RegisterVerifyingKey {
-        id: vk_id.clone(),
-        record: vk_record.clone(),
-    }
-    .execute(&iroha_test_samples::ALICE_ID, &mut stx)
-    .expect("register verifying key");
     let create = CreateElection {
         election_id: "ref-conflict".to_string(),
         options: 1,
@@ -91,4 +63,13 @@ fn create_election_rejects_plain_conflict() {
         .expect_err("plain-mode referendum conflict should fail");
     let s = format!("{err}");
     assert!(s.contains("mode mismatch"), "unexpected error message: {s}");
+    assert!(stx.world.elections().get("ref-conflict").is_none());
+    assert_eq!(
+        stx.world
+            .governance_referenda()
+            .get("ref-conflict")
+            .expect("retained referendum")
+            .mode,
+        iroha_core::state::GovernanceReferendumMode::Plain
+    );
 }

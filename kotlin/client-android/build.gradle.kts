@@ -1667,7 +1667,10 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
+    val hostNativeTask = name == "testDebugHostNative"
+    useJUnitPlatform {
+        if (!hostNativeTask) excludeTags("host-native")
+    }
     if (name == "testDebugUnitTest") {
         dependsOn("processDebugManifest")
         systemProperty(
@@ -1676,6 +1679,42 @@ tasks.withType<Test>().configureEach {
                 "intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml",
             ).get().asFile.absolutePath,
         )
+    }
+}
+
+// Reuse the Android variant's compiled consumers and mockable Android classpath.
+// Loading a host JNI library is an explicit qualification task, separate from
+// managed unit tests and from physical-device/Android-native execution.
+afterEvaluate {
+    tasks.register<Test>("testDebugHostNative") {
+        description = "Run Android Java consumers against an explicitly supplied host JNI bridge."
+        group = "verification"
+        val managed = tasks.named<Test>("testDebugUnitTest").get()
+        testClassesDirs = managed.testClassesDirs
+        classpath = managed.classpath
+        dependsOn(provider { managed.taskDependencies.getDependencies(managed) })
+        useJUnitPlatform { includeTags("host-native") }
+        filter {
+            includeTestsMatching("org.hyperledger.iroha.sdk.IrohaKeyManagerNativeJavaConsumerTest")
+            isFailOnNoMatchingTests = true
+        }
+        outputs.upToDateWhen { false }
+        outputs.doNotCacheIf("Host JNI qualification must execute against the supplied artifact") { true }
+        val nativeDirectory = providers.environmentVariable("IROHA_NATIVE_LIBRARY_PATH")
+        doFirst {
+            val configured = nativeDirectory.orNull
+            require(!configured.isNullOrBlank()) {
+                "testDebugHostNative requires IROHA_NATIVE_LIBRARY_PATH for the rebuilt host bridge"
+            }
+            val directory = File(configured)
+            require(directory.isAbsolute && directory.isDirectory) {
+                "IROHA_NATIVE_LIBRARY_PATH must be an absolute existing directory"
+            }
+            require(directory.resolve(System.mapLibraryName("connect_norito_bridge")).isFile) {
+                "The configured host JNI bridge is missing"
+            }
+            systemProperty("java.library.path", directory.absolutePath)
+        }
     }
 }
 

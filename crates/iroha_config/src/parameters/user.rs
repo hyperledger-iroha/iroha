@@ -32184,41 +32184,41 @@ impl SorafsQuota {
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsAliasCache {
     /// Positive TTL in seconds applied to cached alias proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS")]
     pub positive_ttl: u64,
     /// Refresh window in seconds before the positive TTL elapses.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS")]
     pub refresh_window: u64,
     /// Hard expiry in seconds after which stale proofs are rejected.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS")]
     pub hard_expiry: u64,
     /// Negative cache TTL in seconds for missing aliases.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS")]
     pub negative_ttl: u64,
     /// TTL in seconds for revoked aliases (`410 Gone` responses).
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS")]
     pub revocation_ttl: u64,
     /// Maximum age in seconds tolerated before alias proof bundles must rotate.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS")]
     pub rotation_max_age: u64,
     /// Grace period in seconds applied after an approved successor before refusing predecessor proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS")]
     pub successor_grace: u64,
     /// Grace period in seconds applied to governance rotation events.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS")]
     pub governance_grace: u64,
 }
 impl Default for SorafsAliasCache {
     fn default() -> Self {
         Self {
-            positive_ttl: defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS,
-            refresh_window: defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS,
-            hard_expiry: defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS,
-            negative_ttl: defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS,
-            revocation_ttl: defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS,
-            rotation_max_age: defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
-            successor_grace: defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
-            governance_grace: defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+            positive_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
+            refresh_window: iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS,
+            hard_expiry: iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS,
+            negative_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS,
+            revocation_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS,
+            rotation_max_age: iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
+            successor_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
+            governance_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
         }
     }
 }
@@ -32307,17 +32307,18 @@ impl SorafsGateway {
             untrusted_hosting,
             direct_mode,
         } = self;
-        let rollout_phase = match actual::SorafsRolloutPhase::parse(&rollout_phase) {
+        let rollout_phase = match iroha_service_model::soranet::RolloutPhase::parse(&rollout_phase)
+        {
             Some(phase) => phase,
             None => {
                 emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                     "invalid `sorafs.gateway.rollout_phase` value `{rollout_phase}`; expected exactly canary|ramp|default"
                 )));
-                actual::SorafsRolloutPhase::default()
+                iroha_service_model::soranet::RolloutPhase::default()
             }
         };
         let anonymity_policy = match anonymity_policy {
-            Some(label) => match actual::SorafsAnonymityStage::parse(&label) {
+            Some(label) => match iroha_service_model::soranet::AnonymityPolicy::parse(&label) {
                 Some(stage) => stage,
                 None => {
                     emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
@@ -32353,21 +32354,21 @@ mod sorafs_gateway_label_config_tests {
         for (rollout_label, expected_rollout, anonymity_label, expected_anonymity) in [
             (
                 "canary",
-                actual::SorafsRolloutPhase::Canary,
+                iroha_service_model::soranet::RolloutPhase::Canary,
                 "anon-guard-pq",
-                actual::SorafsAnonymityStage::GuardPq,
+                iroha_service_model::soranet::AnonymityPolicy::GuardPq,
             ),
             (
                 "ramp",
-                actual::SorafsRolloutPhase::Ramp,
+                iroha_service_model::soranet::RolloutPhase::Ramp,
                 "anon-majority-pq",
-                actual::SorafsAnonymityStage::MajorityPq,
+                iroha_service_model::soranet::AnonymityPolicy::MajorityPq,
             ),
             (
                 "default",
-                actual::SorafsRolloutPhase::Default,
+                iroha_service_model::soranet::RolloutPhase::Default,
                 "anon-strict-pq",
-                actual::SorafsAnonymityStage::StrictPq,
+                iroha_service_model::soranet::AnonymityPolicy::StrictPq,
             ),
         ] {
             let mut emitter = Emitter::new();
@@ -32405,10 +32406,13 @@ mod sorafs_gateway_label_config_tests {
 
         let (parsed, diagnostic) =
             result.expect("ordinary SoraFS gateway configuration errors must not unwind");
-        assert_eq!(parsed.rollout_phase, actual::SorafsRolloutPhase::Canary);
+        assert_eq!(
+            parsed.rollout_phase,
+            iroha_service_model::soranet::RolloutPhase::Canary
+        );
         assert_eq!(
             parsed.anonymity_policy,
-            Some(actual::SorafsAnonymityStage::GuardPq)
+            Some(iroha_service_model::soranet::AnonymityPolicy::GuardPq)
         );
         assert!(
             diagnostic.contains("sorafs.gateway.rollout_phase"),

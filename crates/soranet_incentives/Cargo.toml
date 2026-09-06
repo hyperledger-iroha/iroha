@@ -1,0 +1,19 @@
+[package]
+name = "soranet_incentives"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Deterministic SoraNet relay rewards and payout accounting"
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
+iroha_primitives = { workspace = true, features = ["json"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["json", "test-fixtures", "transparent_api"] }

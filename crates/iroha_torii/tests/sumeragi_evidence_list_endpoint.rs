@@ -1,6 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry-enabled tests for the sumeragi evidence list endpoint.
 #![cfg(feature = "telemetry")]
+use super::sumeragi_evidence::make_phase_vote_evidence;
 use axum::{extract::State, http::header};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -9,95 +10,9 @@ use iroha_core::{
     state::{State as CoreState, World},
     telemetry::StateTelemetry,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-use iroha_data_model::{
-    NetworkId,
-    block::{
-        BlockHeader,
-        consensus::{
-            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
-        },
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-            SumeragiV2Equivocation, ValidatorPower, Vote,
-        },
-    },
-    peer::PeerId,
-};
+use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
 use iroha_torii::{Error, EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
 use std::sync::Arc;
-fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
-    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-        .expect("derive evidence fixture key");
-    let roster = vec![ValidatorPower {
-        validator: PeerId::new(key_pair.public_key().clone()),
-        power: 1,
-    }];
-    let context = HeightContext {
-        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed([seed; Hash::LENGTH]),
-        )),
-        protocol_version: PROTOCOL_VERSION,
-        height,
-        epoch: 0,
-        epoch_end_height: height,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-        roster,
-        nexus_amx_context_hash: Hash::new(b"evidence list nexus context"),
-        execution_policy_hash: Hash::new(b"evidence list execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 4,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 1024,
-            max_chunk_count: 512,
-        },
-        leader_seed: [seed; Hash::LENGTH],
-    };
-    let round = ConsensusRound {
-        context_id: context.id(),
-        height,
-        view: 0,
-    };
-    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"evidence list parent state"),
-        Hash::new(b"evidence list post state"),
-        Hash::new(b"evidence list ordinary writes"),
-        1,
-        Hash::new([seed]),
-    );
-    let vote = |subject_seed: u8| Vote {
-        round,
-        proposal_round: round,
-        phase: GlobalPhase::Prepare,
-        subject: BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
-                [subject_seed; Hash::LENGTH],
-            )),
-            payload_hash: Hash::new([subject_seed]),
-        },
-        execution_commitment,
-        signer: 0,
-        signature: vec![subject_seed; 96],
-    };
-    Evidence {
-        equivocation: SumeragiV2EquivocationEvidence {
-            context,
-            proofs_of_possession: vec![vec![seed; 96]],
-            conflict: SumeragiV2Equivocation::PhaseVote {
-                first: vote(seed),
-                second: vote(seed.wrapping_add(1)),
-            },
-        },
-    }
-}
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn evidence_list_endpoint_supports_filters_and_pagination() {
@@ -182,15 +97,15 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         .expect("array of items");
     assert_eq!(items.len(), 3);
     let expected_statuses = [
-        norito::json::json!({
+        norito::json!({
             "status": "cancelled",
             "details": { "height": 5 }
         }),
-        norito::json::json!({
+        norito::json!({
             "status": "applied",
             "details": { "height": 4 }
         }),
-        norito::json::json!({
+        norito::json!({
             "status": "pending",
             "details": null
         }),

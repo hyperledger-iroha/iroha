@@ -32,8 +32,8 @@ use iroha_data_model::{
     },
     transaction::signed::TransactionBuilder,
 };
-use iroha_telemetry::metrics::{Status as TelemetryStatus, Uptime};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, PEER_KEYPAIR};
+use iroha_torii_shared::status::{Status as TelemetryStatus, Uptime};
 use reqwest::{
     StatusCode,
     header::{HeaderMap, HeaderValue},
@@ -1333,8 +1333,8 @@ async fn submit_and_wait_for_commit_bounds_websocket_handshake_with_absolute_dea
         .next()
         .expect("sample block transaction")
         .clone();
-    let client = ToriiClient::new(format!("http://{address}"))
-        .expect("client targeting stalled websocket");
+    let client =
+        ToriiClient::new(format!("http://{address}")).expect("client targeting stalled websocket");
     let started = Instant::now();
 
     let error = timeout(

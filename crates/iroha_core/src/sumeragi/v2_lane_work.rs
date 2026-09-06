@@ -19905,6 +19905,7 @@ pub(super) mod tests {
             leader_seed: [0x42; 32],
         };
         let mut parent = None;
+        let mut durable_parent_qc = None;
         for block_height in 1..height {
             let valid = ValidBlock::new_dummy_and_modify_header(
                 keys[0].private_key(),
@@ -19922,10 +19923,47 @@ pub(super) mod tests {
             if persist_parent_chain {
                 kura.store_block(block.clone())
                     .expect("persist exact merge-signing parent fixture");
+                // Canonical parent reads authenticate the complete executed wire,
+                // including while the body remains locally retained.
+                let mut parent_context = context.clone();
+                parent_context.height = block_height;
+                parent_context.parent_commit_qc = durable_parent_qc.clone();
+                let finality = signed_finality_artifact(
+                    &parent_context,
+                    &keys,
+                    block.as_ref(),
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                        Hash::new(b"durable lane-work fixture predecessor state"),
+                        Hash::new(b"durable lane-work fixture successor state"),
+                        Hash::new(b"durable lane-work fixture writes"),
+                        u64::try_from(block.as_ref().encode_wire().expect("parent wire").len())
+                            .expect("parent wire length fits u64"),
+                        block
+                            .as_ref()
+                            .executed_block_wire_hash()
+                            .expect("parent wire hash"),
+                    ),
+                    vec![0, 1, 2],
+                    [
+                        "encode durable parent proposal",
+                        "derive durable parent vote preimage",
+                        "durable parent signer index",
+                        "sign durable parent vote",
+                        "aggregate durable parent quorum",
+                        "derive durable parent signer PoP",
+                        "verify durable parent finality",
+                    ],
+                );
+                let _receipt = kura
+                    .store_v2_finality_artifact(&finality)
+                    .expect("persist signed complete-wire parent finality");
+                durable_parent_qc = Some(finality.commit_qc);
             }
             commit_test_block_to_state(state.as_ref(), &block, &context);
         }
-        if let Some(parent_qc) = context.parent_commit_qc.as_mut() {
+        if persist_parent_chain {
+            context.parent_commit_qc = durable_parent_qc;
+        } else if let Some(parent_qc) = context.parent_commit_qc.as_mut() {
             parent_qc.subject.block_hash = parent.expect("non-genesis fixture has a parent");
         }
         let local_index = local_validator_index
@@ -20134,6 +20172,48 @@ pub(super) mod tests {
             )
             .expect("valid explicit Native AMX signing limits"),
         )
+    }
+    #[test]
+    fn durable_parent_fixture_binds_every_complete_wire_to_signed_finality() {
+        for mode in [wire::ConsensusMode::Permissioned, wire::ConsensusMode::Npos] {
+            let (adapter, _) = fixture_with_durable_parent(mode);
+            let mut previous = None;
+            for height in 1..adapter.context.height {
+                let finality = adapter
+                    .kura
+                    .v2_finality_artifact(height)
+                    .expect("read durable parent finality")
+                    .expect("every parent height has finality");
+                finality
+                    .verify()
+                    .expect("every parent has a valid exact quorum");
+                assert_eq!(finality.height_context.parent_commit_qc, previous);
+                let block = adapter
+                    .canonical_block_body(
+                        NonZeroUsize::new(
+                            usize::try_from(height).expect("parent height fits usize"),
+                        )
+                        .expect("parent height is nonzero"),
+                    )
+                    .expect("authenticate complete parent wire")
+                    .expect("complete parent body exists");
+                assert_eq!(finality.block_hash, block.hash());
+                assert_eq!(
+                    finality
+                        .commit_qc
+                        .execution_commitment
+                        .executed_block_wire_hash,
+                    block
+                        .executed_block_wire_hash()
+                        .expect("complete wire hash")
+                );
+                previous = Some(finality.commit_qc);
+            }
+            assert_eq!(adapter.context.parent_commit_qc, previous);
+            adapter
+                .merge_carrier_context_header(0)
+                .expect("certified parent supports deterministic carrier construction");
+        }
     }
     #[test]
     fn merge_carrier_context_header_is_deterministic_and_view_scoped() {

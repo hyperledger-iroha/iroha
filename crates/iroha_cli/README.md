@@ -47,6 +47,22 @@ off-chain token format. The command and bundle are not shipped yet. The
 disposable four-validator devnet is qualification tooling, not a way to join
 the public testnet.
 
+### Local SoraFS artifacts
+
+Local SoraFS compilation and packaging run without client configuration:
+
+```sh
+iroha app sorafs toolkit compile --source contract.ko \
+  --bytecode-out artifacts/contract.to --json-out artifacts/contract.json
+iroha app sorafs toolkit pack artifacts/contract.to \
+  --car-out artifacts/contract.car --manifest-out artifacts/contract.manifest.to
+```
+
+Compilation accepts `--source -` for stdin and publishes the compiler manifest
+and authenticated build sidecars with the artifact. Its JSON summary includes
+the exact byte length, BLAKE3 digest, ABI version, and source origin. Both toolkit
+operations also support machine output without a populated `client.toml`.
+
 ### Client configuration
 
 Select a public network with `[account].profile`. The supported `taira` and

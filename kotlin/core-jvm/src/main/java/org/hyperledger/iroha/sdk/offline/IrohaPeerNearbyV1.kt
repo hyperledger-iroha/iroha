@@ -606,30 +606,46 @@ class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
         }
     }
 
+    /** Seals one verified IPM1 message for this authenticated profile. */
     @Synchronized
-    fun seal(message: ByteArray): IrohaPeerNearbyEncryptedRecordV1 {
+    fun seal(message: IrohaPeerWireMessageV1): IrohaPeerNearbyEncryptedRecordV1 {
         checkNotDestroyed()
         val key = outboundKey ?: throw IllegalStateException("Nearby session is not authenticated")
-        require(message.isNotEmpty() && message.size <= IrohaPeerNearbyV1.MAXIMUM_MESSAGE_BYTES) {
+        require(message.canonicalPayload.profile == profile) { "Nearby message profile mismatch" }
+        require(message.byteCount <= IrohaPeerNearbyV1.MAXIMUM_MESSAGE_BYTES) {
             "Nearby message is too large"
         }
-        val sequence = outboundSequence
-        val placeholder = IrohaPeerNearbyEncryptedRecordV1(
-            profile,
-            localRole,
-            session,
-            sequence,
-            ByteArray(message.size + 16),
-        )
-        val sealed = aesGcmNearby(Cipher.ENCRYPT_MODE, key, nearbyNonce(localRole, sequence),
-            placeholder.header(), message)
         require(outboundSequence != -1L) { "Nearby sequence exhausted" }
-        outboundSequence += 1
-        return IrohaPeerNearbyEncryptedRecordV1(profile, localRole, session, sequence, sealed)
+        val sequence = outboundSequence
+        val plaintext = message.encode()
+        try {
+            val placeholder = IrohaPeerNearbyEncryptedRecordV1(
+                profile,
+                localRole,
+                session,
+                sequence,
+                ByteArray(plaintext.size + 16),
+            )
+            val sealed = aesGcmNearby(Cipher.ENCRYPT_MODE, key, nearbyNonce(localRole, sequence),
+                placeholder.header(), plaintext)
+            try {
+                val record = IrohaPeerNearbyEncryptedRecordV1(profile, localRole, session, sequence, sealed)
+                outboundSequence += 1
+                return record
+            } finally {
+                sealed.fill(0)
+            }
+        } finally {
+            plaintext.fill(0)
+        }
     }
 
+    /**
+     * Authenticates and verifies one IPM1 message before advancing the receive sequence.
+     * Invalid ciphertext or plaintext leaves the expected sequence unchanged.
+     */
     @Synchronized
-    fun open(record: IrohaPeerNearbyEncryptedRecordV1): ByteArray {
+    fun open(record: IrohaPeerNearbyEncryptedRecordV1): IrohaPeerWireMessageV1 {
         checkNotDestroyed()
         val key = inboundKey ?: throw IllegalStateException("Nearby session is not authenticated")
         require(record.profile == profile && record.senderRole == localRole.peer) {
@@ -637,15 +653,23 @@ class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
         }
         require(record.sessionId.contentEquals(session)) { "Nearby session mismatch" }
         require(record.sequence == inboundSequence) { "Nearby replay or reordering" }
+        require(inboundSequence != -1L) { "Nearby sequence exhausted" }
+        val ciphertext = record.ciphertextAndTag
         val plaintext = try {
             aesGcmNearby(Cipher.DECRYPT_MODE, key, nearbyNonce(record.senderRole, record.sequence),
-                record.header(), record.ciphertextAndTag)
+                record.header(), ciphertext)
         } catch (failure: Exception) {
             throw IllegalArgumentException("Nearby authentication failed", failure)
+        } finally {
+            ciphertext.fill(0)
         }
-        require(inboundSequence != -1L) { "Nearby sequence exhausted" }
-        inboundSequence += 1
-        return plaintext
+        try {
+            val message = IrohaPeerWireMessageV1.decode(plaintext, expectedProfile = profile)
+            inboundSequence += 1
+            return message
+        } finally {
+            plaintext.fill(0)
+        }
     }
 
     /** Idempotently destroys the session and its owned key material. */

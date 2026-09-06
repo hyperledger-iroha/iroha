@@ -59,18 +59,29 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
         assert set(required) == KAGEMUSHA_V1_C_SYMBOLS
 
 
-def test_android_coordinator_jni_uses_only_kagemusha_product_identity() -> None:
+def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
     required = set(MODULE.REQUIRED_SYMBOLS["c-jni"])
     assert {
-        "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
-        "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
-        "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
     } <= required
+    assert not any(symbol.startswith("Java_pg_") for symbol in required)
     retired = "".join(reversed(("NativeCore", "Offline")))
     assert not any(retired in symbol for symbol in required)
+
+
+def test_kagami_consumes_the_same_native_artifact_inventory() -> None:
+    source = (REPO_ROOT / "crates/iroha_kagami/src/kagemusha.rs").read_text()
+    declaration = re.search(
+        r"const REQUIRED_C_JNI_SYMBOLS_V1: \[&str; (\d+)\] = \[(.*?)\n\];",
+        source,
+        re.DOTALL,
+    )
+    assert declaration is not None
+    symbols = re.findall(r'"([A-Za-z0-9_]+)"', declaration.group(2))
+    assert len(symbols) == int(declaration.group(1))
+    assert tuple(symbols) == MODULE.REQUIRED_SYMBOLS["c-jni"]
 
 
 def test_native_c_probe_rejects_required_kagemusha_export() -> None:

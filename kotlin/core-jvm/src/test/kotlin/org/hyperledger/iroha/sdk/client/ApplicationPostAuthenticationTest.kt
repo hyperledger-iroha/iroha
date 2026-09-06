@@ -33,7 +33,7 @@ class ApplicationPostAuthenticationTest {
                 .setBaseUri(URI.create("https://torii.example"))
                 .setLocalSigningContext(LocalSigningContext(networkId))
                 .build()
-            HttpClientTransport.withExecutor(executor, config)
+            HttpClientTransport(executor, config)
                 .executeRamLfeProgram("lookup", RamLfeExecuteRequest.encrypted("ABCD"), auth)
                 .join()
         }

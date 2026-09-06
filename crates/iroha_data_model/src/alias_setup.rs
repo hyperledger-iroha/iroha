@@ -39,6 +39,8 @@ pub const ALIAS_LEASE_YEAR_MS: u64 = 31_536_000_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1")]
 pub struct AliasRegistryRoutingActivationV1 {
     /// Payload layout version, which must be [`Self::VERSION`].
     pub version: u16,
@@ -153,6 +155,8 @@ impl AliasRegistryRoutingActivationV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1")]
 pub struct AliasDataspaceBootstrapGrantV1 {
     /// Payload layout version, which must be [`Self::VERSION`].
     pub version: u16,
@@ -309,6 +313,8 @@ impl AliasDataspaceBootstrapGrantV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AccountAliasName")]
 pub struct AccountAliasName {
     /// Canonical alias label.
     pub label: Name,
@@ -455,6 +461,8 @@ fn canonical_alias_segment(raw: &str, segment: AliasSegment) -> Result<Name, Par
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::ResolvedDataSpaceV1")]
 pub struct ResolvedDataSpaceV1 {
     /// Canonical textual dataspace name.
     pub canonical_name: Name,
@@ -505,6 +513,8 @@ impl fmt::Display for ResolvedDataSpaceV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::ResolvedDomainV1")]
 pub struct ResolvedDomainV1 {
     /// Canonical `domain.dataspace` text.
     pub canonical_name: DomainId,
@@ -560,6 +570,8 @@ impl fmt::Display for ResolvedDomainV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::ResolvedAccountAliasV1")]
 pub struct ResolvedAccountAliasV1 {
     /// Canonical account alias text.
     pub canonical_name: AccountAliasName,
@@ -648,6 +660,8 @@ impl From<ResolvedAccountAliasV1> for AccountAlias {
     )
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AccountProvisionV1")]
 pub enum AccountProvisionV1 {
     /// The target account must already exist.
     #[codec(index = 0)]
@@ -669,6 +683,8 @@ pub enum AccountProvisionV1 {
     )
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AccountAliasRoleV1")]
 pub enum AccountAliasRoleV1 {
     /// Make the exact alias the account's primary alias.
     #[codec(index = 0)]
@@ -681,6 +697,8 @@ pub enum AccountAliasRoleV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasDataSpaceIntentV1")]
 pub struct AliasDataSpaceIntentV1 {
     /// Resolved dataspace name.
     pub dataspace: ResolvedDataSpaceV1,
@@ -691,6 +709,8 @@ pub struct AliasDataSpaceIntentV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasDomainIntentV1")]
 pub struct AliasDomainIntentV1 {
     /// Resolved domain name, including its parent dataspace.
     pub domain: ResolvedDomainV1,
@@ -701,6 +721,8 @@ pub struct AliasDomainIntentV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAccountIntentV1")]
 pub struct AliasAccountIntentV1 {
     /// Resolved account alias.
     pub alias: ResolvedAccountAliasV1,
@@ -723,6 +745,8 @@ pub struct AliasAccountIntentV1 {
         deny_unknown_fields
     )
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasIntentV1")]
 pub enum AliasIntentV1 {
     /// Ensure a dataspace alias and its exact owner.
     #[codec(index = 0)]
@@ -749,6 +773,8 @@ impl AliasIntentV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLeaseAcquisitionV1")]
 pub struct AliasLeaseAcquisitionV1 {
     /// Requested lease term in whole years.
     pub term_years: u8,
@@ -773,6 +799,8 @@ impl AliasLeaseAcquisitionV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasQuoteGuardV1")]
 pub struct AliasQuoteGuardV1 {
     /// Policy version that consensus must observe.
     pub expected_policy_version: u16,
@@ -790,6 +818,8 @@ pub struct AliasQuoteGuardV1 {
 /// reclassifies them against live state, and returns the canonical framed instruction vector.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupPlanRequestV1")]
 pub struct AliasSetupPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -820,6 +850,8 @@ impl AliasSetupPlanRequestV1 {
         deny_unknown_fields
     )
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasTargetV1")]
 pub enum AliasTargetV1 {
     /// Dataspace alias resource.
     #[codec(index = 0)]
@@ -854,6 +886,8 @@ impl fmt::Display for AliasTargetV1 {
 /// Owner-configured deterministic auto-renew policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAutoRenewConfigV1")]
 pub struct AliasAutoRenewConfigV1 {
     /// Renewal term in whole years.
     pub term_years: u8,
@@ -873,6 +907,8 @@ pub struct AliasAutoRenewConfigV1 {
 /// Persisted compare-and-set state for native deterministic alias auto-renew.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAutoRenewStateV1")]
 pub struct AliasAutoRenewStateV1 {
     /// State layout version, currently `1`.
     pub version: u8,
@@ -920,6 +956,8 @@ impl AliasAutoRenewStateV1 {
 /// Canonical signed request body for planning one lease renewal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLeaseRenewPlanRequestV1")]
 pub struct AliasLeaseRenewPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -941,6 +979,8 @@ impl AliasLeaseRenewPlanRequestV1 {
 /// Canonical signed request body for planning one auto-renew configuration CAS.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAutoRenewPlanRequestV1")]
 pub struct AliasAutoRenewPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -966,6 +1006,8 @@ impl AliasAutoRenewPlanRequestV1 {
     feature = "json",
     norito(tag = "kind", content = "operation", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecycleOperationV1")]
 pub enum AliasLifecycleOperationV1 {
     /// Absolute-expiry lease renewal with an expected-current-expiry CAS.
     #[codec(index = 0)]
@@ -992,6 +1034,8 @@ impl AliasLifecycleOperationV1 {
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecyclePlanDispositionV1")]
 pub enum AliasLifecyclePlanDispositionV1 {
     /// Exact desired configuration already exists; no instruction or charge is required.
     #[codec(index = 0)]
@@ -1013,6 +1057,8 @@ pub enum AliasLifecyclePlanDispositionV1 {
     )
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasPlanDispositionV1")]
 pub enum AliasPlanDispositionV1 {
     /// Exact desired state already exists and incurs no charge.
     #[codec(index = 0)]
@@ -1031,6 +1077,8 @@ pub enum AliasPlanDispositionV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLeaseQuoteV1")]
 pub struct AliasLeaseQuoteV1 {
     /// Resource to which the quote applies.
     pub target: AliasTargetV1,
@@ -1051,6 +1099,8 @@ pub struct AliasLeaseQuoteV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasPlanResourceV1")]
 pub struct AliasPlanResourceV1 {
     /// Canonically resolved desired state.
     pub intent: AliasIntentV1,
@@ -1073,6 +1123,8 @@ pub struct AliasPlanResourceV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasFramedInstructionV1")]
 pub struct AliasFramedInstructionV1 {
     /// Stable instruction wire identifier.
     pub wire_id: String,
@@ -1082,6 +1134,8 @@ pub struct AliasFramedInstructionV1 {
 /// Exact total charge for one payment asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAssetTotalV1")]
 pub struct AliasAssetTotalV1 {
     /// Payment asset.
     pub payment_asset: AssetDefinitionId,
@@ -1096,6 +1150,8 @@ pub struct AliasAssetTotalV1 {
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupStatusV1")]
 pub enum AliasSetupStatusV1 {
     /// Validation succeeded and the operation is ready.
     #[codec(index = 0)]
@@ -1115,6 +1171,8 @@ pub enum AliasSetupStatusV1 {
     norito(tag = "phase", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupValidationPhaseV1")]
 pub enum AliasSetupValidationPhaseV1 {
     /// Static configuration validation.
     #[codec(index = 0)]
@@ -1140,6 +1198,8 @@ pub enum AliasSetupValidationPhaseV1 {
     norito(tag = "severity", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupSeverityV1")]
 pub enum AliasSetupSeverityV1 {
     /// Informational observation.
     #[codec(index = 0)]
@@ -1154,6 +1214,8 @@ pub enum AliasSetupSeverityV1 {
 /// One stable, secret-free setup/readiness diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupDiagnosticV1")]
 pub struct AliasSetupDiagnosticV1 {
     /// Validation phase.
     pub phase: AliasSetupValidationPhaseV1,
@@ -1179,6 +1241,8 @@ pub struct AliasSetupDiagnosticV1 {
 /// Deterministically ordered setup/readiness diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupReportV1")]
 pub struct AliasSetupReportV1 {
     /// Report layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -1205,6 +1269,8 @@ impl AliasSetupReportV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasPlanAnchorV1")]
 pub struct AliasPlanAnchorV1 {
     /// Height of the anchored block.
     pub block_height: u64,
@@ -1214,6 +1280,8 @@ pub struct AliasPlanAnchorV1 {
 /// Canonical body committed by an alias transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasTransactionPlanBodyV1")]
 pub struct AliasTransactionPlanBodyV1 {
     /// Layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -1258,6 +1326,8 @@ impl AliasTransactionPlanBodyV1 {
 /// Alias transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasTransactionPlanV1")]
 pub struct AliasTransactionPlanV1 {
     /// Canonical plan body.
     pub body: AliasTransactionPlanBodyV1,
@@ -1281,6 +1351,8 @@ impl AliasTransactionPlanV1 {
 /// Canonical body committed by an alias lifecycle transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecycleTransactionPlanBodyV1")]
 pub struct AliasLifecycleTransactionPlanBodyV1 {
     /// Layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -1331,6 +1403,8 @@ impl AliasLifecycleTransactionPlanBodyV1 {
 /// Alias lifecycle transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecycleTransactionPlanV1")]
 pub struct AliasLifecycleTransactionPlanV1 {
     /// Canonical lifecycle plan body.
     pub body: AliasLifecycleTransactionPlanBodyV1,
@@ -2466,3 +2540,6 @@ mod tests {
         assert_eq!(report.diagnostics[0].code, "a.code");
     }
 }
+
+#[cfg(test)]
+mod captured_alias_setup_schema_tests;

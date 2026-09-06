@@ -50,6 +50,8 @@ fn is_zero_prehash_sentinel(hash: Hash) -> bool {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
     norito(tag = "phase", content = "value", rename_all = "SCREAMING_SNAKE_CASE")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingPhaseV1")]
 pub enum ParliamentTimedOvnCastingPhaseV1 {
     /// Participant registration is open.
     Registered,
@@ -66,6 +68,8 @@ pub enum ParliamentTimedOvnCastingPhaseV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1")]
 pub struct ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
     /// Commitment format version.
     pub version: u16,
@@ -125,6 +129,8 @@ impl ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnReleaseBindingV1")]
 pub struct ParliamentTimedOvnReleaseBindingV1 {
     /// Long-lived TLE threshold key session.
     pub tle_key_session_id: TleKeySessionId,
@@ -151,6 +157,8 @@ pub struct ParliamentTimedOvnReleaseBindingV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1")]
 pub struct ParliamentTimedOvnCastingContextBindingV1 {
     /// Binding format version.
     pub version: u16,
@@ -285,6 +293,8 @@ impl ParliamentTimedOvnCastingContextBindingV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1")]
 pub struct ParliamentTimedOvnCastingSnapshotCommitmentV1 {
     /// Snapshot format version.
     pub version: u16,
@@ -366,6 +376,8 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextMembershipProofV1")]
 pub struct ParliamentTimedOvnCastingContextMembershipProofV1 {
     proof: MerkleProof<ParliamentTimedOvnCastingContextBindingV1>,
 }
@@ -418,6 +430,8 @@ impl ParliamentTimedOvnCastingContextMembershipProofV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingWitnessProofV1")]
 pub struct ParliamentTimedOvnCastingWitnessProofV1 {
     /// Fixed raw execution-witness key.
     pub key: Vec<u8>,
@@ -434,6 +448,8 @@ pub struct ParliamentTimedOvnCastingWitnessProofV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnFinalizedCastingProofV1")]
 pub struct ParliamentTimedOvnFinalizedCastingProofV1 {
     /// Fixed-write proof tying the snapshot to the block's ordinary-write root.
     pub snapshot_witness: ParliamentTimedOvnCastingWitnessProofV1,
@@ -706,3 +722,6 @@ mod tests {
         assert!(decoded_membership.verify(&decoded_binding, &decoded_snapshot));
     }
 }
+
+#[cfg(test)]
+mod captured_parliament_casting_schema_tests;

@@ -32,7 +32,7 @@ use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
-use iroha_telemetry::metrics::{
+use iroha_torii_shared::status::{
     CryptoStatus, GovernanceManifestAdmissionCounters, GovernanceManifestQuorumCounters,
     GovernanceProposalCounters, GovernanceProtectedNamespaceCounters, GovernanceStatus,
     Halo2Status, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
@@ -170,7 +170,6 @@ impl Default for MockToriiData {
             },
             nexus: None,
             stack: Default::default(),
-            offline: None,
             sumeragi: None,
             governance,
             teu_lane_commit: Vec::new(),

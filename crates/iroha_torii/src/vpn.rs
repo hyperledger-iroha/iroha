@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
-use iroha_config::client_api::ConfigGetDTO;
+use iroha_torii_shared::configuration::Configuration;
 use iroha_core::{
     kiso::KisoHandle,
     smartcontracts::isi::vpn::vpn_lease_custody_account_id,
@@ -590,7 +590,7 @@ fn default_tunnel_addresses() -> Vec<String> {
         .collect()
 }
 fn build_profile_at(
-    dto: &ConfigGetDTO,
+    dto: &Configuration,
     trust: Option<&VpnRelayTrust>,
     operator_signer_available: bool,
     current_ms: u64,

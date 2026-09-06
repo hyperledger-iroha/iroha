@@ -3,6 +3,8 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.math.BigInteger
 import java.net.URI
 import java.nio.ByteBuffer
@@ -259,7 +261,10 @@ class AtomicPrivateSettlementJsonResponseV1 internal constructor(
 }
 
 /** Exact-route V1 client for prepared-leg, audit, coordination, and redacted query workflows. */
-class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder) {
+class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
+
     private data class AuditApprovalRequestContext(
         val networkId: String,
         val bundleId: String,
@@ -289,7 +294,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
     }
 
     private val executor: HttpTransportExecutor =
-        builder.executor ?: PlatformHttpTransportExecutor.createDefault()
+        HttpTransportScope.create(builder.executor)
     private val baseUri: URI = requireBaseUri(builder.baseUri)
     private val localSigningContext: LocalSigningContext = checkNotNull(builder.localSigningContext) {
         "localSigningContext must be configured before building a settlement client"
@@ -1118,7 +1123,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 target,
                 body,
                 sponsorAuth.accountId,
-                sponsorAuth.privateKey,
+                sponsorAuth.signer,
             )
         } else {
             CanonicalRequestSigner.buildHeaders(
@@ -1127,7 +1132,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 target,
                 body,
                 sponsorAuth.accountId,
-                sponsorAuth.privateKey,
+                sponsorAuth.signer,
                 timestampMs,
                 checkNotNull(nonce),
             )

@@ -1486,6 +1486,7 @@ mod tests {
                 .collect(),
             encrypted_outputs: encrypted_outputs.clone(),
             audit_plaintext_commitment,
+            audit_input_commitment: [0xA5; 32],
             audit_capsule_digest: capsule_digest,
             audit_policy_digest: audit_policy.policy_digest,
             audit_key_epoch: audit_policy.body.key_epoch,

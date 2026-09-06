@@ -1,0 +1,5 @@
+error: norito_schema is only valid on the type declaration
+ --> tests/ui/fail/schema_identity_nested.rs:5:5
+  |
+5 |     #[norito_schema(name = "example::Field")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

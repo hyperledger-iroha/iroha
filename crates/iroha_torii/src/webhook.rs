@@ -4165,6 +4165,7 @@ async fn process_queue_once() -> Duration {
 }
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use super::*;
     use crate::test_utils::TestDataDirGuard;
     use http_body_util::BodyExt as _;

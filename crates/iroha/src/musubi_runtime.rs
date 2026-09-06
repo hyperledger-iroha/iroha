@@ -37,12 +37,20 @@ use reqwest::{
     redirect::Policy as RedirectPolicy,
 };
 use sorafs_car::{
-    CarBuildPlan, CarChunk, DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES, FilePlan, ProfileId,
-    compute_chunk_plan_digest_sha3,
+    CarBuildPlan, CarChunk, FilePlan,
+    musubi::{
+        MusubiBundleIntegritySurfaceV1, MusubiBundleVerifierV1,
+        plan::{
+            MusubiPlanValidationContextV1, resolve_chunk_profile_v1, validate_plan_commitment_v1,
+        },
+    },
+};
+#[cfg(test)]
+use sorafs_car::{
+    DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES, compute_chunk_plan_digest_sha3,
     musubi::{
         MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1, MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1,
-        MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1, MusubiBundleIntegritySurfaceV1,
-        MusubiBundleVerifierV1,
+        MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1,
     },
 };
 use std::{
@@ -111,9 +119,11 @@ const SEED_INGRESS_PLAN_DIGEST_DOMAIN_V1: &[u8] = b"iroha.musubi.v1.seed-ingress
 const SEED_INGRESS_ENVELOPE_MAGIC_V1: [u8; 16] = *b"MUSUBI-SEED-V1\0\0";
 const SEED_INGRESS_ENVELOPE_VERSION_V1: u8 = 1;
 const SEED_INGRESS_ENVELOPE_HEADER_BYTES_V1: usize = 40;
-const SEED_INGRESS_PLAN_HEAP_LIMIT_BYTES_V1: usize = DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES;
+#[cfg(test)]
 const BUNDLE_RELEASE_PATH_V1: &str = MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1;
+#[cfg(test)]
 const BUNDLE_DESCRIPTOR_PATH_V1: &str = MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1;
+#[cfg(test)]
 const BUNDLE_VERIFICATION_LOCK_PATH_V1: &str = MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1;
 #[cfg(test)]
 const SOURCE_TREE_DOMAIN_V1: &[u8] = b"musubi-source-tree-v1\0";
@@ -138,7 +148,9 @@ const BUNDLE_DOMAIN_V1: &[u8] = b"musubi-bundle-v1\0";
     Ord,
     norito::derive::Encode,
     norito::derive::Decode,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeOperationV1")]
 pub enum MusubiPublicationRuntimeOperationV1 {
     /// Stage one exact CAR through authenticated seed ingress.
     #[codec(index = 0)]
@@ -151,7 +163,16 @@ pub enum MusubiPublicationRuntimeOperationV1 {
     ProviderReadback,
 }
 /// Domain-separated short-lived authorization for one exact publication request.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationPayloadV1")]
 pub struct MusubiPublicationRuntimeAuthorizationPayloadV1 {
     /// Fixed domain marker preventing cross-protocol signature reuse.
     pub domain: [u8; 32],
@@ -192,7 +213,16 @@ impl MusubiPublicationRuntimeAuthorizationPayloadV1 {
     }
 }
 /// One controller approval for a bounded private publication request.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationApprovalV1")]
 pub struct MusubiPublicationRuntimeAuthorizationApprovalV1 {
     /// Publisher-controller key that produced this approval.
     pub public_key: PublicKey,
@@ -200,7 +230,16 @@ pub struct MusubiPublicationRuntimeAuthorizationApprovalV1 {
     pub signature: SignatureOf<MusubiPublicationRuntimeAuthorizationPayloadV1>,
 }
 /// Bounded publisher-controller authorization for one private publication request.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationV1")]
 pub struct MusubiPublicationRuntimeAuthorizationV1 {
     /// Exact statement covered by the signature.
     pub payload: MusubiPublicationRuntimeAuthorizationPayloadV1,
@@ -340,7 +379,17 @@ impl MusubiPublicationRuntimeAuthorizationV1 {
     }
 }
 /// One bounded chunk in the canonical Musubi seed-ingress plan witness.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressCarChunkV1")]
 pub struct MusubiSeedIngressCarChunkV1 {
     /// Absolute byte offset in the concatenated bundle payload.
     pub offset: u64,
@@ -350,7 +399,16 @@ pub struct MusubiSeedIngressCarChunkV1 {
     pub digest: [u8; 32],
 }
 /// One portable file entry in the canonical Musubi seed-ingress plan witness.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressCarFileV1")]
 pub struct MusubiSeedIngressCarFileV1 {
     /// Portable UTF-8 path components in canonical byte order.
     pub path: Vec<String>,
@@ -366,7 +424,16 @@ pub struct MusubiSeedIngressCarFileV1 {
 /// The chunk profile is deliberately absent. Conversion resolves the complete, canonical profile
 /// identity from the accompanying immutable archive commitment, preventing a witness from
 /// negotiating or aliasing a different chunker.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressCarPlanV1")]
 pub struct MusubiSeedIngressCarPlanV1 {
     /// Closed witness schema version; must equal one.
     pub version: u8,
@@ -390,22 +457,8 @@ impl MusubiSeedIngressCarPlanV1 {
         plan: &CarBuildPlan,
         commitment: &MusubiArchiveCommitmentV1,
     ) -> Result<Self, MusubiPublicationRuntimeTransportErrorV1> {
-        let maximum_files = usize::try_from(MUSUBI_MAX_FILES_V1)
-            .unwrap_or(usize::MAX)
-            .saturating_add(3);
-        if plan.content_length == 0
-            || plan.content_length > MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1
-            || plan.chunks.is_empty()
-            || plan.chunks.len() > usize::try_from(MUSUBI_MAX_CHUNKS_V1).unwrap_or(usize::MAX)
-            || plan.files.len() < 4
-            || plan.files.len() > maximum_files
-            || plan.chunk_profile != seed_ingress_commitment_profile(commitment)?
-        {
-            return Err(seed_ingress_plan_invalid());
-        }
-        plan.validate_for_ingest_with_limit(SEED_INGRESS_PLAN_HEAP_LIMIT_BYTES_V1)
+        validate_plan_commitment_v1(plan, commitment, MusubiPlanValidationContextV1::SeedIngress)
             .map_err(|_| seed_ingress_plan_invalid())?;
-        validate_seed_ingress_plan_commitment(commitment, plan)?;
         let mut chunks = Vec::new();
         chunks
             .try_reserve_exact(plan.chunks.len())
@@ -448,7 +501,8 @@ impl MusubiSeedIngressCarPlanV1 {
         commitment: &MusubiArchiveCommitmentV1,
     ) -> Result<CarBuildPlan, MusubiPublicationRuntimeTransportErrorV1> {
         self.validate_shape()?;
-        let profile = seed_ingress_commitment_profile(commitment)?;
+        let profile =
+            resolve_chunk_profile_v1(commitment).map_err(|_| seed_ingress_plan_invalid())?;
         let mut chunks = Vec::new();
         chunks
             .try_reserve_exact(self.chunks.len())
@@ -479,9 +533,12 @@ impl MusubiSeedIngressCarPlanV1 {
             chunks,
             files,
         };
-        plan.validate_for_ingest_with_limit(SEED_INGRESS_PLAN_HEAP_LIMIT_BYTES_V1)
-            .map_err(|_| seed_ingress_plan_invalid())?;
-        validate_seed_ingress_plan_commitment(commitment, &plan)?;
+        validate_plan_commitment_v1(
+            &plan,
+            commitment,
+            MusubiPlanValidationContextV1::SeedIngress,
+        )
+        .map_err(|_| seed_ingress_plan_invalid())?;
         Ok(plan)
     }
     /// Validate this witness against one exact immutable archive commitment.
@@ -574,7 +631,16 @@ fn clone_seed_ingress_path(
     Ok(cloned)
 }
 /// Authenticated metadata accompanying one framed canonical plan-and-CAR seed body.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressStageRequestV1")]
 pub struct MusubiSeedIngressStageRequestV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
@@ -626,62 +692,6 @@ impl MusubiSeedIngressStageRequestV1 {
 fn seed_ingress_plan_invalid() -> MusubiPublicationRuntimeTransportErrorV1 {
     MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_SEED_INGRESS_PLAN_INVALID")
 }
-fn seed_ingress_commitment_profile(
-    commitment: &MusubiArchiveCommitmentV1,
-) -> Result<sorafs_car::sorafs_chunker::ChunkProfile, MusubiPublicationRuntimeTransportErrorV1> {
-    commitment
-        .validate()
-        .map_err(|_| seed_ingress_plan_invalid())?;
-    let descriptor = sorafs_car::chunker_registry::lookup(ProfileId(commitment.chunker.profile_id))
-        .ok_or_else(seed_ingress_plan_invalid)?;
-    if descriptor.namespace != commitment.chunker.namespace
-        || descriptor.name != commitment.chunker.name
-        || descriptor.semver != commitment.chunker.semver
-        || descriptor.multihash_code != commitment.chunker.multihash_code
-    {
-        return Err(seed_ingress_plan_invalid());
-    }
-    Ok(descriptor.profile)
-}
-fn validate_seed_ingress_plan_commitment(
-    commitment: &MusubiArchiveCommitmentV1,
-    plan: &CarBuildPlan,
-) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
-    let expected_source_files =
-        usize::try_from(commitment.file_count).map_err(|_| seed_ingress_plan_invalid())?;
-    let expected_files = expected_source_files
-        .checked_add(3)
-        .ok_or_else(seed_ingress_plan_invalid)?;
-    if plan.content_length != commitment.content_length
-        || plan.chunks.len()
-            != usize::try_from(commitment.chunk_count).map_err(|_| seed_ingress_plan_invalid())?
-        || plan.files.len() != expected_files
-        || compute_chunk_plan_digest_sha3(&plan.chunks) != *commitment.chunk_plan_digest.as_bytes()
-    {
-        return Err(seed_ingress_plan_invalid());
-    }
-    let mut source_files = 0_usize;
-    let mut release_files = 0_u8;
-    let mut descriptor_files = 0_u8;
-    let mut lock_files = 0_u8;
-    for file in &plan.files {
-        match file.path.join("/").as_str() {
-            BUNDLE_RELEASE_PATH_V1 => release_files = release_files.saturating_add(1),
-            BUNDLE_DESCRIPTOR_PATH_V1 => descriptor_files = descriptor_files.saturating_add(1),
-            BUNDLE_VERIFICATION_LOCK_PATH_V1 => lock_files = lock_files.saturating_add(1),
-            path if path.starts_with(".musubi/") => return Err(seed_ingress_plan_invalid()),
-            _ => source_files = source_files.saturating_add(1),
-        }
-    }
-    if source_files != expected_source_files
-        || release_files != 1
-        || descriptor_files != 1
-        || lock_files != 1
-    {
-        return Err(seed_ingress_plan_invalid());
-    }
-    Ok(())
-}
 fn seed_ingress_plan_digest(
     canonical_plan: &[u8],
 ) -> Result<MusubiContentDigestV1, MusubiPublicationRuntimeTransportErrorV1> {
@@ -700,7 +710,16 @@ fn seed_ingress_plan_digest(
 /// The named registry snapshot proves when the immutable registration became observable. A backend
 /// may reproduce `registration` from any later finalized archive read because Core permits only the
 /// omitted location directory to change after registration.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiFinalizedArchiveRegistrationEvidenceV1")]
 pub struct MusubiFinalizedArchiveRegistrationEvidenceV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
@@ -746,7 +765,16 @@ impl MusubiFinalizedArchiveRegistrationEvidenceV1 {
     }
 }
 /// Exact archive and receipt inputs sent to the private storage coordinator.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiStorageCoordinationRequestV1")]
 pub struct MusubiStorageCoordinationRequestV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
@@ -830,7 +858,16 @@ impl MusubiStorageCoordinationRequestV1 {
     }
 }
 /// Whether the publisher must add the returned location or may reuse finalized state.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiStorageLocationDispositionV1")]
 pub enum MusubiStorageLocationDispositionV1 {
     /// Coordinator has a pin/order and at least one finalized provider completion.
     #[codec(index = 0)]
@@ -845,7 +882,16 @@ pub enum MusubiStorageLocationDispositionV1 {
     Registered(MusubiArchiveLocationV1),
 }
 /// Idempotent private storage-coordinator result.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiStorageCoordinationResponseV1")]
 pub struct MusubiStorageCoordinationResponseV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
@@ -1001,7 +1047,16 @@ impl MusubiStorageCoordinationResponseV1 {
     }
 }
 /// Exact provider-specific full-archive readback request.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiProviderReadbackRequestV1")]
 pub struct MusubiProviderReadbackRequestV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
@@ -1071,7 +1126,16 @@ impl MusubiProviderReadbackRequestV1 {
     }
 }
 /// Exact commitment evidence returned by one provider-specific readback service.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiProviderReadbackResponseV1")]
 pub struct MusubiProviderReadbackResponseV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
@@ -1232,7 +1296,17 @@ impl MusubiPublicationPrivateRouteV1 {
     }
 }
 /// Secret-free wire error returned by the private publication service.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationServiceErrorCodeV1")]
 pub enum MusubiPublicationServiceErrorCodeV1 {
     /// The request did not select one exact fixed route.
     #[codec(index = 0)]
@@ -1322,7 +1396,17 @@ impl MusubiPublicationServiceErrorCodeV1 {
     }
 }
 /// Canonical bounded error response for every private publication route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationServiceErrorResponseV1")]
 pub struct MusubiPublicationServiceErrorResponseV1 {
     /// Closed response schema version; always one.
     pub version: u8,
@@ -1405,7 +1489,16 @@ impl MusubiPublicationServiceConfigurationV1 {
 ///
 /// Timing policy is intentionally excluded so operators can adjust authorization skew or receipt
 /// lifetime without discarding immutable replay/idempotency history.
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationServiceJournalBindingV1")]
 pub struct MusubiPublicationServiceJournalBindingV1 {
     /// Exact deployment identity accepted by every retained operation.
     pub network_id: NetworkId,
@@ -1539,8 +1632,17 @@ pub trait MusubiProviderReadbackBackendV1: Send {
 }
 /// Immutable operation-wide binding enforced across all three private routes.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, norito::derive::Encode, norito::derive::Decode,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationOperationBindingV1")]
 pub struct MusubiPublicationOperationBindingV1 {
     /// Stable publisher-selected operation id.
     pub operation_id: [u8; 32],
@@ -1584,7 +1686,9 @@ impl MusubiPublicationOperationBindingV1 {
     Ord,
     norito::derive::Encode,
     norito::derive::Decode,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationIdempotencyKeyV1")]
 pub struct MusubiPublicationIdempotencyKeyV1 {
     /// Exact private operation.
     pub operation: MusubiPublicationRuntimeOperationV1,
@@ -4217,4 +4321,5 @@ fn remote_transport_error(
 mod tests {
     include!("musubi_runtime/service_journal_tests.rs");
     include!("musubi_runtime/private_service_tests.rs");
+    pub(super) mod wire_fixtures;
 }

@@ -85,6 +85,7 @@ use iroha_core::{
     privacy_engines::{
         atomic_private_settlement::{
             AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementProvisionalLegInputV1,
+            atomic_private_settlement_audit_input_commitment_v1,
             complete_atomic_private_settlement_prepared_leg_v1,
             consume_atomic_private_settlement_wallet_bundle_v1,
             derive_atomic_private_settlement_input_nullifiers_v1,
@@ -1518,6 +1519,7 @@ fn prepare_leg_with_private_data_and_rngs(
             .collect(),
         encrypted_outputs: placeholders.to_vec(),
         audit_plaintext_commitment: hash(0x40 + ordinal as u8),
+        audit_input_commitment: [0x48 + ordinal as u8; 32],
         audit_capsule_digest: hash(0x50 + ordinal as u8),
         audit_policy_digest: governed.policy.policy_digest,
         audit_key_epoch: governed.policy.body.key_epoch,
@@ -1766,6 +1768,8 @@ fn prepare_leg_with_private_data_and_rngs(
             );
     }
     statement.audit_plaintext_commitment = plaintext.commitment()?;
+    statement.audit_input_commitment =
+        atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)?;
     statement.encrypted_outputs = prepare_atomic_private_settlement_outputs_v1(
         output_rng,
         manifest,

@@ -13966,6 +13966,151 @@ pub async fn handle_v1_zk_verify_batch_with_limits(
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_accounts_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    use iroha_torii_shared::account_capabilities::{
+        ACCOUNT_CAPABILITIES_MAX_BYTES_V1, AccountCapabilitiesV1,
+    };
+    if uri.query().is_some() || !body.is_empty() {
+        return Err(Error::AppQueryValidation {
+            code: "account_capabilities_request_unsupported",
+            message: "Account capability discovery accepts no query parameters or body.".to_owned(),
+        });
+    }
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/accounts/capabilities",
+    )
+    .await?;
+    let crypto = app.state.crypto();
+    let payload = AccountCapabilitiesV1::from_admission(
+        *app.state.network_id_ref(),
+        iroha_data_model::account::address::chain_discriminant(),
+        &crypto.allowed_signing,
+    )
+    .map_err(|message| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            message.to_owned(),
+        ))
+    })?;
+    let bytes = norito::json::to_vec(&payload).map_err(|source| Error::SerializationFailure {
+        context: "account_capabilities",
+        source: Box::new(source),
+    })?;
+    if bytes.len() > ACCOUNT_CAPABILITIES_MAX_BYTES_V1 {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::InternalError(
+                "account capabilities exceed the V1 representation bound".to_owned(),
+            ),
+        ));
+    }
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json"),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod account_capabilities_tests {
+    use super::*;
+    use tower::ServiceExt as _;
+
+    #[tokio::test]
+    async fn account_capabilities_need_no_account_and_bind_current_network() {
+        let app = mk_app_state_for_tests();
+        let network_id = *app.state.network_id_ref();
+        let response = handler_accounts_capabilities(
+            State(app),
+            axum::http::HeaderMap::new(),
+            "/v1/accounts/capabilities".parse().expect("URI"),
+            axum::extract::ConnectInfo("127.0.0.1:8080".parse().expect("remote")),
+            axum::body::Bytes::new(),
+        )
+        .await
+        .expect("public account capabilities");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/json"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            "no-store"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bounded body");
+        let value: iroha_torii_shared::account_capabilities::AccountCapabilitiesV1 =
+            norito::json::from_slice(&bytes).expect("capabilities JSON");
+        assert_eq!(value.network_id, network_id);
+        assert_eq!(value.default_signing, "ed25519");
+        assert!(
+            value
+                .allowed_signing
+                .iter()
+                .any(|algorithm| algorithm == "ed25519")
+        );
+    }
+
+    #[tokio::test]
+    async fn account_capabilities_reject_query_and_body_inputs() {
+        for (uri, body) in [
+            ("/v1/accounts/capabilities?account_id=unregistered", ""),
+            ("/v1/accounts/capabilities", "{}"),
+        ] {
+            assert!(matches!(
+                handler_accounts_capabilities(
+                    State(mk_app_state_for_tests()),
+                    axum::http::HeaderMap::new(),
+                    uri.parse().expect("URI"),
+                    axum::extract::ConnectInfo("127.0.0.1:8080".parse().expect("remote")),
+                    axum::body::Bytes::from(body),
+                )
+                .await,
+                Err(Error::AppQueryValidation { .. })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn account_capabilities_empty_body_limit_rejects_payload_before_handler() {
+        let router = axum::Router::new()
+            .route(
+                "/v1/accounts/capabilities",
+                axum::routing::get(handler_accounts_capabilities)
+                    .layer(axum::extract::DefaultBodyLimit::max(0)),
+            )
+            .with_state(mk_app_state_for_tests());
+        let mut request = axum::http::Request::builder()
+            .uri("/v1/accounts/capabilities")
+            .body(axum::body::Body::from(vec![b'x'; 4097]))
+            .expect("body-bearing bootstrap request");
+        request.extensions_mut().insert(axum::extract::ConnectInfo(
+            "127.0.0.1:8080"
+                .parse::<std::net::SocketAddr>()
+                .expect("remote"),
+        ));
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("bounded route response");
+        assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_accounts_list(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -50759,6 +50904,7 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, application_api;
             ACCOUNTS_GET => optional_canonical_signature_get(handler_accounts_list);
+            ACCOUNTS_CAPABILITIES_GET => limited_public_get(handler_accounts_capabilities, 0);
         );
         mount_accounts_query(builder, app_state.clone(), transaction_max_content_len);
         mount_transactions_query(builder, app_state.clone(), transaction_max_content_len);
@@ -56042,7 +56188,8 @@ mod gateway_runtime_config_tests {
             .provider
             .as_ref()
             .expect("test ACME provider binding");
-        let mapped_provider = gateway_runtime_provider_binding(source_provider);
+        let mapped_provider = gateway_runtime_provider_binding(source_provider)
+            .expect("valid resolved gateway provider binding");
         assert_eq!(
             mapped_provider.provider_handle(),
             source_provider.provider_handle.as_str()
@@ -56058,7 +56205,8 @@ mod gateway_runtime_config_tests {
         let source = compliance_config(PathBuf::from(
             "/var/lib/iroha/sorafs/compliance-checkpoint.norito",
         ));
-        let mapped = gateway_compliance_controller_config(&source);
+        let mapped = gateway_compliance_controller_config(&source)
+            .expect("valid resolved gateway compliance configuration");
         assert_eq!(mapped.trust_policy.policy_id, source.policy_id);
         assert_eq!(mapped.region_scope, format!("region:{}", source.region_id));
         assert_eq!(
@@ -56503,7 +56651,7 @@ fn build_por_components(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod por_runtime_readiness_tests {
-    use super::{por_runtime_readiness_error, validate_por_runtime_ready};
+    use super::{ToriiBuildError, por_runtime_readiness_error, validate_por_runtime_ready};
     fn configured_por() -> iroha_config::parameters::actual::SorafsPor {
         let mut config = iroha_config::parameters::actual::SorafsPor {
             enabled: true,

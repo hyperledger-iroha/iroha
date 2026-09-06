@@ -1934,7 +1934,7 @@ async fn realistic_30tps_catch_up_target(
     realistic_30tps_catch_up_target_from_statuses(&statuses)
 }
 fn realistic_30tps_catch_up_target_from_statuses(
-    statuses: &[iroha::client::Status],
+    statuses: &[iroha_torii_shared::status::Status],
 ) -> Result<Realistic30TpsCatchUpTarget> {
     ensure!(
         !statuses.is_empty(),
@@ -1954,7 +1954,7 @@ fn realistic_30tps_catch_up_target_from_statuses(
     })
 }
 fn realistic_30tps_strict_progress_target_from_statuses(
-    statuses: &[iroha::client::Status],
+    statuses: &[iroha_torii_shared::status::Status],
 ) -> Result<Realistic30TpsCatchUpTarget> {
     ensure!(
         !statuses.is_empty(),
@@ -1974,7 +1974,7 @@ fn realistic_30tps_strict_progress_target_from_statuses(
     })
 }
 fn realistic_30tps_statuses_exceed_strict_progress_target(
-    statuses: &[iroha::client::Status],
+    statuses: &[iroha_torii_shared::status::Status],
     target: Realistic30TpsCatchUpTarget,
 ) -> bool {
     realistic_30tps_strict_progress_target_from_statuses(statuses).is_ok_and(|current| {
@@ -1983,7 +1983,7 @@ fn realistic_30tps_statuses_exceed_strict_progress_target(
     })
 }
 fn realistic_30tps_statuses_satisfy_post_heal_progress(
-    statuses: &[iroha::client::Status],
+    statuses: &[iroha_torii_shared::status::Status],
     target: Realistic30TpsCatchUpTarget,
     final_target_approved: u64,
 ) -> bool {
@@ -1994,7 +1994,7 @@ fn realistic_30tps_statuses_satisfy_post_heal_progress(
     })
 }
 fn realistic_30tps_convergence_span_from_statuses(
-    statuses: &[iroha::client::Status],
+    statuses: &[iroha_torii_shared::status::Status],
 ) -> Result<Realistic30TpsConvergenceSpan> {
     ensure!(
         !statuses.is_empty(),
@@ -2023,7 +2023,9 @@ fn realistic_30tps_convergence_span_from_statuses(
             .unwrap_or_default(),
     })
 }
-fn realistic_30tps_statuses_are_converged(statuses: &[iroha::client::Status]) -> Result<bool> {
+fn realistic_30tps_statuses_are_converged(
+    statuses: &[iroha_torii_shared::status::Status],
+) -> Result<bool> {
     let span = realistic_30tps_convergence_span_from_statuses(statuses)?;
     Ok(span
         .max_blocks_non_empty
@@ -2055,7 +2057,7 @@ fn realistic_30tps_convergence_progress_since(
         .then_some(current)
 }
 fn realistic_30tps_catch_up_progress_since(
-    status: &iroha::client::Status,
+    status: &iroha_torii_shared::status::Status,
     last_seen: Realistic30TpsCatchUpTarget,
 ) -> Option<Realistic30TpsCatchUpTarget> {
     let current = Realistic30TpsCatchUpTarget {
@@ -5181,7 +5183,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
 async fn collect_statuses(
     network: &Network,
     status_timeout: Duration,
-) -> Result<Vec<iroha::client::Status>> {
+) -> Result<Vec<iroha_torii_shared::status::Status>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         tokio::time::timeout(status_timeout, peer.status())
             .await
@@ -5223,7 +5225,7 @@ async fn collect_realistic_statuses(
     network: &Network,
     status_timeout: Duration,
     tolerate_one_fault: bool,
-) -> Result<Vec<iroha::client::Status>> {
+) -> Result<Vec<iroha_torii_shared::status::Status>> {
     if tolerate_one_fault {
         collect_statuses_allowing_missing(network, status_timeout, 1).await
     } else {
@@ -5234,7 +5236,7 @@ async fn collect_statuses_allowing_missing(
     network: &Network,
     status_timeout: Duration,
     max_missing: usize,
-) -> Result<Vec<iroha::client::Status>> {
+) -> Result<Vec<iroha_torii_shared::status::Status>> {
     let results = join_all(network.peers().iter().map(|peer| async move {
         tokio::time::timeout(status_timeout, peer.status())
             .await
@@ -5821,17 +5823,17 @@ fn realistic_30tps_snapshot_settings_enable_read_write_for_rotating_faults() {
 #[test]
 fn realistic_30tps_catch_up_target_uses_leading_statuses() -> Result<()> {
     let target = realistic_30tps_catch_up_target_from_statuses(&[
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 7,
             txs_approved: 11,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 9,
             txs_approved: 10,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 8,
             txs_approved: 13,
             ..Default::default()
@@ -5855,7 +5857,7 @@ fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
     };
     assert_eq!(
         realistic_30tps_catch_up_progress_since(
-            &iroha::client::Status {
+            &iroha_torii_shared::status::Status {
                 blocks_non_empty: 10,
                 txs_approved: 100,
                 ..Default::default()
@@ -5866,7 +5868,7 @@ fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
     );
     assert_eq!(
         realistic_30tps_catch_up_progress_since(
-            &iroha::client::Status {
+            &iroha_torii_shared::status::Status {
                 blocks_non_empty: 11,
                 txs_approved: 100,
                 ..Default::default()
@@ -5880,7 +5882,7 @@ fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
     );
     assert_eq!(
         realistic_30tps_catch_up_progress_since(
-            &iroha::client::Status {
+            &iroha_torii_shared::status::Status {
                 blocks_non_empty: 10,
                 txs_approved: 101,
                 ..Default::default()
@@ -5894,7 +5896,7 @@ fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
     );
     assert_eq!(
         realistic_30tps_catch_up_progress_since(
-            &iroha::client::Status {
+            &iroha_torii_shared::status::Status {
                 blocks_non_empty: 12,
                 txs_approved: 130,
                 ..Default::default()
@@ -5910,17 +5912,17 @@ fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
 #[test]
 fn realistic_30tps_strict_progress_target_uses_lagging_statuses() -> Result<()> {
     let target = realistic_30tps_strict_progress_target_from_statuses(&[
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 7,
             txs_approved: 11,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 9,
             txs_approved: 10,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 8,
             txs_approved: 13,
             ..Default::default()
@@ -5943,12 +5945,12 @@ fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
         txs_approved: 100,
     };
     let one_peer_still_at_baseline = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 10,
             txs_approved: 100,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 11,
             txs_approved: 120,
             ..Default::default()
@@ -5959,12 +5961,12 @@ fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
         target
     ));
     let all_peers_approved_more = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 10,
             txs_approved: 101,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 11,
             txs_approved: 120,
             ..Default::default()
@@ -5975,12 +5977,12 @@ fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
         target
     ));
     let all_peers_have_more_non_empty_blocks = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 11,
             txs_approved: 100,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 12,
             txs_approved: 100,
             ..Default::default()
@@ -6002,12 +6004,12 @@ fn realistic_30tps_post_heal_progress_accepts_completed_target() {
         txs_approved: 216_016,
     };
     let all_peers_at_final_target = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 1379,
             txs_approved: 216_016,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 1379,
             txs_approved: 216_016,
             ..Default::default()
@@ -6023,12 +6025,12 @@ fn realistic_30tps_post_heal_progress_accepts_completed_target() {
         216_016
     ));
     let one_peer_before_final_target = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 1379,
             txs_approved: 216_016,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 1379,
             txs_approved: 216_015,
             ..Default::default()
@@ -6043,12 +6045,12 @@ fn realistic_30tps_post_heal_progress_accepts_completed_target() {
 #[test]
 fn realistic_30tps_all_peer_convergence_rejects_deep_lag() -> Result<()> {
     let converged = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 42,
             txs_approved: 10_000,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 43,
             txs_approved: 10_300,
             ..Default::default()
@@ -6056,12 +6058,12 @@ fn realistic_30tps_all_peer_convergence_rejects_deep_lag() -> Result<()> {
     ];
     assert!(realistic_30tps_statuses_are_converged(&converged)?);
     let lagging = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 42,
             txs_approved: 10_000,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks_non_empty: 47,
             txs_approved: 13_000,
             ..Default::default()
@@ -6492,19 +6494,19 @@ fn throughput_status_summary_uses_strict_min_without_lag_tolerance() {
 #[test]
 fn height_quorum_with_bounded_lag_accepts_one_block_tail_lag() {
     let statuses = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 2,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
@@ -6514,19 +6516,19 @@ fn height_quorum_with_bounded_lag_accepts_one_block_tail_lag() {
 #[test]
 fn height_quorum_with_bounded_lag_accepts_tolerated_tail_lag() {
     let statuses = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 1,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 4,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 4,
             ..Default::default()
         },
@@ -6536,38 +6538,38 @@ fn height_quorum_with_bounded_lag_accepts_tolerated_tail_lag() {
 #[test]
 fn height_quorum_with_bounded_lag_rejects_missing_quorum_or_split_quorum() {
     let missing_quorum = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 2,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 2,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
     ];
     assert!(!height_quorum_with_bounded_lag(&missing_quorum, 3, 3));
     let split_quorum = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 1,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 3,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 5,
             ..Default::default()
         },
@@ -6578,19 +6580,19 @@ fn height_quorum_with_bounded_lag_rejects_missing_quorum_or_split_quorum() {
 #[test]
 fn quorum_low_watermark_height_ignores_tolerated_tail_lag() {
     let statuses = [
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 1,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 2,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 2,
             ..Default::default()
         },
-        iroha::client::Status {
+        iroha_torii_shared::status::Status {
             blocks: 2,
             ..Default::default()
         },
@@ -7342,7 +7344,7 @@ async fn wait_for_height_quorum_with_bounded_lag(
     network: &Network,
     target_height: u64,
     timeout: Duration,
-) -> Result<Vec<iroha::client::Status>> {
+) -> Result<Vec<iroha_torii_shared::status::Status>> {
     let deadline = Instant::now() + timeout;
     let peer_count = network.peers().len();
     let quorum = commit_quorum_from_len(peer_count).max(1);
@@ -7386,7 +7388,7 @@ async fn wait_for_height_quorum_with_bounded_lag(
     }
 }
 fn height_quorum_with_bounded_lag(
-    statuses: &[iroha::client::Status],
+    statuses: &[iroha_torii_shared::status::Status],
     target_height: u64,
     quorum: usize,
 ) -> bool {
@@ -7411,7 +7413,7 @@ fn height_quorum_with_bounded_lag(
     let low_watermark = quorum_low_watermark_height(statuses, tolerated_lagging);
     max_height.saturating_sub(low_watermark) <= 1
 }
-fn status_height_span(statuses: &[iroha::client::Status]) -> Option<(u64, u64)> {
+fn status_height_span(statuses: &[iroha_torii_shared::status::Status]) -> Option<(u64, u64)> {
     let min_height = statuses.iter().map(|status| status.blocks).min()?;
     let max_height = statuses.iter().map(|status| status.blocks).max()?;
     Some((min_height, max_height))
@@ -7420,7 +7422,7 @@ fn tolerated_lagging_peers(peer_count: usize) -> usize {
     peer_count.saturating_sub(commit_quorum_from_len(peer_count).max(1))
 }
 fn quorum_low_watermark_height(
-    statuses: &[iroha::client::Status],
+    statuses: &[iroha_torii_shared::status::Status],
     tolerated_lagging: usize,
 ) -> u64 {
     let mut heights: Vec<_> = statuses.iter().map(|status| status.blocks).collect();
@@ -7445,7 +7447,7 @@ struct StatusSnapshot {
     view_changes: u32,
 }
 impl StatusSnapshot {
-    fn from_status(status: &iroha::client::Status) -> Self {
+    fn from_status(status: &iroha_torii_shared::status::Status) -> Self {
         Self {
             blocks: status.blocks,
             blocks_non_empty: status.blocks_non_empty,

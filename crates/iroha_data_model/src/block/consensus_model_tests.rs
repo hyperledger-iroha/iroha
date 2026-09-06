@@ -843,6 +843,7 @@ fn grouped_native_amx_commitment_fixture() -> LaneBlockCommitment {
 #[test]
 fn canonical_decode_limits_reject_recursive_native_amx_commitment_frames() {
     let fixture = grouped_native_amx_commitment_fixture();
+    eprintln!("recursive fixture: loaded");
     let mut empty = fixture.clone();
     empty.native_amx_receipts.clear();
     let receipt_template = fixture
@@ -867,9 +868,12 @@ fn canonical_decode_limits_reject_recursive_native_amx_commitment_frames() {
         nested = outer;
     }
 
+    eprintln!("recursive fixture: constructed");
     let encoded = norito::to_bytes(&nested).expect("encode recursive Native AMX fixture");
+    eprintln!("recursive fixture: encoded {} bytes", encoded.len());
     let error = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
         .expect_err("canonical decode must reject a recursive consensus value before exhaustion");
+    eprintln!("recursive fixture: rejected {error:?}");
     assert!(
         matches!(
             error,

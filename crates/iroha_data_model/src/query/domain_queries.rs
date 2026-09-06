@@ -91,6 +91,8 @@ pub mod account {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::account::AccountAliasBindingRecord")]
     pub struct AccountAliasBindingRecord {
         /// Canonical account identifier that owns the binding.
         pub account_id: crate::account::AccountId,
@@ -241,6 +243,9 @@ pub mod account {
             FindAccountsWithAsset, FindAliasesByAccountId,
         };
     }
+
+    #[cfg(test)]
+    mod captured_domain_queries_schema_tests;
 }
 pub mod asset {
     //! Asset-related query definitions.
@@ -873,6 +878,8 @@ pub mod runtime {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::runtime::AbiVersion")]
     pub struct AbiVersion {
         /// The ABI version currently active on the node.
         pub abi_version: u16,
@@ -881,6 +888,9 @@ pub mod runtime {
         //! Prelude re-exports.
         pub use super::FindAbiVersion;
     }
+
+    #[cfg(test)]
+    mod captured_domain_queries_schema_tests;
 }
 pub mod proof {
     //! Proof-related query definitions.

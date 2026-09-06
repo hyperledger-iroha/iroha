@@ -3,16 +3,16 @@
 //! A provider must parse and verify the complete semantic bundle before it may attest to an
 //! archive. This module centralizes that fail-closed check so seed ingress, storage providers, and
 //! later cache integration use one canonical transcript implementation.
-use crate::{
-    CarBuildPlan, CarStreamingWriter, CarVerifier, CarWriteStats, ChunkStore, ProfileId,
-    compute_chunk_plan_digest_sha3,
-};
+use crate::{CarBuildPlan, CarStreamingWriter, CarVerifier, CarWriteStats, ChunkStore};
 use iroha_data_model::musubi::{
     ArchiveId, MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1, MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
-    MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1,
-    MUSUBI_MAX_FILES_V1, MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1,
-    MusubiContentDigestV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
-    validate_musubi_portable_path_set_v1,
+    MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1, MusubiContentDigestV1,
+    MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
+};
+pub mod plan;
+use plan::{
+    MusubiPlanValidationContextV1, PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1,
+    source_material_capacity_v1, validate_plan_commitment_v1,
 };
 use std::{
     fmt,
@@ -27,20 +27,7 @@ pub const MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1: &str = ".musubi/verification-
 const SOURCE_TREE_DOMAIN_V1: &[u8] = b"musubi-source-tree-v1\0";
 const ARTIFACT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"musubi-artifact-descriptor-v1\0";
 const BUNDLE_DOMAIN_V1: &[u8] = b"musubi-bundle-v1\0";
-/// Provider verification heap/RSS qualification target used to size individual phase controls.
-///
-/// The controls below are not a proof that the complete process remains under this target.
-const PROVIDER_FETCH_MEMORY_MAX_BYTES_V1: usize = 64 * 1024 * 1024;
-/// Plan/PoR construction is a separate phase and may consume at most half the gate.
-const PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1: usize =
-    PROVIDER_FETCH_MEMORY_MAX_BYTES_V1 / 2;
-/// Maximum aggregate bytes captured for all three mandatory metadata files.
-const BUNDLE_METADATA_TOTAL_MAX_BYTES_V1: u64 =
-    2 * MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 + MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1;
-/// Maximum normalized source-tree transcript retained during semantic verification.
-const SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1: usize = 18 * 1024 * 1024;
 const IO_BUFFER_BYTES: usize = 64 * 1024;
-const BUNDLE_METADATA_FILE_COUNT: usize = 3;
 /// Closed, payload-free integrity surface reported by the Musubi bundle verifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiBundleIntegritySurfaceV1 {
@@ -171,7 +158,11 @@ impl MusubiBundleVerifierV1 {
         let archive_error = || {
             MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment)
         };
-        validate_plan_commitment(plan, commitment)?;
+        validate_plan_commitment_v1(
+            plan,
+            commitment,
+            MusubiPlanValidationContextV1::ProviderFetch,
+        )?;
         if canonical_car.is_empty()
             || u64::try_from(canonical_car.len()).map_err(|_| archive_error())?
                 != commitment.car_size
@@ -251,7 +242,11 @@ impl MusubiBundleVerifierV1 {
         let archive_error = || {
             MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment)
         };
-        validate_plan_commitment(plan, commitment)?;
+        validate_plan_commitment_v1(
+            plan,
+            commitment,
+            MusubiPlanValidationContextV1::ProviderFetch,
+        )?;
         let mut canonical_payload = open_payload().map_err(|_| archive_error())?;
         let stats = CarStreamingWriter::new(plan)
             .write_from_reader(&mut canonical_payload, io::sink())
@@ -307,148 +302,6 @@ fn ensure_payload_eof(payload: &mut impl Read) -> io::Result<()> {
             "Musubi payload contains trailing bytes",
         ))
     }
-}
-fn validate_plan_commitment(
-    plan: &CarBuildPlan,
-    commitment: &MusubiArchiveCommitmentV1,
-) -> Result<(), MusubiBundleVerificationErrorV1> {
-    let archive_error =
-        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
-    commitment.validate().map_err(|_| archive_error())?;
-    let maximum_files = usize::try_from(MUSUBI_MAX_FILES_V1)
-        .unwrap_or(usize::MAX)
-        .saturating_add(BUNDLE_METADATA_FILE_COUNT);
-    if plan.content_length == 0
-        || plan.content_length > MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1
-        || commitment.car_size > MUSUBI_MAX_CAR_BYTES_V1
-        || plan.chunks.is_empty()
-        || plan.chunks.len() > usize::try_from(MUSUBI_MAX_CHUNKS_V1).unwrap_or(usize::MAX)
-        || plan.files.len() < BUNDLE_METADATA_FILE_COUNT + 1
-        || plan.files.len() > maximum_files
-    {
-        return Err(archive_error());
-    }
-    validate_provider_fetch_memory_geometry(plan)?;
-    validate_musubi_portable_path_set_v1(plan.files.iter().map(|file| file.path.as_slice()))
-        .map_err(|_| {
-            MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::SourceTree)
-        })?;
-    let descriptor = crate::chunker_registry::lookup(ProfileId(commitment.chunker.profile_id))
-        .ok_or_else(archive_error)?;
-    if descriptor.namespace != commitment.chunker.namespace
-        || descriptor.name != commitment.chunker.name
-        || descriptor.semver != commitment.chunker.semver
-        || descriptor.multihash_code != commitment.chunker.multihash_code
-        || descriptor.profile != plan.chunk_profile
-        || plan.content_length != commitment.content_length
-        || plan.chunks.len()
-            != usize::try_from(commitment.chunk_count).map_err(|_| archive_error())?
-        || compute_chunk_plan_digest_sha3(&plan.chunks) != *commitment.chunk_plan_digest.as_bytes()
-    {
-        return Err(archive_error());
-    }
-    let expected_source_files =
-        usize::try_from(commitment.file_count).map_err(|_| archive_error())?;
-    let expected_files = expected_source_files
-        .checked_add(BUNDLE_METADATA_FILE_COUNT)
-        .ok_or_else(archive_error)?;
-    if plan.files.len() != expected_files {
-        return Err(archive_error());
-    }
-    let mut source_files = 0_usize;
-    let mut release_files = 0_u8;
-    let mut descriptor_files = 0_u8;
-    let mut lock_files = 0_u8;
-    for file in &plan.files {
-        match file.path.join("/").as_str() {
-            MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1 => {
-                release_files = release_files.saturating_add(1);
-            }
-            MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1 => {
-                descriptor_files = descriptor_files.saturating_add(1);
-            }
-            MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1 => {
-                lock_files = lock_files.saturating_add(1);
-            }
-            path if path.starts_with(".musubi/") => return Err(archive_error()),
-            _ => source_files = source_files.saturating_add(1),
-        }
-    }
-    if source_files != expected_source_files
-        || release_files != 1
-        || descriptor_files != 1
-        || lock_files != 1
-    {
-        return Err(archive_error());
-    }
-    Ok(())
-}
-fn validate_provider_fetch_memory_geometry(
-    plan: &CarBuildPlan,
-) -> Result<(), MusubiBundleVerificationErrorV1> {
-    let archive_error =
-        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
-    let source_error =
-        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::SourceTree);
-    // Structural plan validation runs first so the subsequent joined-path accounting cannot
-    // allocate from unbounded path components supplied by an untrusted caller.
-    plan.validate_for_ingest_with_limit(PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1)
-        .map_err(|_| archive_error())?;
-    validate_bundle_metadata_capture_geometry(plan)?;
-    let source_material_capacity = source_material_capacity_v1(plan)?;
-    if source_material_capacity > SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1 {
-        return Err(source_error());
-    }
-    Ok(())
-}
-fn validate_bundle_metadata_capture_geometry(
-    plan: &CarBuildPlan,
-) -> Result<(), MusubiBundleVerificationErrorV1> {
-    let archive_error =
-        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
-    let captured_metadata_bytes = plan.files.iter().try_fold(0_u64, |total, file| {
-        let path = file.path.join("/");
-        let individual_max = match path.as_str() {
-            MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1 | MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1 => {
-                MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1
-            }
-            MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1 => MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1,
-            _ => return Ok(total),
-        };
-        if file.size == 0 || file.size > individual_max {
-            return Err(archive_error());
-        }
-        total.checked_add(file.size).ok_or_else(archive_error)
-    })?;
-    if captured_metadata_bytes > BUNDLE_METADATA_TOTAL_MAX_BYTES_V1 {
-        return Err(archive_error());
-    }
-    Ok(())
-}
-fn source_material_capacity_v1(
-    plan: &CarBuildPlan,
-) -> Result<usize, MusubiBundleVerificationErrorV1> {
-    let archive_error =
-        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
-    let source_material_length = plan.files.iter().try_fold(
-        frame_length(u64::try_from(SOURCE_TREE_DOMAIN_V1.len()).map_err(|_| archive_error())?)
-            .and_then(|length| length.checked_add(4))
-            .ok_or_else(archive_error)?,
-        |total, file| {
-            let path = file.path.join("/");
-            if path.starts_with(".musubi/") {
-                return Ok(total);
-            }
-            total
-                .checked_add(
-                    frame_length(u64::try_from(path.len()).map_err(|_| archive_error())?)
-                        .ok_or_else(archive_error)?,
-                )
-                .and_then(|length| length.checked_add(8 + 32))
-                .ok_or_else(archive_error)
-        },
-    )?;
-    usize::try_from(source_material_length).map_err(|_| archive_error())
 }
 fn decode_bundle_descriptor_v1(
     bytes: &[u8],
@@ -724,8 +577,13 @@ fn update_frame(hasher: &mut blake3::Hasher, bytes: &[u8]) -> Result<(), ()> {
 // establish that evidence.
 #[cfg(test)]
 mod tests {
+    use super::plan::{
+        BUNDLE_METADATA_TOTAL_MAX_BYTES_V1, PROVIDER_FETCH_MEMORY_MAX_BYTES_V1,
+        SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1, validate_bundle_metadata_capture_geometry,
+    };
     use super::*;
-    use crate::{CarWriter, FileEntry, compute_por_root};
+    use crate::{CarWriter, FileEntry, compute_chunk_plan_digest_sha3, compute_por_root};
+    mod plan_validation;
     use iroha_data_model::{
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiDependencyReqV1,

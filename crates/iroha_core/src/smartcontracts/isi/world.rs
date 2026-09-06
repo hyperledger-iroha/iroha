@@ -286,7 +286,7 @@ pub mod isi {
         unique_vec::PushResult,
     };
     #[cfg(feature = "telemetry")]
-    use iroha_telemetry::metrics::GovernanceManifestActivation;
+    use iroha_torii_shared::status::GovernanceManifestActivation;
     use mv::storage::StorageReadOnly;
     use sha2::Digest as _;
     fn ensure_metadata_value(

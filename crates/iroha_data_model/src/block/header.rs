@@ -563,6 +563,8 @@ fn checked_block_signature_from_wire(
     ))
 }
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::header::BlockHeaderConsensusProjectionV1")]
 struct BlockHeaderConsensusProjectionV1 {
     version: u16,
     height: NonZeroU64,
@@ -1252,3 +1254,6 @@ mod tests {
         // Keep this unit test focused on consensus hashing behavior.
     }
 }
+
+#[cfg(test)]
+mod captured_header_schema_tests;

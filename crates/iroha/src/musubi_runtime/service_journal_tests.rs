@@ -1304,8 +1304,8 @@ fn client() -> (Client, KeyPair) {
             Duration::from_secs(1),
             Duration::from_secs(1),
         ),
-        default_anonymity_policy: sorafs_orchestrator::AnonymityPolicy::default(),
-        rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::default(),
+        default_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
+        rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
         data_model_compatibility: Arc::new(Mutex::new(
             crate::client::DataModelCompatibility::Unchecked,
         )),

@@ -1048,6 +1048,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "bash ci/check_sorafs_python_native_sdk.sh",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",

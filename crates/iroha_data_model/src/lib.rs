@@ -228,6 +228,8 @@ include!(concat!(
 // Slice-based Norito decoders for model types used in packed sequences and
 // options. These forward to the archived Norito representation to avoid
 // duplicating decoding logic.
+#[cfg(all(test, feature = "json"))]
+mod base_wire_fixtures;
 mod norito_slice_decode;
 /// Private module defining sealing traits for `iroha_data_model`.
 mod seal {
@@ -388,3 +390,6 @@ pub mod prelude {
         },
     };
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

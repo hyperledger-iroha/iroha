@@ -21,6 +21,8 @@ pub const SORAFS_CITIZEN_BOND_SNAPSHOT_DOMAIN_V1: &[u8] = b"sorafs.citizen-bond.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondExitPendingV1")]
 pub struct SorafsCitizenBondExitPendingV1 {
     /// Finalized height at which exit was requested.
     pub requested_at_height: u64,
@@ -40,6 +42,8 @@ pub struct SorafsCitizenBondExitPendingV1 {
         deny_unknown_fields
     )
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondStateV1")]
 pub enum SorafsCitizenBondStateV1 {
     /// Bond participates in the current citizen membership root.
     Active,
@@ -56,6 +60,8 @@ pub enum SorafsCitizenBondStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondV1")]
 pub struct SorafsCitizenBondV1 {
     /// Schema version; must be [`SORAFS_CITIZEN_BOND_VERSION_V1`].
     pub version: u16,
@@ -240,6 +246,8 @@ pub enum SorafsCitizenBondErrorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondSnapshotV1")]
 pub struct SorafsCitizenBondSnapshotV1 {
     /// Frozen governance policy root.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -316,3 +324,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_anonymity_schema_tests;

@@ -198,6 +198,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
+iroha_service_model = { workspace = true }
 criterion = { workspace = true }
 tower = "0.5.2"
 hyper = "1.7.0"
@@ -264,3 +265,8 @@ required-features = ["app_api"]
 name = "kagemusha_operation_contract"
 path = "tests/kagemusha_operation_contract.rs"
 required-features = ["app_api"]
+
+[[test]]
+name = "account_capabilities_contract"
+path = "tests/account_capabilities_contract.rs"
+required-features = ["node-api"]

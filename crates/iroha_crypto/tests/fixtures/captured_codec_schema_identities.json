@@ -1,0 +1,635 @@
+[
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvAffineCircuit",
+    "root": "iroha_crypto::fhe_bfv::BfvAffineCircuit",
+    "deserialize_hash": "b601e1e77085ccc562b40716d2571627",
+    "serialize_hash": "b601e1e77085ccc562b40716d2571627"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvBootstrapKey",
+    "root": "iroha_crypto::fhe_bfv::BfvBootstrapKey",
+    "deserialize_hash": "6532ce996a1c0f3b9c61f06bd6891257",
+    "serialize_hash": "6532ce996a1c0f3b9c61f06bd6891257"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvBootstrapKeyMode",
+    "root": "iroha_crypto::fhe_bfv::BfvBootstrapKeyMode",
+    "deserialize_hash": "8ffaae4de0b570aaca22a0f627e61f04",
+    "serialize_hash": "8ffaae4de0b570aaca22a0f627e61f04"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvBootstrapKeyProofStatementMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvBootstrapKeyProofStatementMaterial",
+    "serialize_hash": "9dfeaea6408d14bf9955dcd8872f7e6a"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvBootstrapKeyTranscriptDigestMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvBootstrapKeyTranscriptDigestMaterial",
+    "serialize_hash": "9c3b76f75733253aad594689e12dbd03"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvBootstrapKeyTranscriptProofStatementMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvBootstrapKeyTranscriptProofStatementMaterial",
+    "serialize_hash": "20945f8e65b13abd5c79d25b32c95855"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvBoundedNoiseCiphertextProofInputMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvBoundedNoiseCiphertextProofInputMaterialV1",
+    "deserialize_hash": "8a0d5dea68df5c245e16d65e67915497",
+    "serialize_hash": "8a0d5dea68df5c245e16d65e67915497"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvBoundedNoisePublicKeyProofInputMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvBoundedNoisePublicKeyProofInputMaterialV1",
+    "deserialize_hash": "f71ff3dcb34c317aedb431af965015bc",
+    "serialize_hash": "f71ff3dcb34c317aedb431af965015bc"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvCiphertext",
+    "root": "iroha_crypto::fhe_bfv::BfvCiphertext",
+    "deserialize_hash": "d4b9cf3b6044c8032e4dead9b66f7a48",
+    "serialize_hash": "d4b9cf3b6044c8032e4dead9b66f7a48"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvCiphertextDigestMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvCiphertextDigestMaterial",
+    "serialize_hash": "f22b4ad858f02c0d5d3066ee798d7599"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvCiphertextProofStatementMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvCiphertextProofStatementMaterial",
+    "serialize_hash": "9634ff6ae8327eb3855a50d3ff9f4bd6"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvEvaluationKeyBundle",
+    "root": "iroha_crypto::fhe_bfv::BfvEvaluationKeyBundle",
+    "deserialize_hash": "7cfcf1ca2376475997f8c8f35c603118",
+    "serialize_hash": "7cfcf1ca2376475997f8c8f35c603118"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvExactResidualCiphertextProofInputMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvExactResidualCiphertextProofInputMaterialV1",
+    "deserialize_hash": "b442a4a495a5730deaee56dff318f445",
+    "serialize_hash": "b442a4a495a5730deaee56dff318f445"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvExactResidualPublicKeyProofInputMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvExactResidualPublicKeyProofInputMaterialV1",
+    "deserialize_hash": "3d357b8be4e0faab8ad14399d83cd97f",
+    "serialize_hash": "3d357b8be4e0faab8ad14399d83cd97f"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapAccumulatorV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapAccumulatorV1",
+    "deserialize_hash": "0a58bcaa62eb53e199f5475e3a900998",
+    "serialize_hash": "0a58bcaa62eb53e199f5475e3a900998"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1",
+    "deserialize_hash": "985337bcd5981e83ab74ddadd4ea3494",
+    "serialize_hash": "985337bcd5981e83ab74ddadd4ea3494"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticAirEvaluationMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticAirEvaluationMaterialV1",
+    "deserialize_hash": "5867324748261232348ff4c817622153",
+    "serialize_hash": "5867324748261232348ff4c817622153"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceMaterialV1",
+    "deserialize_hash": "9c22cea99910b8916340c3a400f99661",
+    "serialize_hash": "9c22cea99910b8916340c3a400f99661"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceProfileV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceProfileV1",
+    "deserialize_hash": "66c369fa2c60fbb7c175b846b832b2c9",
+    "serialize_hash": "66c369fa2c60fbb7c175b846b832b2c9"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1",
+    "deserialize_hash": "f8a6cddbd376c2798fe28a03ec59b158",
+    "serialize_hash": "f8a6cddbd376c2798fe28a03ec59b158"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapBlindRotationKeyV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapBlindRotationKeyV1",
+    "deserialize_hash": "f166646d5911e1c203e26ced175f7601",
+    "serialize_hash": "f166646d5911e1c203e26ced175f7601"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapBlindRotationStepV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapBlindRotationStepV1",
+    "deserialize_hash": "5d4d4a089aa7b0507e6f4b817bdc250e",
+    "serialize_hash": "5d4d4a089aa7b0507e6f4b817bdc250e"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1",
+    "serialize_hash": "4a23edc7cf4ceda43801ff7671fbb20f"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactBundleV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactBundleV1",
+    "deserialize_hash": "e583426a2be353b13f87a4317676395f",
+    "serialize_hash": "e583426a2be353b13f87a4317676395f"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1",
+    "deserialize_hash": "b7d752f214e59ae5cb670796c6df5225",
+    "serialize_hash": "b7d752f214e59ae5cb670796c6df5225"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1",
+    "deserialize_hash": "4e3d164613954d0c7e4521a4741507c5",
+    "serialize_hash": "4e3d164613954d0c7e4521a4741507c5"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1",
+    "deserialize_hash": "3a930a73473f62ae67697d03e66dde93",
+    "serialize_hash": "3a930a73473f62ae67697d03e66dde93"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1",
+    "serialize_hash": "3d0c7535bbcc1bfcf23e83a5d0854841"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionPrefixTraceBoundsV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionPrefixTraceBoundsV1",
+    "deserialize_hash": "97eb918b75b3beb884216fa1ed344e36",
+    "serialize_hash": "97eb918b75b3beb884216fa1ed344e36"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionPrefixTraceV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionPrefixTraceV1",
+    "deserialize_hash": "cd9c5549ef71817b98d8e15803366cbb",
+    "serialize_hash": "cd9c5549ef71817b98d8e15803366cbb"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofBoundModeV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofBoundModeV1",
+    "deserialize_hash": "ff7d1cfc2e4aad33e8aaf62b94ff3baa",
+    "serialize_hash": "ff7d1cfc2e4aad33e8aaf62b94ff3baa"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofClaimV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofClaimV1",
+    "deserialize_hash": "f33e7996ac830d6135e67ea918d5715d",
+    "serialize_hash": "f33e7996ac830d6135e67ea918d5715d"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofInputMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofInputMaterialV1",
+    "deserialize_hash": "210d989f54fae223c74c3c4cc66591e5",
+    "serialize_hash": "210d989f54fae223c74c3c4cc66591e5"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofStatementMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofStatementMaterial",
+    "serialize_hash": "befef2d88e690b061269863667c68a55"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProverInputMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProverInputMaterialV1",
+    "deserialize_hash": "98701bd799e4e329b2bc9421ea428a75",
+    "serialize_hash": "98701bd799e4e329b2bc9421ea428a75"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionWitnessDigestMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionWitnessDigestMaterialV1",
+    "deserialize_hash": "4559cc6cb4760b31dff01b8735fa8f63",
+    "serialize_hash": "4559cc6cb4760b31dff01b8735fa8f63"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformDiagonalV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformDiagonalV1",
+    "deserialize_hash": "98020bdc43dffaca245bdf04fd7f7ddd",
+    "serialize_hash": "98020bdc43dffaca245bdf04fd7f7ddd"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformV1",
+    "deserialize_hash": "f530ec6b02c3b6c3cdc6289c9e81dbad",
+    "serialize_hash": "f530ec6b02c3b6c3cdc6289c9e81dbad"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapMaterialProofInputMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapMaterialProofInputMaterialV1",
+    "deserialize_hash": "598bd4fc15c84fbc7095892d6e30a295",
+    "serialize_hash": "598bd4fc15c84fbc7095892d6e30a295"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapMaterialProofStatementMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapMaterialProofStatementMaterial",
+    "serialize_hash": "ba04b58a7b92b69bac4a829cd4942eba"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeGeneratedCircuitBodyV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeGeneratedCircuitBodyV1",
+    "deserialize_hash": "bd5288a9a0af00e692ed5289806fbf88",
+    "serialize_hash": "bd5288a9a0af00e692ed5289806fbf88"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1",
+    "serialize_hash": "f89b91d500927fcd120d42bf75d01313"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1",
+    "deserialize_hash": "0c22b7e79af9043e0f3e3d0ebfbbef4e",
+    "serialize_hash": "0c22b7e79af9043e0f3e3d0ebfbbef4e"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1",
+    "deserialize_hash": "7b7b25daae35fcceb5cd17069f669334",
+    "serialize_hash": "7b7b25daae35fcceb5cd17069f669334"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1",
+    "deserialize_hash": "af15d98c094aa1930fd84ea021934dfa",
+    "serialize_hash": "af15d98c094aa1930fd84ea021934dfa"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1",
+    "deserialize_hash": "a3fc5df0fba01eb6b9fa333b8ec6487d",
+    "serialize_hash": "a3fc5df0fba01eb6b9fa333b8ec6487d"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1",
+    "deserialize_hash": "7a1b007d072405652b73dcd4906e08f2",
+    "serialize_hash": "7a1b007d072405652b73dcd4906e08f2"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapProofPublicInputSchemaV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapProofPublicInputSchemaV1",
+    "deserialize_hash": "2fc1faf20f8a322aa7e28db62b960913",
+    "serialize_hash": "2fc1faf20f8a322aa7e28db62b960913"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapRawExtractedSampleV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapRawExtractedSampleV1",
+    "deserialize_hash": "e17e275f2bc6de34febe575afbc385d8",
+    "serialize_hash": "e17e275f2bc6de34febe575afbc385d8"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditEvidenceV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditEvidenceV1",
+    "deserialize_hash": "feebd1a751d953195fbd9cb50a5cda0b",
+    "serialize_hash": "feebd1a751d953195fbd9cb50a5cda0b"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditKeyEvidenceV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditKeyEvidenceV1",
+    "deserialize_hash": "435de9c8e6f1c29c0e5573e644f6f90c",
+    "serialize_hash": "435de9c8e6f1c29c0e5573e644f6f90c"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditManifestV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditManifestV1",
+    "deserialize_hash": "66773786494882297cebf666d7c03479",
+    "serialize_hash": "66773786494882297cebf666d7c03479"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1",
+    "deserialize_hash": "03d8528768e8c1d8c29ca7c1d19116aa",
+    "serialize_hash": "03d8528768e8c1d8c29ca7c1d19116aa"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditProofProfileV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditProofProfileV1",
+    "deserialize_hash": "fcd8ac0f51c27ef53706a71f84395dfb",
+    "serialize_hash": "fcd8ac0f51c27ef53706a71f84395dfb"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditRecordV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditRecordV1",
+    "deserialize_hash": "5ee6b05bc464725e7b972eadb252d861",
+    "serialize_hash": "5ee6b05bc464725e7b972eadb252d861"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditSignoffPayloadV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditSignoffPayloadV1",
+    "deserialize_hash": "bb80bd6cae050c1e9a2a070bb0f68f72",
+    "serialize_hash": "bb80bd6cae050c1e9a2a070bb0f68f72"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditSignoffV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditSignoffV1",
+    "deserialize_hash": "e6534e6f3a9b4d71942012d0aca4d7ba",
+    "serialize_hash": "e6534e6f3a9b4d71942012d0aca4d7ba"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditVerdictV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditVerdictV1",
+    "deserialize_hash": "ad70abfa52e5354fbca42cceacb81e3e",
+    "serialize_hash": "ad70abfa52e5354fbca42cceacb81e3e"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseProverContractMaterialV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseProverContractMaterialV1",
+    "deserialize_hash": "931e218bd26b89936e783ca93832a435",
+    "serialize_hash": "931e218bd26b89936e783ca93832a435"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1",
+    "deserialize_hash": "ee8c38b6d3ea7054dd6dbd259332739d",
+    "serialize_hash": "ee8c38b6d3ea7054dd6dbd259332739d"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionSwitchKeyV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionSwitchKeyV1",
+    "deserialize_hash": "dd02a25700340260e1dfbc453f900a5d",
+    "serialize_hash": "dd02a25700340260e1dfbc453f900a5d"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionV1",
+    "root": "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionV1",
+    "deserialize_hash": "60c5a9eacddf8efd44cdfca84dab6f80",
+    "serialize_hash": "60c5a9eacddf8efd44cdfca84dab6f80"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvGaloisKey",
+    "root": "iroha_crypto::fhe_bfv::BfvGaloisKey",
+    "deserialize_hash": "89564ea8f91aabd11d6c0d0ec2aede85",
+    "serialize_hash": "89564ea8f91aabd11d6c0d0ec2aede85"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext",
+    "root": "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext",
+    "deserialize_hash": "1042e5b988077612440e4cd45673596b",
+    "serialize_hash": "1042e5b988077612440e4cd45673596b"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvIdentifierPublicParameters",
+    "root": "iroha_crypto::fhe_bfv::BfvIdentifierPublicParameters",
+    "deserialize_hash": "9e9c8d2859ae0e1b703e82870767cd98",
+    "serialize_hash": "9e9c8d2859ae0e1b703e82870767cd98"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvParameters",
+    "root": "iroha_crypto::fhe_bfv::BfvParameters",
+    "deserialize_hash": "c7e51b0cb930541ea435b078381438b0",
+    "serialize_hash": "c7e51b0cb930541ea435b078381438b0"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvProductionQualificationBlockerV1",
+    "root": "iroha_crypto::fhe_bfv::BfvProductionQualificationBlockerV1",
+    "deserialize_hash": "9de723c1ab3e833d97bf12f9828ac394",
+    "serialize_hash": "9de723c1ab3e833d97bf12f9828ac394"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvPublicKey",
+    "root": "iroha_crypto::fhe_bfv::BfvPublicKey",
+    "deserialize_hash": "5b5e8c608c775d4cea5999b46d232bdb",
+    "serialize_hash": "5b5e8c608c775d4cea5999b46d232bdb"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvPublicKeyDigestMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvPublicKeyDigestMaterial",
+    "serialize_hash": "6fa595fffdf722c2cb03c8946edc5747"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvPublicKeyProofStatementMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvPublicKeyProofStatementMaterial",
+    "serialize_hash": "cf98bc3b1175422152b90d91cce34faf"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvRefreshTranscriptDigestMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvRefreshTranscriptDigestMaterial",
+    "serialize_hash": "20b403ad3ea5a22ef48068cc3535dd58"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvRelinearizationKey",
+    "root": "iroha_crypto::fhe_bfv::BfvRelinearizationKey",
+    "deserialize_hash": "9aa758138996d84b412c2e017db25a7c",
+    "serialize_hash": "9aa758138996d84b412c2e017db25a7c"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvRelinearizationKeyEntry",
+    "root": "iroha_crypto::fhe_bfv::BfvRelinearizationKeyEntry",
+    "deserialize_hash": "b959ba9c88ab01e05faa260fe2c45506",
+    "serialize_hash": "b959ba9c88ab01e05faa260fe2c45506"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvRnsModulusChain",
+    "root": "iroha_crypto::fhe_bfv::BfvRnsModulusChain",
+    "deserialize_hash": "0b41fc3896c9f74a6fac7bf570c884ff",
+    "serialize_hash": "0b41fc3896c9f74a6fac7bf570c884ff"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvRnsPolynomial",
+    "root": "iroha_crypto::fhe_bfv::BfvRnsPolynomial",
+    "deserialize_hash": "804fed424c4a959cfae930e311bd72ac",
+    "serialize_hash": "804fed424c4a959cfae930e311bd72ac"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvRotationKey",
+    "root": "iroha_crypto::fhe_bfv::BfvRotationKey",
+    "deserialize_hash": "ed83982b0fbd84e330c4642e6ee1368b",
+    "serialize_hash": "ed83982b0fbd84e330c4642e6ee1368b"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvRotationKeyTranscriptDigestMaterial",
+    "root": "iroha_crypto::fhe_bfv::BfvRotationKeyTranscriptDigestMaterial",
+    "serialize_hash": "802322d44f83372f56ab775617ac11ec"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::BfvSecretKey",
+    "root": "iroha_crypto::fhe_bfv::BfvSecretKey",
+    "deserialize_hash": "4300a9e5565d725c8af671d6c254e801",
+    "serialize_hash": "4300a9e5565d725c8af671d6c254e801"
+  },
+  {
+    "nominal": "iroha_crypto::fhe_bfv::RamLfeBfvProfileV1",
+    "root": "iroha_crypto::fhe_bfv::RamLfeBfvProfileV1",
+    "deserialize_hash": "793353177299a06ef5bd714b169ba104",
+    "serialize_hash": "793353177299a06ef5bd714b169ba104"
+  },
+  {
+    "nominal": "iroha_crypto::privacy::LaneCommitmentId",
+    "root": "iroha_crypto::privacy::LaneCommitmentId",
+    "deserialize_hash": "aacbae068fc0edeb0894c22197afa4bd",
+    "serialize_hash": "aacbae068fc0edeb0894c22197afa4bd"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::BfvProgrammedPublicParameters",
+    "root": "iroha_crypto::ram_lfe::BfvProgrammedPublicParameters",
+    "deserialize_hash": "fc0b05d927cc5d2835b824943b099b7d",
+    "serialize_hash": "fc0b05d927cc5d2835b824943b099b7d"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::BfvRamEncryptedInputMode",
+    "root": "iroha_crypto::ram_lfe::BfvRamEncryptedInputMode",
+    "deserialize_hash": "39c98aac5c2f0ebd52d4d19e64719a95",
+    "serialize_hash": "39c98aac5c2f0ebd52d4d19e64719a95"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::BfvRamProgramProfile",
+    "root": "iroha_crypto::ram_lfe::BfvRamProgramProfile",
+    "deserialize_hash": "dc94cd0e80cf1f3b4e092b0de6448d55",
+    "serialize_hash": "dc94cd0e80cf1f3b4e092b0de6448d55"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::ClientRequest",
+    "root": "iroha_crypto::ram_lfe::ClientRequest",
+    "deserialize_hash": "e549909ffc9eebc1ce82420761e21847",
+    "serialize_hash": "e549909ffc9eebc1ce82420761e21847"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::EvalResponse",
+    "root": "iroha_crypto::ram_lfe::EvalResponse",
+    "deserialize_hash": "a91f4ce19a9d6355d4f5e8fb925a2721",
+    "serialize_hash": "a91f4ce19a9d6355d4f5e8fb925a2721"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::HiddenRamFheInstruction",
+    "root": "iroha_crypto::ram_lfe::HiddenRamFheInstruction",
+    "deserialize_hash": "923accb23a9a6e8c28fb1bd3adbf42d2",
+    "serialize_hash": "923accb23a9a6e8c28fb1bd3adbf42d2"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::HiddenRamFheProgram",
+    "root": "iroha_crypto::ram_lfe::HiddenRamFheProgram",
+    "deserialize_hash": "276fb88d007b816435975306e3453152",
+    "serialize_hash": "276fb88d007b816435975306e3453152"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::PolicyCommitment",
+    "root": "iroha_crypto::ram_lfe::PolicyCommitment",
+    "deserialize_hash": "7c9909276d24aef0bdb1612eac44d5ae",
+    "serialize_hash": "7c9909276d24aef0bdb1612eac44d5ae"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::RamLfeBackend",
+    "root": "iroha_crypto::ram_lfe::RamLfeBackend",
+    "deserialize_hash": "cf8a2419cbc63245c441f745973f3b8f",
+    "serialize_hash": "cf8a2419cbc63245c441f745973f3b8f"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::RamLfeProofVerifierMetadata",
+    "root": "iroha_crypto::ram_lfe::RamLfeProofVerifierMetadata",
+    "deserialize_hash": "2f4a565697d1c9f642474a813df3f10e",
+    "serialize_hash": "2f4a565697d1c9f642474a813df3f10e"
+  },
+  {
+    "nominal": "iroha_crypto::ram_lfe::RamLfeVerificationMode",
+    "root": "iroha_crypto::ram_lfe::RamLfeVerificationMode",
+    "deserialize_hash": "88f6d7fef0c584eb8f09958ca0aceadc",
+    "serialize_hash": "88f6d7fef0c584eb8f09958ca0aceadc"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::directory::GuardDirectoryIssuerV1",
+    "root": "iroha_crypto::soranet::directory::GuardDirectoryIssuerV1",
+    "deserialize_hash": "bbeed1e003fcecd713a2d9a2e3592830",
+    "serialize_hash": "bbeed1e003fcecd713a2d9a2e3592830"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::directory::GuardDirectoryRelayEntryV2",
+    "root": "iroha_crypto::soranet::directory::GuardDirectoryRelayEntryV2",
+    "deserialize_hash": "0eb65d241974b8bf9a95097e0aed14ae",
+    "serialize_hash": "0eb65d241974b8bf9a95097e0aed14ae"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::directory::GuardDirectorySnapshotV2",
+    "root": "iroha_crypto::soranet::directory::GuardDirectorySnapshotV2",
+    "deserialize_hash": "472a6b952465ea476891c6d24d0d6db1",
+    "serialize_hash": "472a6b952465ea476891c6d24d0d6db1"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::pow::SignedTicket",
+    "root": "iroha_crypto::soranet::pow::SignedTicket",
+    "deserialize_hash": "cfbfb938914e2aed0a213ee4f6ae83b5",
+    "serialize_hash": "cfbfb938914e2aed0a213ee4f6ae83b5"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::pow::Ticket",
+    "root": "iroha_crypto::soranet::pow::Ticket",
+    "deserialize_hash": "f55261a15d45ce543ae157d38a835193",
+    "serialize_hash": "f55261a15d45ce543ae157d38a835193"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::pow::TicketRevocationSnapshot",
+    "root": "iroha_crypto::soranet::pow::TicketRevocationSnapshot",
+    "deserialize_hash": "1d4ff94554d22d983435faa020e8edf5",
+    "serialize_hash": "1d4ff94554d22d983435faa020e8edf5"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::pow::TicketRevocationSnapshotEntry",
+    "root": "iroha_crypto::soranet::pow::TicketRevocationSnapshotEntry",
+    "deserialize_hash": "a6aa439c66df02e7715eb360fe672ce7",
+    "serialize_hash": "a6aa439c66df02e7715eb360fe672ce7"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::replay::ReplayLedgerSnapshotEntryV1",
+    "root": "iroha_crypto::soranet::replay::ReplayLedgerSnapshotEntryV1",
+    "deserialize_hash": "d43a19cadfb4bde418072ea0754738ca",
+    "serialize_hash": "d43a19cadfb4bde418072ea0754738ca"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::replay::ReplayLedgerSnapshotV1",
+    "root": "iroha_crypto::soranet::replay::ReplayLedgerSnapshotV1",
+    "deserialize_hash": "06f6b29faa6fc08c41bd3b1ae0f1f225",
+    "serialize_hash": "06f6b29faa6fc08c41bd3b1ae0f1f225"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::token::TokenStoreEntry",
+    "root": "iroha_crypto::soranet::token::TokenStoreEntry",
+    "deserialize_hash": "ec069675115ea2931ba5cd91c39e6bf0",
+    "serialize_hash": "ec069675115ea2931ba5cd91c39e6bf0"
+  },
+  {
+    "nominal": "iroha_crypto::soranet::token::TokenStoreSnapshot",
+    "root": "iroha_crypto::soranet::token::TokenStoreSnapshot",
+    "deserialize_hash": "9670b699e568a5af64d63277a6a2f5fa",
+    "serialize_hash": "9670b699e568a5af64d63277a6a2f5fa"
+  },
+  {
+    "nominal": "iroha_crypto::streaming::KeyUpdateTranscript",
+    "root": "iroha_crypto::streaming::KeyUpdateTranscript",
+    "serialize_hash": "40e44605cc6bcde7c8ac05286ced15e2"
+  },
+  {
+    "nominal": "iroha_crypto::streaming::SessionCadenceSnapshot",
+    "root": "iroha_crypto::streaming::SessionCadenceSnapshot",
+    "deserialize_hash": "39fa8020bb351103deb3b94078c57de8",
+    "serialize_hash": "39fa8020bb351103deb3b94078c57de8"
+  },
+  {
+    "nominal": "iroha_crypto::streaming::StreamingSessionSnapshot",
+    "root": "iroha_crypto::streaming::StreamingSessionSnapshot",
+    "deserialize_hash": "9a529bd911a50b2ba4dbba696fa951fd",
+    "serialize_hash": "9a529bd911a50b2ba4dbba696fa951fd"
+  },
+  {
+    "nominal": "iroha_crypto::streaming::TransportCapabilityResolutionSnapshot",
+    "root": "iroha_crypto::streaming::TransportCapabilityResolutionSnapshot",
+    "deserialize_hash": "9dc74338f7e5f59f5ba46e7151ea795b",
+    "serialize_hash": "9dc74338f7e5f59f5ba46e7151ea795b"
+  },
+  {
+    "nominal": "iroha_crypto::vrf::VrfOutput",
+    "root": "iroha_crypto::vrf::VrfOutput",
+    "deserialize_hash": "f6f5bed18087ecb58ba7507d9afad010",
+    "serialize_hash": "f6f5bed18087ecb58ba7507d9afad010"
+  },
+  {
+    "nominal": "iroha_crypto::vrf::VrfProof",
+    "root": "iroha_crypto::vrf::VrfProof",
+    "deserialize_hash": "7ad0e8dfe9f1faf7e517dfd30934d446",
+    "serialize_hash": "7ad0e8dfe9f1faf7e517dfd30934d446"
+  }
+]

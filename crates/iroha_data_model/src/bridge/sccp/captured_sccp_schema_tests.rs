@@ -1,0 +1,50 @@
+//! Immutable compiler-captured identities for this source owner’s existing codecs.
+
+#[test]
+fn captured_codec_schema_identities() {
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpNetworkV1>(
+        "iroha_data_model::bridge::sccp::SccpNetworkV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpLaneIdV1>(
+        "iroha_data_model::bridge::sccp::SccpLaneIdV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpOutboundMessageContextV1>(
+        "iroha_data_model::bridge::sccp::SccpOutboundMessageContextV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpOutboundMessageKeyV1>(
+        "iroha_data_model::bridge::sccp::SccpOutboundMessageKeyV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpOutboundMessageIndexKeyV1>(
+        "iroha_data_model::bridge::sccp::SccpOutboundMessageIndexKeyV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpOutboundMessageDescriptorV1>(
+        "iroha_data_model::bridge::sccp::SccpOutboundMessageDescriptorV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpOutboundPendingMessageRecordV1>(
+        "iroha_data_model::bridge::sccp::SccpOutboundPendingMessageRecordV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpOutboundPendingUsageV1>(
+        "iroha_data_model::bridge::sccp::SccpOutboundPendingUsageV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpInboundAnchorHighWaterKeyV1>(
+        "iroha_data_model::bridge::sccp::SccpInboundAnchorHighWaterKeyV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpEvmSourceEmitterV1>(
+        "iroha_data_model::bridge::sccp::SccpEvmSourceEmitterV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpTronSourceEmitterV1>(
+        "iroha_data_model::bridge::sccp::SccpTronSourceEmitterV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpTonAddressV1>(
+        "iroha_data_model::bridge::sccp::SccpTonAddressV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpTonSourceEmitterV1>(
+        "iroha_data_model::bridge::sccp::SccpTonSourceEmitterV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpSourceEmitterV1>(
+        "iroha_data_model::bridge::sccp::SccpSourceEmitterV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::SccpSourceIdentityV1>(
+        "iroha_data_model::bridge::sccp::SccpSourceIdentityV1",
+    );
+}

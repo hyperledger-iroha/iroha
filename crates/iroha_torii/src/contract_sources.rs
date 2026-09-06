@@ -2863,7 +2863,8 @@ mod tests {
         barrier.wait();
         let successes = contenders
             .into_iter()
-            .filter(|contender| contender.join().expect("source writer thread"))
+            .map(|contender| contender.join().expect("source writer thread"))
+            .filter(|succeeded| *succeeded)
             .count();
         assert_eq!(successes, 1);
         let published = fs::read(&*path).expect("read immutable winner");

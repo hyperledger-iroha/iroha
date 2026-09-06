@@ -94,7 +94,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{numeric::Quantity, small::SmallVec};
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::NexusLaneTeuBuckets;
+use iroha_torii_shared::status::{NexusLaneTeuBuckets, SchedulerLayerWidthBuckets};
 #[cfg(feature = "telemetry")]
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
@@ -512,7 +512,6 @@ impl core::ops::Deref for VerifiedV2FinalityArtifact {
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{
     DataspacePipelineSummary, DataspaceTeuGaugeUpdate, LanePipelineSummary, LaneTeuGaugeUpdate,
-    SchedulerLayerWidthBuckets,
 };
 use crate::{
     da::{

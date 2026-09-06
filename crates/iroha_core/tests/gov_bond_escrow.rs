@@ -81,22 +81,21 @@ fn plain_ballot_locks_bond_into_escrow() {
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanSubmitGovernanceBallot");
     // Seed the already-open plain referendum visible at this block height.
-    stx.world.put_governance_referendum_for_testing(
+    stx.world.governance_referenda_mut().insert(
         "rid-bond-lock".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 1,
             h_end: 5,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
-            final_tally: None,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
     let instr = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "rid-bond-lock".to_string(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 10_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
-        },
+        owner: ALICE_ID.clone(),
+        direction: 0,
+        amount: 10_u64.into(),
+        duration_blocks: 200,
     };
     instr
         .clone()
@@ -125,11 +124,10 @@ fn plain_ballot_locks_bond_into_escrow() {
         .expect("grant escrow ballot permission for the negative case");
     let self_custodied = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "rid-bond-lock".to_string(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 10_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
-        },
+        owner: BOB_ID.clone(),
+        direction: 0,
+        amount: 10_u64.into(),
+        duration_blocks: 200,
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("the configured custody account must not create a nominal self-lock");

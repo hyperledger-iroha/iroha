@@ -172,6 +172,8 @@ class IrohaPeerWireMessageV1 private constructor(
     val canonicalHash: ByteArray get() = canonicalDigest.copyOf()
     val wireHash: ByteArray get() = messageDigest.copyOf()
     val encodedBody: ByteArray get() = body.copyOf()
+    /** Complete encoded IPM1 byte count, available without copying its body. */
+    val byteCount: Int get() = HEADER_LENGTH + body.size
     val streamId: ByteArray get() = messageDigest.copyOfRange(0, 16)
 
     @JvmOverloads
@@ -292,30 +294,36 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalDigest = data.copyOfRange(20, 52)
             val messageDigest = data.copyOfRange(52, 84)
             val encodedBody = data.copyOfRange(84, data.size)
-            val computedWire = Blake2b.digest256(MESSAGE_DOMAIN + data.copyOfRange(0, 52) + encodedBody)
-            require(computedWire.contentEquals(messageDigest)) { "Peer message wire hash mismatch" }
+            try {
+                val computedWire = Blake2b.digest256(MESSAGE_DOMAIN + data.copyOfRange(0, 52) + encodedBody)
+                require(computedWire.contentEquals(messageDigest)) { "Peer message wire hash mismatch" }
 
-            val canonicalBytes = when (encoding) {
-                IrohaPeerContentEncodingV1.NONE -> {
-                    require(encodedLength == canonicalLength) { "Peer message length mismatch" }
-                    encodedBody.copyOf()
+                val canonicalBytes = when (encoding) {
+                    IrohaPeerContentEncodingV1.NONE -> {
+                        require(encodedLength == canonicalLength) { "Peer message length mismatch" }
+                        encodedBody.copyOf()
+                    }
+                    IrohaPeerContentEncodingV1.ZLIB -> inflateBounded(encodedBody, canonicalLength)
                 }
-                IrohaPeerContentEncodingV1.ZLIB -> inflateBounded(encodedBody, canonicalLength)
+                val payload = try {
+                    IrohaPeerCanonicalPayload(profile, kind, schemaVersion, canonicalBytes)
+                } finally {
+                    canonicalBytes.fill(0)
+                }
+                require(canonicalHash(payload).contentEquals(canonicalDigest)) {
+                    "Peer canonical payload hash mismatch"
+                }
+                val message = IrohaPeerWireMessageV1(
+                    payload,
+                    encoding,
+                    canonicalDigest,
+                    messageDigest,
+                    encodedBody,
+                )
+                return message
+            } finally {
+                encodedBody.fill(0)
             }
-            val payload = IrohaPeerCanonicalPayload(profile, kind, schemaVersion, canonicalBytes)
-            canonicalBytes.fill(0)
-            require(canonicalHash(payload).contentEquals(canonicalDigest)) {
-                "Peer canonical payload hash mismatch"
-            }
-            val message = IrohaPeerWireMessageV1(
-                payload,
-                encoding,
-                canonicalDigest,
-                messageDigest,
-                encodedBody,
-            )
-            encodedBody.fill(0)
-            return message
         }
 
         internal fun decodeHeader(

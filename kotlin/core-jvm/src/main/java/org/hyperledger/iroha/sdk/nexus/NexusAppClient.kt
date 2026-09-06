@@ -6,18 +6,14 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
-import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
 import org.hyperledger.iroha.sdk.client.TransactionFinality
 import org.hyperledger.iroha.sdk.core.model.Executable
-import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
-import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
-import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
@@ -31,123 +27,6 @@ class NexusAppError(
     message: String,
     cause: Throwable? = null,
 ) : RuntimeException(message, cause)
-
-/** Static configuration for a SORA Nexus app facade instance. */
-data class NexusAppConfig @JvmOverloads constructor(
-    @JvmField val networkId: NetworkId,
-    @JvmField val chainId: String,
-    @JvmField val chainDiscriminant: Int,
-    @JvmField val appId: String? = null,
-    @JvmField val relayUrl: String? = null,
-    @JvmField val node: String? = null,
-    @JvmField val authority: String? = null,
-    @JvmField val signingPublicKey: ByteArray? = null,
-    @JvmField val appMetadata: Map<String, String> = emptyMap(),
-) {
-    init {
-        require(chainDiscriminant in 0..0xffff) {
-            "chainDiscriminant must fit in u16"
-        }
-    }
-}
-
-/** App-role Connect registration options. */
-data class NexusConnectOptions @JvmOverloads constructor(
-    @JvmField val scopes: Set<String> = emptySet(),
-    @JvmField val walletUriBase: String? = null,
-    @JvmField val node: String? = null,
-    @JvmField val metadata: Map<String, String> = emptyMap(),
-    @JvmField val sessionId: String? = null,
-)
-
-/** Registered Connect session plus wallet launch metadata. */
-data class NexusConnectSession @JvmOverloads constructor(
-    @JvmField val sessionId: String,
-    @JvmField val walletLaunchUri: String,
-    @JvmField val appId: String? = null,
-    @JvmField val relayUrl: String? = null,
-    @JvmField val node: String? = null,
-    @JvmField val approvedAccount: String? = null,
-    @JvmField val signingPublicKey: ByteArray? = null,
-    @JvmField val metadata: Map<String, String> = emptyMap(),
-)
-
-/** Wallet approval result; transports leave [session] null and the facade supplies its caller copy. */
-data class NexusApprovedAccount @JvmOverloads constructor(
-    @JvmField val accountId: String,
-    @JvmField val signingPublicKey: ByteArray? = null,
-    @JvmField val session: NexusConnectSession? = null,
-)
-
-/** Input for the V1 Quantity asset transfer flow. */
-data class NexusTransferInput @JvmOverloads constructor(
-    @JvmField val sourceAssetId: String,
-    @JvmField val quantity: String,
-    @JvmField val destinationAccountId: String,
-    @JvmField val feePayment: FeePaymentIntent,
-    @JvmField val authority: String? = null,
-    @JvmField val signingPublicKey: ByteArray? = null,
-    @JvmField val creationTimeMs: Long? = null,
-    @JvmField val ttlMs: Long? = null,
-    @JvmField val nonce: Long? = null,
-    @JvmField val metadata: Map<String, String> = emptyMap(),
-) {
-    init {
-        KotodamaQuantity.parseCanonical(quantity)
-    }
-
-    /** Construct the minimal transfer input from a lossless validated quantity value. */
-    constructor(
-        sourceAssetId: String,
-        quantity: KotodamaQuantity,
-        destinationAccountId: String,
-        feePayment: FeePaymentIntent,
-    ) : this(sourceAssetId, quantity.toString(), destinationAccountId, feePayment)
-}
-
-/** Canonical transaction payload to be signed by a wallet. */
-data class NexusSignableTransaction(
-    @JvmField val payloadBytes: ByteArray,
-    @JvmField val payloadHashHex: String,
-    @JvmField val authority: String,
-    @JvmField val signingPublicKey: ByteArray,
-    @JvmField val signatureAlgorithm: String = NEXUS_SIGNATURE_ALGORITHM_ED25519,
-)
-
-/** Transfer draft containing both the normalized input and signable payload. */
-data class NexusTransferDraft(
-    @JvmField val input: NexusTransferInput,
-    @JvmField val signable: NexusSignableTransaction,
-)
-
-/** Wallet signature over [NexusSignableTransaction.payloadBytes]. */
-data class NexusWalletSignature @JvmOverloads constructor(
-    @JvmField val signature: ByteArray,
-    @JvmField val algorithm: String = NEXUS_SIGNATURE_ALGORITHM_ED25519,
-)
-
-/** Options for signing finalization and Torii pipeline waiting. */
-data class NexusFinalizeOptions @JvmOverloads constructor(
-    @JvmField val waitForFinalStatus: Boolean = true,
-    @JvmField val pipelineStatusOptions: PipelineStatusOptions? = null,
-)
-
-/** Receipt returned after a signed transfer is finalized and submitted. */
-data class NexusTransferReceipt(
-    @JvmField val transactionHashHex: String,
-    @JvmField val signedTransaction: SignedTransaction,
-    @JvmField val submission: ClientResponse,
-    @JvmField val finalStatus: Map<String, Any>? = null,
-) {
-    init {
-        require(transactionHashHex.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
-            "transactionHashHex must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker"
-        }
-        require(transactionHashHex == SignedTransactionHasher.hashHex(signedTransaction)) {
-            "transactionHashHex must identify the exact signed transaction"
-        }
-    }
-}
 
 /** App-role Connect dependency used by [NexusAppClient]. */
 interface NexusConnectTransport {
@@ -219,11 +98,17 @@ class NexusAppClient @JvmOverloads constructor(
             "Connect session signingPublicKey" to session.signingPublicKey,
             "config.signingPublicKey" to config.signingPublicKey,
         )
-        val approvedSession = session.copy(
+        val approvedSession = NexusConnectSession(
+            sessionId = session.sessionId,
+            walletLaunchUri = session.walletLaunchUri,
+            appId = session.appId,
+            relayUrl = session.relayUrl,
+            node = session.node,
+            metadata = session.metadata,
             approvedAccount = accountId,
             signingPublicKey = publicKey.copyOf(),
         )
-        return approved.copy(
+        return NexusApprovedAccount(
             accountId = accountId,
             signingPublicKey = publicKey.copyOf(),
             session = approvedSession,
@@ -250,7 +135,15 @@ class NexusAppClient @JvmOverloads constructor(
             "transfer input signingPublicKey" to input.signingPublicKey,
             "config.signingPublicKey" to config.signingPublicKey,
         )
-        val normalized = input.copy(
+        val normalized = NexusTransferInput(
+            sourceAssetId = input.sourceAssetId,
+            quantity = input.quantity,
+            destinationAccountId = input.destinationAccountId,
+            feePayment = input.feePayment,
+            creationTimeMs = input.creationTimeMs,
+            ttlMs = input.ttlMs,
+            nonce = input.nonce,
+            metadata = input.metadata,
             authority = authority,
             signingPublicKey = signingPublicKey.copyOf(),
         )
@@ -273,7 +166,6 @@ class NexusAppClient @JvmOverloads constructor(
         val payloadBytes = codecAdapter.encodeTransaction(payload)
         val signable = NexusSignableTransaction(
             payloadBytes = payloadBytes,
-            payloadHashHex = toHex(IrohaHash.prehash(payloadBytes)),
             authority = authority,
             signingPublicKey = signingPublicKey.copyOf(),
         )
@@ -313,11 +205,9 @@ class NexusAppClient @JvmOverloads constructor(
             "Connect session signingPublicKey" to session.signingPublicKey,
             "config.signingPublicKey" to config.signingPublicKey,
         )
-        ensureEd25519(signable.signatureAlgorithm)
         val signature = transport.requestSignature(session, signable, config)
-        ensureEd25519(signature.algorithm)
         validateEd25519Signature(signature.signature)
-        return NexusWalletSignature(signature.signature.copyOf(), NEXUS_SIGNATURE_ALGORITHM_ED25519)
+        return signature
     }
 
     fun finalizeAndSubmit(
@@ -331,8 +221,6 @@ class NexusAppClient @JvmOverloads constructor(
             "signable signingPublicKey" to signable.signingPublicKey,
             "config.signingPublicKey" to config.signingPublicKey,
         )
-        ensureEd25519(signable.signatureAlgorithm)
-        ensureEd25519(signature.algorithm)
         validateEd25519PublicKey(signable.signingPublicKey)
         validateEd25519Signature(signature.signature)
         validateEd25519SignatureForPayload(
@@ -413,7 +301,15 @@ class NexusAppClient @JvmOverloads constructor(
             "config.signingPublicKey" to config.signingPublicKey,
         )
         val draft = buildTransferDraft(
-            input.copy(
+            NexusTransferInput(
+                sourceAssetId = input.sourceAssetId,
+                quantity = input.quantity,
+                destinationAccountId = input.destinationAccountId,
+                feePayment = input.feePayment,
+                creationTimeMs = input.creationTimeMs,
+                ttlMs = input.ttlMs,
+                nonce = input.nonce,
+                metadata = input.metadata,
                 authority = authority,
                 signingPublicKey = signingPublicKey.copyOf(),
             ),
@@ -545,18 +441,6 @@ class NexusAppClient @JvmOverloads constructor(
     }
 }
 
-private fun ensureEd25519(algorithm: String) {
-    if (
-        !algorithm.all { it.code in 0x20..0x7E } ||
-        !(algorithm == NEXUS_SIGNATURE_ALGORITHM_ED25519 || algorithm == "0")
-    ) {
-        throw NexusAppError(
-            "unsupported_signature_algorithm",
-            "Nexus App Facade V1 supports Ed25519 signatures only",
-        )
-    }
-}
-
 private fun validateEd25519PublicKey(publicKey: ByteArray) {
     if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
         throw NexusAppError(
@@ -603,12 +487,4 @@ private fun <T> joinClientFuture(code: String, message: String, block: () -> T):
     } catch (ex: RuntimeException) {
         throw NexusAppError(code, "$message: ${ex.message ?: ex.javaClass.simpleName}", ex)
     }
-}
-
-private fun toHex(data: ByteArray): String {
-    val builder = StringBuilder(data.size * 2)
-    for (byte in data) {
-        builder.append(String.format("%02x", byte))
-    }
-    return builder.toString()
 }

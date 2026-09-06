@@ -93,6 +93,8 @@ pub const SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1: u16 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelEngineV1")]
 pub enum ModerationModelEngineV1 {
     /// Fixed-point linear model followed by monotonic piecewise-linear calibration.
     #[cfg_attr(feature = "json", norito(rename = "deterministic_linear_v1"))]
@@ -102,6 +104,8 @@ pub enum ModerationModelEngineV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1")]
 pub enum ModerationFeatureProfileV1 {
     /// 256 byte-frequency bins followed by 256 stable adjacent-byte bins.
     #[cfg_attr(feature = "json", norito(rename = "byte_histogram_bigram_v1"))]
@@ -110,6 +114,8 @@ pub enum ModerationFeatureProfileV1 {
 /// One point in a monotonic, piecewise-linear calibration curve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationCalibrationKnotV1")]
 pub struct ModerationCalibrationKnotV1 {
     /// Raw signed linear-model output at this point.
     pub input: i64,
@@ -123,6 +129,8 @@ pub struct ModerationCalibrationKnotV1 {
 /// operation and memory budgets are committed into the signed manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelArtifactV1")]
 pub struct ModerationModelArtifactV1 {
     /// Artefact schema version; must equal [`MODERATION_MODEL_ARTIFACT_VERSION_V1`].
     pub schema_version: u16,
@@ -149,6 +157,8 @@ pub struct ModerationModelArtifactV1 {
 /// A score emitted for one manifest-bound moderation model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelScoreV1")]
 pub struct ModerationModelScoreV1 {
     /// Model UUID.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -358,6 +368,8 @@ impl ModerationModelArtifactV1 {
 /// Governance-signed moderation reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproManifestV1")]
 pub struct ModerationReproManifestV1 {
     /// Canonical payload describing the runner, models, and thresholds.
     pub body: ModerationReproBodyV1,
@@ -368,6 +380,8 @@ pub struct ModerationReproManifestV1 {
 /// Canonical payload hashed and signed in the reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproBodyV1")]
 pub struct ModerationReproBodyV1 {
     /// Schema version; must equal [`MODERATION_REPRO_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -398,6 +412,8 @@ pub struct ModerationReproBodyV1 {
 /// Complete execution fingerprint for one model artefact referenced by the runner.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelFingerprintV1")]
 pub struct ModerationModelFingerprintV1 {
     /// Model UUID.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -431,6 +447,8 @@ pub struct ModerationModelFingerprintV1 {
 /// Seed derivation metadata used to generate deterministic RNG inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationSeedMaterialV1")]
 pub struct ModerationSeedMaterialV1 {
     /// Signed calibration-provenance label; integer inference never consumes it.
     pub domain_tag: String,
@@ -443,6 +461,8 @@ pub struct ModerationSeedMaterialV1 {
 /// Threshold values used when aggregating moderation verdicts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationThresholdsV1")]
 pub struct ModerationThresholdsV1 {
     /// Minimum combined score required to quarantine content (basis points, 0-10_000).
     pub quarantine: u16,
@@ -452,6 +472,8 @@ pub struct ModerationThresholdsV1 {
 /// Signature and signer metadata for a reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproSignatureV1")]
 pub struct ModerationReproSignatureV1 {
     /// Governance role (e.g., `council`, `sre_lead`, `audit`).
     pub role: String,
@@ -463,6 +485,8 @@ pub struct ModerationReproSignatureV1 {
 /// Validation summary returned after checking a reproducibility manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproManifestSummary")]
 pub struct ModerationReproManifestSummary {
     /// Referenced manifest UUID.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -477,6 +501,8 @@ pub struct ModerationReproManifestSummary {
 /// Governance-signed runner trust policy bound to one reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicyV1")]
 pub struct ModerationTrustPolicyV1 {
     /// Canonical policy body.
     pub body: ModerationTrustPolicyBodyV1,
@@ -487,6 +513,8 @@ pub struct ModerationTrustPolicyV1 {
 /// Canonical body of a runner trust and freshness policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicyBodyV1")]
 pub struct ModerationTrustPolicyBodyV1 {
     /// Schema version; must equal [`MODERATION_TRUST_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -531,6 +559,8 @@ pub struct ModerationTrustPolicyBodyV1 {
 /// One runner signer authorization and its validity/revocation window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustedSignerV1")]
 pub struct ModerationTrustedSignerV1 {
     /// Canonical operational role label.
     pub role: String,
@@ -547,6 +577,8 @@ pub struct ModerationTrustedSignerV1 {
 /// Governance signature over a moderation trust policy body.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicySignatureV1")]
 pub struct ModerationTrustPolicySignatureV1 {
     /// Governance role label.
     pub role: String,
@@ -558,6 +590,8 @@ pub struct ModerationTrustPolicySignatureV1 {
 /// Canonical runner-signed screening result envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationSignedScreeningResultV1")]
 pub struct ModerationSignedScreeningResultV1 {
     /// Signed screening body.
     pub body: ModerationSignedScreeningBodyV1,
@@ -569,6 +603,8 @@ pub struct ModerationSignedScreeningResultV1 {
 /// Canonical body signed by an authorized deterministic runner.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationSignedScreeningBodyV1")]
 pub struct ModerationSignedScreeningBodyV1 {
     /// Schema version; must equal [`MODERATION_SIGNED_RESULT_VERSION_V1`].
     pub schema_version: u16,
@@ -616,6 +652,8 @@ pub struct ModerationSignedScreeningBodyV1 {
 /// Successful external trust-policy validation summary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicySummaryV1")]
 pub struct ModerationTrustPolicySummaryV1 {
     /// Number of authorized runner signers.
     pub trusted_signer_count: u16,
@@ -627,6 +665,8 @@ pub struct ModerationTrustPolicySummaryV1 {
 /// One authenticated runner contribution committed by a committee aggregate.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationCommitteeMemberV1")]
 pub struct ModerationCommitteeMemberV1 {
     /// Distinct policy-authorized runner key.
     pub signer_public_key: PublicKey,
@@ -645,6 +685,8 @@ pub struct ModerationCommitteeMemberV1 {
 /// Deterministic aggregate over distinct, authenticated runner results.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationCommitteeAggregateV1")]
 pub struct ModerationCommitteeAggregateV1 {
     /// Schema version; must equal [`MODERATION_COMMITTEE_AGGREGATE_VERSION_V1`].
     pub schema_version: u16,
@@ -685,6 +727,8 @@ pub struct ModerationCommitteeAggregateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationProvenancePayloadV1")]
 pub enum ModerationProvenancePayloadV1 {
     /// Exact runner-signed screening result.
     SignedScreeningResult(ModerationSignedScreeningResultV1),
@@ -694,6 +738,8 @@ pub enum ModerationProvenancePayloadV1 {
 /// One hash-chained moderation provenance entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationProvenanceEntryV1")]
 pub struct ModerationProvenanceEntryV1 {
     /// Zero-based sequence number.
     pub sequence: u64,
@@ -711,6 +757,8 @@ pub struct ModerationProvenanceEntryV1 {
 /// Bounded tamper-evident moderation provenance segment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationProvenanceLogV1")]
 pub struct ModerationProvenanceLogV1 {
     /// Schema version; must equal [`MODERATION_PROVENANCE_LOG_VERSION_V1`].
     pub schema_version: u16,
@@ -2593,6 +2641,8 @@ fn validate_typed_signature_payload(
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
     norito(tag = "choice", content = "value", rename_all = "kebab-case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationVoteChoice")]
 pub enum SoraFsModerationVoteChoice {
     /// Keep the original moderation action.
     Uphold,
@@ -2616,6 +2666,8 @@ impl SoraFsModerationVoteChoice {
 /// Immutable case scope that every moderation commit/reveal payload must bind.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationBallotContextV1")]
 pub struct SoraFsModerationBallotContextV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1`].
     pub version: u16,
@@ -2685,6 +2737,8 @@ impl SoraFsModerationBallotContextV1 {
 /// Juror commitment for a `SoraFS` moderation case.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationBallotCommitV1")]
 pub struct SoraFsModerationBallotCommitV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1`].
     pub version: u16,
@@ -2759,6 +2813,8 @@ impl SoraFsModerationBallotCommitV1 {
 /// Juror reveal for a `SoraFS` moderation case.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationBallotRevealV1")]
 pub struct SoraFsModerationBallotRevealV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1`].
     pub version: u16,
@@ -2907,6 +2963,8 @@ pub const ADVERSARIAL_CORPUS_VERSION_V1: u16 = 1;
 /// Governance-signed registry describing adversarial corpus families.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::AdversarialCorpusManifestV1")]
 pub struct AdversarialCorpusManifestV1 {
     /// Schema version; must equal [`ADVERSARIAL_CORPUS_VERSION_V1`].
     pub schema_version: u16,
@@ -2922,6 +2980,8 @@ pub struct AdversarialCorpusManifestV1 {
 /// Perceptual hash/embedding family describing one moderated cluster.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::AdversarialPerceptualFamilyV1")]
 pub struct AdversarialPerceptualFamilyV1 {
     /// Deterministic family identifier (UUID).
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2935,6 +2995,8 @@ pub struct AdversarialPerceptualFamilyV1 {
 /// Entry describing a single adversarial variant and its fingerprints.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation::AdversarialPerceptualVariantV1")]
 pub struct AdversarialPerceptualVariantV1 {
     /// Variant identifier (UUID).
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -4800,3 +4862,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_moderation_schema_tests;

@@ -38,19 +38,19 @@ fn plain_ballot_emits_open_event_with_window() {
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
-            referendum_id: "any".into(),
+            referendum_id: rid.clone(),
         }
         .into();
         Grant::account_permission(ballot_perm, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant ballot permission");
-        stx.world.put_governance_referendum_for_testing(
+        stx.world.governance_referenda_mut().insert(
             rid.clone(),
             GovernanceReferendumRecord {
                 h_start: 2,
                 h_end: 6,
                 status: GovernanceReferendumStatus::Proposed,
-                final_tally: None,
+                mode: iroha_core::state::GovernanceReferendumMode::Plain,
             },
         );
         stx.apply();
@@ -64,11 +64,10 @@ fn plain_ballot_emits_open_event_with_window() {
     let mut stx = sblock.transaction();
     CastPlainBallot {
         referendum_id: rid.clone(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 1_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(4).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 1_u64.into(),
+        duration_blocks: 4,
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("ballot ok");

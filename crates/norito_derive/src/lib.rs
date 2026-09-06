@@ -24,6 +24,20 @@ use syn::{
     Variant, parse_macro_input, parse_quote,
 };
 
+mod schema_identity;
+
+#[cfg(test)]
+#[path = "../../../scripts/norito_schema_capture/derive_probe.rs"]
+mod capture_probe_tests;
+
+/// Declare a canonical schema identity independent of the Rust item location.
+#[proc_macro_derive(NoritoSchema, attributes(norito_schema))]
+pub fn derive_norito_schema(input: TokenStream) -> TokenStream {
+    schema_identity::expand(parse_macro_input!(input as DeriveInput))
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 mod json_write_bounded;
 use json_write_bounded::{EnumAttr, VariantAttr, parse_helper_path};
 

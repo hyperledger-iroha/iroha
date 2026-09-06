@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.net.URI
 import java.time.Duration
 import java.util.Collections
@@ -9,9 +11,12 @@ import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 
 /** Typed HTTP client for DA proof-policy, commitment, and pin-intent routes. */
-class DaToriiClient private constructor(builder: Builder) {
+class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
+
     private val executor: HttpTransportExecutor =
-        builder.executor ?: PlatformHttpTransportExecutor.createDefault()
+        HttpTransportScope.create(builder.executor)
     private val baseUri: URI = builder.baseUri
     private val timeout: Duration? = builder.timeout
     private val defaultHeaders: Map<String, String> =

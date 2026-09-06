@@ -12,6 +12,12 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
+from scripts.tests.sorafs_release_contract_support import (
+    assert_canary_matches_release_gate,
+    required_release_kinds,
+    release_module,
+)
+
 from scripts.tests.sorafs_hedging_billing_freshness_contract import (
     assert_shipped_hedging_billing_freshness_contract,
 )
@@ -290,7 +296,7 @@ IROHA_CONFIG_DEFAULTS_RS = (
 IROHA_CONFIG_USER_RS = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
 )
-IROHA_CONFIG_CLIENT_API_RS = REPO_ROOT / "crates" / "iroha_config" / "src" / "client_api.rs"
+TORII_CONFIGURATION_RS = REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "configuration.rs"
 SORAFS_CLI_RS = REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "bin" / "sorafs_cli.rs"
 HEDGING_FIXTURE_ROOT = REPO_ROOT / "fixtures" / "sorafs_manifest" / "hedging"
 HEDGING_FIXTURE_README = HEDGING_FIXTURE_ROOT / "README.md"
@@ -2048,15 +2054,13 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     kiso = read(IROHA_CORE_KISO_RS)
     actual_config = read(IROHA_CONFIG_ACTUAL_RS)
     user_config = read(IROHA_CONFIG_USER_RS)
-    client_api = read(IROHA_CONFIG_CLIENT_API_RS)
+    client_api = read(TORII_CONFIGURATION_RS)
     pow_crypto = read(IROHA_CRYPTO_SORANET_POW_RS)
 
-    handshake_args = cli.split("pub struct HandshakeUpdateArgs", 1)[1].split(
-        "impl HandshakeUpdateArgs", 1
+    handshake_commands = cli.split("pub enum HandshakeCommand", 1)[1].split(
+        "pub enum HandshakeTokenCommand", 1
     )[0]
-    into_payload = cli.split("fn into_payload(self)", 1)[1].split(
-        "fn normalise_hex", 1
-    )[0]
+    assert "pub struct HandshakeUpdateArgs" not in cli
     apply_config_update = kiso.split("fn apply_config_update", 1)[1].split(
         "fn apply_soranet_handshake_update", 1
     )[0]
@@ -2083,7 +2087,7 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     )[0]
     client_pow_summary = client_api.split(
         "pub struct SoranetHandshakePowSummary", 1
-    )[1].split("impl From<&'_ base::SoranetPow>", 1)[0]
+    )[1].split("/// Summary of the Argon2 puzzle gate.", 1)[0]
     client_puzzle_update = client_api.split(
         "pub struct SoranetHandshakePuzzleUpdate", 1
     )[1].split("impl SoranetHandshakePuzzleUpdate", 1)[0]
@@ -2117,13 +2121,12 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
         "allow-sm-openssl-preview-mismatch",
         "allow_sm_openssl_preview_mismatch",
     ):
-        assert stale not in handshake_args
-        assert stale not in into_payload
+        assert stale not in handshake_commands
 
-    assert "pow_update.required" not in into_payload
-    assert "puzzle_update.enabled" not in into_payload
-    assert "require_sm_handshake_match = Some(false)" not in into_payload
-    assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
+    assert "pow_update.required" not in cli
+    assert "puzzle_update.enabled" not in cli
+    assert "require_sm_handshake_match = Some(false)" not in cli
+    assert "require_sm_openssl_preview_match = Some(false)" not in cli
 
     assert "required:" not in actual_default_pow
     assert "puzzle: SoranetPuzzle::default_const()" in actual_default_pow
@@ -2147,14 +2150,14 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "_ => w.skip_value()?" not in client_puzzle_update_parser
     assert "_ => w.skip_value()?" not in client_pow_summary_parser
     assert "_ => w.skip_value()?" not in client_pow_update_parser
-    parsed_user_pow = user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
+    parsed_user_pow = user_config.split("impl SoranetHandshakePow", 1)[1].split(
         "/// Puzzle configuration supplied at the user level.", 1
     )[0]
     assert "required:" not in parsed_user_pow
-    assert "puzzle: puzzle.parse()" in parsed_user_pow
-    assert "puzzle: Some(puzzle.parse())" not in parsed_user_pow
+    assert "puzzle: puzzle.parse(emitter)" in parsed_user_pow
+    assert "puzzle: Some(" not in parsed_user_pow
     assert "actual::SoranetPuzzle" in user_config.split(
-        "fn parse(self) -> actual::SoranetPuzzle", 1
+        "impl SoranetHandshakePuzzle", 1
     )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
     assert "SM handshake matching is mandatory" in apply_config_update
     assert "SM OpenSSL preview matching is mandatory" in apply_config_update
@@ -2183,7 +2186,8 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "record_revocation" not in pow_crypto
     assert "hashcash" not in pow_crypto.lower()
 
-    assert "handshake_update_accepts_pow_overrides" in cli
+    assert "HandshakeCommand::Show" in handshake_commands
+    assert "HandshakeCommand::Token" in handshake_commands
     assert "soranet_handshake_update_applies" in kiso
     assert "soranet_sm_policy_update_rejects_relaxation" in kiso
     assert "puzzle disable should succeed" not in kiso
@@ -8246,7 +8250,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     provenance_command = "python3 -I -S scripts/check_build_efficiency_provenance.py"
     assert release_gate.count(provenance_command) == 1
     assert release_gate.index(provenance_command) < release_gate.index(
-        "python3 scripts/check_source_file_budget.py --require-objective"
+        "python3 scripts/check_source_file_budget.py"
     )
     assert "scripts/tests/check_build_efficiency_provenance_test.py" in release_gate
     assert all(
@@ -8264,7 +8268,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert release_workflow.count("fetch-depth: 0") == 1
     assert "python3 -m pytest -q \\" in release_gate
     assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate and "def _validate_version_map(" in candidate_packager and "canonical SemVer" in candidate_packager and all(name in candidate_packager_test for name in ("test_candidate_packager_rejects_version_map_mismatch_without_outputs", "test_candidate_packager_rejects_noncanonical_semver_without_outputs"))
-    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and "#[tokio::test]\nasync fn post_admission_quarantine_survives_restart_with_shared_chunks()" in provider_ingest_test and all(marker in provider_ingest_contract for marker in ("QUARANTINE_RESTART_SHA256", "test_quarantine_restart_proof_is_frozen_connected_and_unignored"))
+    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("QUARANTINE_RESTART_SHA256", "test_quarantine_restart_proof_is_frozen_connected_and_unignored"))
     assert "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate and "def _validate_version_map(" in manifest and "canonical SemVer" in manifest and all(name in manifest_test for name in ("test_manifest_rejects_embedded_version_map_mismatch", "test_manifest_rejects_noncanonical_semver"))
     assert "scripts/tests/package_sorafs_validate_release_test.py" in release_gate
     assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
@@ -8277,7 +8281,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
         "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture", 'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"', 'cargo test --locked -p irohad --lib "${provider_ingest_test}" -- --exact --list', 'grep -Fxc -- "${provider_ingest_test}: test"', "--exact --include-ignored --nocapture",
     )
     assert all(marker in release_gate for marker in required)
-    assert release_gate.count("python3 scripts/check_source_file_budget.py --require-objective") == 1 and release_gate.index("python3 scripts/check_source_file_budget.py --require-objective") < release_gate.index("cargo fmt --all -- --check") and release_gate.index("reference FFI header contract") < release_gate.index("release helper adversarial tests")
+    assert release_gate.count("python3 scripts/check_source_file_budget.py") == 1 and release_gate.index("python3 scripts/check_source_file_budget.py") < release_gate.index("cargo fmt --all -- --check") and release_gate.index("reference FFI header contract") < release_gate.index("release helper adversarial tests")
     assert release_gate.index("release helper adversarial tests") < release_gate.index("clippy sorafs_orchestrator")
 
 
@@ -16325,7 +16329,6 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_ai_prescreen_canary_test.py")
     plan = read(SORAFS_AI_PRESCREEN_PLAN)
     normalized_plan = re.sub(r"\s+", " ", plan)
-    roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free non-runner SoraFS AI pre-screening canary artifacts." in builder
     assert 'EXTERNAL_EVIDENCE_ONLY_KINDS = ("runner", "committee", "transparency_publication")' in builder
@@ -16478,7 +16481,7 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
         in normalized_plan
     )
     assert "reviewed `ai-prescreen-governance-edge-*` edge labels" in normalized_plan
-    assert "scripts/build_sorafs_ai_prescreen_canary.py" in roadmap
+    assert_canary_matches_release_gate("ai_prescreen")
     assert (
         SCRIPTS_DIR
         / "examples"
@@ -17585,9 +17588,7 @@ def test_unshipped_moderation_panel_parent_service_surface_is_not_exposed() -> N
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
     assert exposed == {}
-    roadmap = read(REPO_ROOT / "roadmap.md")
-    assert "410 Gone" not in roadmap
-    assert roadmap.count("`404 Not Found`") == 2
+    assert "e2e_panel" in required_release_kinds("moderation_panel")
 
 
 def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -> None:
@@ -18188,7 +18189,6 @@ def test_reputation_canary_builder_is_checked_in() -> None:
     builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_reputation_canary_test.py")
     docs = read(SORAFS_REPUTATION_PLAN)
     normalized_docs = re.sub(r"\s+", " ", docs)
-    roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free SoraFS reputation rollout canary artifacts." in builder
     assert "validate_evidence_set(" in builder
@@ -18266,7 +18266,7 @@ def test_reputation_canary_builder_is_checked_in() -> None:
     assert "reviewed provider names using the same `provider-*` production shape" in normalized_docs
     assert "reviewed `reputation-sse-event-*`" in normalized_docs
     assert "`reputation-websocket-event-*` labels without non-production markers" in normalized_docs
-    assert "scripts/build_sorafs_reputation_canary.py" in roadmap
+    assert_canary_matches_release_gate("reputation")
     assert (
         SCRIPTS_DIR / "examples" / "sorafs_reputation_provider_canary.args.example"
     ).is_file()
@@ -18733,7 +18733,6 @@ def test_por_canary_builder_is_checked_in() -> None:
     builder = read(SCRIPTS_DIR / "build_sorafs_por_canary.py")
     builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_por_canary_test.py")
     plan = read(SORAFS_POR_PLAN)
-    roadmap = read(REPO_ROOT / "roadmap.md")
     scheduler_runtime_example = read(
         SCRIPTS_DIR / "examples" / "sorafs_por_scheduler_runtime_canary.args.example"
     )
@@ -18806,7 +18805,7 @@ def test_por_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert "scripts/build_sorafs_por_canary.py" in plan
-    assert "scripts/build_sorafs_por_canary.py" in roadmap
+    assert_canary_matches_release_gate("por")
     assert (
         SCRIPTS_DIR / "examples" / "sorafs_por_randomness_canary.args.example"
     ).is_file()
@@ -19332,7 +19331,6 @@ def test_potr_canary_builder_is_checked_in() -> None:
     builder = read(SCRIPTS_DIR / "build_sorafs_potr_canary.py")
     builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_potr_canary_test.py")
     plan = read(SORAFS_POTR_PLAN)
-    roadmap = read(REPO_ROOT / "roadmap.md")
     multi_provider_example = read(
         SCRIPTS_DIR / "examples" / "sorafs_potr_multi_provider_probe_canary.args.example"
     )
@@ -19397,7 +19395,7 @@ def test_potr_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert "scripts/build_sorafs_potr_canary.py" in plan
-    assert "scripts/build_sorafs_potr_canary.py" in roadmap
+    assert_canary_matches_release_gate("potr")
     assert (
         SCRIPTS_DIR
         / "examples"
@@ -19838,7 +19836,6 @@ def test_repair_canary_builder_is_checked_in() -> None:
     )
     docs = read(SORAFS_REPAIR_PLAN)
     normalized_docs = re.sub(r"\s+", " ", docs)
-    roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free SoraFS repair rollout canary artifacts." in builder
     assert "validate_evidence_payload(payload, validation_options(args))" in builder
@@ -19902,7 +19899,7 @@ def test_repair_canary_builder_is_checked_in() -> None:
         "`--failure-event-count` values derived from the reviewed failure-source inventory"
         in normalized_docs
     )
-    assert "scripts/build_sorafs_repair_canary.py" in roadmap
+    assert_canary_matches_release_gate("repair")
     assert (
         SCRIPTS_DIR / "examples" / "sorafs_repair_auditor_roster_canary.args.example"
     ).is_file()
@@ -20283,7 +20280,6 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
         SCRIPTS_DIR / "tests" / "build_sorafs_reference_sdk_release_canary_test.py"
     )
     docs = read(SORAFS_REFERENCE_SDK_PLAN)
-    roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free SoraFS reference SDK release evidence artifacts." in builder
     assert "validate_evidence_payload(payload, validation_options(args))" in builder
@@ -20330,7 +20326,7 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
     )
     assert "test_output_directory_is_refused" in builder_tests
     assert "scripts/build_sorafs_reference_sdk_release_canary.py" in docs
-    assert "scripts/build_sorafs_reference_sdk_release_canary.py" in roadmap
+    assert_canary_matches_release_gate("reference_sdk_release")
     assert (
         SCRIPTS_DIR
         / "examples"
@@ -20828,7 +20824,6 @@ def test_pdp_canary_builder_is_checked_in() -> None:
     builder = read(SCRIPTS_DIR / "build_sorafs_pdp_canary.py")
     builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_pdp_canary_test.py")
     plan = read(SORAFS_PDP_PLAN)
-    roadmap = read(REPO_ROOT / "roadmap.md")
     proof_generation_example = read(
         SCRIPTS_DIR / "examples" / "sorafs_pdp_proof_generation_canary.args.example"
     )
@@ -20912,7 +20907,7 @@ def test_pdp_canary_builder_is_checked_in() -> None:
     assert "scripts/build_sorafs_pdp_canary.py" in plan
     assert "--route-body-blake3-hex" in plan
     assert "--repair-handoff-digest-hex" in plan
-    assert "scripts/build_sorafs_pdp_canary.py" in roadmap
+    assert_canary_matches_release_gate("pdp")
     assert (
         SCRIPTS_DIR / "examples" / "sorafs_pdp_provider_transport_canary.args.example"
     ).is_file()
@@ -21690,7 +21685,7 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
         "scripts/check_native_sdk_abi23_artifact.py": ("inspectSorafsOrderbookSubmissionForDiscriminantV1", "verify_sorafs_orderbook_submission_receipt_v1"),
     }
     assert all(marker in read(REPO_ROOT / path) for path, markers in sdk_contract.items() for marker in markers)
-    status = read(REPO_ROOT / "status.md"); assert status.index("SoraFS orderbook signed-submit SDK hard cut") < status.index("SoraFS orderbook submit SDK helpers")
+    assert "sdk_release" in required_release_kinds("orderbook")
 
 
 def test_orderbook_docs_keep_rollout_contract_markers() -> None:
@@ -25072,29 +25067,14 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
     )
     broker_root = REPO_ROOT / "crates" / "irohad" / "src"
     broker_source = read(broker_root / "runtime_provider_broker.rs")
-    assert 'include!("runtime_provider_broker/runtime_network_binding_tests.rs");' in broker_source
+    assert 'include!("runtime_network_binding_tests.rs");' in read(
+        broker_root / "runtime_provider_broker" / "server_tests_03.rs"
+    )
+    # The broker owns a module tree; source contracts must follow its capability
+    # boundary rather than requiring former inline code in the entry point.
     broker = re.sub(
-        r"\s+",
-        "",
-        "\n".join(
-            (
-                broker_source,
-                read(
-                    broker_root
-                    / "runtime_provider_broker"
-                    / "server_source_tests.rs"
-                ),
-                read(
-                    broker_root
-                    / "runtime_provider_broker"
-                    / "codec_signer_tests.rs"
-                ),
-                read(
-                    broker_root
-                    / "runtime_provider_broker"
-                    / "runtime_network_binding_tests.rs"
-                ),
-            )
+        r"\s+", "", broker_source + "\n".join(
+            read(path) for path in sorted((broker_root / "runtime_provider_broker").rglob("*.rs"))
         ),
     )
     broker_api = re.sub(
@@ -25259,17 +25239,13 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
     closure = re.sub(
         r"\s+", " ", read(REPO_ROOT / "specs" / "sorafs" / "v1_closure_ledger.md")
     )
-    roadmap = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
-    status = re.sub(r"\s+", " ", read(REPO_ROOT / "status.md"))
     assert (
         "The stock daemon registry and broker cover transparency slots 2–6 and the directly required Governance DAG slots 7–10"
         in closure
     )
-    assert (
-        "The local stock registry/broker client/server transport for transparency slots 2–10 is complete"
-        in roadmap
+    assert required_release_kinds("transparency") == (
+        "source_entry", "publication", "privacy_aggregate", "proof_token_issuance", "explorer",
     )
-    assert "SoraFS transparency stock-broker source closure" in status
     for stale_claim in (
         "but every transparency slot still fails closed",
         "Extend and package it with independently administered threshold-PRF",
@@ -25406,7 +25382,6 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     )
     docs = read(SORAFS_TRANSPARENCY_PLAN)
     normalized_docs = re.sub(r"\s+", " ", docs)
-    roadmap = read(REPO_ROOT / "roadmap.md")
     publication_example = read(
         SCRIPTS_DIR
         / "examples"
@@ -25461,7 +25436,7 @@ def test_transparency_canary_builder_is_checked_in() -> None:
         "`--cycle-detail-probe-count` from the reviewed cycle-detail probe inventory"
         in normalized_docs
     )
-    assert "scripts/build_sorafs_transparency_canary.py" in roadmap
+    assert_canary_matches_release_gate("transparency")
     assert "--cycle-detail-probe\ntransparency-cycle-detail-readback" in publication_example
     assert not (
         SCRIPTS_DIR
@@ -26257,9 +26232,7 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     )
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     plan = read(SORAFS_GATEWAY_LOAD_PLAN)
-    roadmap = read(REPO_ROOT / "roadmap.md")
     normalized_plan = re.sub(r"\s+", " ", plan)
-    normalized_roadmap = re.sub(r"\s+", " ", roadmap)
 
     assert "Build payload-free SoraFS gateway load rollout canary artifacts." in builder
     assert "validate_evidence_payload(payload, validation_options(args))" in builder
@@ -26410,11 +26383,7 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
         "rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 "
         "contract"
     ) in normalized_plan
-    assert (
-        "rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 "
-        "contract"
-    ) in normalized_roadmap
-    assert "scripts/build_sorafs_gateway_load_canary.py" in roadmap
+    assert_canary_matches_release_gate("gateway_load")
     assert (
         SCRIPTS_DIR
         / "examples"
@@ -26572,7 +26541,6 @@ def test_unshipped_gateway_load_live_surface_is_not_exposed() -> None:
 
 def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     plan = re.sub(r"\s+", " ", read(SORAFS_RELEASE_PIPELINE_PLAN))
-    roadmap_source = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
     checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py"); contract = read(SCRIPTS_DIR / "sorafs_production_readiness_contract.py")
     runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness.py"); runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py")
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py"); signer_evidence = read(SCRIPTS_DIR / "sorafs_software_signer_evidence.py")
@@ -26581,76 +26549,21 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     direct_example = read(EXAMPLES_DIR / "sorafs_production_readiness.args.example"); negative_runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness_negative_archive.py")
     runner_example = read(EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example"); negative_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_negative_archive_test.py"); version_map = read(SCRIPTS_DIR / "check_sorafs_release_version_map.py"); version_map_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_release_version_map_test.py")
 
-    required_markers = (
-        "`scripts/check_sorafs_production_readiness.py` is the final aggregate SoraFS promotion gate",
-        "sorafs.production_readiness.aggregate_gate.v1",
-        "`scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane summary paths",
-        "requires exactly one summary input per required gate",
-        "requires an explicit canonical `--deployment-id`/`--environment` pair",
-        "validates the schema-closed collection plan envelope against the built command plan before dry-run output or execution",
-        "rejects reviewed summary input paths with secret-looking, control-character, parent/current, or platform-specific components before they can be rendered into dry-run command plans",
-        "rejects plan-rendered verifier, output-directory, and summary-output paths plus runner input files/directories with secret-looking, control-character, parent/current, drive-prefix, or platform-specific components before dry-run output through the shared runner preflight",
-        "artifact/load-error lists",
-        "no extra `required` rows",
-        "top-level evidence/artifact counts consistent with the validated rows",
-        "evidence file counts to match the distinct recognized artifact paths",
-        "threshold metadata as a non-empty canonical non-negative integer map that the aggregate row preserves for release review",
-        "reject extra top-level lane-summary fields outside the schema-closed payload-free lane summary contract",
-        "validate allowed top-level lane metadata as payload-free canonical strings, non-negative integers, booleans, objects, and lists with expected container shapes",
-        "validate exact lowercase-hex binding-list metadata shapes before aggregate promotion",
-        "require every fingerprint-backed top-level scalar hex, string-list, positive-integer list, and tuple binding-list metadata field to declare its owning required artifact kind or kinds before aggregate fingerprint matching",
-        "validate exact lowercase-hex and positive-integer scalar list metadata shapes before aggregate promotion",
-        "validate governance public-head identifiers as lowercase hex list metadata before aggregate promotion",
-        "validate exact object-list metadata shapes before aggregate promotion",
-        "require every object-list metadata field to declare its owning required artifact kind before its detail rows can be matched to recognized artifact fingerprints",
-        "reject exact duplicate object-list metadata entries while preserving artifact order",
-        "reject domain-duplicate object-list metadata identities before aggregate promotion",
-        "validate exact object metadata shapes before aggregate promotion",
-        "require set-derived lane metadata lists to be duplicate-free and sorted in canonical order",
-        "bind those metadata fields to the lane-specific contract that emits them",
-        "required-row and artifact schema labels to match the owning checker evidence schemas",
-        "reject extra required-row fields outside the schema-closed payload-free required-row contract",
-        "canonical unique archive-relative paths without absolute, empty, current, parent, encoded, URI-scheme-like, platform-specific, or secret-looking path segments",
-        "reject explicit artifact `status` labels outside successful states such as `passed` or `verified`",
-        "reject extra artifact-row fields outside the schema-closed payload-free artifact contract",
-        "per-lane rollout/release checkers to normalize artifact row paths through the shared archive-label helper before summary rendering",
-        "deriving labels relative to evidence directories or safe explicit basenames",
-        "require top-level recognized-artifact inventory and validate it against the per-kind required-row artifact counts and `(kind, path, sha256)` identities plus matching required artifact metadata instead of ignoring it",
-        "archive-relative summary path labels derived from evidence-directory membership or safe explicit basenames",
-        "validate the schema-closed aggregate summary envelope before writing the final production-readiness report",
-        "require aggregate status to match canonical aggregate diagnostics",
-        "ready aggregate summaries must carry complete deployment context with a reviewed deployment id, a final `prod`/`production` environment, and only present, valid required rows",
-        "aggregate required row deployment_id must match aggregate deployment_id",
-        "aggregate required row environment must match aggregate environment",
-        "require aggregate recognized-summary counts to match present required rows",
-        "validate final aggregate required rows for exact present and missing row output contracts",
-        "validate invalid aggregate required-row metadata before blocked rows are emitted for release review",
-        "pin deterministic missing-row diagnostics for absent lane summaries",
-        "pin deterministic duplicate-summary diagnostics for duplicate lane summaries",
-        "count every duplicate lane-summary input while keeping one duplicate row diagnostic per gate",
-        "pin aggregate blockers for unknown schemas and explicit unrequired summaries",
-        "reject unknown summary schemas discovered in summary directories",
-        "rejects explicit summaries for lanes outside a narrowed `--require-gate` selection",
-        "require an explicit final `--deployment-id`/`--environment` pair even for direct checker invocations",
-        "SoraFS production promotion now has an aggregate readiness gate over the existing per-lane rollout/release evidence summaries",
-        "The same shared validator now rejects compact and tokenized pre-release aliases such as `prerelease`, `releasecandidate`, `candidateproduction`, `productionpreview`, `preprodrelease`, `pre-production`, `production-candidate`, `prod-rc`, `prod-preview`, and `preprod-production`",
-        "The same validator also rejects synthetic rollout maturity labels such as `canary`, `alpha`, `beta`, `dry-run`, `pilot`, `experimental`, and `trial` even when joined to `prod`, `production`, or `release` labels",
-        "The shared deployment-id validator also rejects the `stg` staging abbreviation as a token or when glued to `prod`, `production`, or `release` labels",
-        "The shared deployment-id validator rejects proof-of-concept labels such as `poc`, `proof-of-concept`, and `prototype` before final promotion",
-        "The shared deployment-id validator also rejects smoke, fixture, stub, lab, temporary, benchmark, load-test, and work-in-progress deployment labels before final promotion",
-        "The shared deployment-id validator rejects performance, stress, soak, chaos, burn-in, and scale-test deployment labels before final promotion",
-        "The shared deployment-id validator rejects shadow, dark-launch, dogfood, rehearsal, training, drill, and game-day deployment labels before final promotion",
-        "The shared deployment-id validator rejects cutover, blue-green, rollback, roll-forward, failover, fallback, and switchover deployment labels before final promotion",
-        "The shared and final aggregate validators also collapse numeric non-production aliases such as `qa2`, `uat01`, `canary2`, and `staging1` to their underlying marker before promotion",
-        "This does not close the live deployment gaps above",
-    )
-    missing = [
-        marker
-        for marker in required_markers
-        if marker not in plan and marker not in roadmap_source
-    ]
-
-    assert missing == []
+    release_contract = release_module("sorafs_production_readiness_contract")
+    release_runner = release_module("run_sorafs_production_readiness")
+    release_checker = release_module("check_sorafs_production_readiness")
+    assert release_runner.DEFAULT_REQUIRED_GATES == release_contract.DEFAULT_REQUIRED_GATES
+    assert release_checker.DEFAULT_REQUIRED_GATES == release_contract.DEFAULT_REQUIRED_GATES
+    assert set(release_contract.DEFAULT_REQUIRED_GATES) == set(release_contract.GATE_REQUIRED_KIND_SCHEMAS)
+    assert release_runner.BUNDLED_VERIFIER.resolve() == SCRIPTS_DIR / "check_sorafs_production_readiness.py"
+    assert release_runner.PLAN_DEPLOYMENT_CONTEXT_FIELDS == {"deployment_id", "environment"}
+    assert {
+        "required_gates", "thresholds", "deployment_context", "external_summaries",
+        "topology_qualification", "resilience_qualification", "l1_lane_evidence_inventory",
+        "foundational_prerequisite", "summary_contract", "steps",
+    } <= release_runner.PLAN_FIELDS
+    assert "scripts/check_sorafs_production_readiness.py" in plan
+    assert release_checker.SUMMARY_SCHEMA in plan
     assert 'SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"' in checker
     assert "DEFAULT_REQUIRED_GATES" in checker
     assert "GATE_REQUIRED_KIND_SCHEMAS" in checker

@@ -3847,6 +3847,7 @@ pub mod application_api {
         DOMAINS_GET => dataspace_get("application.domains_get", "/v1/domains");
         DOMAINS_QUERY_POST => dataspace_compute_post("application.domains_query_post", "/v1/domains/query");
         ACCOUNTS_GET => dataspace_get("application.accounts_get", "/v1/accounts");
+        ACCOUNTS_CAPABILITIES_GET => app_get("application.accounts_capabilities_get", "/v1/accounts/capabilities");
         ACCOUNTS_QUERY_POST => dataspace_compute_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => account_compute_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");

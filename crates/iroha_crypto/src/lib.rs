@@ -1,6 +1,8 @@
 //! This module contains structures and implementations related to the cryptographic parts of the Iroha.
 #![allow(unexpected_cfgs)]
 mod algorithm;
+#[cfg(test)]
+mod captured_schema_tests;
 mod confidential;
 #[cfg(feature = "pqc")]
 pub mod confidential_memo;
@@ -867,7 +869,8 @@ impl TryFrom<&PublicKeyCompact> for PublicKeyFull {
 /// In case signature verification is needed, it will be decoded.
 ///
 /// Invariant: `payload` is valid, that is conversion to full form must not give error.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::PublicKeyCompact")]
 #[repr(transparent)]
 pub struct PublicKeyCompact {
     // First byte corresponds to algorithm
@@ -2017,6 +2020,8 @@ ffi::ffi_item! {
     /// );
     /// ```
     #[derive(Clone, PartialEq, Eq, TypeId)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_crypto::PublicKey")]
     #[repr(transparent)]
     #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     pub struct PublicKey(PublicKeyCompact);
@@ -3021,7 +3026,8 @@ impl norito::json::JsonSerialize for PrivateKey {
 /// [`Debug`] is always redacted so that embedding this type in another debug-formatted
 /// value cannot disclose key material. [`Display`], JSON/Norito serialization, and the
 /// named export methods expose the private key deliberately and must not be used in logs.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ExposedPrivateKey")]
 pub struct ExposedPrivateKey(pub PrivateKey);
 impl FromStr for ExposedPrivateKey {
     type Err = ParseError;

@@ -36,7 +36,7 @@ mod gov_zk_ballot_lock_verified;
 mod gov_zk_ballot_real_vk;
 #[path = "../gov_zk_ballot_vk_status.rs"]
 mod gov_zk_ballot_vk_status;
-#[path = "../gov_zk_create_inserts_referendum.rs"]
-mod gov_zk_create_inserts_referendum;
+#[path = "../gov_zk_election_admission.rs"]
+mod gov_zk_election_admission;
 #[path = "../gov_zk_create_rejects_plain_conflict.rs"]
 mod gov_zk_create_rejects_plain_conflict;

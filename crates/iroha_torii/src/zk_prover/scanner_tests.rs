@@ -1250,7 +1250,7 @@ fn attachment_metadata_loading_rejects_oversized_files_before_parsing() {
     let id = format!("{:064x}", 0xBAD2u64);
     fs::write(
         attachment_meta_path(&tenant_key, &id),
-        vec![b' '; ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
+        vec![b' '; crate::zk_attachments::ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
     )
     .expect("write oversized metadata fixture");
     let error = load_attachment_meta(&AttachmentLocation { tenant_key, id })

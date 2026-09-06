@@ -27,6 +27,23 @@ const torii = new ToriiClient(TAIRA_TESTNET_PROFILE.toriiBaseUrl, {
 });
 ```
 
+Before an account exists, `ToriiClient.getAccountCapabilities({ signal })` and
+the browser client's matching method read public `GET /v1/accounts/capabilities`.
+The closed `AccountCapabilitiesV1` JSON response contains `schema_version: 1`,
+the canonical `network_id`, a u16 `network_prefix`, the current `allowed_signing`
+admission set, and explicit `default_signing: "ed25519"`. Ed25519 is the
+first-release account-bootstrap policy and is mandatory in node admission;
+array ordering and the node's default hash do not express signing preferences.
+Compare the returned network identity with the user's selected network before
+creating an identity. This advert is endpoint discovery, not signed network
+evidence or permission to submit a transaction.
+
+These SDK calls omit configured credentials, reject redirects, accept only the
+exact V1 JSON shape, enforce a 4 KiB streamed response limit, and support abort
+through body consumption. The route accepts no query or request body. Standard
+Torii listener access controls still apply; permission-aware
+`GET /v1/node/capabilities` retains its existing account authentication.
+
 From an Iroha source checkout, run the native build (wrapping
 `cargo build -p iroha_js_host`) before using native-backed APIs:
 
@@ -44,6 +61,13 @@ peer processes, toolchain, build scripts, procedural macros, dependencies, and
 build environment. It is not a reproducible-build or hostile-executor proof.
 Release processes that require that stronger property must compare matching
 artifacts from independent controlled rebuilders.
+
+Loading a debug artifact from a dirty source tree verifies its recorded source
+seal in a separate process before loading native code. This verifier has a
+15-second timeout and does not inherit `NODE_OPTIONS`. In Electron, it runs
+with `ELECTRON_RUN_AS_NODE=1` so verification cannot launch another application
+or renderer. Verification failure or timeout prevents the native binding from
+loading.
 
 Native publication also assumes that the configured Cargo target is on a
 single-host local, hard-link-capable filesystem and that cooperating builders

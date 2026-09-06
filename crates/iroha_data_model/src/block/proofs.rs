@@ -39,6 +39,8 @@ pub const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: usize = 32 * 1024 
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::proofs::BlockReceiptProof")]
 pub struct BlockReceiptProof {
     /// Hash of the transaction entrypoint proven to be part of the block.
     leaf: HashOf<TransactionEntrypoint>,
@@ -78,6 +80,8 @@ impl BlockReceiptProof {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::proofs::ExecutionReceiptProof")]
 pub struct ExecutionReceiptProof {
     /// Hash of the execution result proven to be part of the block.
     leaf: HashOf<TransactionResult>,
@@ -116,6 +120,8 @@ impl ExecutionReceiptProof {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::proofs::BlockProofs")]
 pub struct BlockProofs {
     /// Height of the block containing the transaction.
     pub block_height: NonZeroU64,
@@ -1073,3 +1079,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_proofs_schema_tests;

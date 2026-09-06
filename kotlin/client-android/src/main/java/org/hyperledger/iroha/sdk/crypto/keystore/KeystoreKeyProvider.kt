@@ -248,13 +248,6 @@ class KeystoreKeyProvider @JvmOverloads constructor(
         }
     }
 
-    /** Retained for binary compatibility; always fails closed because a challenge is required. */
-    @Throws(AttestationVerificationException::class)
-    fun verifyAttestation(
-        alias: String,
-        verifier: AttestationVerifier,
-    ): AttestationResult? = verifyAttestation(alias, verifier, null)
-
     /** Returns a copy of this provider with adjusted generation parameters. */
     fun withParameters(parameters: KeyGenParameters): KeystoreKeyProvider =
         KeystoreKeyProvider(backend, parameters, defaultPreference)

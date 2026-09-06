@@ -35,6 +35,8 @@ pub const KAGEMUSHA_DEVICE_MINT_STAGE_DISPOSITION_EXACT_DUPLICATE_V1: u8 = 1;
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_device_v1::KagemushaDeviceMintStageCommandV1")]
 pub struct KagemushaDeviceMintStageCommandV1 {
     /// Secure-device lifecycle version.
     pub version: u16,
@@ -54,6 +56,8 @@ pub struct KagemushaDeviceMintStageCommandV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_device_v1::KagemushaDeviceMintStageResultV1")]
 pub struct KagemushaDeviceMintStageResultV1 {
     /// Secure-device lifecycle version.
     pub version: u16,
@@ -353,3 +357,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_kagemusha_device_v1_schema_tests;

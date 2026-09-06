@@ -8,13 +8,9 @@ sealed interface Result<out T, out E> {
 
     data class Ok<out T, out E>(
         @JvmField val value: T,
-    ) : Result<T, E> {
-        fun value(): T = value
-    }
+    ) : Result<T, E>
 
     data class Err<out T, out E>(
         @JvmField val error: E,
-    ) : Result<T, E> {
-        fun error(): E = error
-    }
+    ) : Result<T, E>
 }

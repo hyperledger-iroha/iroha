@@ -134,6 +134,8 @@ pub struct TicketEnvelopeV1 {
     pub nullifier: Digest32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::ticket::TicketSignaturePayloadV1")]
 struct TicketSignaturePayloadV1 {
     body: TicketBodyV1,
     commitment: Digest32,
@@ -493,3 +495,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_ticket_schema_tests;

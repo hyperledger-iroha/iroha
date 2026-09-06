@@ -3,6 +3,8 @@
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudHostOperationV1")]
 pub enum SoracloudHostOperationV1 {
     /// Read committed service-state metadata visible to the active handler.
     ReadCommittedState,
@@ -23,6 +25,8 @@ pub enum SoracloudHostOperationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1")]
 pub struct SoracloudHostRequestEnvelopeV1 {
     /// Schema version; must equal [`SORACLOUD_HOST_REQUEST_VERSION_V1`].
     pub schema_version: u16,
@@ -58,6 +62,8 @@ impl SoracloudHostRequestEnvelopeV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudHostRequestPayloadV1")]
 pub enum SoracloudHostRequestPayloadV1 {
     /// Request to read committed service-state metadata.
     ReadCommittedState(SoracloudReadCommittedStateRequestV1),
@@ -109,6 +115,8 @@ impl SoracloudHostRequestPayloadV1 {
 #[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudHostResponseEnvelopeV1")]
 pub struct SoracloudHostResponseEnvelopeV1 {
     /// Schema version; must equal [`SORACLOUD_HOST_RESPONSE_VERSION_V1`].
     pub schema_version: u16,
@@ -144,6 +152,8 @@ impl SoracloudHostResponseEnvelopeV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudHostResponsePayloadV1")]
 pub enum SoracloudHostResponsePayloadV1 {
     /// Response to committed service-state metadata lookups.
     ReadCommittedState(SoracloudReadCommittedStateResponseV1),
@@ -194,6 +204,8 @@ impl SoracloudHostResponsePayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudReadCommittedStateRequestV1")]
 pub struct SoracloudReadCommittedStateRequestV1 {
     /// Declared binding name to read from.
     pub binding_name: Name,
@@ -213,6 +225,8 @@ impl SoracloudReadCommittedStateRequestV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudReadCommittedStateResponseV1")]
 pub struct SoracloudReadCommittedStateResponseV1 {
     /// Matching entry when one exists.
     #[norito(required)]
@@ -234,6 +248,8 @@ impl SoracloudReadCommittedStateResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudEmitStateMutationRequestV1")]
 pub struct SoracloudEmitStateMutationRequestV1 {
     /// Binding mutated by the runtime.
     pub binding_name: Name,
@@ -309,6 +325,8 @@ impl SoracloudEmitStateMutationRequestV1 {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudEmitStateMutationResponseV1")]
 pub struct SoracloudEmitStateMutationResponseV1 {
     /// Stable mutation digest returned by the host after staging the write-back.
     pub mutation_commitment: Hash,
@@ -330,6 +348,8 @@ impl SoracloudEmitStateMutationResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudEmitMailboxMessageRequestV1")]
 pub struct SoracloudEmitMailboxMessageRequestV1 {
     /// Destination service name.
     pub to_service: Name,
@@ -353,6 +373,8 @@ impl SoracloudEmitMailboxMessageRequestV1 {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudEmitMailboxMessageResponseV1")]
 pub struct SoracloudEmitMailboxMessageResponseV1 {
     /// Deterministic execution-local staging identifier.
     ///
@@ -385,6 +407,8 @@ impl SoracloudEmitMailboxMessageResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudAppendJournalRequestV1")]
 pub struct SoracloudAppendJournalRequestV1 {
     /// Runtime-relative journal path for the appended material.
     pub artifact_path: String,
@@ -407,6 +431,8 @@ impl SoracloudAppendJournalRequestV1 {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudAppendJournalResponseV1")]
 pub struct SoracloudAppendJournalResponseV1 {
     /// Content-addressed digest of the materialized journal payload.
     pub artifact_hash: Hash,
@@ -428,6 +454,8 @@ impl SoracloudAppendJournalResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudPublishCheckpointRequestV1")]
 pub struct SoracloudPublishCheckpointRequestV1 {
     /// Runtime-relative checkpoint path for the published material.
     pub artifact_path: String,
@@ -450,6 +478,8 @@ impl SoracloudPublishCheckpointRequestV1 {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudPublishCheckpointResponseV1")]
 pub struct SoracloudPublishCheckpointResponseV1 {
     /// Content-addressed digest of the materialized checkpoint payload.
     pub artifact_hash: Hash,
@@ -471,6 +501,8 @@ impl SoracloudPublishCheckpointResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudReadConfigRequestV1")]
 pub struct SoracloudReadConfigRequestV1 {
     /// Stable config identifier relative to the authoritative service-config set.
     pub config_name: String,
@@ -492,6 +524,8 @@ impl SoracloudReadConfigRequestV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudReadConfigResponseV1")]
 pub struct SoracloudReadConfigResponseV1 {
     /// Whether the requested config was found for the active service revision.
     pub found: bool,
@@ -515,6 +549,8 @@ impl SoracloudReadConfigResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudReadSecretEnvelopeRequestV1")]
 pub struct SoracloudReadSecretEnvelopeRequestV1 {
     /// Stable secret identifier relative to the authoritative service-secret set.
     pub secret_name: String,
@@ -536,6 +572,8 @@ impl SoracloudReadSecretEnvelopeRequestV1 {
 #[derive(Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudReadSecretEnvelopeResponseV1")]
 pub struct SoracloudReadSecretEnvelopeResponseV1 {
     /// Matching authoritative secret envelope when one exists.
     #[norito(required)]
@@ -1649,3 +1687,6 @@ pub fn encode_ciphertext_query_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(query)
 }
+
+#[cfg(test)]
+mod captured_host_protocol_schema_tests;

@@ -3,6 +3,8 @@
 //! The encoded bytes in these doctests double as executable documentation:
 //! any layout changes surface immediately through the doctest failure, making
 //! it clear that downstream fixtures need to be regenerated.
+pub mod identity;
+
 use norito_derive::{NoritoDeserialize, NoritoSerialize};
 /// Minimal sample payload used by the docs and CLI examples.
 ///

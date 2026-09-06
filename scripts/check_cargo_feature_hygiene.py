@@ -289,8 +289,8 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha": {
         "default": ("tls-rustls-native-roots", "gost", "sm"),
-        "gost": ("iroha_config/gost", "iroha_crypto/gost", "iroha_data_model/gost"),
-        "sm": ("iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"),
+        "gost": ("iroha_crypto/gost", "iroha_data_model/gost"),
+        "sm": ("iroha_crypto/sm", "iroha_data_model/sm"),
         "tls-rustls-native-roots": (
             "reqwest/rustls-tls-native-roots",
             "tokio-tungstenite/rustls-tls-native-roots",
@@ -507,7 +507,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_genesis": ("dev-tools", "sm-ffi-openssl"),
     "iroha_telemetry": (
         "dev-telemetry",
-        "otel-exporter",
         "telegram",
     ),
     "ivm": (

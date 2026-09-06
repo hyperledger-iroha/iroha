@@ -5,7 +5,7 @@ use iroha_data_model::{
     query::{QueryResponse, SignedQuery},
 };
 use iroha_schema::prelude::*;
-use iroha_telemetry::metrics::Status;
+use iroha_torii_shared::status::Status;
 macro_rules! types {
     ($($t:ty),+ $(,)?) => {
         // use all the types in a type position, so that IDE can resolve them
@@ -166,7 +166,7 @@ pub mod complete_data_model {
         json::Json,
     };
     pub use iroha_schema::Compact;
-    pub use iroha_telemetry::metrics::{Status, Uptime};
+    pub use iroha_torii_shared::status::{Status, Uptime};
     pub use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 }
 #[cfg(test)]

@@ -10,8 +10,18 @@ The source-coupled protocol lives in
 `atomic_private_settlement_real_process_harness.rs` in the same directory.
 
 The source checkout must be clean at the exact signed commit. The driver checks
-`git verify-commit` and each signed blob's actual bytes, including changes hidden
-by Git index flags. Cargo home must be absolute and canonical, and Cargo
+`git verify-commit` and reuses `compute_workspace_source_manifest.py`'s canonical
+`release_source_identity`, including actual tracked bytes hidden by Git index
+flags and the mandatory `Cargo.lock`. The recorded source hash is the canonical
+workspace source manifest. Gitlinks must be existing empty directories: their
+commit pins remain bound by the signed parent tree. Populated documentation
+submodules are separate unsealed checkouts and fail qualification; the driver
+never changes or deinitializes them. Untracked ignore policies are rejected
+unless their parent directory is already excluded by a tracked ignore rule.
+Those nested policies cannot affect source discovery; tracked inputs beneath
+an ignored directory remain part of the manifest. Ignoring only `.gitignore`
+filenames, local Git excludes, and untracked rules cannot authorize that exception.
+Cargo home must be absolute and canonical, and Cargo
 configuration cannot traverse symlinks. Unsigned Cargo configuration in the checkout, ancestor
 directories, or Cargo home is rejected. Use a new absolute target directory and
 a new absolute evidence directory outside the repository. Both release builds

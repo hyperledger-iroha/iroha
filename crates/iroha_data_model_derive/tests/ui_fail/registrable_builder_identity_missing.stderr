@@ -1,0 +1,5 @@
+error: RegistrableBuilder requires #[registrable_builder(schema_name = "captured child identity")]
+ --> tests/ui_fail/registrable_builder_identity_missing.rs:5:8
+  |
+5 | struct MissingIdentity {
+  |        ^^^^^^^^^^^^^^^

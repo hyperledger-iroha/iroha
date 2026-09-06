@@ -15,7 +15,6 @@ use iroha_crypto::soranet::{
     handshake::HandshakeSuite,
 };
 use iroha_data_model::soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayId};
-use iroha_logger::info;
 use norito::{
     DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits, to_bytes,
 };
@@ -29,6 +28,7 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+use tracing::info;
 const GUARD_SET_VERSION: u8 = 8;
 /// Maximum encoded size of one first-release authenticated guard cache.
 pub const GUARD_CACHE_MAX_BYTES_V1: usize = 2 * 1024 * 1024;

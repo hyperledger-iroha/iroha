@@ -18,6 +18,8 @@ use thiserror::Error;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "kind", content = "payload", no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::AccountController")]
 pub enum AccountController {
     /// Single public key controls the account.
     Single(PublicKey),
@@ -89,6 +91,8 @@ impl fmt::Display for AccountController {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::MultisigPolicy")]
 pub struct MultisigPolicy {
     version: u8,
     threshold: u16,
@@ -288,6 +292,8 @@ impl MultisigPolicy {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::MultisigMember")]
 pub struct MultisigMember {
     public_key: PublicKey,
     weight: u16,

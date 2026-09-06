@@ -18,7 +18,8 @@ pub use facade::{
 pub(crate) use relation::validate_audit_openings_v1;
 pub use relation::{
     AtomicPrivateSettlementInputWitnessV1, AtomicPrivateSettlementProverWitnessV1,
-    AtomicPrivateSettlementRelationErrorV1, atomic_private_settlement_dummy_input_memo_digest_v1,
+    AtomicPrivateSettlementRelationErrorV1, atomic_private_settlement_audit_input_commitment_v1,
+    atomic_private_settlement_dummy_input_memo_digest_v1,
     atomic_private_settlement_output_memo_digests_v1, atomic_private_settlement_program_id_v1,
 };
 pub use wallet::{

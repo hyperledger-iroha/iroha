@@ -13,7 +13,6 @@ class PrivacyNativeBridgeTest {
     private val matrix = loadExact12Matrix()
     private val protocolRows = matrix.filter { it.first() == "protocol" }
     private val typedEnvelopeRows = matrix.filter { it.first() == "typed-envelope" }
-    private val retired = matrix.filter { it.first() == "retired" }.map { it[1] }
     private val expected = protocolRows.map { it[2] }
     private val expectedProofSystems = listOf(
         PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
@@ -81,7 +80,7 @@ class PrivacyNativeBridgeTest {
     @Test
     fun sharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests() {
         assertEquals(
-            setOf("matrix-version", "registry-sha256", "protocol", "typed-envelope", "retired"),
+            setOf("matrix-version", "registry-sha256", "protocol", "typed-envelope"),
             matrix.map { it[0] }.toSet(),
         )
         assertEquals(listOf(listOf("matrix-version", "1")), matrix.filter { it[0] == "matrix-version" })
@@ -109,20 +108,14 @@ class PrivacyNativeBridgeTest {
                 assertEquals(false, digest.all { it == '0' })
             }
         }
-        assertEquals(retired.size, retired.toSet().size)
-        assertEquals(true, retired.none(expected::contains))
     }
 
     @Test
     fun aliasesAndNonCanonicalSpellingsAreRejected() {
         (
-            retired +
-                listOf(
-                    "iroha-zk-ams-v1 ",
-                    "Iroha-Zk-Ams-V1",
-                    "",
-                    "unknown-privacy-protocol-v1",
-                )
+            expected.flatMap { label ->
+                listOf(" $label", "$label ", label.uppercase(), "alias-$label")
+            } + listOf("", "unknown-privacy-protocol-v1")
         ).forEach { rejected ->
             assertFailsWith<IllegalArgumentException> {
                 PrivacyProtocolIdV1.fromCanonicalLabel(rejected)

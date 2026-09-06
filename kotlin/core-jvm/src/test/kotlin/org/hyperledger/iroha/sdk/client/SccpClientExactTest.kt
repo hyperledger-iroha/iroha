@@ -227,7 +227,7 @@ class SccpClientExactTest {
         for (schemaName in SCCP_PROOF_REQUEST_SCHEMA_NAMES) {
             val frame = canonicalArtifactBytes(schemaName)
             val executor = SccpNoritoExecutor(frame)
-            val transport = HttpClientTransport.withExecutor(
+            val transport = HttpClientTransport(
                 executor,
                 ClientConfig.builder()
                     .setBaseUri(URI.create("https://torii.example"))
@@ -239,7 +239,7 @@ class SccpClientExactTest {
         }
 
         val unknown = SccpNoritoExecutor(canonicalArtifactBytes("example::UnknownProofRequestV1"))
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             unknown,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))

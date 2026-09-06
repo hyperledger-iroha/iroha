@@ -154,8 +154,6 @@ pub mod snapshot;
 pub mod sns;
 /// Shared Soracloud runtime snapshot types and traits.
 pub mod soracloud_runtime;
-/// SoraNet relay incentive calculator and treasury helpers.
-pub mod soranet_incentives;
 /// In-memory state and view types.
 pub mod state;
 /// Norito Streaming handshake/state helpers.

@@ -75,16 +75,16 @@ pub use iroha_telemetry::metrics::musubi::{
     MusubiPublicationPhaseMetricV1,
 };
 pub use iroha_telemetry::metrics::{
-    GOVERNANCE_MANIFEST_RECENT_CAP, GovernanceManifestActivation, Halo2Status,
-    LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
-    NexusDataspaceTeuStatus, NexusLaneManifestValidatorBindingStatus,
-    NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets, NexusLaneTeuStatus,
-    SchedulerLayerWidthBuckets, SorafsGatewayRequestMetricLabels,
-    SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection, TxGossipCaps,
-    TxGossipSnapshot, TxGossipStatus,
+    GOVERNANCE_MANIFEST_RECENT_CAP, LaneSettlementBuffer, LaneSettlementSnapshot,
+    LaneSwaplineSnapshot, Metrics, SorafsGatewayRequestMetricLabels,
+    SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection,
 };
 use iroha_telemetry::privacy::{
     PrivacyBucketConfig, PrivacyEventError, PrivacyShareError, SoranetSecureAggregator,
+};
+use iroha_torii_shared::status::{
+    GovernanceManifestActivation, Halo2Status, NexusDataspaceTeuStatus, NexusLaneTeuBuckets,
+    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, TxGossipCaps, TxGossipStatus,
 };
 use ivm::host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config};
 use mv::storage::StorageReadOnly;
@@ -7959,7 +7959,6 @@ mod tests {
             },
             peer::PeerId,
         };
-        use iroha_telemetry::metrics::Status;
         use iroha_test_samples::PEER_KEYPAIR;
         use nonzero_ext::nonzero;
         let metrics = Arc::new(Metrics::default());
@@ -8027,7 +8026,7 @@ mod tests {
             0,
             0,
         );
-        let status = Status::from(&*telemetry);
+        let status = telemetry.status_snapshot();
         let alpha = status
             .tx_gossip
             .targets

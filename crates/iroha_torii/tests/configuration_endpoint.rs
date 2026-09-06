@@ -7,10 +7,8 @@ mod norito_rpc_harness;
 use axum::http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
-use iroha_config::{
-    client_api::ConfigGetDTO,
-    parameters::actual::{NodeRole, NoritoRpcStage},
-};
+use iroha_config::parameters::actual::{NodeRole, NoritoRpcStage};
+use iroha_torii_shared::configuration::Configuration;
 use norito_rpc_harness::NoritoRpcHarness;
 use tower::ServiceExt as _;
 #[tokio::test]
@@ -46,7 +44,7 @@ async fn configuration_endpoint_includes_transport_summary() {
     let response = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).expect("valid configuration payload");
+    let dto: Configuration = norito::json::from_slice(&body).expect("valid configuration payload");
     let summary = dto.transport.norito_rpc;
     assert!(summary.enabled, "expected Norito-RPC flag to propagate");
     assert!(summary.require_mtls, "require_mtls flag missing");

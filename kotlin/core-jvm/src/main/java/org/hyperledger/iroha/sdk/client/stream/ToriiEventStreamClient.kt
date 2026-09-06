@@ -6,7 +6,7 @@ import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.LocalSigningContext
-import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
@@ -26,9 +26,11 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.LinkedHashMap
-import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -42,12 +44,35 @@ private const val DEFAULT_EVENT_NAME = "message"
  */
 class ToriiEventStreamClient private constructor(
     @JvmField val baseUri: URI,
-    private val transport: TransportExecutor,
+    transport: TransportExecutor?,
     defaultHeaders: Map<String, String> = emptyMap(),
     observers: List<ClientObserver> = emptyList(),
     private val localSigningContext: LocalSigningContext? = null,
     private val canonicalRequestAuth: ToriiCanonicalRequestAuth? = null,
-) {
+    readerExecutor: Executor? = null,
+) : AutoCloseable {
+    private val transport = HttpTransportScope.create(transport)
+    private val ownsReaderExecutor = readerExecutor == null
+    private val readerExecutor = readerExecutor ?: Executors.newCachedThreadPool { task ->
+        Thread(task, "iroha-sse-reader").apply { isDaemon = true }
+    }
+    private val lifecycleLock = Any()
+    private var closed = false
+    private val streams = LinkedHashSet<ActiveStream>()
+
+    /** Cancels this client's streams; an injected backend remains application-owned. */
+    override fun close() {
+        val active = synchronized(lifecycleLock) {
+            if (closed) return
+            closed = true
+            streams.toList().also { streams.clear() }
+        }
+        active.forEach { it.close() }
+        try { transport.close() } finally {
+            if (ownsReaderExecutor) (readerExecutor as ExecutorService).shutdownNow()
+        }
+    }
+
     private val defaultHeaders: Map<String, String> = defaultHeaders.toMap()
     private val observers: List<ClientObserver> = observers.toList()
 
@@ -67,8 +92,9 @@ class ToriiEventStreamClient private constructor(
     /**
      * Opens an SSE stream against `path` using the supplied options.
      *
-     * Callers must close the returned `ToriiEventStream`; the listener is notified when the
-     * stream receives frames, fails, or terminates.
+     * Callers must close the returned `ToriiEventStream` or this client. Caller-initiated closure
+     * completes the stream without a terminal listener notification. New streams are rejected
+     * after this client is closed.
      *
      * When the configured transport supports streaming responses, frames are parsed as they
      * arrive; otherwise, the response body is buffered before parsing.
@@ -78,22 +104,44 @@ class ToriiEventStreamClient private constructor(
         options: ToriiEventStreamOptions?,
         listener: ToriiEventStreamListener,
     ): ToriiEventStream {
+        synchronized(lifecycleLock) { check(!closed) { "Torii event stream client is closed" } }
         val resolved = options ?: ToriiEventStreamOptions.defaultOptions()
         val request = buildRequest(path, resolved)
-        notifyRequest(request)
-        if (transport is StreamingTransportExecutor) {
-            val responseFuture = transport.openStream(request)
-            val stream = ActiveStream(request, responseFuture)
-            responseFuture.whenComplete { response, throwable ->
-                handleStreamResponse(request, listener, stream, response, throwable)
-            }
-            return stream
+        val stream = ActiveStream()
+        synchronized(lifecycleLock) {
+            check(!closed) { "Torii event stream client is closed" }
+            streams.add(stream)
         }
-
-        val responseFuture = transport.execute(request)
-        val stream = ActiveStream(request, responseFuture)
-        responseFuture.whenComplete { response, throwable ->
-            handleBufferedResponse(request, listener, stream, response, throwable)
+        stream.completion().whenComplete { _, _ ->
+            synchronized(lifecycleLock) { streams.remove(stream) }
+            if (stream.completion().isCancelled) stream.close()
+        }
+        try {
+            notifyRequest(request)
+            if (stream.closed()) return stream
+            if (transport is StreamingTransportExecutor) {
+                val responseFuture = transport.openStream(request)
+                stream.attachResponse(responseFuture)
+                responseFuture.whenComplete { response, throwable ->
+                    try {
+                        handleStreamResponse(request, listener, stream, response, throwable)
+                    } catch (failure: Exception) {
+                        failStream(request, listener, stream, failure)
+                    }
+                }
+            } else {
+                val responseFuture = transport.execute(request)
+                stream.attachResponse(responseFuture)
+                responseFuture.whenComplete { response, throwable ->
+                    try {
+                        handleBufferedResponse(request, listener, stream, response, throwable)
+                    } catch (failure: Exception) {
+                        failStream(request, listener, stream, failure)
+                    }
+                }
+            }
+        } catch (failure: Exception) {
+            failStream(request, listener, stream, failure)
         }
         return stream
     }
@@ -147,7 +195,7 @@ class ToriiEventStreamClient private constructor(
                 target,
                 null,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
             )
         } else {
             CanonicalRequestSigner.buildHeaders(
@@ -156,7 +204,7 @@ class ToriiEventStreamClient private constructor(
                 target,
                 null,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
                 timestampMs,
                 nonce!!,
             )
@@ -184,6 +232,7 @@ class ToriiEventStreamClient private constructor(
                 var eventId: String? = null
                 var line: String? = null
                 while (!activeStream.closed() && reader.readLine().also { line = it } != null) {
+                    if (activeStream.closed()) break
                     val currentLine = line!!
                     if (currentLine.isEmpty()) {
                         dispatchEvent(listener, data, eventName, eventId)
@@ -218,7 +267,7 @@ class ToriiEventStreamClient private constructor(
                         }
                     }
                 }
-                dispatchEvent(listener, data, eventName, eventId)
+                if (!activeStream.closed()) dispatchEvent(listener, data, eventName, eventId)
             }
         } catch (ex: IOException) {
             if (!activeStream.closed()) {
@@ -234,15 +283,9 @@ class ToriiEventStreamClient private constructor(
         response: TransportResponse?,
         throwable: Throwable?,
     ) {
+        if (stream.closed()) return
         if (throwable != null) {
-            val cause = unwrapCompletion(throwable)
-            if (cause is CancellationException && stream.closedByCaller()) {
-                stream.signalSuccess()
-                return
-            }
-            stream.signalFailure(cause)
-            notifyFailure(request, cause)
-            listener.onError(cause)
+            failStream(request, listener, stream, unwrapCompletion(throwable))
             return
         }
         response!!
@@ -253,19 +296,19 @@ class ToriiEventStreamClient private constructor(
                 "Torii SSE request failed with status ${response.statusCode}" +
                     if (message.isEmpty()) "" else ": $message"
             )
-            stream.signalFailure(error)
-            notifyFailure(request, error)
-            listener.onError(error)
+            failStream(request, listener, stream, error)
             return
         }
 
         val clientResponse = ClientResponse(response.statusCode, ByteArray(0))
         notifyResponse(request, clientResponse)
+        if (stream.closed()) return
         listener.onOpen()
+        if (stream.closed()) return
 
-        val readerFuture = CompletableFuture.runAsync {
+        val readerFuture = CompletableFuture.runAsync({
             parseEventStream(ByteArrayInputStream(response.body), listener, stream)
-        }
+        }, readerExecutor)
         stream.attach(readerFuture)
         readerFuture.whenComplete { _, parseError ->
             handleParseCompletion(request, listener, stream, parseError)
@@ -279,15 +322,10 @@ class ToriiEventStreamClient private constructor(
         response: TransportStreamResponse?,
         throwable: Throwable?,
     ) {
+        response?.let { stream.attachStream(it) }
+        if (stream.closed()) return
         if (throwable != null) {
-            val cause = unwrapCompletion(throwable)
-            if (cause is CancellationException && stream.closedByCaller()) {
-                stream.signalSuccess()
-                return
-            }
-            stream.signalFailure(cause)
-            notifyFailure(request, cause)
-            listener.onError(cause)
+            failStream(request, listener, stream, unwrapCompletion(throwable))
             return
         }
         response!!
@@ -297,20 +335,19 @@ class ToriiEventStreamClient private constructor(
                 "Torii SSE request failed with status ${response.statusCode}" +
                     if (message.isEmpty()) "" else ": $message"
             )
-            stream.signalFailure(error)
-            notifyFailure(request, error)
-            listener.onError(error)
+            failStream(request, listener, stream, error)
             return
         }
 
         val clientResponse = ClientResponse(response.statusCode, ByteArray(0))
         notifyResponse(request, clientResponse)
+        if (stream.closed()) return
         listener.onOpen()
-        stream.attachStream(response)
+        if (stream.closed()) return
 
-        val readerFuture = CompletableFuture.runAsync {
+        val readerFuture = CompletableFuture.runAsync({
             parseEventStream(response.body, listener, stream)
-        }
+        }, readerExecutor)
         stream.attach(readerFuture)
         readerFuture.whenComplete { _, parseError ->
             handleParseCompletion(request, listener, stream, parseError)
@@ -323,17 +360,33 @@ class ToriiEventStreamClient private constructor(
         stream: ActiveStream,
         parseError: Throwable?,
     ) {
-        stream.closeStreamResponse()
-        val cause = parseError?.let(::unwrapCompletion)
-        if (cause != null && cause !is CancellationException) {
-            stream.signalFailure(cause)
-            notifyFailure(request, cause)
-            listener.onError(cause)
-        } else if (!stream.closedByCaller()) {
+        val cleanupError = stream.closeStreamResponse()
+        val cause = parseError?.let(::unwrapCompletion) ?: cleanupError
+        if (parseError != null && cleanupError != null && cause !== cleanupError) {
+            cause!!.addSuppressed(cleanupError)
+        }
+        if (stream.closed()) return
+        if (cause != null) {
+            failStream(request, listener, stream, cause)
+            return
+        }
+        try {
             listener.onClosed()
             stream.signalSuccess()
-        } else {
-            stream.signalSuccess()
+        } catch (failure: Exception) {
+            failStream(request, listener, stream, failure)
+        }
+    }
+
+    private fun failStream(
+        request: TransportRequest,
+        listener: ToriiEventStreamListener,
+        stream: ActiveStream,
+        failure: Throwable,
+    ) {
+        stream.closeStreamResponse()?.let { if (it !== failure) failure.addSuppressed(it) }
+        if (stream.signalFailure(failure)) {
+            try { notifyFailure(request, failure) } finally { listener.onError(failure) }
         }
     }
 
@@ -606,11 +659,12 @@ class ToriiEventStreamClient private constructor(
 
     class Builder {
         private var baseUri: URI = URI.create("http://localhost:8080")
-        private var transport: TransportExecutor = PlatformHttpTransportExecutor.createDefault()
+        private var transport: TransportExecutor? = null
         private val defaultHeaders: MutableMap<String, String> = LinkedHashMap()
         private val observers: MutableList<ClientObserver> = ArrayList()
         private var localSigningContext: LocalSigningContext? = null
         private var canonicalRequestAuth: ToriiCanonicalRequestAuth? = null
+        private var readerExecutor: Executor? = null
 
         fun setBaseUri(baseUri: URI): Builder {
             this.baseUri = baseUri
@@ -619,6 +673,12 @@ class ToriiEventStreamClient private constructor(
 
         fun setTransportExecutor(transport: TransportExecutor): Builder {
             this.transport = transport
+            return this
+        }
+
+        /** Borrows an executor for blocking SSE reads; this client never shuts it down. */
+        fun setReaderExecutor(executor: Executor): Builder {
+            readerExecutor = executor
             return this
         }
 
@@ -662,35 +722,42 @@ class ToriiEventStreamClient private constructor(
                 observers,
                 localSigningContext,
                 canonicalRequestAuth,
+                readerExecutor,
             )
         }
     }
 
-    private class ActiveStream(
-        private val request: TransportRequest,
-        private val responseFuture: CompletableFuture<*>,
-    ) : ToriiEventStream {
+    private class ActiveStream : ToriiEventStream {
 
+        private val lifecycleLock = Any()
         private val completion = CompletableFuture<Void>()
         private val closed = AtomicBoolean(false)
-        private val _closedByCaller = AtomicBoolean(false)
         private val streamResponse = AtomicReference<TransportStreamResponse?>(null)
-        @Volatile private var readerFuture: CompletableFuture<Void>? = null
+        private val responseFuture = AtomicReference<CompletableFuture<*>?>(null)
+        private val readerFuture = AtomicReference<CompletableFuture<Void>?>(null)
 
-        fun attach(readerFuture: CompletableFuture<Void>) {
-            this.readerFuture = readerFuture
+        fun attachResponse(future: CompletableFuture<*>) {
+            responseFuture.set(future)
+            if (closed()) future.cancel(false)
+        }
+
+        fun attach(future: CompletableFuture<Void>) {
+            readerFuture.set(future)
+            if (closed()) future.cancel(false)
         }
 
         fun attachStream(response: TransportStreamResponse) {
             streamResponse.set(response)
+            if (closed()) closeStreamResponse()
         }
 
-        fun closeStreamResponse() {
+        fun closeStreamResponse(): Exception? = try {
             streamResponse.getAndSet(null)?.close()
-        }
+            null
+        } catch (failure: Exception) { failure }
 
-        fun signalFailure(error: Throwable) {
-            completion.completeExceptionally(error)
+        fun signalFailure(error: Throwable): Boolean = synchronized(lifecycleLock) {
+            !closed() && completion.completeExceptionally(error)
         }
 
         fun signalSuccess() {
@@ -699,19 +766,19 @@ class ToriiEventStreamClient private constructor(
 
         fun closed(): Boolean = closed.get()
 
-        fun closedByCaller(): Boolean = _closedByCaller.get()
-
         override fun isOpen(): Boolean = !closed.get() && !completion.isDone
 
         override fun completion(): CompletableFuture<Void> = completion
 
         override fun close() {
-            if (!closed.compareAndSet(false, true)) return
-            _closedByCaller.set(true)
-            streamResponse.getAndSet(null)?.close()
-            readerFuture?.cancel(true)
-            responseFuture.cancel(true)
-            completion.complete(null)
+            synchronized(lifecycleLock) {
+                if (!closed.compareAndSet(false, true)) return
+            }
+            val cleanupError = closeStreamResponse()
+            readerFuture.getAndSet(null)?.cancel(false)
+            responseFuture.getAndSet(null)?.cancel(false)
+            if (cleanupError == null) completion.complete(null)
+            else completion.completeExceptionally(cleanupError)
         }
     }
 }

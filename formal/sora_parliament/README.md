@@ -198,7 +198,7 @@ For this formal-model corridor, release qualification still requires a settled
 source revision, an exhaustive same-source pinned TLC 2.19 run and archive, and
 qualification of mandatory finalized-pulse production and consensus-enforced
 global-beacon and TLE key-rotation paths. The repository-wide gate inventory in
-the [SORA Parliament hardening roadmap](../../roadmap.md#sora-parliament-hardening)
+the [SORA Parliament hardening roadmap](../../roadmap.md#product-services-and-deployment)
 additionally requires focused and four-peer execution evidence, a genuine
 authenticated deployment-selected share provider, and independent review of the
 timed-OVN publication manifest. Qualified software custody or an authenticated

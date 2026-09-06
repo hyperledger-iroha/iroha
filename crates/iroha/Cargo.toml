@@ -34,12 +34,10 @@ test-fixtures = ["iroha_data_model/test-fixtures"]
 # release-evidence state-commitment route.
 test-network-private-settlement-evidence = []
 sm = [
-    "iroha_config/sm",
     "iroha_crypto/sm",
     "iroha_data_model/sm",
 ]
 gost = [
-    "iroha_config/gost",
     "iroha_crypto/gost",
     "iroha_data_model/gost",
 ]
@@ -66,13 +64,13 @@ tls-rustls-webpki-roots = [
 ]
 
 [dependencies]
+iroha_service_model = { workspace = true }
 bytes = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
-iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_primitives = { workspace = true }
-iroha_logger = { workspace = true }
+tracing = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }

@@ -361,8 +361,11 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             consume_then_fail_id.clone(),
             Action::new(
                 [
-                    RemoveKeyValue::account(ALICE_ID.clone(), ordering_witness.clone()).into(),
-                    Register::domain(Domain::new(wonderland.clone())).into(),
+                    InstructionBox::from(RemoveKeyValue::account(
+                        ALICE_ID.clone(),
+                        ordering_witness.clone(),
+                    )),
+                    InstructionBox::from(Register::domain(Domain::new(wonderland.clone()))),
                 ],
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),

@@ -15,6 +15,8 @@ use iroha_data_model::{
         validate_privacy_capability_archive_v1,
     },
 };
+mod gpu;
+
 include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");
 include!("platform_jni/part_3.rs");

@@ -850,6 +850,8 @@ impl<'a> norito_core::DecodeFromSlice<'a> for ConfidentialMemoEnvelopeV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[repr(u8)]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::ConfidentialStatus")]
 pub enum ConfidentialStatus {
     /// Entry has been published but is not yet active.
     Proposed,
@@ -1368,3 +1370,6 @@ mod tests {
         assert!(norito::to_bytes(&envelope).is_err());
     }
 }
+
+#[cfg(test)]
+mod captured_confidential_schema_tests;

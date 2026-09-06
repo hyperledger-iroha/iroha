@@ -51,8 +51,6 @@ use derive_more::Display;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{Stream, StreamExt, stream};
 use http_default::{AsyncWebSocketStream, WebSocketStream};
-pub use iroha_config::client_api::{ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO};
-use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 /// Closed penalty lifecycle returned by the Sumeragi evidence audit API.
 pub use iroha_data_model::block::consensus::EvidencePenaltyStatus as SumeragiEvidencePenaltyStatus;
@@ -85,9 +83,8 @@ use iroha_data_model::{
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::pin_registry::PinStatusKindV1,
 };
-use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
-pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
+use iroha_torii_shared::configuration::{ConfidentialGas, Configuration};
 pub use iroha_torii_shared::governance_proposal_api::{
     DeployContractProposalDraftRequestV1, DeployContractProposalDraftResponseV1,
     GovernanceProposalInstructionDraftV1, SccpRouteGovernanceProposalDraftRequestV1,
@@ -117,6 +114,10 @@ pub use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
     PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
+use iroha_torii_shared::status::Status;
+#[cfg(test)]
+use iroha_torii_shared::status::{TxGossipSnapshot, Uptime};
+use tracing::{debug, error, trace, warn};
 
 /// Exact public-map count vector returned by the non-shipping APS evidence route.
 #[cfg(feature = "test-network-private-settlement-evidence")]
@@ -176,6 +177,7 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     /// Exact public-map count vector.
     pub counts: PrivateSettlementTestNetworkStateCountsV1,
 }
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
 pub use iroha_torii_shared::kagemusha_api::{
     KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
     KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1, KagemushaReadinessV1,
@@ -236,8 +238,7 @@ use sorafs_manifest::{
     repair::RepairTicketId,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, OrchestratorConfig, PolicyOverride, RolloutPhase, TransportPolicy,
-    WriteModeHint, fetch_via_gateway as orchestrator_fetch_via_gateway,
+    OrchestratorConfig, PolicyOverride, fetch_via_gateway as orchestrator_fetch_via_gateway,
     prelude::{
         CarBuildPlan, FetchSession as SorafsFetchOutcome,
         GatewayFetchConfig as SorafsGatewayFetchConfig,
@@ -10658,7 +10659,7 @@ fn lifecycle_status() -> LaneLifecycleStatusV1 {
 #[cfg(test)]
 mod status_tests {
     use super::*;
-    use iroha_telemetry::metrics::{
+    use iroha_torii_shared::status::{
         BuildStatus, CryptoStatus, GovernanceStatus, Halo2Status, StackStatus,
         SumeragiConsensusStatus,
     };
@@ -10691,7 +10692,6 @@ mod status_tests {
                 sm_openssl_preview_enabled: true,
                 halo2: Halo2Status::default(),
             },
-            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -10744,34 +10744,18 @@ mod status_tests {
         assert_eq!(got.queue_size, s.queue_size);
     }
     #[test]
-    fn decode_status_json_defaults_missing_build_metadata() {
-        let mut status = status_fixture();
-        status.peers = 2;
-        status.blocks = 3;
-        status.blocks_non_empty = 2;
-        status.commit_time_ms = 40;
-        status.txs_approved = 8;
-        status.txs_rejected = 0;
-        status.last_rejection_at_ms = None;
-        status.txs_rejected_recent_5m = 0;
-        status.uptime = Uptime(Duration::from_millis(999));
-        status.queue_size = 1;
-        status.crypto.sm_helpers_available = false;
-        status.crypto.sm_openssl_preview_enabled = false;
-        let mut value = norito::json::to_value(&status).expect("encode status to json value");
+    fn decode_status_json_requires_build_metadata() {
+        let mut value =
+            norito::json::to_value(&status_fixture()).expect("encode status to json value");
         let JsonValue::Object(ref mut map) = value else {
             panic!("status should serialize as a JSON object");
         };
         map.remove("build");
         let body = norito::json::to_vec(&value).expect("encode modified json");
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
-        let got = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
-            .expect("json decode");
-        assert_eq!(got.build.git_commit_sha, "");
-        assert_eq!(got.build.dpn_validator_release_commit, "");
-        assert_eq!(got.peers, 2);
-        assert_eq!(got.blocks, 3);
-        assert_eq!(got.queue_size, 1);
+        let error = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
+            .expect_err("the canonical status contract requires build metadata");
+        assert!(error.to_string().contains("missing field `build`"));
     }
     #[test]
     fn lane_lifecycle_status_decodes_json_and_norito() {
@@ -11122,28 +11106,26 @@ mod evidence_response_tests {
 fn default_alias_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
     sorafs_manifest::alias_cache::AliasCachePolicy::new(
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS,
+        ),
+        std::time::Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        std::time::Duration::from_secs(
+            iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
-        ),
-        std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
-        ),
-        std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
         ),
     )
 }
@@ -11214,8 +11196,7 @@ mod evidence_http_tests {
             network_id: test_network_id(),
             key_pair,
             account: account_id,
-            account_chain_discriminant:
-                iroha_config::parameters::defaults::common::chain_discriminant(),
+            account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             torii_api_url: url,
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
@@ -11226,7 +11207,7 @@ mod evidence_http_tests {
             soracloud_http_witness_file: None,
             sorafs_alias_cache: default_alias_policy(),
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
-            sorafs_rollout_phase: SorafsRolloutPhase::Canary,
+            sorafs_rollout_phase: RolloutPhase::Canary,
         };
         let mut client = Client::new(config);
         client.set_operator_key_pair(checked_random_keypair());
@@ -13512,11 +13493,14 @@ mod evidence_http_tests {
             })
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let mint_roster = mint_finality_roster_fixture(test_network_id(), 0, &roster);
         let context = HeightContext {
             network_id: test_network_id(),
             protocol_version: PROTOCOL_VERSION,
             height: 10,
             epoch: 0,
+            kagemusha_mint_finality_epoch_id: mint_roster.finality_epoch_id().unwrap(),
+            kagemusha_mint_finality_epoch_roster: mint_roster,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -14129,8 +14113,8 @@ mod evidence_http_tests {
     }
     #[test]
     fn pipeline_status_rejects_unbound_or_noncanonical_hashes() {
-        let expected = transaction_hash(0x29);
-        let other = transaction_hash(0x2b).to_string();
+        let expected = transaction_hash(0x2b);
+        let other = transaction_hash(0x2d).to_string();
         let payload = iroha_torii_shared::PipelineTransactionStatusResponse::new(
             other,
             iroha_torii_shared::PipelineTransactionStatus {
@@ -14150,6 +14134,11 @@ mod evidence_http_tests {
             expected.to_string().to_ascii_uppercase(),
             format!("{}0", &expected.to_string()[..63]),
         ] {
+            assert_ne!(
+                hash,
+                expected.to_string(),
+                "the mutation must change the hash"
+            );
             let mut malformed = payload.clone();
             malformed.hash = hash;
             let err = validate_global_pipeline_status_response(&malformed, expected)
@@ -15242,7 +15231,7 @@ pub struct Client {
     /// Default `SoraNet` anonymity policy stage applied to gateway fetches.
     pub default_anonymity_policy: AnonymityPolicy,
     /// Rollout phase controlling the default anonymity policy.
-    pub rollout_phase: SorafsRolloutPhase,
+    pub rollout_phase: RolloutPhase,
     /// Cached Torii compatibility state for queries and transaction submissions.
     pub(crate) data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
     /// Default response wire-format preference for negotiated Torii endpoints.
@@ -15633,12 +15622,7 @@ impl Client {
             telemetry_region,
             ..OrchestratorConfig::default()
         };
-        let rollout_phase = match self.rollout_phase {
-            SorafsRolloutPhase::Canary => RolloutPhase::Canary,
-            SorafsRolloutPhase::Ramp => RolloutPhase::Ramp,
-            SorafsRolloutPhase::Default => RolloutPhase::Default,
-        };
-        config = config.with_rollout_phase(rollout_phase);
+        config = config.with_rollout_phase(self.rollout_phase);
         let phase_default_policy = config.anonymity_policy;
         if self.default_anonymity_policy != phase_default_policy {
             config.anonymity_policy = self.default_anonymity_policy;
@@ -16266,7 +16250,7 @@ impl Client {
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
-        iroha_logger::trace!(tx=?transaction, "Submitting");
+        tracing::trace!(tx=?transaction, "Submitting");
         let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
         let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
@@ -16287,7 +16271,7 @@ impl Client {
         transaction: &SignedTransaction,
     ) -> Result<TransactionSubmissionDisposition> {
         self.ensure_transaction_submit_compatibility()?;
-        iroha_logger::trace!(tx=?transaction, "Submitting for blocking confirmation");
+        tracing::trace!(tx=?transaction, "Submitting for blocking confirmation");
         let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
         let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
@@ -16362,7 +16346,7 @@ impl Client {
         self.ensure_transaction_submit_compatibility()?;
         let expected = QueuePlanOutcomeUnknownIdentity::for_prepared_payload(payload)?;
         let hash = payload.hash();
-        iroha_logger::trace!(%hash, "Submitting prepared transaction payload");
+        tracing::trace!(%hash, "Submitting prepared transaction payload");
         let mut request = bounded_async_response::client()
             .post(join_torii_url(&self.torii_url, torii_uri::TRANSACTION))
             .timeout(self.torii_request_timeout)
@@ -17414,7 +17398,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
-    pub fn get_config(&self) -> Result<ConfigGetDTO> {
+    pub fn get_config(&self) -> Result<Configuration> {
         let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
         let resp = self.send_builder(
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
@@ -17427,13 +17411,13 @@ impl Client {
             ". ",
         )?;
         let s = std::str::from_utf8(resp.body()).wrap_err("Invalid UTF-8")?;
-        norito::json::from_json_fast_smart::<ConfigGetDTO>(s).map_err(|e| eyre!("{e}"))
+        norito::json::from_json_fast_smart::<Configuration>(s).map_err(|e| eyre!("{e}"))
     }
     /// Convenience helper returning only the confidential gas schedule.
     ///
     /// # Errors
     /// Returns an error if fetching the configuration fails or the payload cannot be decoded.
-    pub fn get_confidential_gas_schedule(&self) -> Result<ConfidentialGasDTO> {
+    pub fn get_confidential_gas_schedule(&self) -> Result<ConfidentialGas> {
         self.get_config().map(|cfg| cfg.confidential_gas)
     }
     /// Gets network status seen from the peer
@@ -26230,8 +26214,8 @@ mod tests {
             pin_registry::ManifestDigest,
         },
     };
-    use iroha_telemetry::metrics::GovernanceStatus;
     use iroha_test_samples::{ALICE_ID, gen_account_in};
+    use iroha_torii_shared::status::GovernanceStatus;
     use iroha_version::codec::DecodeVersioned;
     use norito::json::Value;
     use sorafs_car::{
@@ -28723,7 +28707,7 @@ mod tests {
             true,
             Some(&account_id),
             88,
-            0x88,
+            0x8A,
         );
         let mut noncanonical_target = exact.clone();
         noncanonical_target.alias_target_account_id = Some(format!(" {TEST_WORKER_I105} "));
@@ -28736,10 +28720,13 @@ mod tests {
                 JsonValue::from("applied"),
             );
         let canonical_body = norito::json::to_json(&exact).expect("encode canonical response");
-        let canonical_hash = exact.observed_block_hash.to_string();
+        let canonical_hash =
+            norito::json::to_json(&exact.observed_block_hash).expect("encode canonical block hash");
         let lowercase_hash = canonical_hash.to_ascii_lowercase();
         assert_ne!(canonical_hash, lowercase_hash);
+        assert!(canonical_body.contains(&canonical_hash));
         let noncanonical_hash_body = canonical_body.replace(&canonical_hash, &lowercase_hash);
+        assert_ne!(canonical_body, noncanonical_hash_body);
 
         for (label, response) in [
             (
@@ -28916,7 +28903,7 @@ mod tests {
     #[test]
     fn sponsored_onboarding_rejects_short_tokens_and_tampered_receipts_before_http() {
         let client = client_with_base_url(base_url());
-        let (request, mut receipt) = account_onboarding_plan_fixture(&client);
+        let (request, receipt) = account_onboarding_plan_fixture(&client);
         assert!(
             client
                 .post_account_onboarding_plan(&request, "short")
@@ -28924,20 +28911,35 @@ mod tests {
                 .to_string()
                 .contains("32 through 256")
         );
-        receipt.body.request.alias = "substituted@paynet".to_owned();
-        assert!(
-            client
-                .post_account_onboarding_prepare(
-                    &request,
-                    &receipt,
-                    &prepared_binding_fixture("onboarding"),
-                    &prepared_fee_payment_fixture(),
-                    &"T".repeat(32),
-                )
-                .expect_err("tampered receipt rejected")
-                .to_string()
-                .contains("hash or authority signature")
-        );
+        let mut substituted_request = receipt.clone();
+        substituted_request.body.request.alias = "substituted@paynet".to_owned();
+        let mut substituted_hash = receipt.clone();
+        substituted_hash.plan_hash = iroha_crypto::Hash::new(b"substituted onboarding hash");
+        assert_ne!(substituted_hash.plan_hash, receipt.plan_hash);
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        for (tampered, expected) in [
+            (substituted_request, "exact normalized request"),
+            (substituted_hash, "hash or authority signature"),
+        ] {
+            let error = with_mock_http(
+                respond_with(&snapshots, empty_response(StatusCode::OK)),
+                || {
+                    client.post_account_onboarding_prepare(
+                        &request,
+                        &tampered,
+                        &prepared_binding_fixture("onboarding"),
+                        &prepared_fee_payment_fixture(),
+                        &"T".repeat(32),
+                    )
+                },
+            )
+            .expect_err("tampered receipt rejected before transport");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error: {error:#}"
+            );
+        }
+        assert!(snapshots.lock().expect("lock snapshots").is_empty());
     }
     #[test]
     fn sponsored_onboarding_rejects_unbounded_or_misdirected_owner_follow_up() {
@@ -29311,7 +29313,9 @@ mod tests {
         })
         .expect_err("duplicate sponsor-program response media type must be rejected");
         assert!(
-            error.to_string().contains("duplicated `content-type`"),
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("duplicated `content-type`")),
             "unexpected duplicate-media error: {error:#}"
         );
     }
@@ -29499,7 +29503,9 @@ mod tests {
         })
         .expect_err("duplicate fee quote response media type must be rejected");
         assert!(
-            error.to_string().contains("duplicated `content-type`"),
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("duplicated `content-type`")),
             "unexpected duplicate-media error: {error:#}"
         );
     }
@@ -30183,8 +30189,7 @@ mod tests {
             network_id: test_network_id(),
             key_pair,
             account: account_id,
-            account_chain_discriminant:
-                iroha_config::parameters::defaults::common::chain_discriminant(),
+            account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             torii_api_url: "http://127.0.0.1:8080".parse().unwrap(),
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
@@ -30195,7 +30200,7 @@ mod tests {
             soracloud_http_witness_file: None,
             sorafs_alias_cache: default_alias_policy(),
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
-            sorafs_rollout_phase: SorafsRolloutPhase::Canary,
+            sorafs_rollout_phase: RolloutPhase::Canary,
         }
     }
     #[derive(Debug)]
@@ -30652,10 +30657,12 @@ mod tests {
             .body(response_body)
             .expect("build accepted response");
 
-        let (result, snapshot) = capture_request(response, || {
+        let (result, snapshots) = capture_requests(response, || {
             client.authorize_and_retry_da_ingest(&request, &scope)
         });
         let result = result.expect("authorize and retry DA ingest");
+        assert_eq!(snapshots.len(), 1, "one scoped request must be submitted");
+        let snapshot = snapshots.into_iter().next().expect("scoped request");
 
         assert_eq!(result.status, "accepted");
         assert_eq!(result.pin_scope, Some(scope));
@@ -33926,7 +33933,7 @@ mod tests {
     }
     #[test]
     fn decode_status_allows_json_fallback() {
-        use iroha_telemetry::metrics::{BuildStatus, CryptoStatus, StackStatus, Status as S};
+        use iroha_torii_shared::status::{BuildStatus, CryptoStatus, StackStatus, Status as S};
         // Minimal JSON body with required fields
         let body = norito::json::to_vec(&S {
             build: BuildStatus::default(),
@@ -33951,7 +33958,6 @@ mod tests {
             tx_gossip: TxGossipSnapshot::default(),
             crypto: CryptoStatus::default(),
             stack: StackStatus::default(),
-            offline: None,
             sumeragi: None,
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -33969,7 +33975,7 @@ mod tests {
     }
     #[test]
     fn decode_status_prefers_framed_payload() {
-        use iroha_telemetry::metrics::Status as S;
+        use iroha_torii_shared::status::Status as S;
         let status = S {
             peers: 5,
             blocks: 9,
@@ -36824,10 +36830,13 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request),
+            || client.post_deploy_contract_proposal_draft(&request),
         )
-        .expect_err("retired lifecycle controls in the instruction must reject");
-        assert!(error.to_string().contains("does not match"));
+        .expect_err("substituted instruction code hash must reject");
+        assert!(
+            error.to_string().contains("does not match"),
+            "unexpected error: {error:#}"
+        );
 
         let mut mismatched_request = request.clone();
         mismatched_request.manifest_provenance = None;
@@ -36842,7 +36851,7 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request),
+            || client.post_deploy_contract_proposal_draft(&request),
         )
         .expect_err("manifest provenance mismatch must reject");
         assert!(error.to_string().contains("does not match"));
@@ -36854,11 +36863,15 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&wrong_id).expect("wrong-id deploy response"),
         );
-        let _ = with_mock_http(
+        let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request),
+            || client.post_deploy_contract_proposal_draft(&request),
         )
         .expect_err("wrong deploy proposal id must reject");
+        assert!(
+            error.to_string().contains("proposal id does not match"),
+            "unexpected error: {error:#}"
+        );
     }
     #[test]
     fn sccp_governance_draft_is_typed_locally_signed_and_response_bound() {

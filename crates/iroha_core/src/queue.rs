@@ -148,7 +148,7 @@ use iroha_data_model::{
 use iroha_logger::{trace, warn};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::NexusLaneTeuBuckets;
+use iroha_torii_shared::status::NexusLaneTeuBuckets;
 #[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
 pub use journal::QUEUE_PLAN_JOURNAL_VERSION;

@@ -150,7 +150,7 @@ impl AuditDeployArgs {
         ))
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ValidatedGovernedContractBinding<'a> {
     found: bool,
     active: Option<bool>,
@@ -1043,7 +1043,7 @@ mod tests {
             "contract_subject_account": "ed0120subject",
             "dataspace": "universal",
             "active": false,
-            "lifecycle": lifecycle(None),
+            "lifecycle": (lifecycle(None)),
             "emergency_hold_active": false
         })
     }
@@ -1056,10 +1056,10 @@ mod tests {
             "contract_subject_account": "ed0120subject",
             "dataspace": "universal",
             "active": true,
-            "lifecycle": lifecycle(Some(&code_hash)),
+            "lifecycle": (lifecycle(Some(&code_hash))),
             "emergency_hold_active": false,
             "code_hash_hex": code_hash,
-            "abi_hash_hex": "22".repeat(32),
+            "abi_hash_hex": ("22".repeat(32)),
             "public_entrypoints": ["balance", "transfer"]
         })
     }
@@ -1234,9 +1234,9 @@ mod tests {
             lifecycle.as_object_mut().expect("lifecycle object").insert(
                 "emergency_hold".into(),
                 norito::json!({
-                    "incident_digest_hex": "11".repeat(32),
-                    "proposal_content_id_hex": "22".repeat(32),
-                    "governance_attempt_id_hex": "33".repeat(32),
+                    "incident_digest_hex": ("11".repeat(32)),
+                    "proposal_content_id_hex": ("22".repeat(32)),
+                    "governance_attempt_id_hex": ("33".repeat(32)),
                     "reason": "containment",
                     "imposed_at_height": 1,
                     "expires_at_height": 2
@@ -1272,17 +1272,17 @@ mod tests {
                 "version": 1,
                 "origin": "parliament",
                 "origin_account": proposer,
-                "origin_proposal_content_id_hex": "11".repeat(32),
-                "origin_governance_attempt_id_hex": "22".repeat(32),
+                "origin_proposal_content_id_hex": ("11".repeat(32)),
+                "origin_governance_attempt_id_hex": ("22".repeat(32)),
                 "owner": owner,
                 "pending_owner": "parliament",
                 "parliament_delegated": true,
                 "active_code_hash_hex": null,
                 "revision": 7,
                 "emergency_hold": {
-                    "incident_digest_hex": "33".repeat(32),
-                    "proposal_content_id_hex": "44".repeat(32),
-                    "governance_attempt_id_hex": "55".repeat(32),
+                    "incident_digest_hex": ("33".repeat(32)),
+                    "proposal_content_id_hex": ("44".repeat(32)),
+                    "governance_attempt_id_hex": ("55".repeat(32)),
                     "reason": "containment",
                     "imposed_at_height": 10,
                     "expires_at_height": 20

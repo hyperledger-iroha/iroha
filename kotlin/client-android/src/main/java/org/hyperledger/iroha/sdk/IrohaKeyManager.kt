@@ -248,7 +248,7 @@ class IrohaKeyManager private constructor(
     fun verifyAttestation(
         alias: String,
         verifier: AttestationVerifier,
-        expectedChallenge: ByteArray? = null,
+        expectedChallenge: ByteArray?,
     ): AttestationResult? {
         if (expectedChallenge == null || expectedChallenge.isEmpty()) {
             throw AttestationVerificationException(

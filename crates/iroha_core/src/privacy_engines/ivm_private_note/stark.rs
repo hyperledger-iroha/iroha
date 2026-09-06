@@ -64,7 +64,8 @@ const TYPE_VM_PROGRAM: usize = 8;
 const TYPE_VM_PREVIOUS: usize = 9;
 const TYPE_VM_NEXT: usize = 10;
 const TYPE_PADDING: usize = 11;
-const TYPE_COLUMN_COUNT: usize = 12;
+const TYPE_MEMBERSHIP: usize = 12;
+const TYPE_COLUMN_COUNT: usize = 13;
 const FIXED_ROUND_SELECTOR_OFFSET: usize = TYPE_COLUMN_COUNT;
 const FIXED_FIRST_BLOCK_ROUND_ZERO: usize = FIXED_ROUND_SELECTOR_OFFSET + 64;
 const FIXED_SHA_END_TERMINAL: usize = FIXED_FIRST_BLOCK_ROUND_ZERO + 1;
@@ -89,13 +90,13 @@ const FIXED_VM_ACTION_LIMB_ONE_BYTE: usize = FIXED_VM_ACTION_LIMB_ZERO_BYTE + 1;
 const FIXED_VM_EXECUTION_EPOCH_BYTE: usize = FIXED_VM_ACTION_LIMB_ONE_BYTE + 1;
 pub(crate) const PRIVATE_NOTE_PROFILE_FIXED_WIDTH_V1: usize = FIXED_VM_EXECUTION_EPOCH_BYTE + 1;
 pub(crate) const PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1: usize = 1;
-pub(crate) const PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1: usize = 1_372;
+pub(crate) const PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1: usize = 1_375;
 /// Audited maximum algebraic degree across the complete shared/profile AIR.
 pub(crate) const PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1: u8 =
     PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
 const PROFILE_AUX_VM_CARRY_BRIDGE: usize = 0;
 /// Relation-local descriptor combined with the shared proof-driver geometry.
-pub(crate) const IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:relation=proof-managed-note:wire=IPS1-v1:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-proof=8388608:sha256-wide-air:public-digest=poseidon-x7-goldilocks-6x64(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:vm=16x8:ciphertext=IPNE-v1:fee=separate:legacy=unrepresentable:governance=typed-lifecycle";
+pub(crate) const IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:relation=proof-managed-note:wire=IPS1-v1:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:sha256-wide-air:public-digest=poseidon-x7-goldilocks-6x64(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:vm=16x8:ciphertext=IPNE-v1:fee=separate:legacy=unrepresentable:governance=typed-lifecycle";
 /// Exact first-release proof ceiling enforced by the private-note verifier.
 pub const IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1: usize = 8 * 1024 * 1024;
 const PRIVATE_NOTE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
@@ -285,6 +286,9 @@ fn private_note_profile_fixed_columns_with_relation_profile_v1(
             }
             PrivateNoteFixedRowV1::NodeSelect { .. } => {
                 set(&mut columns, TYPE_NODE_SELECT, row, F::ONE);
+            }
+            PrivateNoteFixedRowV1::Membership { .. } => {
+                set(&mut columns, TYPE_MEMBERSHIP, row, F::ONE);
             }
             PrivateNoteFixedRowV1::Distinct { chunk, chunks, .. } => {
                 set(&mut columns, TYPE_DISTINCT, row, F::ONE);
@@ -653,7 +657,27 @@ const COPY_WIDTH: usize = PRIVATE_NOTE_COPY_WIDTH_V1;
 const DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 const VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 include!("../shared_note_profile_constraints.rs");
-define_note_profile_constraint_residues_v1!(private_note_profile_constraint_residues_inner_v1);
+define_note_profile_constraint_residues_v1!(private_note_shared_constraint_residues_v1);
+
+fn private_note_profile_constraint_residues_inner_v1(
+    current: &[F],
+    next: &[F],
+    current_aux: &[F],
+    next_aux: &[F],
+    fixed: &[F],
+) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+    let mut residues =
+        private_note_shared_constraint_residues_v1(current, next, current_aux, next_aux, fixed)?;
+    let selector = fixed[NOTE_COPY_FIXED_WIDTH_V1 + TYPE_MEMBERSHIP];
+    for pair in 0..3 {
+        residues.push(
+            selector
+                .mul(current[COPY_OFFSET])
+                .mul(current[COPY_OFFSET + 1 + pair * 2].sub(current[COPY_OFFSET + 2 + pair * 2])),
+        );
+    }
+    Ok(residues)
+}
 /// Reusable crate-private bridge from one relation profile to the shared STARK driver.
 ///
 /// A sibling adapter owns its protocol descriptor, profile digest, transcript
@@ -1439,14 +1463,40 @@ mod tests {
             .expect("canonical fixed output memos verify");
 
         let PrivateNoteRelationProfileV1::ExactThreeOutputBalanced {
+            output_memo_digests,
+            mut audit_input_commitment,
+        } = value.profile
+        else {
+            unreachable!("three-output fixture")
+        };
+        audit_input_commitment[0] ^= 1;
+        let false_audit_profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+            output_memo_digests,
+            audit_input_commitment,
+        );
+        let false_audit_adapter = PrivateNoteStarkAdapterV1::new_with_relation_profile_v1(
+            &value.statement,
+            &binding,
+            &limits,
+            false_audit_profile,
+        );
+        assert_proof_equation_rejection_v1(
+            "verifier-fixed audited input openings",
+            verify_proof_managed_note_stark_v1(&false_audit_adapter, &proof),
+        );
+
+        let PrivateNoteRelationProfileV1::ExactThreeOutputBalanced {
             mut output_memo_digests,
+            audit_input_commitment,
         } = value.profile
         else {
             unreachable!("fixture uses the exact three-output profile")
         };
         output_memo_digests[2][0] ^= 1;
-        let substituted_profile =
-            PrivateNoteRelationProfileV1::exact_three_output_balanced(output_memo_digests);
+        let substituted_profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+            output_memo_digests,
+            audit_input_commitment,
+        );
         let substituted_adapter = PrivateNoteStarkAdapterV1::new_with_relation_profile_v1(
             &value.statement,
             &binding,
@@ -1630,6 +1680,89 @@ mod tests {
             nonzero,
             vec![F(u64::from(honest_nullifier.as_bytes()[0])).sub(F(u64::from(substituted[0])))],
             "only the verifier-fixed public digest byte binding must reject the rebuilt trace"
+        );
+    }
+
+    #[test]
+    fn virtual_membership_polynomial_rejects_positive_nonmember_inputs() {
+        let mut row = vec![F::ZERO; PRIVATE_NOTE_BASE_WIDTH_V1];
+        let aux = vec![F::ZERO; NOTE_COPY_AUX_WIDTH_V1 + PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1];
+        let mut fixed =
+            vec![F::ZERO; NOTE_COPY_FIXED_WIDTH_V1 + PRIVATE_NOTE_PROFILE_FIXED_WIDTH_V1];
+        fixed[NOTE_COPY_FIXED_WIDTH_V1 + TYPE_MEMBERSHIP] = F::ONE;
+        for pair in 0..3 {
+            row[COPY_OFFSET + 1 + pair * 2] = F(11 + pair as u64);
+            row[COPY_OFFSET + 2 + pair * 2] = F(22 + pair as u64);
+        }
+        let residues =
+            private_note_profile_constraint_residues_inner_v1(&row, &row, &aux, &aux, &fixed)
+                .expect("zero cover residue shape");
+        assert!(residues.iter().all(|value| *value == F::ZERO));
+        for value in [1_u64, 128, 255] {
+            row[COPY_OFFSET] = F(value);
+            let residues =
+                private_note_profile_constraint_residues_inner_v1(&row, &row, &aux, &aux, &fixed)
+                    .expect("positive input residue shape");
+            assert_eq!(
+                residues.iter().filter(|value| **value != F::ZERO).count(),
+                3
+            );
+        }
+    }
+
+    #[test]
+    fn audited_opening_substitution_fails_verifier_polynomials() {
+        let value = three_output_fixture();
+        let trace = build_private_note_base_trace_with_profile_v1(
+            &value.statement,
+            &value.witness,
+            value.profile,
+        )
+        .expect("actual private inputs");
+        let mut claimed = value
+            .witness
+            .inputs
+            .iter()
+            .map(|input| input.note.clone())
+            .collect::<Vec<_>>();
+        claimed[0].value -= 1;
+        claimed[1].value += 1;
+        let PrivateNoteRelationProfileV1::ExactThreeOutputBalanced {
+            output_memo_digests,
+            audit_input_commitment,
+        } = value.profile
+        else {
+            unreachable!()
+        };
+        let target = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+            output_memo_digests,
+            super::super::derive_private_note_input_openings_commitment_v1(&claimed)
+                .expect("same-total false capsule inputs"),
+        );
+        let target_fixed =
+            private_note_profile_fixed_columns_with_relation_profile_v1(&value.statement, target)
+                .expect("verifier-fixed profile");
+        let aux = vec![F::ZERO; NOTE_COPY_AUX_WIDTH_V1 + PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1];
+        let mut rejected_bytes = 0;
+        for (index, row) in trace.fixed.rows.iter().enumerate() {
+            if matches!(row, PrivateNoteFixedRowV1::ShaEnd { public_digest: Some(digest), .. } if *digest == audit_input_commitment)
+            {
+                let mut fixed = vec![F::ZERO; NOTE_COPY_FIXED_WIDTH_V1];
+                fixed.extend(target_fixed.iter().map(|column| column[index]));
+                let residues = private_note_profile_constraint_residues_inner_v1(
+                    &trace.rows[index],
+                    &trace.rows[index + 1],
+                    &aux,
+                    &aux,
+                    &fixed,
+                )
+                .expect("hash endpoint polynomials");
+                rejected_bytes += residues.iter().filter(|value| **value != F::ZERO).count();
+            }
+        }
+        assert!(
+            rejected_bytes > 0,
+            "the verifier must reject the false provenance even with unchanged actual input and output rows"
         );
     }
     fn mutation_is_detected(

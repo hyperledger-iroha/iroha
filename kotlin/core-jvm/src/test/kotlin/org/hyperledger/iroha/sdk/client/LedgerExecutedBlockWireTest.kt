@@ -105,7 +105,7 @@ class LedgerExecutedBlockWireTest {
     }
 
     private fun client(executor: HttpTransportExecutor): HttpClientTransport =
-        HttpClientTransport.withExecutor(
+        HttpClientTransport(
             executor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )

@@ -28,6 +28,8 @@ ffi::ffi_item! {
     #[derive(
         Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, derive_more::Debug, Hash, IntoSchema,
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_crypto::signature::Signature")]
     #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     #[repr(transparent)]
     #[debug("{{ {} }}", hex::encode_upper(payload))]
@@ -679,6 +681,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Signature {
         let (payload, used) = decode_signature_payload_from_slice(bytes)?;
         validate_signature_payload_for_decode(&payload)?;
         Ok((Signature { payload }, used))
+    }
+}
+impl<T: norito::NoritoSchema> norito::NoritoSchema for SignatureOf<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_crypto::signature::SignatureOf",
+            &[T::nominal_name()],
+        )
     }
 }
 impl<T> norito::core::NoritoSerialize for SignatureOf<T> {

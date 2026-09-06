@@ -6192,6 +6192,15 @@ export interface ToriiNetworkTimeStatus {
   note: string | null;
 }
 
+/** Public, account-free V1 bootstrap policy; the default is explicit and unrelated to list order. */
+export interface AccountCapabilitiesV1 {
+  readonly schema_version: 1;
+  readonly network_id: string;
+  readonly network_prefix: number;
+  readonly allowed_signing: readonly CryptoAlgorithm[];
+  readonly default_signing: "ed25519";
+}
+
 export interface ToriiNodeCapabilities {
   abiVersion: number;
   dataModelVersion: number;
@@ -10655,6 +10664,7 @@ export declare class ToriiBrowserClient {
   getNodeCapabilities(
     options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiBrowserNodeCapabilities>;
+  getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
   getContractDeploymentState(
     request: ToriiBrowserContractDeploymentStateRequest,
     options?: ToriiBrowserContractDeploymentStateOptions,
@@ -11008,6 +11018,7 @@ export interface ValidationFeePolicyProofCatchUpV1
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
+  getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
   getKagemushaReadiness(
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaReadinessV1>;

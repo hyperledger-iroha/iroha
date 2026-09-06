@@ -4,7 +4,8 @@
 Prerequisites: Python 3.9+ and a freshly built canonical Rust ``koto``
 driver. The normative grammar and documentation roots are read from
 ``specs/kotodama_v1_docs.json``. Every tracked or newly added Markdown
-file below those roots is scanned. Explicit ``kotodama``/``ko`` fences and
+file below those roots is scanned, excluding ``docs/history`` evidence.
+Explicit ``kotodama``/``ko`` fences and
 ``cat > *.ko <<'TAG'`` shell snippets are checked. The checker only creates
 temporary ``.ko`` files and never writes generated artifacts into the
 repository.
@@ -48,6 +49,7 @@ _HEREDOC_SOURCE = re.compile(
     r"^\s*cat\s+.*?\.ko\s*<<(?P<strip_tabs>-)?\s*(?P<quote>['\"]?)"
     r"(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)\s*$"
 )
+HISTORICAL_ROOT = Path("docs/history")
 
 
 class DocumentationCheckError(RuntimeError):
@@ -86,6 +88,12 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def is_historical_document(document: Path) -> bool:
+    """Historical evidence never participates in current compiler qualification."""
+
+    return document == HISTORICAL_ROOT or HISTORICAL_ROOT in document.parents
+
+
 def _relative_document(root: Path, raw: object, context: str) -> Path:
     if not isinstance(raw, str) or not raw:
         raise DocumentationCheckError(f"{context} must be a non-empty path string")
@@ -98,15 +106,19 @@ def _relative_document(root: Path, raw: object, context: str) -> Path:
         )
     if relative.suffix != ".md":
         raise DocumentationCheckError(f"{context} must name a Markdown file: {raw!r}")
+    if is_historical_document(relative):
+        raise DocumentationCheckError(f"{context} cannot use historical evidence: {raw!r}")
 
     root = root.resolve()
     resolved = (root / relative).resolve()
     try:
-        resolved.relative_to(root)
+        canonical = resolved.relative_to(root)
     except ValueError as error:
         raise DocumentationCheckError(
             f"{context} escapes the repository: {raw!r}"
         ) from error
+    if is_historical_document(canonical):
+        raise DocumentationCheckError(f"{context} resolves to historical evidence: {raw!r}")
     if not resolved.is_file():
         raise DocumentationCheckError(f"{context} does not exist: {raw!r}")
     return relative
@@ -122,15 +134,19 @@ def _relative_source_root(root: Path, raw: object, context: str) -> Path:
         raise DocumentationCheckError(
             f"{context} must be a normalized repository-relative path: {raw!r}"
         )
+    if is_historical_document(relative):
+        raise DocumentationCheckError(f"{context} cannot use historical evidence: {raw!r}")
 
     root = root.resolve()
     resolved = (root / relative).resolve()
     try:
-        resolved.relative_to(root)
+        canonical = resolved.relative_to(root)
     except ValueError as error:
         raise DocumentationCheckError(
             f"{context} escapes the repository: {raw!r}"
         ) from error
+    if is_historical_document(canonical):
+        raise DocumentationCheckError(f"{context} resolves to historical evidence: {raw!r}")
     if not resolved.is_dir():
         raise DocumentationCheckError(f"{context} is not a directory: {raw!r}")
     return relative
@@ -465,6 +481,86 @@ def extract_source_fences(document: Path, text: str) -> tuple[SourceFence, ...]:
     return tuple(sorted(fences, key=lambda fence: fence.opening_line))
 
 
+def _git_output(root: Path, *arguments: str) -> bytes:
+    """Read local Git evidence without treating errors as absent documents."""
+
+    try:
+        result = subprocess.run(
+            ["git", *arguments], cwd=root, capture_output=True, check=False,
+        )
+    except OSError as error:
+        raise DocumentationCheckError(f"cannot read documentation Git evidence: {error}") from error
+    if result.returncode:
+        raise DocumentationCheckError(
+            "cannot read documentation Git evidence: "
+            + result.stderr.decode("utf-8", errors="replace").strip()
+        )
+    return result.stdout
+
+
+def _git_document_text(root: Path, revision: str, document: Path) -> str:
+    """Distinguish a newly added document from unavailable or non-file evidence."""
+
+    entries = _git_output(root, "ls-tree", "--full-tree", "-z", revision, "--", document.as_posix())
+    if not entries:
+        return ""
+    rows = entries.rstrip(b"\0").split(b"\0")
+    if len(rows) != 1:
+        raise DocumentationCheckError(f"ambiguous Git documentation entry: {document}")
+    header, path = rows[0].split(b"\t", 1)
+    mode, kind, object_id = header.split()
+    if path != document.as_posix().encode() or kind != b"blob" or mode not in {b"100644", b"100755"}:
+        raise DocumentationCheckError(f"Git documentation is not a regular source file: {document}")
+    try:
+        return _git_output(root, "cat-file", "blob", object_id.decode("ascii")).decode("utf-8")
+    except UnicodeError as error:
+        raise DocumentationCheckError(f"Git documentation is not UTF-8: {document}") from error
+
+
+def changed_executable_documents(
+    changed_paths: Sequence[Path], root: Path, manifest: Path, *, base_revision: str = "HEAD",
+) -> tuple[Path, ...]:
+    """Compare actual source/mode projections, including removed fences and files.
+
+    CI supplies its merge base; explicit local paths compare with HEAD. Prose
+    and Markdown line positions do not change executable inputs. Missing Git
+    evidence, malformed source claims, and invalid inventories raise so callers
+    can select the compiler check conservatively.
+    """
+
+    candidates = [path for path in changed_paths
+                  if path.suffix in {".md", ".mdx"} and not is_historical_document(path)]
+    if not candidates:
+        return ()
+    document_set = load_document_set(manifest, root)
+    candidates = [path for path in candidates if any(
+        path == source_root or source_root in path.parents
+        for source_root in document_set.source_roots
+    )]
+    if not candidates:
+        return ()
+    revision = _git_output(root, "rev-parse", "--verify", "--end-of-options",
+                           f"{base_revision}^{{commit}}").decode("ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
+        raise DocumentationCheckError("Git comparison revision is not a commit identity")
+    selected = []
+    for document in candidates:
+        path = root / document
+        try:
+            canonical = path.resolve().relative_to(root.resolve())
+            if is_historical_document(canonical):
+                raise DocumentationCheckError(f"current document resolves to historical evidence: {document}")
+            current = path.read_text(encoding="utf-8") if path.exists() or path.is_symlink() else ""
+        except (OSError, UnicodeError, ValueError) as error:
+            raise DocumentationCheckError(f"cannot read current documentation {document}: {error}") from error
+        previous = _git_document_text(root, revision, document)
+        before = tuple((fence.source, fence.zk) for fence in extract_source_fences(document, previous))
+        after = tuple((fence.source, fence.zk) for fence in extract_source_fences(document, current))
+        if before != after or (document in document_set.documents and not after):
+            selected.append(document)
+    return tuple(sorted(set(selected)))
+
+
 def tracked_markdown_documents(
     root: Path, source_roots: Sequence[Path]
 ) -> tuple[Path, ...]:
@@ -513,6 +609,8 @@ def tracked_markdown_documents(
             ) from error
         if document.suffix not in {".md", ".mdx"}:
             continue
+        if is_historical_document(document):
+            continue
         if (root / document).is_file():
             documents.append(document)
     return tuple(sorted(set(documents)))
@@ -528,10 +626,15 @@ def collect_source_fences(
     candidates.update(tracked_markdown_documents(root, document_set.source_roots))
     covered_required: set[Path] = set()
     for document in sorted(candidates):
+        if is_historical_document(document):
+            raise DocumentationCheckError(f"required document cannot use historical evidence: {document}")
         path = root / document
         try:
+            canonical = path.resolve().relative_to(root.resolve())
+            if is_historical_document(canonical):
+                raise DocumentationCheckError(f"current document resolves to historical evidence: {document}")
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
+        except (OSError, UnicodeError, ValueError) as error:
             raise DocumentationCheckError(
                 f"failed to read {document}: {error}"
             ) from error

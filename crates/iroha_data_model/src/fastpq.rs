@@ -26,6 +26,8 @@ pub const FASTPQ_TRANSITION_BATCH_SCHEMA_NAME: &str =
     norito::derive::JsonDeserialize,
     IntoSchema,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferTranscript")]
 pub struct TransferTranscript {
     /// Hash of the transaction entrypoint (`hash_as_entrypoint`) that emitted this transcript.
     pub batch_hash: Hash,
@@ -52,6 +54,8 @@ pub struct TransferTranscript {
     norito::derive::JsonDeserialize,
     IntoSchema,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferDeltaTranscript")]
 pub struct TransferDeltaTranscript {
     /// Source account.
     pub from_account: AccountId,
@@ -159,6 +163,8 @@ pub fn transfer_asset_scales(
     norito::derive::JsonDeserialize,
     IntoSchema,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferSmtWitness")]
 pub struct TransferSmtWitness {
     /// Root before applying this participant update.
     pub root_before: [u8; 32],
@@ -217,6 +223,8 @@ pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u
     IntoSchema,
 )]
 #[norito(schema_name = "iroha_data_model::fastpq::FastpqTransitionBatchV1")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqTransitionBatch", frame = "iroha_data_model::fastpq::FastpqTransitionBatchV1")]
 pub struct FastpqTransitionBatch {
     /// Parameter set name (`fastpq-state-transition-stark-v1`).
     pub parameter: String,
@@ -239,6 +247,8 @@ pub struct FastpqTransitionBatch {
     norito::derive::JsonDeserialize,
     IntoSchema,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqStateTransition")]
 pub struct FastpqStateTransition {
     /// Schema-qualified logical key (asset/account path).
     pub key: Vec<u8>,
@@ -263,6 +273,8 @@ pub struct FastpqStateTransition {
     IntoSchema,
 )]
 #[norito(tag = "kind", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqOperationKind")]
 pub enum FastpqOperationKind {
     /// Asset transfer between two existing accounts.
     #[codec(index = 16)]
@@ -284,6 +296,8 @@ pub enum FastpqOperationKind {
     norito::derive::JsonDeserialize,
     IntoSchema,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqPublicInputs")]
 pub struct FastpqPublicInputs {
     /// Data-space identifier (little-endian UUID bytes).
     pub dsid: [u8; 16],
@@ -312,6 +326,8 @@ pub struct FastpqPublicInputs {
     norito::derive::JsonDeserialize,
     IntoSchema,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferTranscriptBundle")]
 pub struct TransferTranscriptBundle {
     /// Entry identity associated with the transcripts on the enclosing evidence surface.
     ///
@@ -538,3 +554,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_fastpq_schema_tests;

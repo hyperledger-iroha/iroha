@@ -588,7 +588,7 @@ mod tests {
     #[tokio::test]
     async fn status_accept_header_returns_codec_norito() {
         let telemetry = MaybeTelemetry::for_tests();
-        let expected = Status::from(telemetry.metrics().await);
+        let expected = telemetry.metrics().await.status_snapshot();
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static(

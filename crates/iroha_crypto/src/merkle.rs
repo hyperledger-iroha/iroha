@@ -260,6 +260,22 @@ pub struct CompactMerkleProof<T> {
     dirs: u32,
     siblings: Vec<Option<HashOf<T>>>,
 }
+// Markers carry identity only; tree and proof payloads do not serialize T.
+macro_rules! merkle_schema_identity {
+    ($($ty:ident => $name:literal),+ $(,)?) => {$(
+        impl<T: norito::NoritoSchema> norito::NoritoSchema for $ty<T> {
+            fn nominal_name() -> String {
+                norito::schema::identity::generic_name($name, &[T::nominal_name()])
+            }
+        }
+    )+};
+}
+merkle_schema_identity! {
+    MerkleTree => "iroha_crypto::merkle::MerkleTree",
+    MerkleTreeCommitment => "iroha_crypto::merkle::MerkleTreeCommitment",
+    MerkleProof => "iroha_crypto::merkle::MerkleProof",
+    CompactMerkleProof => "iroha_crypto::merkle::CompactMerkleProof",
+}
 impl<T> norito::core::NoritoSerialize for MerkleTree<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (hash_scheme, leaves) = self
