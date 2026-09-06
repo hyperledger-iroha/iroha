@@ -23314,7 +23314,8 @@ impl Kura {
         }
         let settlement = &artifact.participant_settlement;
         let computed_settlement_hash =
-            compute_native_amx_participant_settlement_hash(settlement);
+            compute_native_amx_participant_settlement_hash(settlement)
+                .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
         if computed_settlement_hash != artifact.participant_settlement_hash
             || settlement.lane_id != descriptor.lane_id
             || settlement.dataspace_id != descriptor.dataspace_id

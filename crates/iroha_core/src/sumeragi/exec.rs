@@ -321,7 +321,10 @@ impl NativeAmxApplicationManifestV1 {
                     );
                 }
                 let computed_settlement_hash =
-                    compute_native_amx_participant_settlement_hash(&leg.participant_settlement);
+                    compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
+                        .map_err(|_| {
+                            "Native AMX participant control settlement cannot be hashed".to_owned()
+                        })?;
                 if computed_settlement_hash != leg.participant_settlement_hash {
                     return Err(
                         "Native AMX participant control settlement hash mismatch".to_owned()

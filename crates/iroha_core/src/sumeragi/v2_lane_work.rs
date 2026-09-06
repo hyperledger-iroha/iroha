@@ -16170,7 +16170,7 @@ impl V2LaneWorkAdapter {
             }
             let participant_settlement = participant_control.settlement.clone();
             let participant_settlement_hash =
-                compute_native_amx_participant_settlement_hash(&participant_settlement);
+                compute_native_amx_participant_settlement_hash(&participant_settlement).ok()?;
             let prepare_body = NativeAmxAttestationBodyV2 {
                 round,
                 epoch: self.context.epoch,
@@ -16330,9 +16330,7 @@ impl V2LaneWorkAdapter {
                 dataspace_id: participant.route.dataspace_id,
                 participant_proposal: commit_request.participant_proposal,
                 participant_settlement: commit_request.participant_settlement,
-                participant_settlement_hash: HashOf::from_untyped_unchecked(
-                    commit_body.participant_settlement_commitment,
-                ),
+                participant_settlement_hash: commit_body.participant_settlement_commitment,
                 prepare_qc,
                 commit_qc,
             });

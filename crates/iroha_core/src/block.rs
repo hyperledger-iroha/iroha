@@ -1400,7 +1400,9 @@ fn validate_native_amx_attestation_qc(
     }
     let participant_descriptor = &leg.participant_proposal.descriptor;
     let participant_settlement_hash =
-        compute_native_amx_participant_settlement_hash(&leg.participant_settlement);
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement).map_err(
+            |_| "native AMX participant settlement cannot be hashed".to_owned(),
+        )?;
     if participant_descriptor.lane_id != leg.lane_id
         || participant_descriptor.dataspace_id != leg.dataspace_id
         || participant_descriptor.lane_incarnation != body.participant_lane_incarnation

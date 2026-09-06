@@ -96,7 +96,8 @@ pub(crate) fn native_amx_participant_application_role(
     let prepare = &leg.prepare_qc.body;
     let commit = &leg.commit_qc.body;
     let settlement_hash =
-        compute_native_amx_participant_settlement_hash(&leg.participant_settlement);
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
+            .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
     if descriptor.lane_id != leg.lane_id
         || descriptor.dataspace_id != leg.dataspace_id
         || prepare.participant_lane_id != leg.lane_id
@@ -2713,7 +2714,8 @@ impl NativeAmxAttestationRequestV2 {
             .map_err(|_| NativeAmxRequestError::InvalidParticipantProposal)?;
         let participant_descriptor = &self.participant_proposal.descriptor;
         let settlement_hash =
-            compute_native_amx_participant_settlement_hash(&self.participant_settlement);
+            compute_native_amx_participant_settlement_hash(&self.participant_settlement)
+                .map_err(|_| NativeAmxRequestError::ParticipantProposalMismatch)?;
         let participant_is_coordinator_route = body.participant_lane_id == body.coordinator_lane_id
             && body.participant_dataspace_id == body.coordinator_dataspace_id;
         let participant_work_matches = if participant_is_coordinator_route {
@@ -3230,7 +3232,8 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             };
             if participant_request.validate_plan_binding().is_err()
                 || compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
-                    != leg.participant_settlement_hash
+                    .ok()
+                    != Some(leg.participant_settlement_hash)
                 || leg.participant_settlement_hash
                     != prepare.body.participant_settlement_commitment
                 || native_amx_participant_application_role(receipt, leg).is_err()
