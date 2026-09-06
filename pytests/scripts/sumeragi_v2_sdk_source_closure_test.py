@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 1_453
+    assert len(diagnostics_records.stdout.splitlines()) == 1_454
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines

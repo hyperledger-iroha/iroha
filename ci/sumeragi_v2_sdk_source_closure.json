@@ -78,6 +78,7 @@
     "diagnostics-suite": [
       "IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift",
       "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift",
+      "IrohaSwift/Tests/IrohaSwiftTests/ToriiAccountAndNodeBoundaryTests.swift",
       "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
       "ci/run_sumeragi_v2_sdk_diagnostics.sh",
       "fixtures/sumeragi_v2/native_amx_v2_grouped.json",

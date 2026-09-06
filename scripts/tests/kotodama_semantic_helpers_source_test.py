@@ -23,10 +23,10 @@ MAXIMUM_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_RUST_LINE_REDUCTION
 
 TEST_MARKER = "#[cfg(test)]\nmod tests {"
 TEST_SUFFIX_SHA256 = (
-    "84a2eed26f614c7fcc8bc8e44750b2512769ead52480bf910af4cc391b95ae3f"
+    "62a477ecf7a62a35a5dd789523784582c10a64a7fc1ac94a19547b6b835a2a8f"
 )
 TEST_RECORDS_SHA256 = (
-    "7c30c102cf0e5f01c9753cd05db2537bc861cdc109c62d6c8980e9776be10b09"
+    "8b55006a0617100b980197e989f795b6dfc68f1a9f4beb6adc5c6ce29a20ee5c"
 )
 TEST_LEAVES = (
     (
@@ -183,7 +183,7 @@ def validate_source(source: str) -> None:
 
     _require(_sha256(test_suffix) == TEST_SUFFIX_SHA256, "test suffix changed")
     test_records = _test_records(test_suffix)
-    _require(len(test_records) == 126, "direct test count changed")
+    _require(len(test_records) == 127, "direct test count changed")
     _require(
         _json_sha256(test_records) == TEST_RECORDS_SHA256,
         "test identifiers, attributes, or order changed",
@@ -320,6 +320,7 @@ def validate_source(source: str) -> None:
     for required in (
         "query page offset must be in 0..=i64::MAX",
         "query page offset plus limit must fit i64",
+        ".or_else(|| value.try_to_u128().map(JsonNumber::U128))",
         "_ => analyze_fixed_builtin_call(builtin, arg_typed)",
         "effects.merge_from(statement_effects(context, statement));",
         "effects.mutates_durable_state |= typed_map_expr_is_state(context, map);",
@@ -329,6 +330,7 @@ def validate_source(source: str) -> None:
     ):
         _require(required in production, f"required current semantic invariant missing: {required}")
     for required_test in (
+        "fn trigger_metadata_integer_domain_is_exact_through_u128(",
         "fn typed_aggregate_traits_are_spawn_free_for_flat_width(",
         "fn semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary(",
         "fn public_semantic_apis_handoff_from_a_small_caller(",
@@ -373,6 +375,11 @@ class KotodamaSemanticHelpersSourceTest(unittest.TestCase):
                 source,
                 "query page offset plus limit must fit i64",
                 "query page offset plus limit must fit u64",
+            ),
+            "u128 trigger metadata": _replace_once(
+                source,
+                ".or_else(|| value.try_to_u128().map(JsonNumber::U128))",
+                ".or_else(|| value.try_to_u64().map(JsonNumber::U64))",
             ),
             "effect merge": _replace_once(
                 source,

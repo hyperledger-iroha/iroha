@@ -4724,7 +4724,7 @@ _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256 = {
         "3225baa482525897247541b84e14644ef34b81984195a1976c28c58561c38b1c"
     ),
     "effects::V2EffectExecutor::settle_apply_terminal_direct_broadcast": (
-        "21363eceed13f14853d3355754f9294f911e539111f8eea8478ff9e1495d6f6c"
+        "3f980d359d08ed1a285baceb24108f493e4e42a887d7f6c24e702e9d2f17eea2"
     ),
 }
 

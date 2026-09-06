@@ -3909,6 +3909,7 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeInstruction"
   | "noritoEncodeInstructionBoxArchive"
   | "noritoEncodeContractManifestSignaturePayload"
+  | "noritoEncodeFeePaymentIntentArchive"
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
@@ -12535,6 +12536,10 @@ export function noritoDecodeInstructionBoxArchive(
 export function noritoEncodeContractManifestSignaturePayload(
   manifest: Record<string, unknown>,
 ): Buffer;
+/** Encode one exact compact-length `FeePaymentIntent` archive. */
+export function noritoEncodeFeePaymentIntentArchive(
+  intent: Readonly<NoritoFeePaymentIntent>,
+): Uint8Array;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
 ): Buffer;
