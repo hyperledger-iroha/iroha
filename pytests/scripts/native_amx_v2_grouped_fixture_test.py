@@ -362,7 +362,7 @@ def _validate_receipt_group(document: dict[str, Any]) -> None:
                 assert settlement[field] == "0"
             assert settlement["swap_metadata"] is None
             assert settlement["nexus_fee_receipts"] == []
-            assert settlement["native_amx_receipts"] == []
+            assert "native_amx_receipts" not in settlement
             for settlement_receipt in settlement_receipts:
                 assert settlement_receipt["source_id"] in source_ids
                 assert settlement_receipt["timestamp_ms"] == body[

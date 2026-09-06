@@ -19616,10 +19616,10 @@ enum ToriiNativeAmxWire {
         "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage"
     private static let proposalPreimageType =
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
-    private static let settlementType =
-        "iroha_data_model::block::consensus::LaneBlockCommitment"
-    private static let settlementHashDomain =
-        Data("iroha.nexus.lane-relay.settlement.v1".utf8)
+    private static let participantSettlementType =
+        "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+    private static let participantSettlementHashDomain =
+        Data("iroha.consensus.native-amx.participant-settlement.v1".utf8)
     private static let blsKeyAdmissionMessage =
         Data("native-amx:bls-normal-key-admission:v1".utf8)
     /// A valid compressed BLS-Normal signature used only to make the native
@@ -20130,18 +20130,18 @@ enum ToriiNativeAmxWire {
         ])
     }
 
-    static func settlementHash(_ settlement: ToriiLaneSettlementCommitment) -> String? {
+    static func participantSettlementHash(
+        _ settlement: ToriiNativeAmxParticipantSettlement
+    ) -> String? {
         guard settlement.swapMetadata == nil,
               settlement.nexusFeeReceipts.isEmpty,
-              settlement.nativeAmxReceipts.isEmpty,
               let laneIncarnation = hashBytes(settlement.laneIncarnation),
               let totalLocalAmount = quantity(settlement.totalLocalAmount),
               let totalXorDue = quantity(settlement.totalXorDue),
               let totalXorAfterHaircut = quantity(settlement.totalXorAfterHaircut),
               let totalXorVariance = quantity(settlement.totalXorVariance),
               let receipts = vector(settlement.receipts, encode: settlementReceipt),
-              let emptyNexusReceipts = vector([Data](), encode: { $0 }),
-              let emptyNativeReceipts = vector([Data](), encode: { $0 })
+              let emptyNexusReceipts = vector([Data](), encode: { $0 })
         else {
             return nil
         }
@@ -20158,11 +20158,10 @@ enum ToriiNativeAmxWire {
             Data([0]),
             receipts,
             emptyNexusReceipts,
-            emptyNativeReceipts,
         ])
-        var hashPreimage = littleEndian(UInt64(settlementHashDomain.count))
-        hashPreimage.append(settlementHashDomain)
-        hashPreimage.append(noritoFrame(typeName: settlementType, payload: payload))
+        var hashPreimage = littleEndian(UInt64(participantSettlementHashDomain.count))
+        hashPreimage.append(participantSettlementHashDomain)
+        hashPreimage.append(noritoFrame(typeName: participantSettlementType, payload: payload))
         return hashLiteral(hashPreimage)
     }
 }
@@ -20892,7 +20891,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
     public let laneId: UInt32
     public let dataspaceId: UInt64
     public let participantProposal: ToriiNativeAmxParticipantLaneBlockProposal
-    public let participantSettlement: ToriiLaneSettlementCommitment
+    public let participantSettlement: ToriiNativeAmxParticipantSettlement
     public let participantSettlementHash: String
     /// True when the current source entrypoint is absent from the control proposal.
     /// Full block admission must prove such a proposal is another transaction's
@@ -20929,7 +20928,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
             forKey: .participantProposal
         )
         participantSettlement = try container.decode(
-            ToriiLaneSettlementCommitment.self,
+            ToriiNativeAmxParticipantSettlement.self,
             forKey: .participantSettlement
         )
         participantSettlementHash = try ToriiNativeAmxWire.canonicalHash(
@@ -21003,7 +21002,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               coordinatorParticipantProposalMatches,
               participantSettlementHash == body.participantSettlementCommitment,
               participantSettlementHash
-                == ToriiNativeAmxWire.settlementHash(participantSettlement),
+                == ToriiNativeAmxWire.participantSettlementHash(participantSettlement),
               participantSettlement.blockHeight == body.participantLaneBlockHeight,
               participantSettlement.laneId == laneId,
               participantSettlement.dataspaceId == dataspaceId,
@@ -21018,8 +21017,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               Set(settlementSources).count == settlementSources.count,
               sourcePositions.count == 1,
               settlementIsZeroEffect,
-              participantSettlement.nexusFeeReceipts.isEmpty,
-              participantSettlement.nativeAmxReceipts.isEmpty
+              participantSettlement.nexusFeeReceipts.isEmpty
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .prepareQc,
@@ -21396,6 +21394,95 @@ public struct ToriiLaneSwapMetadata: Decodable, Sendable, Equatable {
         case liquidityProfile = "liquidity_profile"
         case twapLocalPerXor = "twap_local_per_xor"
         case volatilityClass = "volatility_class"
+    }
+}
+
+/// Exact finite settlement certified by a Native AMX participant committee.
+public struct ToriiNativeAmxParticipantSettlement: Decodable, Sendable, Equatable {
+    public let blockHeight: UInt64
+    public let laneId: UInt32
+    public let laneIncarnation: String
+    public let dataspaceId: UInt64
+    public let transactionCount: UInt64
+    public let totalLocalAmount: String
+    public let totalXorDue: String
+    public let totalXorAfterHaircut: String
+    public let totalXorVariance: String
+    public let swapMetadata: ToriiLaneSwapMetadata?
+    public let receipts: [ToriiLaneSettlementReceipt]
+    public let nexusFeeReceipts: [ToriiNexusFeeReceipt]
+
+    private enum CodingKeys: String, CodingKey {
+        case blockHeight = "block_height"
+        case laneId = "lane_id"
+        case laneIncarnation = "lane_incarnation"
+        case dataspaceId = "dataspace_id"
+        case transactionCount = "tx_count"
+        case totalLocalAmount = "total_local_amount"
+        case totalXorDue = "total_xor_due"
+        case totalXorAfterHaircut = "total_xor_after_haircut"
+        case totalXorVariance = "total_xor_variance"
+        case swapMetadata = "swap_metadata"
+        case receipts
+        case nexusFeeReceipts = "nexus_fee_receipts"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: [
+                "block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count",
+                "total_local_amount", "total_xor_due", "total_xor_after_haircut",
+                "total_xor_variance", "swap_metadata", "receipts", "nexus_fee_receipts",
+            ],
+            context: "native AMX participant settlement"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        blockHeight = try container.decode(UInt64.self, forKey: .blockHeight)
+        laneId = try container.decode(UInt32.self, forKey: .laneId)
+        laneIncarnation = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .laneIncarnation),
+            key: .laneIncarnation,
+            container: container,
+            field: "native AMX participant settlement lane_incarnation"
+        )
+        dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
+        transactionCount = try container.decode(UInt64.self, forKey: .transactionCount)
+        totalLocalAmount = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalLocalAmount),
+            field: "native AMX participant settlement total_local_amount"
+        )
+        totalXorDue = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorDue),
+            field: "native AMX participant settlement total_xor_due"
+        )
+        totalXorAfterHaircut = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorAfterHaircut),
+            field: "native AMX participant settlement total_xor_after_haircut"
+        )
+        totalXorVariance = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorVariance),
+            field: "native AMX participant settlement total_xor_variance"
+        )
+        guard container.contains(.swapMetadata) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.swapMetadata,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription:
+                        "native AMX participant settlement swap_metadata must be present, including when null."
+                )
+            )
+        }
+        swapMetadata = try container.decodeIfPresent(
+            ToriiLaneSwapMetadata.self,
+            forKey: .swapMetadata
+        )
+        receipts = try container.decode([ToriiLaneSettlementReceipt].self, forKey: .receipts)
+        nexusFeeReceipts = try container.decode(
+            [ToriiNexusFeeReceipt].self,
+            forKey: .nexusFeeReceipts
+        )
     }
 }
 

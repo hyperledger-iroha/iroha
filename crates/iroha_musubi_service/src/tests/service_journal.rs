@@ -1,5 +1,6 @@
 // Service and journal test body included from the parent module.
 use super::*;
+use iroha::config::Config;
 use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
     ChainId,
@@ -1282,19 +1283,21 @@ fn client() -> (Client, KeyPair) {
     )
     .expect("derive fixture key");
     let account = AccountId::new(key_pair.public_key().clone());
-    let client = Client {
+    let client = Client::new(Config {
         chain: ChainId::from("musubi-runtime-test"),
-        network_id: crate::client::test_network_id(),
-        torii_url: Url::parse("https://torii.example/").expect("Torii URL"),
+        network_id: test_network_id(0xA5),
+        account_chain_discriminant: 1,
+        torii_api_url: Url::parse("https://torii.example/").expect("Torii URL"),
         key_pair: key_pair.clone(),
-        transaction_ttl: Some(Duration::from_secs(10)),
+        transaction_ttl: Duration::from_secs(10),
         transaction_status_timeout: Duration::from_secs(5),
         torii_request_timeout: Duration::from_secs(5),
         account,
-        headers: std::collections::HashMap::default(),
-        operator_key_pair: None,
-        add_transaction_nonce: false,
-        alias_cache_policy: sorafs_manifest::alias_cache::AliasCachePolicy::new(
+        basic_auth: None,
+        transaction_add_nonce: false,
+        connect_queue_root: std::path::PathBuf::new(),
+        soracloud_http_witness_file: None,
+        sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy::new(
             Duration::from_secs(1),
             Duration::from_secs(1),
             Duration::from_secs(1),
@@ -1304,13 +1307,9 @@ fn client() -> (Client, KeyPair) {
             Duration::from_secs(1),
             Duration::from_secs(1),
         ),
-        default_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
-        rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
-        data_model_compatibility: Arc::new(Mutex::new(
-            crate::client::DataModelCompatibility::Unchecked,
-        )),
-        wire_format_preference: crate::client::WireFormatPreference::default(),
-    };
+        sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
+        sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
+    });
     (client, key_pair)
 }
 fn threshold_authorization_runtime(

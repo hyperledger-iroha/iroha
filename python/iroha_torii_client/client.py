@@ -5574,25 +5574,29 @@ class _SumeragiV2StatusParser:
         ]
 
     @classmethod
-    def _settlement(cls, value: Any, *, context: str) -> Dict[str, Any]:
+    def _settlement(
+        cls, value: Any, *, context: str, native_amx_participant: bool = False
+    ) -> Dict[str, Any]:
+        fields = {
+            "block_height",
+            "lane_id",
+            "lane_incarnation",
+            "dataspace_id",
+            "tx_count",
+            "total_local_amount",
+            "total_xor_due",
+            "total_xor_after_haircut",
+            "total_xor_variance",
+            "swap_metadata",
+            "receipts",
+            "nexus_fee_receipts",
+        }
+        if not native_amx_participant:
+            fields.add("native_amx_receipts")
         record = cls._exact_mapping(
             value,
             context,
-            {
-                "block_height",
-                "lane_id",
-                "lane_incarnation",
-                "dataspace_id",
-                "tx_count",
-                "total_local_amount",
-                "total_xor_due",
-                "total_xor_after_haircut",
-                "total_xor_variance",
-                "swap_metadata",
-                "receipts",
-                "nexus_fee_receipts",
-                "native_amx_receipts",
-            },
+            fields,
         )
         block_height = cls._unsigned(
             record.get("block_height"), f"{context}.block_height"
@@ -5703,19 +5707,21 @@ class _SumeragiV2StatusParser:
                 )
             )
         ]
-        native_amx_receipts = [
-            cls._native_amx_receipt(
-                item,
-                context=f"{context}.native_amx_receipts[{index}]",
-            )
-            for index, item in enumerate(
-                cls._array(
-                    record.get("native_amx_receipts"),
-                    f"{context}.native_amx_receipts",
-                    maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+        native_amx_receipts: List[Dict[str, Any]] = []
+        if not native_amx_participant:
+            native_amx_receipts = [
+                cls._native_amx_receipt(
+                    item,
+                    context=f"{context}.native_amx_receipts[{index}]",
                 )
-            )
-        ]
+                for index, item in enumerate(
+                    cls._array(
+                        record.get("native_amx_receipts"),
+                        f"{context}.native_amx_receipts",
+                        maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+                    )
+                )
+            ]
         if len({item["source_id"] for item in nexus_fee_receipts}) != len(
             nexus_fee_receipts
         ):
@@ -5761,7 +5767,7 @@ class _SumeragiV2StatusParser:
                 f"{context} native AMX receipts do not bind the exact ordered "
                 "source group"
             )
-        return {
+        settlement = {
             "block_height": block_height,
             "lane_id": lane_id,
             "lane_incarnation": lane_incarnation,
@@ -5781,8 +5787,10 @@ class _SumeragiV2StatusParser:
             "swap_metadata": swap_metadata,
             "receipts": receipts,
             "nexus_fee_receipts": nexus_fee_receipts,
-            "native_amx_receipts": native_amx_receipts,
         }
+        if not native_amx_participant:
+            settlement["native_amx_receipts"] = native_amx_receipts
+        return settlement
 
     @classmethod
     def _nexus_fee_schedule(cls, value: Any, *, context: str) -> Dict[str, Any]:
@@ -6412,17 +6420,17 @@ class _SumeragiV2StatusParser:
             record.get("participant_settlement"),
             f"{context}.participant_settlement",
         )
-        if settlement_value.get("native_amx_receipts") != []:
-            raise RuntimeError(f"{context}.participant_settlement must be terminal")
-        if settlement_value.get("nexus_fee_receipts") != []:
-            raise RuntimeError(f"{context}.participant_settlement cannot contain fee receipts")
         cls._array(
             settlement_value.get("receipts"),
             f"{context}.participant_settlement.receipts",
             minimum=1,
             maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
         )
-        settlement = cls._settlement(settlement_value, context=f"{context}.participant_settlement")
+        settlement = cls._settlement(
+            settlement_value,
+            context=f"{context}.participant_settlement",
+            native_amx_participant=True,
+        )
         settlement_hash = cls._nonzero_hash(
             record.get("participant_settlement_hash"),
             f"{context}.participant_settlement_hash",
@@ -6534,7 +6542,6 @@ class _SumeragiV2StatusParser:
                 for receipt in receipts
             )
             or settlement["nexus_fee_receipts"]
-            or settlement["native_amx_receipts"]
         ):
             raise RuntimeError(f"{context} participant settlement differs from its signed body")
         return {

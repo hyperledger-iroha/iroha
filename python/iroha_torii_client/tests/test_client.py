@@ -773,7 +773,6 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
                         },
                     ],
                     "nexus_fee_receipts": [],
-                    "native_amx_receipts": [],
                 },
                 "participant_settlement_hash": participant_settlement_hash,
                 "prepare_qc": qc("prepare"),

@@ -314,10 +314,10 @@ const SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE =
   "iroha_data_model::block::consensus::LaneBlockProposalPreimage";
 
 const SUMERAGI_NATIVE_SETTLEMENT_TYPE =
-  "iroha_data_model::block::consensus::LaneBlockCommitment";
+  "iroha_data_model::block::consensus::NativeAmxParticipantSettlement";
 
 const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
-  "iroha.nexus.lane-relay.settlement.v1",
+  "iroha.consensus.native-amx.participant-settlement.v1",
   "utf8",
 );
 
@@ -570,24 +570,137 @@ function encodeSumeragiNativeSettlementReceipt(receipt) {
   ]);
 }
 
+function parseSumeragiNativeParticipantSettlement(value, context) {
+  const record = assertExactSumeragiRecord(
+    value,
+    [
+      "block_height",
+      "lane_id",
+      "lane_incarnation",
+      "dataspace_id",
+      "tx_count",
+      "total_local_amount",
+      "total_xor_due",
+      "total_xor_after_haircut",
+      "total_xor_variance",
+      "swap_metadata",
+      "receipts",
+      "nexus_fee_receipts",
+    ],
+    context,
+  );
+  if (record.swap_metadata !== null) {
+    throw new TypeError(`${context}.swap_metadata must be null`);
+  }
+  const receipts = Object.freeze(
+    assertSumeragiArrayBound(
+      record.receipts,
+      MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+      `${context}.receipts`,
+      1,
+    ).map((receipt, index) => {
+      const receiptContext = `${context}.receipts[${index}]`;
+      const receiptRecord = assertExactSumeragiRecord(
+        receipt,
+        [
+          "source_id",
+          "local_amount",
+          "xor_due",
+          "xor_after_haircut",
+          "xor_variance",
+          "timestamp_ms",
+        ],
+        receiptContext,
+      );
+      return Object.freeze({
+        source_id: parseSumeragiByte32(
+          receiptRecord.source_id,
+          `${receiptContext}.source_id`,
+        ),
+        local_amount: requireCanonicalQuantity(
+          receiptRecord.local_amount,
+          `${receiptContext}.local_amount`,
+        ),
+        xor_due: requireCanonicalQuantity(
+          receiptRecord.xor_due,
+          `${receiptContext}.xor_due`,
+        ),
+        xor_after_haircut: requireCanonicalQuantity(
+          receiptRecord.xor_after_haircut,
+          `${receiptContext}.xor_after_haircut`,
+        ),
+        xor_variance: requireCanonicalQuantity(
+          receiptRecord.xor_variance,
+          `${receiptContext}.xor_variance`,
+        ),
+        timestamp_ms: parseSumeragiUnsigned(
+          receiptRecord.timestamp_ms,
+          `${receiptContext}.timestamp_ms`,
+        ),
+      });
+    }),
+  );
+  const nexusFeeReceipts = Object.freeze(
+    assertSumeragiArrayBound(
+      record.nexus_fee_receipts,
+      0,
+      `${context}.nexus_fee_receipts`,
+    ),
+  );
+  return Object.freeze({
+    block_height: parseSumeragiUnsigned(record.block_height, `${context}.block_height`),
+    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
+      max: 0xffffffff,
+    }),
+    lane_incarnation: parseSumeragiNonzeroHash(
+      record.lane_incarnation,
+      `${context}.lane_incarnation`,
+    ),
+    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
+    tx_count: parseSumeragiUnsigned(record.tx_count, `${context}.tx_count`),
+    total_local_amount: requireCanonicalQuantity(
+      record.total_local_amount,
+      `${context}.total_local_amount`,
+    ),
+    total_xor_due: requireCanonicalQuantity(
+      record.total_xor_due,
+      `${context}.total_xor_due`,
+    ),
+    total_xor_after_haircut: requireCanonicalQuantity(
+      record.total_xor_after_haircut,
+      `${context}.total_xor_after_haircut`,
+    ),
+    total_xor_variance: requireCanonicalQuantity(
+      record.total_xor_variance,
+      `${context}.total_xor_variance`,
+    ),
+    swap_metadata: null,
+    receipts,
+    nexus_fee_receipts: nexusFeeReceipts,
+  });
+}
+
 function computeSumeragiNativeParticipantSettlementHash(settlement) {
+  const canonicalSettlement = parseSumeragiNativeParticipantSettlement(
+    settlement,
+    "Native AMX participant settlement",
+  );
   const payload = encodeSumeragiNativeStruct([
-    u64ToLittleEndianBuffer(settlement.block_height),
-    encodeSumeragiNativeLaneId(settlement.lane_id),
-    encodeSumeragiNativeHash(settlement.lane_incarnation),
-    encodeSumeragiNativeDataspaceId(settlement.dataspace_id),
-    u64ToLittleEndianBuffer(settlement.tx_count),
-    encodeSumeragiNativeQuantity(settlement.total_local_amount),
-    encodeSumeragiNativeQuantity(settlement.total_xor_due),
-    encodeSumeragiNativeQuantity(settlement.total_xor_after_haircut),
-    encodeSumeragiNativeQuantity(settlement.total_xor_variance),
+    u64ToLittleEndianBuffer(canonicalSettlement.block_height),
+    encodeSumeragiNativeLaneId(canonicalSettlement.lane_id),
+    encodeSumeragiNativeHash(canonicalSettlement.lane_incarnation),
+    encodeSumeragiNativeDataspaceId(canonicalSettlement.dataspace_id),
+    u64ToLittleEndianBuffer(canonicalSettlement.tx_count),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_local_amount),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_due),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_after_haircut),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_variance),
     Buffer.from([0]),
     encodeNoritoVec(
-      settlement.receipts,
+      canonicalSettlement.receipts,
       encodeSumeragiNativeSettlementReceipt,
       true,
     ),
-    encodeNoritoVec([], (value) => value, true),
     encodeNoritoVec([], (value) => value, true),
   ]);
   const framedSettlement = frameNoritoPayload(
@@ -946,29 +1059,10 @@ function parseSumeragiNativeAmxLeg(value, context) {
     record.participant_proposal,
     `${context}.participant_proposal`,
   );
-  const settlementWire = ensureRecord(
+  const participantSettlement = parseSumeragiNativeParticipantSettlement(
     record.participant_settlement,
     `${context}.participant_settlement`,
   );
-  if (
-    !Array.isArray(settlementWire.native_amx_receipts) ||
-    settlementWire.native_amx_receipts.length !== 0
-  ) {
-    throw new TypeError(`${context}.participant_settlement must be terminal`);
-  }
-  if (
-    !Array.isArray(settlementWire.nexus_fee_receipts) ||
-    settlementWire.nexus_fee_receipts.length !== 0
-  ) {
-    throw new TypeError(`${context}.participant_settlement cannot contain fee receipts`);
-  }
-  assertSumeragiArrayBound(
-    settlementWire.receipts,
-    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-    `${context}.participant_settlement.receipts`,
-    1,
-  );
-  const participantSettlement = parseLaneSettlementCommitments([settlementWire])[0];
   const participantSettlementHash = parseSumeragiNonzeroHash(
     record.participant_settlement_hash,
     `${context}.participant_settlement_hash`,
@@ -1074,8 +1168,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
         receipt.xor_variance !== "0" ||
         receipt.timestamp_ms !== body.authority_context_height,
     ) ||
-    participantSettlement.nexus_fee_receipts.length !== 0 ||
-    participantSettlement.native_amx_receipts.length !== 0
+    participantSettlement.nexus_fee_receipts.length !== 0
   ) {
     throw new TypeError(`${context} participant settlement differs from its signed body`);
   }

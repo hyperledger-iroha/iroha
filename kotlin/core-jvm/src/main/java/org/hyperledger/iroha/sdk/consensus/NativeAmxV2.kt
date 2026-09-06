@@ -58,9 +58,10 @@ object NativeAmxV2 {
     private const val PROPOSAL_PREIMAGE_TYPE =
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
     private const val SETTLEMENT_TYPE =
-        "iroha_data_model::block::consensus::LaneBlockCommitment"
+        "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
     private val SETTLEMENT_HASH_DOMAIN =
-        "iroha.nexus.lane-relay.settlement.v1".toByteArray(StandardCharsets.UTF_8)
+        "iroha.consensus.native-amx.participant-settlement.v1"
+            .toByteArray(StandardCharsets.UTF_8)
 
     private class BlsNormalPeerId(
         val literal: String,
@@ -1213,15 +1214,12 @@ object NativeAmxV2 {
     }
 
     private fun parseParticipantSettlement(value: Any?, path: String): ParticipantSettlement {
-        val record = exactObject(value, GROUP_FIELDS, path)
+        val record = exactObject(value, PARTICIPANT_SETTLEMENT_FIELDS, path)
         require(record["swap_metadata"] == null) {
             "$path.swap_metadata must be null for control-only participant settlement"
         }
         require(array(record["nexus_fee_receipts"], "$path.nexus_fee_receipts").isEmpty()) {
             "$path.nexus_fee_receipts must be empty"
-        }
-        require(array(record["native_amx_receipts"], "$path.native_amx_receipts").isEmpty()) {
-            "$path.native_amx_receipts must be empty"
         }
         val receiptValues = array(record["receipts"], "$path.receipts")
         require(receiptValues.size in 1..MAX_GROUP_SOURCES) {
@@ -1607,7 +1605,6 @@ object NativeAmxV2 {
                 byteArrayOf(0),
                 vector(settlement.receipts, ::settlementReceipt),
                 vector(emptyList<ByteArray>()) { it },
-                vector(emptyList<ByteArray>()) { it },
             ),
         )
         val frame = noritoFrame(SETTLEMENT_TYPE, payload)
@@ -1798,6 +1795,7 @@ object NativeAmxV2 {
         "nexus_fee_receipts",
         "native_amx_receipts",
     )
+    private val PARTICIPANT_SETTLEMENT_FIELDS = GROUP_FIELDS - "native_amx_receipts"
     private val RECEIPT_FIELDS = setOf(
         "version",
         "source_id",

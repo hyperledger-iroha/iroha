@@ -93,7 +93,7 @@ thiserror = { workspace = true }
 displaydoc = { workspace = true }
 derive_more = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
 futures-util = "0.3.31"

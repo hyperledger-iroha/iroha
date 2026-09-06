@@ -1,8 +1,8 @@
 """Canonical Native AMX V2 hashing and participant-identity helpers.
 
 The routines in this module intentionally mirror the Rust data-model encodings
-used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and terminal lane
-settlement commitments.  They are private SDK plumbing, not a second wire
+used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and Native AMX
+participant settlements. They are private SDK plumbing, not a second wire
 format.
 """
 
@@ -36,8 +36,10 @@ _DESCRIPTOR_PREIMAGE_TYPE = (
 _PROPOSAL_PREIMAGE_TYPE = (
     "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
 )
-_SETTLEMENT_TYPE = "iroha_data_model::block::consensus::LaneBlockCommitment"
-_SETTLEMENT_HASH_DOMAIN = b"iroha.nexus.lane-relay.settlement.v1"
+_SETTLEMENT_TYPE = (
+    "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+)
+_SETTLEMENT_HASH_DOMAIN = b"iroha.consensus.native-amx.participant-settlement.v1"
 _APPLICATION_MANIFEST_LEAF_DOMAIN = b"iroha:merkle:leaf:v1\0"
 
 
@@ -418,14 +420,14 @@ def _settlement_receipt(receipt: Mapping[str, Any]) -> bytes:
 def compute_native_amx_participant_settlement_hash(
     settlement: Mapping[str, Any],
 ) -> str:
-    """Hash a terminal participant ``LaneBlockCommitment`` exactly as Rust."""
+    """Hash a ``NativeAmxParticipantSettlement`` exactly as Rust."""
 
     if settlement.get("swap_metadata") is not None:
         raise ValueError("Native AMX participant settlement must not contain swap metadata")
     if settlement.get("nexus_fee_receipts"):
         raise ValueError("Native AMX participant settlement must not contain fee receipts")
-    if settlement.get("native_amx_receipts"):
-        raise ValueError("Native AMX participant settlement must be terminal")
+    if "native_amx_receipts" in settlement:
+        raise ValueError("Native AMX participant settlement cannot contain Native AMX receipts")
     payload = _struct(
         (
             _u64(settlement["block_height"]),
@@ -439,7 +441,6 @@ def compute_native_amx_participant_settlement_hash(
             _quantity(settlement["total_xor_variance"]),
             b"\x00",
             _vector(settlement["receipts"], _settlement_receipt),
-            _vector((), lambda value: value),
             _vector((), lambda value: value),
         )
     )

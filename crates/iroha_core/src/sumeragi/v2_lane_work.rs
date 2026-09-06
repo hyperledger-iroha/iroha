@@ -140,7 +140,7 @@ use iroha_data_model::{
     block::{
         AutonomousLanePayloadEnvelopeV1, BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
+            CertPhase, LaneBlockCertificateV1, LaneBlockDescriptorV1,
             LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
             LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxParticipantSettlement,
@@ -27117,7 +27117,8 @@ pub(super) mod tests {
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment =
-            compute_native_amx_participant_settlement_hash(&participant_settlement);
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement hash");
         let mut participant_proposal = proposal.clone();
         participant_proposal.payload_block_hint = None;
         NativeAmxAttestationRequestV2 {
@@ -27234,7 +27235,8 @@ pub(super) mod tests {
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source distinct-participant settlement is valid");
         body.participant_settlement_commitment =
-            compute_native_amx_participant_settlement_hash(&participant_settlement);
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement hash");
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: plan.legs(),

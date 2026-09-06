@@ -796,7 +796,7 @@ mod tests {
     }
     #[test]
     fn canonical_value_serializer_covers_the_full_kotodama_boundary_depth() {
-        let levels = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+        let levels = norito::core::MAX_VALUE_NESTING_DEPTH - 1;
         let mut nested = norito::json::Value::from(7_u64);
         for _ in 0..levels {
             nested = norito::json::Value::Array(vec![nested]);
@@ -837,7 +837,7 @@ mod tests {
             .name("iroha-json-iterative-boundary".into())
             .stack_size(128 * 1024)
             .spawn(|| -> Result<(), String> {
-                let wrappers = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+                let wrappers = norito::core::MAX_VALUE_NESTING_DEPTH - 1;
                 let at_255 = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
                 let validated =
                     Json::from_str_norito(&at_255).map_err(|error| error.to_string())?;

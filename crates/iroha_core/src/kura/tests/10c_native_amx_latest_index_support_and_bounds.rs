@@ -188,7 +188,8 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
             }],
             nexus_fee_receipts: Vec::new(),
         };
-        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+            .expect("fixture participant settlement hash");
         let leaf = NativeAmxApplicationManifestLeafV1 {
             version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             lane_id: proposal.descriptor.lane_id,
@@ -496,7 +497,8 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
             }],
             nexus_fee_receipts: Vec::new(),
         };
-        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+            .expect("fixture participant settlement hash");
         let leaf = NativeAmxApplicationManifestLeafV1 {
             version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             lane_id: proposal.descriptor.lane_id,

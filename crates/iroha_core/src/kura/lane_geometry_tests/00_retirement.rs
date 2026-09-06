@@ -2641,7 +2641,8 @@ fn geometry_native_amx_receipt(
         .expect("single-source test fixture settlement is valid");
     let participant_settlement_hash = iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
         &participant_settlement,
-    );
+    )
+    .expect("fixture participant settlement hash");
     let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
         .expect("geometry retirement participant PoP");
     let qc = |body| {

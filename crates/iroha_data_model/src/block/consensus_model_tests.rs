@@ -1633,10 +1633,18 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
     let decoded = norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded)
         .expect("decode participant settlement");
     assert_eq!(decoded, settlement);
-    let json = norito::json::to_value(&settlement).expect("serialize participant settlement JSON");
+    let mut json =
+        norito::json::to_value(&settlement).expect("serialize participant settlement JSON");
     assert!(
         json.get("native_amx_receipts").is_none(),
         "the dedicated participant settlement wire type cannot nest Native AMX receipts"
+    );
+    json.as_object_mut()
+        .expect("participant settlement JSON object")
+        .insert("native_amx_receipts".to_owned(), norito::json!([]));
+    assert!(
+        norito::json::from_value::<NativeAmxParticipantSettlement>(json).is_err(),
+        "the participant settlement decoder must reject a nested Native AMX receipt field"
     );
 }
 #[test]

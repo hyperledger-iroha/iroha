@@ -7,7 +7,7 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::{
-            ExecWitness, LaneBlockCommitment, LaneBlockProposalV1,
+            ExecWitness, LaneBlockProposalV1,
             NativeAmxParticipantSettlement, NativeAmxReceipt,
             compute_native_amx_participant_settlement_hash,
         },
@@ -893,7 +893,8 @@ mod tests {
             receipts,
             nexus_fee_receipts: Vec::new(),
         };
-        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+            .expect("fixture participant settlement hash");
         ManifestParticipantFixture {
             proposal,
             settlement,

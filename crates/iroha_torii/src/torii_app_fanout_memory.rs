@@ -428,7 +428,7 @@ impl ToriiAppFanoutMemoryBudget {
                 0,
             ));
         }
-        let depth = max_nesting_depth.min(norito::core::MAX_OWNED_VALUE_DECODE_DEPTH);
+        let depth = max_nesting_depth.min(norito::core::MAX_VALUE_NESTING_DEPTH);
         Ok(ToriiFanoutNoritoDecodePlan {
             limits: norito::DecodeLimits::new(
                 max_elements,

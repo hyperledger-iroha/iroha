@@ -1283,7 +1283,6 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
             },
           ],
           nexus_fee_receipts: [],
-          native_amx_receipts: [],
         },
         participant_settlement_hash: participantSettlementHash,
         prepare_qc: qc("prepare"),

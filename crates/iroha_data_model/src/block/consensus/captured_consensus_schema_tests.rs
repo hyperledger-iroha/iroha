@@ -107,6 +107,9 @@ fn captured_codec_schema_identities() {
     crate::captured_schema_tests::assert_bidirectional::<super::NativeAmxLegRecordV2>(
         "iroha_data_model::block::consensus::NativeAmxLegRecordV2",
     );
+    crate::captured_schema_tests::assert_bidirectional::<super::NativeAmxParticipantSettlement>(
+        "iroha_data_model::block::consensus::NativeAmxParticipantSettlement",
+    );
     crate::captured_schema_tests::assert_bidirectional::<super::NativeAmxReceipt>(
         "iroha_data_model::block::consensus::NativeAmxReceipt",
     );

@@ -1966,9 +1966,8 @@ pub fn compute_native_amx_participant_settlement_hash(
     settlement: &NativeAmxParticipantSettlement,
 ) -> Result<HashOf<NativeAmxParticipantSettlement>, norito::Error> {
     let bytes = norito::encode_canonical(settlement)?;
-    let domain_len = u64::try_from(NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1.len())
-        .expect("protocol-defined Native AMX digest domain fits in u64")
-        .to_le_bytes();
+    let domain_len =
+        (NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1.len() as u64).to_le_bytes();
     Ok(HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
         &domain_len,
         NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1,
@@ -4183,6 +4182,7 @@ impl_decode_from_slice_via_codec!(NativeAmxPhase);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV2);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV2);
 impl_decode_from_slice_via_codec!(NativeAmxLegRecordV2);
+impl_decode_from_slice_via_codec!(NativeAmxParticipantSettlement);
 impl_decode_from_slice_via_codec!(NativeAmxReceipt);
 // Provide nicer `Debug` rendering for validator indices in test snapshots.
 impl fmt::Display for CertPhase {

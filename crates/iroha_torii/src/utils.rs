@@ -1803,7 +1803,7 @@ pub mod extractors {
             body_bytes,
             elements,
             body_bytes.saturating_mul(2),
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
         )
     }
     fn signed_query_json_rejection(resource_limit: bool) -> Response {
@@ -2603,7 +2603,7 @@ pub mod extractors {
                 body.len(),
                 body.len(),
                 body.len() * 2,
-                norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                norito::core::MAX_VALUE_NESTING_DEPTH,
             );
             let exact = VersionedIngressLimits {
                 max_body_bytes: body.len(),

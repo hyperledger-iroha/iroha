@@ -202,7 +202,8 @@ fn native_amx_request_respects_the_configured_source_bound() {
     request.body.participant_settlement_commitment =
         iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
             &request.participant_settlement,
-        );
+        )
+        .expect("fixture participant settlement hash");
     assert!(request.validate_plan_binding().is_ok());
     assert!(!adapter.native_request_matches_context(&request, request.body.round.view));
 }

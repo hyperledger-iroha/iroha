@@ -1270,7 +1270,8 @@
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment =
-            compute_native_amx_participant_settlement_hash(&participant_settlement);
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement hash");
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: routing_plan.legs(),
@@ -1369,7 +1370,8 @@
             .body
             .participant_settlement_commitment = compute_native_amx_participant_settlement_hash(
             &coordinator_participates.participant_settlement,
-        );
+        )
+        .expect("fixture participant settlement hash");
         assert_eq!(
             coordinator_participates.validate_plan_binding(),
             Ok(()),
@@ -1401,7 +1403,8 @@
         stale_same_route.body.participant_settlement_commitment =
             compute_native_amx_participant_settlement_hash(
                 &stale_same_route.participant_settlement,
-            );
+            )
+            .expect("fixture participant settlement hash");
         assert_eq!(
             stale_same_route.validate_plan_binding(),
             Err(NativeAmxRequestError::ParticipantProposalMismatch),

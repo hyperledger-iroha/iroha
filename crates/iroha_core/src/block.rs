@@ -28628,7 +28628,8 @@ mod tests {
                     .computed_grouped_participant_settlement(&[prepare_qc.body.source_id])
                     .expect("single-source test fixture settlement is valid");
                 let participant_settlement_hash =
-                    compute_native_amx_participant_settlement_hash(&participant_settlement);
+                    compute_native_amx_participant_settlement_hash(&participant_settlement)
+                        .expect("fixture participant settlement hash");
                 NativeAmxLegRecordV2 {
                     lane_id: leg.route.lane_id,
                     dataspace_id: leg.route.dataspace_id,
@@ -28988,7 +28989,8 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
         };
         let participant_settlement_hash =
-            compute_native_amx_participant_settlement_hash(&participant_settlement);
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement hash");
         for receipt in [&mut first_receipt, &mut second_receipt] {
             let leg = receipt
                 .legs
@@ -29071,7 +29073,8 @@ mod tests {
         coordinator_leg.participant_settlement_hash =
             compute_native_amx_participant_settlement_hash(
                 &coordinator_leg.participant_settlement,
-            );
+            )
+            .expect("fixture participant settlement hash");
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,
@@ -29696,7 +29699,8 @@ mod tests {
         stale_leg.participant_settlement.lane_incarnation = stale_incarnation;
         stale_leg.participant_settlement_hash = compute_native_amx_participant_settlement_hash(
             &stale_leg.participant_settlement,
-        );
+        )
+        .expect("fixture participant settlement hash");
         for body in [
             &mut stale_leg.prepare_qc.body,
             &mut stale_leg.commit_qc.body,
@@ -29837,7 +29841,8 @@ mod tests {
         unexpected_leg.participant_settlement_hash =
             compute_native_amx_participant_settlement_hash(
                 &unexpected_leg.participant_settlement,
-            );
+            )
+            .expect("fixture participant settlement hash");
         for body in [
             &mut unexpected_leg.prepare_qc.body,
             &mut unexpected_leg.commit_qc.body,
