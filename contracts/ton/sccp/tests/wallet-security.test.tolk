@@ -536,7 +536,7 @@ get fun `test ordinary Jetton transfer carries only its funded inbound value`() 
         owner.address,
         null,
         0,
-        PayloadInline { payload: beginCell().endCell().beginParse() },
+        PayloadInline { value: beginCell().endCell().beginParse() },
         { value: sccpWalletStorageReserve() + ton("2") },
     );
     expect(transfer).toHaveSuccessfulTx<AskToTransfer>({ to: sourceWallet.address });

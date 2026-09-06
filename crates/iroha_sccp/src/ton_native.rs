@@ -8,6 +8,8 @@
 //! opens the finalized shard descriptor, and finally parses the concrete
 //! account transaction and external-out message. No caller-provided event
 //! fields are trusted independently of authenticated TON cells.
+//! Native TL-B constructors are retained, and shard prefixes are converted to
+//! terminated shard ids only after decoding their exact wire representation.
 
 use super::{
     H256, SccpPayloadV1, canonical_sccp_payload_bytes, payload_hash, prefixed_blake2b,
@@ -5653,7 +5655,7 @@ mod tests {
         for _ in 0..8 {
             info.bit(false);
         }
-        info.uint(0, 8); // flags
+        info.uint(1, 8); // gen_software is present
         info.uint(u64::from(previous.seqno + 1), 32);
         info.uint(0, 32); // vertical seqno
         info.uint(0, 2); // ShardIdent constructor
@@ -5667,6 +5669,9 @@ mod tests {
         info.uint(u64::from(active.catchain_seqno), 32);
         info.uint(0, 32); // minimum referenced masterchain seqno
         info.uint(0, 32); // previous key-block seqno
+        info.uint(u64::from(TON_GLOBAL_VERSION_CONSTRUCTOR), 8);
+        info.uint(12, 32); // global version
+        info.uint(0, 64); // capabilities
 
         let mut previous_ref = TestBits::default();
         previous_ref.uint(1, 64); // end logical time
@@ -5829,6 +5834,133 @@ mod tests {
                 shard_block_proof_boc: vec![0x21; 7],
                 shard_state_proof_boc: vec![0x22; 11],
             },
+        }
+    }
+
+    #[test]
+    fn shard_ident_decodes_native_prefix_without_block_id_terminator() {
+        // Wire vectors follow TON ShardIdent::pack: shard & (shard - 1),
+        // https://github.com/ton-blockchain/ton/blob/master/crypto/block/block-parse.cpp.
+        let parse = |prefix_bits: u8, workchain: i32, prefix: u64| {
+            let mut wire = vec![prefix_bits]; // $00 followed by six prefix-length bits
+            wire.extend_from_slice(&workchain.to_be_bytes());
+            wire.extend_from_slice(&prefix.to_be_bytes());
+            let cell = ordinary_cell(wire, Vec::new());
+            ton_read_shard_ident(&mut TonBitReader::new(&cell).expect("wire cell"))
+        };
+        assert_eq!(parse(0, -1, 0), Some((-1, 0x8000_0000_0000_0000)));
+        assert_eq!(parse(0, 0, 0), Some((0, 0x8000_0000_0000_0000)));
+        assert_eq!(parse(1, 0, 0), Some((0, 0x4000_0000_0000_0000)));
+        assert_eq!(
+            parse(1, 0, 0x8000_0000_0000_0000),
+            Some((0, 0xc000_0000_0000_0000))
+        );
+        assert_eq!(parse(60, 0, 0x10), Some((0, 0x18)));
+        for (bits, prefix) in [(0, 1), (0, 1 << 63), (1, 1 << 62), (60, 8), (61, 0)] {
+            assert_eq!(parse(bits, 0, prefix), None);
+        }
+    }
+
+    #[test]
+    fn block_extra_requires_native_implicit_constructor() {
+        // block_extra's implicit TL-B CRC32 tag is 0x4a33f6fd. Keep these
+        // literal bytes independent of the parser constant and fixture helper.
+        let mut extra = vec![0x4a, 0x33, 0xf6, 0xfd];
+        extra.extend_from_slice(&[0; 64]);
+        extra.push(0xc0); // custom present, then the cell top-up bit
+        let mut custom = TestBits::default();
+        custom.uint(0xcca5, 16);
+        custom.bit(false); // not a key block
+        custom.bit(false); // empty ShardHashes
+        custom.bit(false); // empty ShardFees
+        custom.uint(0, 10); // two empty CurrencyCollections
+        let boc = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                TonBocCell {
+                    descriptor: 4,
+                    data_descriptor: 137,
+                    data: extra,
+                    refs: vec![1, 1, 1, 2],
+                    exotic: false,
+                },
+                ordinary_cell(Vec::new(), Vec::new()),
+                custom.cell(vec![1]),
+            ],
+        };
+        let parsed = ton_parse_masterchain_extra(&boc, 0).expect("native BlockExtra");
+        assert!(parsed.shard_hashes_root.is_none());
+        assert!(parsed.config_dictionary_root.is_none());
+        assert_eq!(ton_parse_block_extra_account_blocks(&boc, 0), Some(1));
+        for omit in [false, true] {
+            let mut malformed = boc.clone();
+            if omit {
+                malformed.cells[0].data.drain(..4);
+                malformed.cells[0].data_descriptor -= 8;
+            } else {
+                malformed.cells[0].data[0] ^= 1;
+            }
+            assert!(ton_parse_masterchain_extra(&malformed, 0).is_none());
+            assert_eq!(ton_parse_block_extra_account_blocks(&malformed, 0), None);
+        }
+    }
+
+    #[test]
+    fn block_info_requires_capabilities_constructor_when_software_is_present() {
+        let proof = work_estimate_fixture();
+        let (_, bytes, _, _) = masterchain_continuation_fixture(
+            proof.finality.anchor.checkpoint,
+            &proof.finality.anchor.active_validator_set,
+        );
+        let boc = parse_ton_boc(&bytes).expect("block fixture");
+        let expected = ton_parse_block_info(&boc, 1).expect("native software extension");
+        let software_offset = boc.cells[1].data.len() - 13;
+        assert_eq!(boc.cells[1].data[9], 1);
+        assert_eq!(boc.cells[1].data[software_offset], 0xc4);
+
+        let mut absent = boc.clone();
+        absent.cells[1].data[9] = 0;
+        absent.cells[1].data.truncate(software_offset);
+        absent.cells[1].data_descriptor -= 26;
+        assert_eq!(ton_parse_block_info(&absent, 1), Some(expected));
+        for omit in [false, true] {
+            let mut malformed = boc.clone();
+            if omit {
+                malformed.cells[1].data.remove(software_offset);
+                malformed.cells[1].data_descriptor -= 2;
+            } else {
+                malformed.cells[1].data[software_offset] ^= 1;
+            }
+            assert_eq!(ton_parse_block_info(&malformed, 1), None);
+        }
+    }
+
+    #[test]
+    fn shard_descriptor_rejects_unregistered_nonzero_shard_block() {
+        let expected = TonBlockIdExtV1 {
+            workchain: 0,
+            shard: 0x8000_0000_0000_0000,
+            seqno: 17,
+            root_hash: [0x71; 32],
+            file_hash: [0x72; 32],
+        };
+        for constructor in [0x0a, 0x0b] {
+            for registered_seqno in [0, 1, 16] {
+                let mut bits = TestBits::default();
+                bits.uint(constructor, 4);
+                bits.uint(u64::from(expected.seqno), 32);
+                bits.uint(registered_seqno, 32);
+                bits.uint(42, 64);
+                bits.uint(43, 64);
+                bits.bytes(&expected.root_hash);
+                bits.bytes(&expected.file_hash);
+                let cell = bits.cell(Vec::new());
+                let mut reader = TonBitReader::new(&cell).expect("shard descriptor cell");
+                assert_eq!(
+                    ton_parse_shard_descriptor(&mut reader, expected.workchain, expected.shard),
+                    (registered_seqno != 0).then_some((expected, registered_seqno as u32))
+                );
+            }
         }
     }
 

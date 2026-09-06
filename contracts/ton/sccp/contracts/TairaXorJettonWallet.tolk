@@ -88,7 +88,9 @@ fun sendInternalTransfer(
             storage.tail.load().routeConfigurationHash,
             storage.tail.load().maxWrappedSupply,
         ),
-        value: sccpMasterBurnMinimum(),
+        // Mode 64 adds the remaining inbound value. An explicit value here
+        // would also need funds from the pre-message balance that is reserved.
+        value: 0,
         body: InternalTransferStep {
             queryId,
             jettonAmount: amount,

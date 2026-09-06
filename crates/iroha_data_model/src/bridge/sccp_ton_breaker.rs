@@ -543,6 +543,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn account_readback_preserves_authenticated_transaction_coordinates() {
+        let account = SccpTonAccountStateReadbackV1 {
+            address: SccpTonAddressV1 { workchain: 0, account_id: [1; 32] },
+            shard_block: SccpTonBlockIdExtV1 {
+                workchain: 0,
+                shard: SCCP_TON_MASTERCHAIN_SHARD_V1,
+                seqno: 7,
+                root_hash: [2; 32],
+                file_hash: [3; 32],
+            },
+            registered_masterchain_seqno: 8,
+            shard_state_hash: [4; 32],
+            account_state_hash: [5; 32],
+            code_hash: [6; 32],
+            data_hash: [7; 32],
+            last_transaction_hash: [8; 32],
+            last_transaction_lt: u64::MAX - 1,
+            storage_last_transaction_lt: u64::MAX,
+        };
+        assert!(account.is_well_formed(8));
+        let encoded = norito::to_bytes(&account).expect("encode account readback");
+        assert_eq!(norito::decode_from_bytes::<SccpTonAccountStateReadbackV1>(&encoded).unwrap(), account);
+        #[cfg(feature = "json")]
+        {
+            let encoded = norito::json::to_json(&account).unwrap();
+            assert_eq!(norito::json::from_str::<SccpTonAccountStateReadbackV1>(&encoded).unwrap(), account);
+        }
+        let mut invalid = account;
+        invalid.storage_last_transaction_lt = invalid.last_transaction_lt;
+        assert!(!invalid.is_well_formed(8));
+        invalid.last_transaction_lt = 0;
+        assert!(!invalid.is_well_formed(8));
+        invalid.storage_last_transaction_lt = 0;
+        assert!(invalid.is_well_formed(8));
+        invalid.registered_masterchain_seqno = 0;
+        assert!(!invalid.is_well_formed(8));
+    }
+
+    #[test]
     fn freshness_uses_checked_fixed_time_window() {
         let ton = 1_000_000;
         assert!(observation_is_fresh_at(ton, ton));
