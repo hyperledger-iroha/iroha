@@ -8,8 +8,6 @@ pub mod config;
 pub mod da;
 pub mod http;
 mod http_default;
-pub mod musubi_archive_fetch;
-pub mod musubi_runtime;
 pub mod nexus;
 pub mod nexus_app;
 pub mod privacy_issuance;

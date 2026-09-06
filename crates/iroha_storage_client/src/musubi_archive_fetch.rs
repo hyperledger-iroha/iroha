@@ -17,11 +17,11 @@ use std::{
 };
 mod bounded_stream;
 mod json_preflight;
-use crate::{
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use iroha::{
     client::Client,
     config::{MusubiFetchConfig, MusubiFetchProviderGatewayConfig},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -1113,7 +1113,7 @@ fn operator_request_headers(
     let nonce = random_nonce()?;
     let message = Client::operator_network_request_message(
         network_id,
-        &crate::http::Method::POST,
+        &iroha::http::Method::POST,
         url,
         body,
         timestamp_ms,
@@ -1127,9 +1127,9 @@ fn operator_request_headers(
         .public_key()
         .try_to_multihash_string()
         .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
-    let timestamp_ms = crate::client::canonical_request_timestamp_header_value(timestamp_ms)
+    let timestamp_ms = iroha::client::canonical_request_timestamp_header_value(timestamp_ms)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
-    let signature_b64 = crate::client::canonical_request_signature_header_value(&signature)
+    let signature_b64 = iroha::client::canonical_request_signature_header_value(&signature)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
     Ok(OperatorRequestHeadersV1 {
         public_key,
@@ -2130,7 +2130,7 @@ mod tests {
             .expect("checked operator signature payload");
         let exact_message = Client::operator_network_request_message(
             &network_id,
-            &crate::http::Method::POST,
+            &iroha::http::Method::POST,
             &url,
             body,
             timestamp_ms,
@@ -2150,7 +2150,7 @@ mod tests {
         for altered_message in [
             Client::operator_network_request_message(
                 &other_network,
-                &crate::http::Method::POST,
+                &iroha::http::Method::POST,
                 &url,
                 body,
                 timestamp_ms,
@@ -2159,7 +2159,7 @@ mod tests {
             .expect("bounded foreign-network operator message"),
             Client::operator_network_request_message(
                 &network_id,
-                &crate::http::Method::POST,
+                &iroha::http::Method::POST,
                 &other_path,
                 body,
                 timestamp_ms,
@@ -2168,7 +2168,7 @@ mod tests {
             .expect("bounded altered-path operator message"),
             Client::operator_network_request_message(
                 &network_id,
-                &crate::http::Method::POST,
+                &iroha::http::Method::POST,
                 &url,
                 br#"{"manifest_id_hex":"22"}"#,
                 timestamp_ms,
@@ -2177,7 +2177,7 @@ mod tests {
             .expect("bounded altered-body operator message"),
             Client::operator_network_request_message(
                 &network_id,
-                &crate::http::Method::POST,
+                &iroha::http::Method::POST,
                 &url,
                 body,
                 timestamp_ms,

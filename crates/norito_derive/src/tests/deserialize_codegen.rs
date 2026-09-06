@@ -225,7 +225,7 @@ fn binary_default_attributes_do_not_generate_missing_field_fallbacks() {
     }
 }
 #[test]
-fn ordinary_struct_fields_use_verified_exact_length_streaming() {
+fn ordinary_struct_fields_use_counted_length_streaming() {
     let input: DeriveInput = syn::parse_quote! {
         struct Envelope {
             named: Vec<u8>,
@@ -242,8 +242,9 @@ fn ordinary_struct_fields_use_verified_exact_length_streaming() {
         &input.attrs,
         None,
     ));
-    assert_eq!(expansion.matches("write_len_prefixed_exact(").count(), 2);
-    assert!(!expansion.contains("write_len_prefixed("));
+    assert_eq!(expansion.matches("write_len_prefixed(").count(), 2);
+    assert!(!expansion.contains("write_len_prefixed_exact("));
+    assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
 }
 #[test]
 fn packed_struct_codegen_counts_then_streams_without_field_payload_buffers() {
@@ -269,7 +270,7 @@ fn packed_struct_codegen_counts_then_streams_without_field_payload_buffers() {
     assert!(!expansion.contains("__field_bufs"));
 }
 #[test]
-fn ordinary_enum_fields_use_verified_exact_length_streaming() {
+fn ordinary_enum_fields_use_counted_length_streaming() {
     let input: DeriveInput = syn::parse_quote! {
         enum Envelope {
             Tuple(Vec<u8>),
@@ -286,8 +287,9 @@ fn ordinary_enum_fields_use_verified_exact_length_streaming() {
         &input.attrs,
         None,
     ));
-    assert!(expansion.matches("write_len_prefixed_exact(").count() >= 2);
-    assert!(!expansion.contains("write_len_prefixed("));
+    assert!(expansion.matches("write_len_prefixed(").count() >= 2);
+    assert!(!expansion.contains("write_len_prefixed_exact("));
+    assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
 }
 #[test]
 fn enum_byte_array_lengths_use_the_raw_wire_width() {

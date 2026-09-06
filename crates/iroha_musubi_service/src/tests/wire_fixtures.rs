@@ -3,7 +3,7 @@
 use super::*;
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
 
-pub(in crate::musubi_runtime) fn check_identity<T>(fixtures: &[json::Value])
+pub(crate) fn check_identity<T>(fixtures: &[json::Value])
 where
     T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
 {
@@ -27,7 +27,7 @@ where
     assert_eq!(<T as NoritoDeserialize>::schema_hash(), hash);
 }
 
-pub(in crate::musubi_runtime) fn record<T>(specimen: &str, value: &T) -> json::Value
+pub(crate) fn record<T>(specimen: &str, value: &T) -> json::Value
 where
     T: NoritoSerialize + for<'a> NoritoDeserialize<'a> + PartialEq + fmt::Debug,
 {
@@ -210,7 +210,7 @@ fn current_records() -> Vec<json::Value> {
 #[test]
 fn publication_wire_frames_match_pre_extraction_goldens() {
     let mut expected: Vec<json::Value> = json::from_str(include_str!(
-        "../../../tests/fixtures/musubi_publication_frames.json"
+        "../../tests/fixtures/musubi_publication_frames.json"
     ))
     .expect("publication frame fixtures");
     let mut actual = current_records();
@@ -227,7 +227,7 @@ fn publication_wire_frames_match_pre_extraction_goldens() {
 #[test]
 fn publication_schema_identities_match_original_frames() {
     let fixtures: Vec<json::Value> = json::from_str(include_str!(
-        "../../../tests/fixtures/musubi_publication_frames.json"
+        "../../tests/fixtures/musubi_publication_frames.json"
     ))
     .unwrap();
     macro_rules! check {

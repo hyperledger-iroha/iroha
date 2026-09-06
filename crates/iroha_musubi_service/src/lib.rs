@@ -1,11 +1,11 @@
-//! Authenticated HTTPS transport for the private Musubi publication control plane.
+//! Authenticated service and HTTPS transport for the private Musubi publication control plane.
 //!
 //! The public Torii `SoraFS` upload route is deliberately not used here. Every request
 //! targets one fixed publication-specific route, carries a bounded canonical Norito
 //! authorization approved by the configured Iroha account controller, and rejects redirects.
-use crate::{client::Client, crypto::KeyPair};
 use base64::Engine as _;
-use iroha_crypto::{PublicKey, SignatureOf};
+use iroha::client::Client;
+use iroha_crypto::{KeyPair, PublicKey, SignatureOf};
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, MultisigPolicy},
@@ -4319,7 +4319,7 @@ fn remote_transport_error(
 }
 #[cfg(test)]
 mod tests {
-    include!("musubi_runtime/service_journal_tests.rs");
-    include!("musubi_runtime/private_service_tests.rs");
+    include!("tests/service_journal.rs");
+    include!("tests/private_service.rs");
     pub(super) mod wire_fixtures;
 }

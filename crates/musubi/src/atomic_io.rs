@@ -1968,8 +1968,7 @@ compile_error!("Musubi atomic file reads are not qualified for this Android arch
 ))]
 compile_error!("Musubi atomic file reads are not qualified for this Unix target");
 #[cfg(unix)]
-const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> =
-    Some(secure_no_follow_nonblocking_flags());
+const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = Some(secure_no_follow_nonblocking_flags());
 #[cfg(not(unix))]
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = None;
 #[cfg(test)]

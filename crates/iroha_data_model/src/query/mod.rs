@@ -2573,7 +2573,7 @@ where
         let values: [&dyn norito::core::NoritoSerialize; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
-            norito::core::write_len_prefixed_exact(writer, value, &mut field)?;
+            norito::core::write_len_prefixed(writer, value, &mut field)?;
         }
         Ok(())
     }

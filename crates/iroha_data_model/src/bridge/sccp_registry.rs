@@ -570,7 +570,9 @@ impl SccpGroth16Bls12381IcV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381VerifyingKeyV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381VerifyingKeyV1"
+)]
 pub struct SccpGroth16Bls12381VerifyingKeyV1 {
     /// Verifying-key schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -661,7 +663,9 @@ pub fn sccp_groth16_bls12381_verifying_key_hash_v1(
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254SemanticCircuitV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254SemanticCircuitV1"
+)]
 pub struct SccpGroth16Bn254SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -684,7 +688,9 @@ pub struct SccpGroth16Bn254SemanticCircuitV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381SemanticCircuitV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381SemanticCircuitV1"
+)]
 pub struct SccpGroth16Bls12381SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -944,7 +950,9 @@ impl SccpPortableVerifyingKeyRefV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSoraOutboundExecutionPolicyV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpSoraOutboundExecutionPolicyV1"
+)]
 pub struct SccpSoraOutboundExecutionPolicyV1 {
     /// Policy schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -3252,8 +3260,6 @@ mod tests {
         TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
     }
     use norito::codec::DecodeAll as _;
-    const SIGNATORY: &str =
-        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
     fn word_u64(value: u64) -> [u8; 32] {
         let mut word = [0; 32];
         word[24..].copy_from_slice(&value.to_be_bytes());

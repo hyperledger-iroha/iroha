@@ -167,7 +167,12 @@ inventory remain separate review records. A reviewed 1,771-declaration ordinary
 batch is applied across 107 files. Its 3,467 captured directions comprise 1,696
 bidirectional types, 68 serializer-only types and seven decoder-only types.
 Module-owned immutable fixture suites preserve those codec capabilities and
-original cfg scopes; their compiler/runtime qualification is pending.
+original cfg scopes. All 110 owner-scoped tests pass on the sealed
+post-declaration harness, and a second controlled 6,112-probe capture is exactly
+equal to the pre-declaration capture after excluding source coordinates. A
+wider sealed model run, with the known recursive-wire regression excluded,
+completed 3,045 passes and exposed 37 failures that still require disposition;
+therefore this evidence does not qualify the complete model suite.
 
 ### Batch declaration migration
 
@@ -199,7 +204,7 @@ helper is not a compiler capture or coverage proof.
 | `model` / `model_single` | Preserve explicit attributes through ordinary and FFI expansions; capture actual private `model` names. |
 | `declare_versioned` | Explicit identity for the generated enum; version aliases share their underlying identity and acquire no duplicate implementation. |
 | `EventSet` | Separate explicit identity for the generated `*Set`, alongside the parent event identity. |
-| `RegistrableBuilder` | Separate explicit identity for `New*`; current generation copies documentation but must not copy the parent's identity. |
+| `RegistrableBuilder` | Each of the two production callers supplies a required literal identity for its generated `New*` child. The generator has no fallback and rejects missing, duplicate, unknown, non-literal and invalid metadata. Eight generator tests, three compile-fail cases and 23 asset/NFT owner tests pass. |
 | `queries!`, `isi!`, `isi_box!`, `enum_type!`, `data_event!` | One identity derive in each template, with captured literal attributes at declarations/invocations. |
 | Musubi digest/text and governance hash macros | Required literal arguments at each invocation, without source-path concatenation. |
 | `EnumRef` | Explicit child identities only for existing codec or typed-marker uses; no new wire surface for ordinary helpers. |

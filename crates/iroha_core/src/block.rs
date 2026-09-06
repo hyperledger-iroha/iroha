@@ -64,8 +64,9 @@ use iroha_data_model::{
     block::{
         consensus::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            ValidatorIndex,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxParticipantSettlement,
+            NativeAmxPhase, NativeAmxReceipt, ValidatorIndex,
+            compute_native_amx_participant_settlement_hash,
         },
         *,
     },
@@ -1399,8 +1400,7 @@ fn validate_native_amx_attestation_qc(
     }
     let participant_descriptor = &leg.participant_proposal.descriptor;
     let participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
-            .map_err(|_| "native AMX participant settlement cannot be hashed".to_owned())?;
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement);
     if participant_descriptor.lane_id != leg.lane_id
         || participant_descriptor.dataspace_id != leg.dataspace_id
         || participant_descriptor.lane_incarnation != body.participant_lane_incarnation
@@ -1413,7 +1413,7 @@ fn validate_native_amx_attestation_qc(
         || participant_descriptor.lane_block_view != body.participant_lane_block_view
         || leg.participant_proposal.proposal_hash != body.participant_proposal_hash
         || participant_settlement_hash != leg.participant_settlement_hash
-        || Hash::from(participant_settlement_hash) != body.participant_settlement_commitment
+        || participant_settlement_hash != body.participant_settlement_commitment
     {
         return Err("native AMX attestation participant finality mismatch".to_owned());
     }
@@ -10332,8 +10332,8 @@ pub(crate) mod valid {
         ) -> Result<(), BlockValidationError> {
             struct ParticipantGroup {
                 proposal: LaneBlockProposalV1,
-                settlement: LaneBlockCommitment,
-                settlement_hash: HashOf<LaneBlockCommitment>,
+                settlement: NativeAmxParticipantSettlement,
+                settlement_hash: HashOf<NativeAmxParticipantSettlement>,
                 members: Vec<(u64, Hash, [u8; Hash::LENGTH])>,
                 member_indices: BTreeSet<u64>,
                 member_sources: BTreeSet<[u8; Hash::LENGTH]>,
@@ -28483,7 +28483,10 @@ mod tests {
             participant_lane_block_height,
             participant_lane_block_view,
             participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
+                0;
+                Hash::LENGTH
+            ])),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),
@@ -28623,8 +28626,7 @@ mod tests {
                     .computed_grouped_participant_settlement(&[prepare_qc.body.source_id])
                     .expect("single-source test fixture settlement is valid");
                 let participant_settlement_hash =
-                    iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                        .expect("fixture participant settlement hashes");
+                    compute_native_amx_participant_settlement_hash(&participant_settlement);
                 NativeAmxLegRecordV2 {
                     lane_id: leg.route.lane_id,
                     dataspace_id: leg.route.dataspace_id,
@@ -28952,7 +28954,7 @@ mod tests {
         participant_proposal.descriptor.descriptor_hash =
             participant_proposal.descriptor.computed_descriptor_hash();
         participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
-        let participant_settlement = LaneBlockCommitment {
+        let participant_settlement = NativeAmxParticipantSettlement {
             block_height: participant_proposal.descriptor.lane_block_height,
             lane_id: participant.lane_id,
             lane_incarnation: participant_proposal.descriptor.lane_incarnation,
@@ -28982,11 +28984,9 @@ mod tests {
                 },
             ],
             nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
         };
         let participant_settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("shared participant settlement hash");
+            compute_native_amx_participant_settlement_hash(&participant_settlement);
         for receipt in [&mut first_receipt, &mut second_receipt] {
             let leg = receipt
                 .legs
@@ -28998,7 +28998,7 @@ mod tests {
             leg.participant_settlement_hash = participant_settlement_hash;
             for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
                 body.participant_proposal_hash = participant_proposal.proposal_hash;
-                body.participant_settlement_commitment = Hash::from(participant_settlement_hash);
+                body.participant_settlement_commitment = participant_settlement_hash;
             }
         }
         BlockExecutionContextBundle::new(vec![
@@ -29067,10 +29067,9 @@ mod tests {
             .descriptor
             .lane_incarnation;
         coordinator_leg.participant_settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(
+            compute_native_amx_participant_settlement_hash(
                 &coordinator_leg.participant_settlement,
-            )
-            .expect("stale same-route settlement hashes");
+            );
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,
@@ -29081,7 +29080,7 @@ mod tests {
                 .lane_incarnation;
             body.participant_proposal_hash = coordinator_leg.participant_proposal.proposal_hash;
             body.participant_settlement_commitment =
-                Hash::from(coordinator_leg.participant_settlement_hash);
+                coordinator_leg.participant_settlement_hash;
         }
         assert!(matches!(
             ValidBlock::validate_native_amx_participant_groups(&bundle),
@@ -29693,17 +29692,16 @@ mod tests {
         stale_leg.participant_proposal.proposal_hash =
             stale_leg.participant_proposal.computed_proposal_hash();
         stale_leg.participant_settlement.lane_incarnation = stale_incarnation;
-        stale_leg.participant_settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(&stale_leg.participant_settlement)
-                .expect("stale participant settlement hashes");
+        stale_leg.participant_settlement_hash = compute_native_amx_participant_settlement_hash(
+            &stale_leg.participant_settlement,
+        );
         for body in [
             &mut stale_leg.prepare_qc.body,
             &mut stale_leg.commit_qc.body,
         ] {
             body.participant_lane_incarnation = stale_incarnation;
             body.participant_proposal_hash = stale_leg.participant_proposal.proposal_hash;
-            body.participant_settlement_commitment =
-                Hash::from(stale_leg.participant_settlement_hash);
+            body.participant_settlement_commitment = stale_leg.participant_settlement_hash;
         }
         let error = validate(&stale_participant_incarnation)
             .expect_err("retired participant incarnation must fail");
@@ -29835,10 +29833,9 @@ mod tests {
         unexpected_leg.participant_settlement.lane_id = unexpected_leg.lane_id;
         unexpected_leg.participant_settlement.dataspace_id = unexpected_leg.dataspace_id;
         unexpected_leg.participant_settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(
+            compute_native_amx_participant_settlement_hash(
                 &unexpected_leg.participant_settlement,
-            )
-            .expect("unexpected participant settlement hashes");
+            );
         for body in [
             &mut unexpected_leg.prepare_qc.body,
             &mut unexpected_leg.commit_qc.body,
@@ -29847,7 +29844,7 @@ mod tests {
             body.participant_dataspace_id = unexpected_leg.dataspace_id;
             body.participant_proposal_hash = unexpected_leg.participant_proposal.proposal_hash;
             body.participant_settlement_commitment =
-                Hash::from(unexpected_leg.participant_settlement_hash);
+                unexpected_leg.participant_settlement_hash;
         }
         assert!(
             validate(&unexpected_participant)

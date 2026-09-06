@@ -199,10 +199,10 @@ fn native_amx_request_respects_the_configured_source_bound() {
         .body
         .computed_grouped_participant_settlement(&[second_source, request.body.source_id])
         .expect("build a canonical two-source settlement");
-    request.body.participant_settlement_commitment = Hash::from(
-        iroha_data_model::nexus::compute_settlement_hash(&request.participant_settlement)
-            .expect("hash the canonical two-source settlement"),
-    );
+    request.body.participant_settlement_commitment =
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &request.participant_settlement,
+        );
     assert!(request.validate_plan_binding().is_ok());
     assert!(!adapter.native_request_matches_context(&request, request.body.round.view));
 }

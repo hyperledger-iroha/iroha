@@ -143,6 +143,21 @@ layout:
   hashes, and emitted bytes must remain identical. Native helper waits are
   bounded before CPU fallback.
 
+### Counted length framing and encode depth
+
+Every length-delimited field is sized by running its serializer against a
+counting sink. Norito then emits that measured length and constrains the output
+pass to the same byte count. `encoded_len_hint` and `encoded_len_exact` are
+optional diagnostics; canonical encoding never trusts them for framing,
+admission, or buffer reservation. This prevents a recursive or incorrect
+length oracle from exhausting the stack, forcing a payload-sized speculative
+allocation, or understating the bytes accepted by the output pass.
+
+Derive-generated serializers and length diagnostics also enforce
+`MAX_VALUE_NESTING_DEPTH`. Recursive in-memory values therefore return a
+typed `NestingDepthExceeded` error through fallible encoding APIs before native
+stack exhaustion. The guard changes no accepted wire bytes or field ordering.
+
 ### Decode-scoped resource limits
 
 Archive byte limits do not bound collection reservations: an eight-byte

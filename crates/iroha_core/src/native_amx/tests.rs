@@ -51,7 +51,10 @@
             participant_lane_block_height: 1,
             participant_lane_block_view: 0,
             participant_proposal_hash: Hash::new(b"native-amx-v2-participant-proposal"),
-            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
+                0;
+                Hash::LENGTH
+            ])),
             participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
             participant_validator_count: 1,
             participant_min_quorum: 1,
@@ -494,7 +497,7 @@
         conflicting_settlement.phase = NativeAmxPhase::Prepare;
         conflicting_settlement.round.view += 1;
         conflicting_settlement.participant_settlement_commitment =
-            Hash::new(b"slot-conflicting settlement only");
+            HashOf::from_untyped_unchecked(Hash::new(b"slot-conflicting settlement only"));
         assert_eq!(
             guard.record_body_for_test(&conflicting_settlement),
             Err(NativeAmxSigningGuardError::SlotEquivocation)
@@ -1266,10 +1269,8 @@
         let participant_settlement = body
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source test fixture settlement is valid");
-        body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("fixture participant settlement hashes"),
-        );
+        body.participant_settlement_commitment =
+            compute_native_amx_participant_settlement_hash(&participant_settlement);
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: routing_plan.legs(),
@@ -1366,11 +1367,8 @@
             .expect("single-source test fixture settlement is valid");
         coordinator_participates
             .body
-            .participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(
-                &coordinator_participates.participant_settlement,
-            )
-            .expect("overlapping participant settlement hashes"),
+            .participant_settlement_commitment = compute_native_amx_participant_settlement_hash(
+            &coordinator_participates.participant_settlement,
         );
         assert_eq!(
             coordinator_participates.validate_plan_binding(),
@@ -1400,12 +1398,10 @@
             .body
             .computed_grouped_participant_settlement(&[stale_same_route.body.source_id])
             .expect("stale same-route settlement fixture remains structurally valid");
-        stale_same_route.body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(
+        stale_same_route.body.participant_settlement_commitment =
+            compute_native_amx_participant_settlement_hash(
                 &stale_same_route.participant_settlement,
-            )
-            .expect("stale same-route settlement hashes"),
-        );
+            );
         assert_eq!(
             stale_same_route.validate_plan_binding(),
             Err(NativeAmxRequestError::ParticipantProposalMismatch),

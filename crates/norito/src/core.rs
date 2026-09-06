@@ -49,10 +49,13 @@ pub mod gpu_zstd;
 const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
 /// Maximum number of recursively owned values reconstructed by one decoder.
 ///
-/// `Box`, `Rc`, and `Arc` make it possible for a wire value to have a data-dependent recursive
-/// depth even though its Rust type is finite. Keeping this limit in the codec prevents an untrusted
-/// archive from exhausting the native stack before the decoded value reaches its domain validator.
-pub const MAX_OWNED_VALUE_DECODE_DEPTH: usize = 256;
+/// Maximum nesting depth for recursively encoded or decoded Norito values.
+///
+/// Owned containers such as `Box`, `Rc`, and `Arc` make a finite Rust type recursively shaped at
+/// runtime. The shared ceiling also covers derive-generated encoders, so hostile values cannot
+/// exhaust the native stack before a codec guard executes. Thirty-two levels leave a deterministic
+/// margin on the smallest supported test and worker stacks.
+pub const MAX_VALUE_NESTING_DEPTH: usize = 32;
 static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
 /// Per-decode resource limits for attacker-controlled archives.
 ///
@@ -448,6 +451,9 @@ thread_local! {
     static ENCODE_COMPACT_LEN_USED: Cell<bool> = const { Cell::new(false) };
 }
 thread_local! {
+    static ENCODE_VALUE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+thread_local! {
     static FORCE_SEQUENTIAL: Cell<bool> = const { Cell::new(false) };
 }
 #[derive(Debug, Default)]
@@ -590,6 +596,39 @@ impl DecodeDepthGuard {
 impl Drop for DecodeDepthGuard {
     fn drop(&mut self) {
         DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
+    }
+}
+/// Guard one nested encode or encoded-length operation.
+///
+/// Derive-generated implementations enter this guard before evaluating fields. This makes
+/// recursive owned values fail with a typed error before Rust exhausts the native stack.
+#[doc(hidden)]
+pub struct EncodeValueDepthGuard {
+    previous_depth: usize,
+}
+impl EncodeValueDepthGuard {
+    /// Enter one value level in the current encode operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NestingDepthExceeded`] when the canonical nesting ceiling is exceeded.
+    pub fn enter() -> Result<Self, Error> {
+        let previous_depth = ENCODE_VALUE_NESTING_DEPTH.with(Cell::get);
+        let depth = previous_depth.saturating_add(1);
+        if depth > MAX_VALUE_NESTING_DEPTH {
+            return Err(Error::NestingDepthExceeded {
+                depth,
+                limit: MAX_VALUE_NESTING_DEPTH,
+                context: "encode budget",
+            });
+        }
+        ENCODE_VALUE_NESTING_DEPTH.with(|slot| slot.set(depth));
+        Ok(Self { previous_depth })
+    }
+}
+impl Drop for EncodeValueDepthGuard {
+    fn drop(&mut self) {
+        ENCODE_VALUE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
     }
 }
 /// Run a decode operation with limits scoped to the current thread.
@@ -847,10 +886,10 @@ impl OwnedValueDecodeDepthGuard {
     fn enter() -> Result<Self, Error> {
         OWNED_VALUE_DECODE_DEPTH.with(|depth| {
             let next = depth.get().saturating_add(1);
-            if next > MAX_OWNED_VALUE_DECODE_DEPTH {
+            if next > MAX_VALUE_NESTING_DEPTH {
                 return Err(Error::NestingDepthExceeded {
                     depth: next,
-                    limit: MAX_OWNED_VALUE_DECODE_DEPTH,
+                    limit: MAX_VALUE_NESTING_DEPTH,
                     context: "owned Norito value",
                 });
             }
@@ -2223,27 +2262,6 @@ pub fn write_len_prefixed<W: Write, const N: usize>(
     let mut counter = LengthCountingWriter::default();
     serialize_to_writer(value, &mut counter)?;
     let exact_len = counter.len;
-    let len = u64::try_from(exact_len).map_err(|_| Error::LengthMismatch)?;
-    write_len_with_flags(writer, len, flags)?;
-    serialize_to_writer_exact(value, writer, exact_len)
-}
-/// Write a trusted exact length prefix, then serialize the value directly.
-///
-/// This avoids materializing a temporary field buffer for hot paths whose `encoded_len_exact`
-/// implementations are covered by byte-equivalence tests. If an exact length is not available, it
-/// uses [`write_len_prefixed`]'s count-first direct writer. A mismatching exact implementation
-/// returns [`Error::LengthMismatch`]. The prefix may already have been emitted, but a payload
-/// overrun is rejected before it can grow the destination past that declared length. As with every
-/// serialization error, callers must discard the incomplete destination.
-pub fn write_len_prefixed_exact<W: Write, const N: usize>(
-    writer: &mut W,
-    value: &dyn NoritoSerialize,
-    buf: &mut SmallBuf<N>,
-) -> Result<(), Error> {
-    let Some(exact_len) = value.encoded_len_exact() else {
-        return write_len_prefixed(writer, value, buf);
-    };
-    let flags = effective_layout_flags();
     let len = u64::try_from(exact_len).map_err(|_| Error::LengthMismatch)?;
     write_len_with_flags(writer, len, flags)?;
     serialize_to_writer_exact(value, writer, exact_len)
@@ -4235,9 +4253,8 @@ pub trait NoritoSerialize {
     /// Optional hint: estimated encoded byte length for `self`.
     ///
     /// Implementations should return `Some(len)` when the exact or a tight upper-bound length is
-    /// cheap to compute, otherwise return `None`. The encoder uses this to pre-reserve buffer
-    /// capacity to reduce reallocations. Returning an underestimate may cause reallocations; an
-    /// overestimate only over-allocates the buffer.
+    /// cheap to compute, otherwise return `None`. Canonical encoders do not trust this value for
+    /// framing, admission, or allocation; callers may use it only as a diagnostic estimate.
     fn encoded_len_hint(&self) -> Option<usize> {
         None
     }
@@ -5729,7 +5746,7 @@ pub mod stream {
             usize::MAX,
             usize::MAX,
             usize::MAX,
-            super::MAX_OWNED_VALUE_DECODE_DEPTH,
+            super::MAX_VALUE_NESTING_DEPTH,
         );
         super::with_decode_limits(limits, || {
             let mut payload = DigestingReader::new(PayloadStream::new(reader, header.compression)?);
@@ -6435,7 +6452,7 @@ macro_rules! impl_tuple {
                     );
                 }
                 $(
-                    write_len_prefixed_exact(
+                    write_len_prefixed(
                         writer,
                         &self.$idx,
                         &mut __buf,
@@ -6655,25 +6672,14 @@ impl Write for ByteSink {
         Ok(())
     }
 }
-const MAX_INITIAL_PAYLOAD_CAPACITY: usize = 1024 * 1024;
-
-fn initial_payload_capacity<T: NoritoSerialize>(value: &T) -> usize {
-    value
-        .encoded_len_exact()
-        .or_else(|| value.encoded_len_hint())
-        .unwrap_or(0)
-        .min(MAX_INITIAL_PAYLOAD_CAPACITY)
-}
-
 pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     value: &T,
 ) -> Result<(Vec<u8>, u8), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(base_flags)?;
-    let estimated = initial_payload_capacity(value);
     let flags = base_flags;
-    let mut sink = ByteSink::with_headroom(estimated, 0);
+    let mut sink = ByteSink::with_headroom(0, 0);
     {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut encoder = Encoder::for_byte_sink(&mut sink);
@@ -6837,11 +6843,10 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(base_flags)?;
-    let estimated = initial_payload_capacity(value);
     let flags = base_flags;
     let padding = payload_alignment_padding_for::<T>();
     let headroom = Header::SIZE + padding;
-    let mut sink = ByteSink::with_headroom_from(std::mem::take(out), estimated, headroom);
+    let mut sink = ByteSink::with_headroom_from(std::mem::take(out), 0, headroom);
     {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut encoder = Encoder::for_byte_sink(&mut sink);

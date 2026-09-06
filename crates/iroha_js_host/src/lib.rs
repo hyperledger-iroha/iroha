@@ -44,7 +44,7 @@ use halo2_proofs::{
     },
     transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
 };
-use iroha::da::{
+use iroha_storage_client::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
@@ -3410,7 +3410,7 @@ struct ProofReport {
     verified: bool,
 }
 fn build_car_plan_from_manifest(manifest: &DaManifestV1) -> napi::Result<CarBuildPlan> {
-    sorafs_car::build_plan_from_da_manifest(manifest)
+    iroha_storage_client::da::build_car_plan_from_manifest(manifest)
         .map_err(|err| invalid_arg(format!("failed to build CAR plan: {err}")))
 }
 fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> napi::Result<()> {

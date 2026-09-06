@@ -356,8 +356,9 @@ fn grouped_native_candidate_fixture(
         .computed_grouped_participant_settlement(&source_ids)
         .expect("derive exact grouped participant settlement");
     let participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-            .expect("hash exact grouped participant settlement");
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &participant_settlement,
+        );
     let receipts = source_ids
         .iter()
         .copied()
@@ -365,8 +366,7 @@ fn grouped_native_candidate_fixture(
         .map(|(source_id, entrypoint_hash)| {
             let mut request = bind_request(source_id, entrypoint_hash);
             request.participant_settlement = participant_settlement.clone();
-            request.body.participant_settlement_commitment =
-                Hash::from(participant_settlement_hash);
+            request.body.participant_settlement_commitment = participant_settlement_hash;
             request
                 .validate_plan_binding()
                 .expect("exact grouped Native request binding");
@@ -652,9 +652,10 @@ fn native_body_recovery_payload(
         .computed_grouped_participant_settlement(&[source_id])
         .expect("derive exact participant settlement");
     let settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&request.participant_settlement)
-            .expect("hash exact participant settlement");
-    request.body.participant_settlement_commitment = Hash::from(settlement_hash);
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &request.participant_settlement,
+        );
+    request.body.participant_settlement_commitment = settlement_hash;
     request
         .validate_plan_binding()
         .expect("exact Native request binding");
@@ -1074,13 +1075,27 @@ fn merge_native_projection_execution(
                 .clone()
         });
     let source_bundle = b"Native AMX merge projection source".to_vec();
-    let mut settlement = receipts[0]
+    let participant_settlement = receipts[0]
         .legs
         .last()
         .expect("merge projection fixture coordinator settlement")
         .participant_settlement
         .clone();
-    settlement.native_amx_receipts = receipts.clone();
+    let settlement = LaneBlockCommitment {
+        block_height: participant_settlement.block_height,
+        lane_id: participant_settlement.lane_id,
+        lane_incarnation: participant_settlement.lane_incarnation,
+        dataspace_id: participant_settlement.dataspace_id,
+        tx_count: participant_settlement.tx_count,
+        total_local_amount: participant_settlement.total_local_amount,
+        total_xor_due: participant_settlement.total_xor_due,
+        total_xor_after_haircut: participant_settlement.total_xor_after_haircut,
+        total_xor_variance: participant_settlement.total_xor_variance,
+        swap_metadata: participant_settlement.swap_metadata,
+        receipts: participant_settlement.receipts,
+        nexus_fee_receipts: participant_settlement.nexus_fee_receipts,
+        native_amx_receipts: receipts.clone(),
+    };
     let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
         .expect("hash merge projection fixture settlement");
     iroha_data_model::merge::MergeLaneExecution {
@@ -1286,15 +1301,16 @@ fn merge_native_projection_rebind_single_source_participant(
     assert_eq!(leg.participant_settlement.receipts.len(), 1);
     leg.participant_settlement.tx_count = 1;
     leg.participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
-            .expect("hash single-source merge projection settlement");
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &leg.participant_settlement,
+        );
     let descriptor = &leg.participant_proposal.descriptor;
     let participant_lane_id = descriptor.lane_id;
     let participant_dataspace_id = descriptor.dataspace_id;
     let participant_incarnation = descriptor.lane_incarnation;
     let participant_view = descriptor.lane_block_view;
     let proposal_hash = leg.participant_proposal.proposal_hash;
-    let settlement_commitment = Hash::from(leg.participant_settlement_hash);
+    let settlement_commitment = leg.participant_settlement_hash;
     for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
         body.source_id = source_id;
         body.tx_entrypoint_hash = entrypoint_hash;
@@ -1574,13 +1590,14 @@ fn native_amx_merge_projection_rejects_same_route_identity_conflict() {
         leg.participant_settlement.lane_incarnation =
             leg.participant_proposal.descriptor.lane_incarnation;
         leg.participant_settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
-                .expect("hash conflicting merge coordinator settlement");
+            iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+                &leg.participant_settlement,
+            );
         for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
             body.participant_lane_incarnation =
                 leg.participant_proposal.descriptor.lane_incarnation;
             body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
-            body.participant_settlement_commitment = Hash::from(leg.participant_settlement_hash);
+            body.participant_settlement_commitment = leg.participant_settlement_hash;
         }
     });
     let error = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(

@@ -38,7 +38,6 @@ use iroha::{
         Client, PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
     },
     config::Config,
-    musubi_runtime::MusubiSeedIngressCarPlanV1,
 };
 #[cfg(test)]
 use iroha_data_model::isi::musubi::PublishMusubiReleaseV1;
@@ -64,6 +63,7 @@ use iroha_data_model::{
     sorafs::capacity::ProviderId,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
+use iroha_musubi_service::MusubiSeedIngressCarPlanV1;
 use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(test)]
 use std::fs;
@@ -857,10 +857,10 @@ impl RegistrySigningClientV1 {
         &self,
         timeout: Duration,
     ) -> Result<
-        iroha::musubi_runtime::AuthenticatedMusubiPublicationRuntimeClientV1,
-        iroha::musubi_runtime::MusubiPublicationRuntimeTransportErrorV1,
+        iroha_musubi_service::AuthenticatedMusubiPublicationRuntimeClientV1,
+        iroha_musubi_service::MusubiPublicationRuntimeTransportErrorV1,
     > {
-        iroha::musubi_runtime::AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
+        iroha_musubi_service::AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
             &self.client,
             timeout,
         )

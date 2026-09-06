@@ -5,10 +5,6 @@ use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommit
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
 use std::num::NonZeroU64;
-#[expect(
-    dead_code,
-    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
-)]
 #[derive(Clone, Copy, norito::codec::Encode)]
 struct RetiredQcRefFixture {
     height: Height,
@@ -17,10 +13,6 @@ struct RetiredQcRefFixture {
     subject_block_hash: HashOf<BlockHeader>,
     phase: CertPhase,
 }
-#[expect(
-    dead_code,
-    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
-)]
 #[derive(Clone, Copy, norito::codec::Encode)]
 struct RetiredConsensusBlockHeaderFixture {
     parent_hash: HashOf<BlockHeader>,
@@ -32,10 +24,6 @@ struct RetiredConsensusBlockHeaderFixture {
     epoch: u64,
     highest_qc: RetiredQcRefFixture,
 }
-#[expect(
-    dead_code,
-    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
-)]
 #[derive(Clone, Copy, norito::codec::Encode)]
 struct RetiredProposalFixture {
     header: RetiredConsensusBlockHeaderFixture,
@@ -186,15 +174,6 @@ fn sample_roster() -> Vec<PeerId> {
         .collect()
 }
 include!("consensus/wire_schema_tests.rs");
-fn sample_retired_qc_ref() -> RetiredQcRefFixture {
-    RetiredQcRefFixture {
-        height: 4,
-        view: 1,
-        epoch: 1,
-        subject_block_hash: dummy_hash(),
-        phase: CertPhase::Prepare,
-    }
-}
 #[test]
 fn committed_lane_block_status_progress_policy_is_fail_closed() {
     for (status, executable) in [
@@ -812,7 +791,7 @@ fn sample_native_amx_leg(
         .computed_grouped_participant_settlement(&[prepare_qc.body.source_id])
         .expect("single-source test fixture settlement is valid");
     let participant_settlement_hash =
-        crate::nexus::compute_settlement_hash(&participant_settlement)
+        compute_native_amx_participant_settlement_hash(&participant_settlement)
             .expect("fixture participant settlement hashes");
     NativeAmxLegRecordV2 {
         lane_id: participant.0,
@@ -840,52 +819,6 @@ fn grouped_native_amx_commitment_fixture() -> LaneBlockCommitment {
         .expect("decode Rust-owned grouped Native AMX lane commitment")
 }
 
-#[test]
-fn canonical_decode_limits_reject_recursive_native_amx_commitment_frames() {
-    let fixture = grouped_native_amx_commitment_fixture();
-    eprintln!("recursive fixture: loaded");
-    let mut empty = fixture.clone();
-    empty.native_amx_receipts.clear();
-    let receipt_template = fixture
-        .native_amx_receipts
-        .first()
-        .expect("grouped fixture contains a receipt")
-        .clone();
-    let leg_template = receipt_template
-        .legs
-        .first()
-        .expect("grouped fixture contains a participant leg")
-        .clone();
-
-    let mut nested = empty.clone();
-    for _ in 0..=norito::core::MAX_OWNED_VALUE_DECODE_DEPTH {
-        let mut leg = leg_template.clone();
-        leg.participant_settlement = nested;
-        let mut receipt = receipt_template.clone();
-        receipt.legs = vec![leg];
-        let mut outer = empty.clone();
-        outer.native_amx_receipts = vec![receipt];
-        nested = outer;
-    }
-
-    eprintln!("recursive fixture: constructed");
-    let encoded = norito::to_bytes(&nested).expect("encode recursive Native AMX fixture");
-    eprintln!("recursive fixture: encoded {} bytes", encoded.len());
-    let error = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
-        .expect_err("canonical decode must reject a recursive consensus value before exhaustion");
-    eprintln!("recursive fixture: rejected {error:?}");
-    assert!(
-        matches!(
-            error,
-            norito::core::Error::NestingDepthExceeded {
-                depth,
-                limit: norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
-                context: "decode budget",
-            } if depth == norito::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1
-        ),
-        "unexpected canonical decode rejection: {error:?}"
-    );
-}
 #[expect(
     clippy::too_many_lines,
     reason = "this ordered fail-closed fixture validator follows the complete Native AMX evidence pipeline and preserves first-error intent across its canonical anchors"
@@ -1669,7 +1602,6 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
     assert!(settlement.total_xor_variance.is_zero());
     assert!(settlement.swap_metadata.is_none());
     assert!(settlement.nexus_fee_receipts.is_empty());
-    assert!(settlement.native_amx_receipts.is_empty());
     assert_eq!(
         settlement
             .receipts
@@ -1686,17 +1618,26 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
             && receipt.timestamp_ms == body.authority_context_height
     }));
     assert_eq!(
-        Hash::from(
-            crate::nexus::compute_settlement_hash(&settlement)
-                .expect("computed participant settlement must hash")
-        ),
+        compute_native_amx_participant_settlement_hash(&settlement)
+            .expect("computed participant settlement must hash"),
         body.computed_grouped_participant_settlement_commitment(&fifo_sources)
             .expect("FIFO-ordered grouped participant commitment")
     );
+    assert_ne!(
+        compute_native_amx_participant_settlement_hash(&settlement)
+            .expect("computed participant settlement must hash"),
+        HashOf::new(&settlement),
+        "Native AMX participant settlement commitment must use its protocol domain"
+    );
     let encoded = norito::to_bytes(&settlement).expect("encode participant settlement");
-    let decoded = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
+    let decoded = norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded)
         .expect("decode participant settlement");
     assert_eq!(decoded, settlement);
+    let json = norito::json::to_value(&settlement).expect("serialize participant settlement JSON");
+    assert!(
+        json.get("native_amx_receipts").is_none(),
+        "the dedicated participant settlement wire type cannot nest Native AMX receipts"
+    );
 }
 #[test]
 fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() {
@@ -1729,6 +1670,16 @@ fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() 
             .map(|receipt| receipt.source_id)
             .collect::<Vec<_>>(),
         reverse_hash_order
+    );
+    let forward_settlement = body
+        .computed_grouped_participant_settlement(&[body.source_id, [0x32; 32]])
+        .expect("forward candidate order is valid");
+    assert_ne!(
+        compute_native_amx_participant_settlement_hash(&forward_settlement)
+            .expect("forward participant settlement must hash"),
+        compute_native_amx_participant_settlement_hash(&reverse_settlement)
+            .expect("reverse participant settlement must hash"),
+        "participant settlement commitment binds canonical source order"
     );
     assert!(
         body.computed_grouped_participant_settlement(&vec![

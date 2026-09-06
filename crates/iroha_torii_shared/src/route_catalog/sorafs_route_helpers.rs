@@ -12,23 +12,6 @@ const fn operator_local_get(stable_route_id: &'static str, path: &'static str) -
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::NONE)
 }
-const fn operator_local_expensive_post(
-    stable_route_id: &'static str,
-    path: &'static str,
-) -> RouteDescriptor {
-    RouteDescriptor::new(
-        stable_route_id,
-        HttpMethod::Post,
-        path,
-        ApiSurface::Operator,
-        Listener::Torii,
-        RouteEffect::ExpensiveCompute,
-        AdmissionPolicy::Operator,
-    )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::NONE)
-}
 const fn delegated_routing_get(
     stable_route_id: &'static str,
     path: &'static str,

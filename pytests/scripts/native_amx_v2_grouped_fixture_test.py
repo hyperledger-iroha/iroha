@@ -692,11 +692,11 @@ def test_native_amx_openapi_expresses_direct_group_bounds() -> None:
         ):
             assert participant_properties[field] == {"const": "0"}
         assert participant_properties["swap_metadata"] == {"type": "null"}
-        for field in ("nexus_fee_receipts", "native_amx_receipts"):
-            assert participant_properties[field] == {
-                "maxItems": 0,
-                "type": "array",
-            }
+        assert participant_properties["nexus_fee_receipts"] == {
+            "maxItems": 0,
+            "type": "array",
+        }
+        assert "native_amx_receipts" not in participant_properties
 
         receipt = schemas["NativeAmxParticipantSettlementReceipt"]
         assert receipt["additionalProperties"] is False

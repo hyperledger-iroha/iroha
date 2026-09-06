@@ -143,8 +143,9 @@ use iroha_data_model::{
             CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
             LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
             LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxParticipantSettlement,
+            NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            compute_native_amx_participant_settlement_hash,
         },
         consensus_v2 as wire, decode_versioned_signed_block,
     },
@@ -1247,7 +1248,7 @@ impl NativeRequestSlotKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NativeRequestSlotClaim {
     participant_proposal_hash: Hash,
-    participant_settlement_commitment: Hash,
+    participant_settlement_commitment: HashOf<NativeAmxParticipantSettlement>,
 }
 impl NativeRequestSlotClaim {
     const fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
@@ -1260,7 +1261,7 @@ impl NativeRequestSlotClaim {
 #[derive(Clone, Debug)]
 struct NativeParticipantControl {
     proposal: LaneBlockProposalV1,
-    settlement: LaneBlockCommitment,
+    settlement: NativeAmxParticipantSettlement,
 }
 type NativeParticipantControlMap = BTreeMap<(LaneId, DataSpaceId), NativeParticipantControl>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -16065,7 +16066,7 @@ impl V2LaneWorkAdapter {
                     timestamp_ms: self.context.height,
                 })
                 .collect::<Vec<_>>();
-            let settlement = LaneBlockCommitment {
+            let settlement = NativeAmxParticipantSettlement {
                 block_height: proposal.descriptor.lane_block_height,
                 lane_id: route.lane_id,
                 lane_incarnation: participant_lane_incarnation,
@@ -16078,7 +16079,6 @@ impl V2LaneWorkAdapter {
                 swap_metadata: None,
                 receipts,
                 nexus_fee_receipts: Vec::new(),
-                native_amx_receipts: Vec::new(),
             };
             controls.insert(
                 (route.lane_id, route.dataspace_id),
@@ -16170,7 +16170,7 @@ impl V2LaneWorkAdapter {
             }
             let participant_settlement = participant_control.settlement.clone();
             let participant_settlement_hash =
-                iroha_data_model::nexus::compute_settlement_hash(&participant_settlement).ok()?;
+                compute_native_amx_participant_settlement_hash(&participant_settlement);
             let prepare_body = NativeAmxAttestationBodyV2 {
                 round,
                 epoch: self.context.epoch,
@@ -16192,7 +16192,7 @@ impl V2LaneWorkAdapter {
                 participant_lane_block_height: participant_descriptor.lane_block_height,
                 participant_lane_block_view: participant_descriptor.lane_block_view,
                 participant_proposal_hash: participant_proposal.proposal_hash,
-                participant_settlement_commitment: Hash::from(participant_settlement_hash),
+                participant_settlement_commitment: participant_settlement_hash,
                 participant_validator_set_hash: HashOf::new(&validators),
                 participant_validator_count: u32::try_from(validators.len()).ok()?,
                 participant_min_quorum: u32::try_from(min_signers).ok()?,
@@ -27056,7 +27056,10 @@ pub(super) mod tests {
             participant_lane_block_height: 1,
             participant_lane_block_view: 0,
             participant_proposal_hash: Hash::new(b"native-amx-test-participant-proposal"),
-            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
+                0;
+                Hash::LENGTH
+            ])),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),
@@ -27115,10 +27118,8 @@ pub(super) mod tests {
         let participant_settlement = body
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source test fixture settlement is valid");
-        body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("fixture native AMX settlement hash"),
-        );
+        body.participant_settlement_commitment =
+            compute_native_amx_participant_settlement_hash(&participant_settlement);
         let mut participant_proposal = proposal.clone();
         participant_proposal.payload_block_hint = None;
         NativeAmxAttestationRequestV2 {
@@ -27234,10 +27235,8 @@ pub(super) mod tests {
         let participant_settlement = body
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source distinct-participant settlement is valid");
-        body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("fixture distinct-participant settlement hash"),
-        );
+        body.participant_settlement_commitment =
+            compute_native_amx_participant_settlement_hash(&participant_settlement);
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: plan.legs(),

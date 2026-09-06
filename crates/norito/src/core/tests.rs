@@ -155,16 +155,16 @@ fn owned_pointer_decoders_charge_their_wrapper_allocations() {
 }
 #[test]
 fn owned_value_decode_depth_guard_is_bounded_and_restores() {
-    let guards = (0..MAX_OWNED_VALUE_DECODE_DEPTH)
+    let guards = (0..MAX_VALUE_NESTING_DEPTH)
         .map(|_| OwnedValueDecodeDepthGuard::enter().expect("depth within codec limit"))
         .collect::<Vec<_>>();
     assert!(matches!(
         OwnedValueDecodeDepthGuard::enter(),
         Err(Error::NestingDepthExceeded {
             depth,
-            limit: MAX_OWNED_VALUE_DECODE_DEPTH,
+            limit: MAX_VALUE_NESTING_DEPTH,
             context: "owned Norito value",
-        }) if depth == MAX_OWNED_VALUE_DECODE_DEPTH + 1
+        }) if depth == MAX_VALUE_NESTING_DEPTH + 1
     ));
     drop(guards);
     OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore decode depth");
@@ -938,19 +938,6 @@ impl NoritoSerialize for HostileGrowingSecondPass {
         Ok(())
     }
 }
-struct HostileBadExactLen;
-impl NoritoSerialize for HostileBadExactLen {
-    fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&[0x11])?;
-        for _ in 0..HOSTILE_GROWTH_WRITES {
-            writer.write_all(&[0x22; HOSTILE_GROWTH_CHUNK_BYTES])?;
-        }
-        Ok(())
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        Some(1)
-    }
-}
 #[test]
 fn decode_field_canonical_ignores_bad_encoded_len_exact() {
     let value = BadExactLen(0xAABBCCDD);
@@ -1116,34 +1103,6 @@ fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
     assert_eq!(out, [0x11]);
     assert_eq!(out.capacity(), initial_capacity);
 }
-#[test]
-fn write_len_prefixed_exact_caps_an_incorrect_exact_implementation() {
-    let mut out = Vec::with_capacity(32);
-    let initial_capacity = out.capacity();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
-    let error = {
-        let mut encoder = Encoder::for_buffer(&mut out);
-        write_len_prefixed_exact(&mut encoder, &HostileBadExactLen, &mut tmp)
-            .expect_err("incorrect exact length must fail")
-    };
-    assert!(matches!(error, Error::LengthMismatch));
-    let (declared, header_bytes) = read_len_from_slice(&out).expect("declared exact length");
-    assert_eq!(declared, 1);
-    assert_eq!(&out[header_bytes..], &[0x11]);
-    assert_eq!(out.capacity(), initial_capacity);
-}
-#[test]
-fn write_len_prefixed_exact_matches_buffered_output() {
-    let value = vec![1u64, 2, 3, 5, 8, 13];
-    let mut buffered = Vec::new();
-    let mut exact = Vec::new();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
-    let mut buffered_encoder = Encoder::for_buffer(&mut buffered);
-    write_len_prefixed(&mut buffered_encoder, &value, &mut tmp).expect("write buffered");
-    let mut exact_encoder = Encoder::for_buffer(&mut exact);
-    write_len_prefixed_exact(&mut exact_encoder, &value, &mut tmp).expect("write exact");
-    assert_eq!(exact, buffered);
-}
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
 struct BadExactWrapper {
     inner: BadExactLen,
@@ -1153,16 +1112,51 @@ enum BadExactEnum {
     One(BadExactLen),
 }
 #[test]
-fn derived_struct_rejects_incorrect_exact_field_length() {
+fn derived_struct_ignores_untrusted_exact_field_length() {
     let value = BadExactWrapper {
         inner: BadExactLen(0xAABBCCDD),
     };
-    assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
+    let frame = to_bytes(&value).expect("counted encoding ignores the untrusted length oracle");
+    let archived = from_bytes::<BadExactWrapper>(&frame).expect("validate counted struct frame");
+    let decoded = BadExactWrapper::try_deserialize(archived).expect("decode counted struct");
+    assert_eq!(decoded, value);
 }
 #[test]
-fn derived_enum_rejects_incorrect_exact_field_length() {
+fn derived_enum_ignores_untrusted_exact_field_length() {
     let value = BadExactEnum::One(BadExactLen(0x11223344));
-    assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
+    let frame = to_bytes(&value).expect("counted encoding ignores the untrusted length oracle");
+    let archived = from_bytes::<BadExactEnum>(&frame).expect("validate counted enum frame");
+    let decoded = BadExactEnum::try_deserialize(archived).expect("decode counted enum");
+    assert_eq!(decoded, value);
+}
+
+#[derive(crate::Encode)]
+struct RecursiveEncodeNode {
+    children: Vec<Self>,
+}
+
+#[test]
+fn recursive_encode_fails_before_exhausting_the_native_stack() {
+    let mut value = RecursiveEncodeNode {
+        children: Vec::new(),
+    };
+    for _ in 0..=MAX_VALUE_NESTING_DEPTH {
+        value = RecursiveEncodeNode {
+            children: vec![value],
+        };
+    }
+    assert!(
+        value.encoded_len_exact().is_none(),
+        "recursive length oracles must stop at the canonical nesting ceiling"
+    );
+    assert!(matches!(
+        to_bytes(&value),
+        Err(Error::NestingDepthExceeded {
+            depth,
+            limit: MAX_VALUE_NESTING_DEPTH,
+            context: "encode budget",
+        }) if depth == MAX_VALUE_NESTING_DEPTH + 1
+    ));
 }
 #[test]
 fn truncated_derived_enum_tag_is_a_length_error() {

@@ -382,14 +382,15 @@ fn native_amx_receipts_for_apply_fixture(
         source_ids[0],
         entrypoint_hashes[0],
         NativeAmxPhase::Prepare,
-        Hash::prehashed([0; Hash::LENGTH]),
+        HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
     );
     let participant_settlement = settlement_template
         .computed_grouped_participant_settlement(&source_ids)
         .expect("derive exact two-source participant settlement");
     let participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-            .expect("hash exact two-source participant settlement");
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &participant_settlement,
+        );
     let qc_for = |body: NativeAmxAttestationBodyV2| {
         let votes = validator_keys
             .iter()
@@ -422,7 +423,7 @@ fn native_amx_receipts_for_apply_fixture(
                 source_id,
                 entrypoint_hash,
                 NativeAmxPhase::Prepare,
-                Hash::from(participant_settlement_hash),
+                participant_settlement_hash,
             );
             let request = NativeAmxAttestationRequestV2 {
                 body: prepare_body,

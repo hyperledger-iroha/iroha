@@ -47,7 +47,8 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{
-            EvidenceRecord, ExecKv, ExecWitness, LaneBlockCommitment, NexusFeeReceipt,
+            EvidenceRecord, ExecKv, ExecWitness, LaneBlockCommitment,
+            NativeAmxParticipantSettlement, NexusFeeReceipt,
             SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
             SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiAutonomousLaneExecution,
             SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
@@ -2309,7 +2310,7 @@ pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
     /// Exact participant proposal identity.
     pub(crate) participant_proposal_hash: Hash,
     /// Exact zero-effect participant settlement identity.
-    pub(crate) participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    pub(crate) participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Canonical global carrier height.
     pub(crate) application_block_height: u64,
     /// Canonical global carrier hash.
@@ -2335,7 +2336,7 @@ struct NativeAmxParticipantApplicationDiagnosticIdentity {
     predecessor_descriptor_hash: Option<Hash>,
     descriptor_hash: Hash,
     proposal_hash: Hash,
-    settlement_hash: HashOf<LaneBlockCommitment>,
+    settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     source_count: u64,
 }
 impl NativeAmxParticipantApplicationDiagnosticIdentity {

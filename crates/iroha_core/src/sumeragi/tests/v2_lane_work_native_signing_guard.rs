@@ -212,10 +212,10 @@ fn native_request_for_distinct_routes(
     let participant_settlement = body
         .computed_grouped_participant_settlement(&[body.source_id])
         .expect("fixture distinct participant settlement");
-    body.participant_settlement_commitment = Hash::from(
-        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-            .expect("hash fixture distinct participant settlement"),
-    );
+    body.participant_settlement_commitment =
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &participant_settlement,
+        );
     NativeAmxAttestationRequestV2 {
         body,
         plan_legs: plan.legs(),
@@ -288,10 +288,10 @@ fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
         .body
         .computed_grouped_participant_settlement(&[request.body.source_id])
         .expect("plan-valid predecessor-drift settlement");
-    request.body.participant_settlement_commitment = Hash::from(
-        iroha_data_model::nexus::compute_settlement_hash(&request.participant_settlement)
-            .expect("hash plan-valid predecessor-drift settlement"),
-    );
+    request.body.participant_settlement_commitment =
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &request.participant_settlement,
+        );
     assert_eq!(request.validate_plan_binding(), Ok(()));
     assert!(
         !adapter.native_request_matches_context(&request, 0),

@@ -18,8 +18,8 @@ use iroha::{
     client::{
         Client, SorafsAliasListFilter, SorafsAppealFinanceReadbackFilter,
         SorafsBillingAcknowledgementProof, SorafsBillingStatementListFilter,
-        SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions, SorafsHedgingProjectionFilter,
-        SorafsModerationBallotEventsFilter, SorafsModerationBallotsFilter,
+        SorafsHedgingProjectionFilter, SorafsModerationBallotEventsFilter,
+        SorafsModerationBallotsFilter,
         SorafsModerationModelRegistryFilter, SorafsModerationQuarantineFilter,
         SorafsModerationQuarantineObjectStoreRequest, SorafsModerationQuarantineReleaseRequest,
         SorafsModerationQuarantineReviewRequest, SorafsModerationScreeningResultRequest,
@@ -29,6 +29,9 @@ use iroha::{
         SorafsTokenOverrides, SorafsTransparencyReadbackFilter,
     },
     http::{Response, StatusCode},
+};
+use iroha_storage_client::client::{
+    SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions, StorageClient,
 };
 use iroha_config::parameters::defaults;
 use iroha_crypto::{
@@ -4552,7 +4555,7 @@ impl Run for FetchArgs {
         let client = context.client_from_config();
         let runtime = Runtime::new().wrap_err("failed to create Tokio runtime")?;
         let session = runtime
-            .block_on(client.sorafs_fetch_via_gateway(
+            .block_on(StorageClient::new(&client).sorafs_fetch_via_gateway(
                 &plan,
                 gateway_config,
                 provider_inputs,

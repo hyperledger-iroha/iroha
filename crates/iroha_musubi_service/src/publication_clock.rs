@@ -8,9 +8,7 @@ use super::{
     MusubiPublicationSystemClockV1,
 };
 #[cfg(unix)]
-use iroha_primitives::fs::{
-    secure_directory_open_flags, secure_no_follow_nonblocking_flags,
-};
+use iroha_primitives::fs::{secure_directory_open_flags, secure_no_follow_nonblocking_flags};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::{
@@ -70,8 +68,15 @@ impl fmt::Display for DurableMusubiPublicationServiceClockOpenErrorV1 {
     }
 }
 impl std::error::Error for DurableMusubiPublicationServiceClockOpenErrorV1 {}
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha::musubi_runtime::publication_clock::DurableClockStateV1")]
 struct DurableClockStateV1 {
     domain: [u8; 32],
@@ -106,8 +111,15 @@ impl DurableClockStateV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha::musubi_runtime::publication_clock::DurableClockEnvelopeV1")]
 struct DurableClockEnvelopeV1 {
     state: DurableClockStateV1,

@@ -1446,6 +1446,8 @@ pub const NATIVE_AMX_PARTICIPANT_LEGS_MAX: usize = 255;
 pub const NATIVE_AMX_VALIDATORS_MAX: usize = 128;
 /// Canonical compressed BLS-normal proof-of-possession and signature size.
 pub const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
+const NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1: &[u8] =
+    b"iroha.consensus.native-amx.participant-settlement.v1";
 /// Phase certified by a native AMX participant committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1512,7 +1514,7 @@ pub struct NativeAmxAttestationBodyV2 {
     /// Exact participant-lane proposal certified by this vote.
     pub participant_proposal_hash: Hash,
     /// Commitment to this transaction's participant-local settlement leaf.
-    pub participant_settlement_commitment: Hash,
+    pub participant_settlement_commitment: HashOf<NativeAmxParticipantSettlement>,
     /// Hash of the exact canonical participant committee that may attest this leg.
     pub participant_validator_set_hash: HashOf<Vec<PeerId>>,
     /// Number of validators in the exact participant committee.
@@ -1552,7 +1554,7 @@ impl NativeAmxAttestationBodyV2 {
     pub fn computed_grouped_participant_settlement(
         &self,
         sources: &[[u8; 32]],
-    ) -> Result<LaneBlockCommitment, &'static str> {
+    ) -> Result<NativeAmxParticipantSettlement, &'static str> {
         if sources.is_empty() || sources.len() > NATIVE_AMX_GROUP_SOURCES_MAX {
             return Err("Native AMX participant source group is out of bounds");
         }
@@ -1575,7 +1577,7 @@ impl NativeAmxAttestationBodyV2 {
         }
         let tx_count = u64::try_from(sources.len())
             .map_err(|_| "Native AMX participant source group is out of bounds")?;
-        Ok(LaneBlockCommitment {
+        Ok(NativeAmxParticipantSettlement {
             block_height: self.participant_lane_block_height,
             lane_id: self.participant_lane_id,
             lane_incarnation: self.participant_lane_incarnation,
@@ -1599,7 +1601,6 @@ impl NativeAmxAttestationBodyV2 {
                 })
                 .collect(),
             nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
         })
     }
     /// Compute the commitment to an exact grouped participant settlement.
@@ -1611,12 +1612,10 @@ impl NativeAmxAttestationBodyV2 {
     pub fn computed_grouped_participant_settlement_commitment(
         &self,
         sources: &[[u8; 32]],
-    ) -> Result<Hash, &'static str> {
+    ) -> Result<HashOf<NativeAmxParticipantSettlement>, &'static str> {
         let settlement = self.computed_grouped_participant_settlement(sources)?;
-        Ok(Hash::from(
-            crate::nexus::compute_settlement_hash(&settlement)
-                .expect("native AMX participant settlement must hash"),
-        ))
+        compute_native_amx_participant_settlement_hash(&settlement)
+            .map_err(|_| "Native AMX participant settlement cannot be hashed")
     }
 }
 /// Error returned when a native AMX validator set and its proofs of possession
@@ -1804,9 +1803,9 @@ pub struct NativeAmxLegRecordV2 {
     /// Exact control-only participant proposal certified by both phase QCs.
     pub participant_proposal: LaneBlockProposalV1,
     /// Deterministic participant-local settlement committed by the proposal.
-    pub participant_settlement: LaneBlockCommitment,
+    pub participant_settlement: NativeAmxParticipantSettlement,
     /// Canonical hash of `participant_settlement` signed by both phase QCs.
-    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    pub participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Context-bound participant prepare QC.
     pub prepare_qc: NativeAmxAttestationQcV2,
     /// Context-bound participant commit QC.
@@ -1917,6 +1916,64 @@ pub struct LaneSwapMetadata {
     pub twap_local_per_xor: Numeric,
     /// Volatility bucket recorded when applying the epsilon.
     pub volatility_class: LaneVolatilityClass,
+}
+/// Non-recursive zero-effect settlement certified by a Native AMX participant committee.
+///
+/// Native AMX receipts cannot appear inside this value. This keeps the consensus wire graph
+/// finite while retaining the exact participant source order and the fields validated by the
+/// zero-effect protocol rules.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+)]
+pub struct NativeAmxParticipantSettlement {
+    /// Participant lane-local block height associated with the settlement.
+    pub block_height: u64,
+    /// Participant lane identifier.
+    pub lane_id: LaneId,
+    /// Active participant lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Participant dataspace identifier.
+    pub dataspace_id: DataSpaceId,
+    /// Number of grouped transaction sources represented by the settlement.
+    pub tx_count: u64,
+    /// Exact total local amount; Native AMX validation requires zero.
+    pub total_local_amount: Quantity,
+    /// Exact total XOR due; Native AMX validation requires zero.
+    pub total_xor_due: Quantity,
+    /// Exact total XOR after haircut; Native AMX validation requires zero.
+    pub total_xor_after_haircut: Quantity,
+    /// Exact total XOR variance; Native AMX validation requires zero.
+    pub total_xor_variance: Quantity,
+    /// Conversion metadata; Native AMX validation requires this to be absent.
+    #[norito(required)]
+    pub swap_metadata: Option<LaneSwapMetadata>,
+    /// Canonically ordered zero-effect receipts for the grouped transaction sources.
+    pub receipts: Vec<LaneSettlementReceipt>,
+    /// Nexus fee receipts; Native AMX validation requires this vector to be empty.
+    pub nexus_fee_receipts: Vec<NexusFeeReceipt>,
+}
+/// Compute the canonical domain-separated hash of a Native AMX participant settlement.
+///
+/// # Errors
+///
+/// Returns an error when the settlement cannot be encoded canonically.
+#[must_use]
+pub fn compute_native_amx_participant_settlement_hash(
+    settlement: &NativeAmxParticipantSettlement,
+) -> Result<HashOf<NativeAmxParticipantSettlement>, norito::Error> {
+    let bytes = norito::encode_canonical(settlement)?;
+    let domain_len = u64::try_from(NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1.len())
+        .expect("protocol-defined Native AMX digest domain fits in u64")
+        .to_le_bytes();
+    Ok(HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+        &domain_len,
+        NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1,
+        &bytes,
+    ])))
 }
 /// Aggregated per-lane settlement commitment captured within a block.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2160,7 +2217,7 @@ fn validate_native_amx_leg_shape(
         return Err("Native AMX participant leg identity is internally inconsistent");
     }
     let settlement = &leg.participant_settlement;
-    let settlement_hash = crate::nexus::compute_settlement_hash(settlement)
+    let settlement_hash = compute_native_amx_participant_settlement_hash(settlement)
         .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
     let same_route = leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id;
     let settlement_sources = settlement
@@ -2189,7 +2246,6 @@ fn validate_native_amx_leg_shape(
         || !settlement.total_xor_variance.is_zero()
         || settlement.swap_metadata.is_some()
         || !settlement.nexus_fee_receipts.is_empty()
-        || !settlement.native_amx_receipts.is_empty()
         || !settlement_sources_are_unique
         || settlement
             .receipts
@@ -2206,7 +2262,7 @@ fn validate_native_amx_leg_shape(
         })
         || !settlement_sources_match
         || settlement_hash != leg.participant_settlement_hash
-        || Hash::from(settlement_hash) != body.participant_settlement_commitment
+        || settlement_hash != body.participant_settlement_commitment
     {
         return Err("Native AMX participant settlement is structurally invalid");
     }
@@ -3823,7 +3879,7 @@ pub struct SumeragiNativeAmxParticipantApplication {
     /// Proposal hash certified for this participant height.
     pub proposal_hash: Hash,
     /// Zero-effect participant settlement hash certified by both phase QCs.
-    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    pub settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Number of ordered grouped transaction sources represented by the control.
     pub source_count: u64,
     /// Canonical global carrier height, present for committed or durable evidence only.

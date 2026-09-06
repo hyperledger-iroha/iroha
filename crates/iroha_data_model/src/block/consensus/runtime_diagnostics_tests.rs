@@ -66,7 +66,10 @@ fn sample_native_amx_qc(
         participant_lane_block_height: 42,
         participant_lane_block_view: 0,
         participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-        participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+        participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
+            0;
+            Hash::LENGTH
+        ])),
         participant_validator_set_hash: validator_set_hash,
         participant_validator_count,
         participant_min_quorum,

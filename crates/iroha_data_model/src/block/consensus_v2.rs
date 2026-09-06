@@ -10,7 +10,7 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     account::AccountId,
-    block::consensus::LaneBlockCommitment,
+    block::consensus::NativeAmxParticipantSettlement,
     consensus::GlobalThresholdBeaconPartialSignatureV1,
     merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
@@ -902,7 +902,7 @@ pub struct NativeAmxApplicationManifestLeafV1 {
     /// Exact certified participant proposal hash.
     pub proposal_hash: Hash,
     /// Hash of the exact zero-effect participant control settlement.
-    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    pub settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Ordered source, entrypoint, and result membership in canonical block order.
     pub members: Vec<NativeAmxApplicationManifestMemberV1>,
     /// Height of the canonical global application block.

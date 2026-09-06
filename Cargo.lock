@@ -4790,7 +4790,6 @@ dependencies = [
  "iroha_primitives",
  "iroha_sccp",
  "iroha_service_model",
- "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
@@ -4802,7 +4801,6 @@ dependencies = [
  "sorafs_car",
  "sorafs_chunker",
  "sorafs_manifest",
- "sorafs_orchestrator",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -4853,6 +4851,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_sccp",
  "iroha_service_model",
+ "iroha_storage_client",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
@@ -5323,6 +5322,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_schema",
  "iroha_service_model",
+ "iroha_storage_client",
  "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",
@@ -5418,6 +5418,25 @@ dependencies = [
  "ratatui",
  "tokio",
  "unicode-width",
+]
+
+[[package]]
+name = "iroha_musubi_service"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "hex",
+ "iroha",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_primitives",
+ "iroha_telemetry",
+ "norito",
+ "reqwest",
+ "sorafs_car",
+ "tempfile",
+ "url",
 ]
 
 [[package]]
@@ -5629,6 +5648,32 @@ dependencies = [
  "iroha_data_model",
  "iroha_smart_contract_codec",
  "norito",
+]
+
+[[package]]
+name = "iroha_storage_client"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "eyre",
+ "hex",
+ "iroha",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_primitives",
+ "iroha_service_model",
+ "norito",
+ "rand 0.9.4",
+ "reqwest",
+ "sorafs_car",
+ "sorafs_manifest",
+ "sorafs_orchestrator",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "url",
 ]
 
 [[package]]
@@ -6872,7 +6917,9 @@ dependencies = [
  "hex",
  "iroha",
  "iroha_data_model",
+ "iroha_musubi_service",
  "iroha_primitives",
+ "iroha_storage_client",
  "ivm",
  "norito",
  "sorafs_car",
@@ -13178,6 +13225,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_primitives",
  "iroha_service_model",
+ "iroha_storage_client",
  "iroha_telemetry",
  "iroha_torii",
  "iroha_torii_shared",

@@ -114,8 +114,9 @@ use iroha_data_model::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
             CertPhase, ExecWitness, LaneBlockCommitment, LaneBlockDescriptorV1,
-            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
+            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1,
+            NativeAmxParticipantSettlement, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            compute_native_amx_participant_settlement_hash,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
@@ -23312,8 +23313,8 @@ impl Kura {
             return Err("Native AMX participant receipt lacks global commit evidence");
         }
         let settlement = &artifact.participant_settlement;
-        let computed_settlement_hash = iroha_data_model::nexus::compute_settlement_hash(settlement)
-            .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
+        let computed_settlement_hash =
+            compute_native_amx_participant_settlement_hash(settlement);
         if computed_settlement_hash != artifact.participant_settlement_hash
             || settlement.lane_id != descriptor.lane_id
             || settlement.dataspace_id != descriptor.dataspace_id
@@ -23326,7 +23327,6 @@ impl Kura {
             || !settlement.total_xor_variance.is_zero()
             || settlement.swap_metadata.is_some()
             || !settlement.nexus_fee_receipts.is_empty()
-            || !settlement.native_amx_receipts.is_empty()
             || settlement.receipts.is_empty()
             || settlement.receipts.len()
                 > crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES

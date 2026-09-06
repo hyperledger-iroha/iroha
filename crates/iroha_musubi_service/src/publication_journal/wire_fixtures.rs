@@ -1,10 +1,10 @@
 //! Pre-extraction durable journal frames, variant tags and snapshot digests.
 
 use super::*;
-use crate::musubi_runtime::{MusubiSeedIngressStageRequestV1, tests::wire_fixtures::record};
+use crate::{MusubiSeedIngressStageRequestV1, tests::wire_fixtures::record};
 
-pub(in crate::musubi_runtime) fn check_identities(fixtures: &[norito::json::Value]) {
-    use crate::musubi_runtime::tests::wire_fixtures::check_identity;
+pub(crate) fn check_identities(fixtures: &[norito::json::Value]) {
+    use crate::tests::wire_fixtures::check_identity;
     check_identity::<DurableMusubiPublicationServiceJournalLimitsV1>(fixtures);
     check_identity::<DurablePublicationOperationRecordV1>(fixtures);
     check_identity::<DurablePublicationResultStateV1>(fixtures);
@@ -17,9 +17,7 @@ pub(in crate::musubi_runtime) fn check_identities(fixtures: &[norito::json::Valu
     check_identity::<Vec<DurablePublicationAuthorizationRecordV1>>(fixtures);
 }
 
-pub(in crate::musubi_runtime) fn records(
-    seed: &MusubiSeedIngressStageRequestV1,
-) -> Vec<norito::json::Value> {
+pub(crate) fn records(seed: &MusubiSeedIngressStageRequestV1) -> Vec<norito::json::Value> {
     let deployment = MusubiPublicationServiceJournalBindingV1 {
         network_id: seed.binding.network_id,
         ingress_broker: seed.binding.ingress_broker.clone(),

@@ -32,15 +32,14 @@ use iroha::data_model::{
     sorafs::pin_registry::ManifestDigest,
 };
 use iroha_primitives::numeric::XorQuantity;
+use iroha_storage_client::da::build_car_plan_from_manifest;
 use norito::{
     decode_from_bytes,
     json::{self, Map, Number, Value},
     to_bytes,
 };
-#[cfg(test)]
-use sorafs_car::sorafs_chunker::ChunkProfile;
 use sorafs_car::{
-    CarBuildPlan, ChunkStore, FilePayload, PorProof, fetch_plan::chunk_fetch_plan_from_json,
+    ChunkStore, FilePayload, PorProof, fetch_plan::chunk_fetch_plan_from_json,
 };
 use std::{
     collections::HashSet,
@@ -1375,22 +1374,6 @@ fn load_manifest(path: &Path) -> Result<DaManifestV1> {
     decode_from_bytes(&bytes)
         .map_err(|err| eyre!("failed to decode manifest `{}`: {err}", path.display()))
 }
-#[cfg(test)]
-fn chunk_profile_from_chunk_size(chunk_size: u32) -> Result<ChunkProfile> {
-    if chunk_size == 0 {
-        return Err(eyre!("manifest chunk_size must be non-zero"));
-    }
-    let size = usize::try_from(chunk_size).map_err(|_| eyre!("chunk_size exceeds host limits"))?;
-    Ok(ChunkProfile {
-        min_size: size,
-        target_size: size,
-        max_size: size,
-        break_mask: 1,
-    })
-}
-fn build_car_plan_from_manifest(manifest: &DaManifestV1) -> Result<CarBuildPlan> {
-    sorafs_car::build_plan_from_da_manifest(manifest).map_err(|err| eyre!(err))
-}
 fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> Result<()> {
     let blob_hash_bytes = manifest.blob_hash.as_ref();
     if store.payload_digest().as_bytes() != blob_hash_bytes {
@@ -1911,14 +1894,6 @@ mod tests {
         assert!(
             display.contains("artifacts/da") || display.contains("artifacts\\da"),
             "unexpected root: {root:?}"
-        );
-    }
-    #[test]
-    fn chunk_profile_from_chunk_size_rejects_zero() {
-        let err = chunk_profile_from_chunk_size(0).expect_err("expected failure");
-        assert!(
-            err.to_string().contains("chunk_size must be non-zero"),
-            "{err:?}"
         );
     }
     #[test]

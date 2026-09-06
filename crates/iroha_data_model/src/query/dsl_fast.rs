@@ -555,12 +555,12 @@ impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
                 if norito::core::use_packed_struct() {
                     norito::core::NoritoSerialize::serialize(raw, writer)
                 } else {
-                    norito::core::write_len_prefixed_exact(writer, raw, &mut field)
+                    norito::core::write_len_prefixed(writer, raw, &mut field)
                 }
             }
             Self::TxPredicate(tree) => {
                 norito::core::NoritoSerialize::serialize(&2_u32, writer)?;
-                norito::core::write_len_prefixed_exact(writer, *tree, &mut field)
+                norito::core::write_len_prefixed(writer, *tree, &mut field)
             }
         }
     }

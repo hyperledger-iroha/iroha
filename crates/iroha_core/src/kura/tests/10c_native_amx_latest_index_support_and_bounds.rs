@@ -167,7 +167,7 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
             proposal.descriptor.accepted_transaction_hashes[0],
         );
-        let settlement = LaneBlockCommitment {
+        let settlement = NativeAmxParticipantSettlement {
             block_height: proposal.descriptor.lane_block_height,
             lane_id: proposal.descriptor.lane_id,
             lane_incarnation: proposal.descriptor.lane_incarnation,
@@ -187,10 +187,8 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
                 timestamp_ms: application_block_height,
             }],
             nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
         };
-        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-            .expect("hash Native AMX fixture settlement");
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
         let leaf = NativeAmxApplicationManifestLeafV1 {
             version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             lane_id: proposal.descriptor.lane_id,
@@ -477,7 +475,7 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
         );
         let result =
             TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::default()));
-        let settlement = LaneBlockCommitment {
+        let settlement = NativeAmxParticipantSettlement {
             block_height: proposal.descriptor.lane_block_height,
             lane_id: proposal.descriptor.lane_id,
             lane_incarnation: proposal.descriptor.lane_incarnation,
@@ -497,10 +495,8 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
                 timestamp_ms: application_block_height,
             }],
             nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
         };
-        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-            .expect("hash two-route Native settlement");
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
         let leaf = NativeAmxApplicationManifestLeafV1 {
             version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             lane_id: proposal.descriptor.lane_id,

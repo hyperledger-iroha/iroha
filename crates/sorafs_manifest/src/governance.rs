@@ -2956,7 +2956,7 @@ mod borrowed_norito {
                     writer.write_all(&[1])?;
                     let value = Value(value);
                     let mut temporary = norito::core::DeriveSmallBuf::new();
-                    norito::core::write_len_prefixed_exact(writer, &value, &mut temporary)?;
+                    norito::core::write_len_prefixed(writer, &value, &mut temporary)?;
                 }
                 None => writer.write_all(&[0])?,
             }
@@ -3018,7 +3018,7 @@ mod borrowed_norito {
                     writer.write_all(&[1])?;
                     let value = Vec(bytes);
                     let mut temporary = norito::core::DeriveSmallBuf::new();
-                    norito::core::write_len_prefixed_exact(writer, &value, &mut temporary)?;
+                    norito::core::write_len_prefixed(writer, &value, &mut temporary)?;
                 }
                 None => writer.write_all(&[0])?,
             }

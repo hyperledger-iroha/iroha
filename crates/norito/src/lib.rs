@@ -209,9 +209,6 @@ pub mod codec {
         }
         /// Return the encoded length for `self` without allocating a buffer.
         fn encoded_len(&self) -> usize {
-            if let Some(len) = self.encoded_len_exact() {
-                return len;
-            }
             let mut sink = std::io::sink();
             encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
@@ -363,18 +360,18 @@ pub mod codec {
             assert_eq!(value.encoded_len(), bytes.len());
         }
         #[test]
-        fn encoded_len_uses_exact_len_when_available() {
+        fn encoded_len_counts_serialized_bytes_instead_of_trusting_exact_len() {
             EXACT_CALLS.store(0, Ordering::Relaxed);
             let value = ExactLenOnly(7);
             assert_eq!(value.encoded_len(), 1);
-            assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
+            assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 0);
         }
         #[test]
-        fn seq_encoding_uses_len_hints_only_for_capacity() {
+        fn seq_encoding_does_not_trust_length_hints() {
             HINT_CALLS.store(0, Ordering::Relaxed);
             let items = vec![Hinted(1), Hinted(2), Hinted(3)];
             assert_eq!(items.encode().last(), Some(&3));
-            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 3);
+            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 0);
         }
         #[test]
         fn huge_length_hint_is_capped_before_reservation() {
@@ -607,7 +604,7 @@ pub mod json {
     /// A Kotodama boundary value may use the complete 256-level public type budget beneath its
     /// required parameter object. The one extra structural level covers that boundary envelope
     /// without relaxing the 256-level guard used by recursively owned typed decoders.
-    pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1;
+    pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_VALUE_NESTING_DEPTH + 1;
     thread_local! {
         static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
     }
@@ -616,10 +613,10 @@ pub mod json {
         fn enter() -> Result<Self, Error> {
             OWNED_VALUE_DECODE_DEPTH.with(|depth| {
                 let next = depth.get().saturating_add(1);
-                if next > crate::core::MAX_OWNED_VALUE_DECODE_DEPTH {
+                if next > crate::core::MAX_VALUE_NESTING_DEPTH {
                     return Err(Error::NestingDepthExceeded {
                         depth: next,
-                        limit: crate::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                        limit: crate::core::MAX_VALUE_NESTING_DEPTH,
                         context: "owned JSON value",
                     });
                 }
@@ -2341,16 +2338,16 @@ pub mod json {
         use crate::json;
         #[test]
         fn owned_value_decode_depth_guard_is_bounded_and_restores() {
-            let guards = (0..crate::core::MAX_OWNED_VALUE_DECODE_DEPTH)
+            let guards = (0..crate::core::MAX_VALUE_NESTING_DEPTH)
                 .map(|_| OwnedValueDecodeDepthGuard::enter().expect("depth within JSON limit"))
                 .collect::<Vec<_>>();
             assert!(matches!(
                 OwnedValueDecodeDepthGuard::enter(),
                 Err(Error::NestingDepthExceeded {
                     depth,
-                    limit: crate::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                    limit: crate::core::MAX_VALUE_NESTING_DEPTH,
                     context: "owned JSON value",
-                }) if depth == crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1
+                }) if depth == crate::core::MAX_VALUE_NESTING_DEPTH + 1
             ));
             drop(guards);
             OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore JSON depth");
@@ -2593,7 +2590,7 @@ pub mod json {
                 .name("norito-json-iterative-boundary".into())
                 .stack_size(128 * 1024)
                 .spawn(|| -> Result<(), String> {
-                    let wrappers = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+                    let wrappers = crate::core::MAX_VALUE_NESTING_DEPTH - 1;
                     let at_255 = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
                     validate_json(&at_255).map_err(|error| error.to_string())?;
                     let value = parse_value(&at_255).map_err(|error| error.to_string())?;
@@ -8894,7 +8891,7 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
         payload_len,
         payload_len.saturating_mul(8),
         allocation_limit,
-        core::MAX_OWNED_VALUE_DECODE_DEPTH,
+        core::MAX_VALUE_NESTING_DEPTH,
     )
 }
 

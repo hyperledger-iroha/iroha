@@ -2,7 +2,9 @@ use crate::{JsonTarget, write_json_output};
 use blake3::hash;
 use hex::encode as hex_encode;
 use integration_tests::da::pdp_potr::{DEFAULT_SEED, SimulationConfig, run_simulation};
-use iroha::da::{DaProofBenchmark, DaProofConfig, benchmark_da_proof_verification};
+use iroha_storage_client::da::{
+    DaProofBenchmark, DaProofConfig, benchmark_da_proof_verification,
+};
 use iroha_config::{
     base::read::ConfigReader,
     parameters::{

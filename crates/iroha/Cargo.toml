@@ -71,15 +71,13 @@ iroha_config_base = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_primitives = { workspace = true }
 tracing = { workspace = true }
-iroha_telemetry = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 iroha_sccp = { workspace = true }
 sorafs_manifest = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
-sorafs_orchestrator = { workspace = true }
 
-iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http", "transparent_api"] }
 iroha_executor_data_model = { workspace = true }
 
 reqwest = { workspace = true, features = ["blocking"] }
@@ -103,18 +101,15 @@ toml = { workspace = true }
 hmac = "0.12.1"
 blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
 blake3.workspace = true
-tempfile = { workspace = true }
 
 [dev-dependencies]
 iroha_test_samples = { workspace = true }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 assertables = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tokio-stream = { workspace = true }
 sorafs_chunker = { workspace = true }
-
-[[test]]
-name = "musubi_archive_fetch_memory"
-path = "tests/musubi_archive_fetch_memory.rs"
+tempfile = { workspace = true }
 
 [[test]]
 name = "tx_ttl"

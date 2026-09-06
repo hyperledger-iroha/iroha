@@ -246,10 +246,10 @@ impl AuthenticatedSorafsArchiveTransportV1 for UnavailableSorafsArchiveTransport
 }
 /// Production authenticated `SoraFS` archive transport.
 pub type ProductionSorafsArchiveTransportV1 =
-    iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1;
+    iroha_storage_client::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1;
 /// Parsed secret-free fetch configuration that defers operator keys, DNS, and HTTP clients.
 pub type PreparedProductionSorafsArchiveTransportV1 =
-    iroha::musubi_archive_fetch::PreparedMusubiArchiveFetchConfigV1;
+    iroha_storage_client::musubi_archive_fetch::PreparedMusubiArchiveFetchConfigV1;
 /// Parse the fetch subtree from the same bounded `client.toml` image used by registry reads.
 ///
 /// # Errors
@@ -294,7 +294,7 @@ impl AuthenticatedSorafsArchiveTransportV1 for ProductionSorafsArchiveTransportV
         provider: ProviderId,
         commitment: &MusubiArchiveCommitmentV1,
     ) -> Result<CarBuildPlan, ArchiveTransportErrorV1> {
-        iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::storage_plan(
+        iroha_storage_client::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::storage_plan(
             self,
             pin_manifest,
             provider,
@@ -309,7 +309,7 @@ impl AuthenticatedSorafsArchiveTransportV1 for ProductionSorafsArchiveTransportV
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
     ) -> Result<Box<dyn Read + Send + 'static>, ArchiveTransportErrorV1> {
-        iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::open_authenticated_car(
+        iroha_storage_client::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::open_authenticated_car(
             self,
             pin_manifest,
             provider,
@@ -319,7 +319,7 @@ impl AuthenticatedSorafsArchiveTransportV1 for ProductionSorafsArchiveTransportV
         .map_err(runtime_error)
     }
     fn take_stream_failure(&mut self) -> Option<ArchiveTransportErrorV1> {
-        iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::take_stream_failure(
+        iroha_storage_client::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::take_stream_failure(
             self,
         )
         .map(runtime_error)
@@ -869,9 +869,9 @@ const fn transport_error(error: ArchiveTransportErrorV1) -> ArchiveFetchErrorV1 
     ArchiveFetchErrorV1::new(error.class(), error.code())
 }
 fn runtime_error(
-    error: iroha::musubi_archive_fetch::MusubiArchiveRuntimeErrorV1,
+    error: iroha_storage_client::musubi_archive_fetch::MusubiArchiveRuntimeErrorV1,
 ) -> ArchiveTransportErrorV1 {
-    use iroha::musubi_archive_fetch::{
+    use iroha_storage_client::musubi_archive_fetch::{
         MusubiArchiveRuntimeFailureClassV1, MusubiArchiveRuntimeIntegritySurfaceV1,
     };
     match error.class() {

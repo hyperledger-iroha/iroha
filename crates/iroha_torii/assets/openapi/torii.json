@@ -23874,10 +23874,6 @@
           "lane_incarnation": {
             "$ref": "#/components/schemas/Hash"
           },
-          "native_amx_receipts": {
-            "maxItems": 0,
-            "type": "array"
-          },
           "nexus_fee_receipts": {
             "maxItems": 0,
             "type": "array"
@@ -23925,8 +23921,7 @@
           "total_xor_variance",
           "swap_metadata",
           "receipts",
-          "nexus_fee_receipts",
-          "native_amx_receipts"
+          "nexus_fee_receipts"
         ],
         "type": "object"
       },

@@ -240,7 +240,7 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
     let (session, _) =
         sample_committed_lane_block_session_for_kura(LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
     let proposal = session.proposal;
-    let settlement = LaneBlockCommitment {
+    let settlement = NativeAmxParticipantSettlement {
         block_height: 1,
         lane_id: LaneId::SINGLE,
         lane_incarnation: proposal.descriptor.lane_incarnation,
@@ -253,10 +253,8 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
     };
-    let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-        .expect("hash fixture settlement");
+    let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
     let mut receipt = NativeAmxParticipantApplicationReceiptArtifact {
         version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
         participant_proposal: proposal.clone(),

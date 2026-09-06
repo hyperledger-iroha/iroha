@@ -62,6 +62,7 @@ iroha_torii_shared = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha = { workspace = true, features = ["test-fixtures"] }
+iroha_storage_client = { workspace = true }
 ivm = { workspace = true }
 norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }

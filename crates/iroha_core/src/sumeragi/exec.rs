@@ -6,7 +6,11 @@ use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
         SignedBlock,
-        consensus::{ExecWitness, LaneBlockCommitment, LaneBlockProposalV1, NativeAmxReceipt},
+        consensus::{
+            ExecWitness, LaneBlockCommitment, LaneBlockProposalV1,
+            NativeAmxParticipantSettlement, NativeAmxReceipt,
+            compute_native_amx_participant_settlement_hash,
+        },
         consensus_v2 as wire,
     },
     merge::MergeLedgerEntry,
@@ -30,8 +34,8 @@ fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
 #[derive(Debug)]
 struct NativeAmxApplicationGroup {
     participant_proposal: LaneBlockProposalV1,
-    participant_settlement: LaneBlockCommitment,
-    participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    participant_settlement: NativeAmxParticipantSettlement,
+    participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     settlement_source_ids: Vec<[u8; Hash::LENGTH]>,
     members: Vec<wire::NativeAmxApplicationManifestMemberV1>,
     results: Vec<TransactionResult>,
@@ -212,7 +216,7 @@ pub(crate) struct NativeAmxApplicationManifestEntryV1 {
     /// Exact participant proposal retained in the durable receipt.
     pub(crate) participant_proposal: LaneBlockProposalV1,
     /// Exact zero-effect settlement retained in the durable receipt.
-    pub(crate) participant_settlement: LaneBlockCommitment,
+    pub(crate) participant_settlement: NativeAmxParticipantSettlement,
     /// Exact canonical transaction results aligned with `leaf.members`.
     pub(crate) results: Vec<TransactionResult>,
 }
@@ -307,9 +311,9 @@ impl NativeAmxApplicationManifestV1 {
                     || prepare.participant_proposal_hash != leg.participant_proposal.proposal_hash
                     || commit.participant_proposal_hash != leg.participant_proposal.proposal_hash
                     || prepare.participant_settlement_commitment
-                        != Hash::from(leg.participant_settlement_hash)
+                        != leg.participant_settlement_hash
                     || commit.participant_settlement_commitment
-                        != Hash::from(leg.participant_settlement_hash)
+                        != leg.participant_settlement_hash
                 {
                     return Err(
                         "Native AMX participant QCs do not bind the canonical source/entrypoint"
@@ -317,10 +321,7 @@ impl NativeAmxApplicationManifestV1 {
                     );
                 }
                 let computed_settlement_hash =
-                    iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
-                        .map_err(|_| {
-                        "Native AMX participant control settlement cannot be hashed".to_owned()
-                    })?;
+                    compute_native_amx_participant_settlement_hash(&leg.participant_settlement);
                 if computed_settlement_hash != leg.participant_settlement_hash {
                     return Err(
                         "Native AMX participant control settlement hash mismatch".to_owned()
@@ -335,7 +336,6 @@ impl NativeAmxApplicationManifestV1 {
                     || !settlement.total_xor_variance.is_zero()
                     || settlement.swap_metadata.is_some()
                     || !settlement.nexus_fee_receipts.is_empty()
-                    || !settlement.native_amx_receipts.is_empty()
                     || settlement.receipts.is_empty()
                     || settlement.receipts.len() > wire::MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS
                     || settlement.receipts.iter().any(|receipt| {
@@ -791,8 +791,8 @@ mod tests {
     #[derive(Clone)]
     struct ManifestParticipantFixture {
         proposal: LaneBlockProposalV1,
-        settlement: LaneBlockCommitment,
-        settlement_hash: HashOf<LaneBlockCommitment>,
+        settlement: NativeAmxParticipantSettlement,
+        settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     }
     pub(super) struct ManifestBlockFixture {
         pub(super) block: SignedBlock,
@@ -876,7 +876,7 @@ mod tests {
                 timestamp_ms: MANIFEST_APPLICATION_HEIGHT,
             })
             .collect::<Vec<_>>();
-        let settlement = LaneBlockCommitment {
+        let settlement = NativeAmxParticipantSettlement {
             block_height: MANIFEST_LANE_BLOCK_HEIGHT,
             lane_id,
             lane_incarnation,
@@ -889,10 +889,8 @@ mod tests {
             swap_metadata: None,
             receipts,
             nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
         };
-        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-            .expect("hash manifest participant settlement");
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
         ManifestParticipantFixture {
             proposal,
             settlement,
@@ -936,7 +934,7 @@ mod tests {
             participant_lane_block_height: descriptor.lane_block_height,
             participant_lane_block_view: descriptor.lane_block_view,
             participant_proposal_hash: participant.proposal.proposal_hash,
-            participant_settlement_commitment: Hash::from(participant.settlement_hash),
+            participant_settlement_commitment: participant.settlement_hash,
             participant_validator_set_hash: descriptor.validator_set_hash,
             participant_validator_count: descriptor.validator_count,
             participant_min_quorum: descriptor.min_quorum,

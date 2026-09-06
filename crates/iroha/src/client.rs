@@ -17,10 +17,9 @@ use crate::{
     da::{
         DaCommitmentListRequest, DaCommitmentListResponse, DaCommitmentProofRequest,
         DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaIngestParams, DaManifestBundle,
-        DaManifestPersistedPaths, DaPinIntentListRequest, DaPinIntentListResponse,
-        DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaProofArtifactMetadata, DaProofConfig,
-        PDP_COMMITMENT_HEADER, build_car_plan_from_manifest, build_da_request,
-        decode_pdp_commitment_header, generate_da_proof_artifact, generate_da_proof_summary,
+        DaPinIntentListRequest, DaPinIntentListResponse, DaPinIntentQueryRequest,
+        DaPinIntentVerifyResponse, PDP_COMMITMENT_HEADER, build_da_request,
+        decode_pdp_commitment_header,
     },
     data_model::{
         ChainId,
@@ -177,7 +176,7 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     /// Exact public-map count vector.
     pub counts: PrivateSettlementTestNetworkStateCountsV1,
 }
-use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
 pub use iroha_torii_shared::kagemusha_api::{
     KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
     KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1, KagemushaReadinessV1,
@@ -236,14 +235,6 @@ use sorafs_manifest::{
     alias_cache::{decode_alias_proof_untrusted_signers, unix_now_secs},
     pdp::PdpCommitmentV1,
     repair::RepairTicketId,
-};
-use sorafs_orchestrator::{
-    OrchestratorConfig, PolicyOverride, fetch_via_gateway as orchestrator_fetch_via_gateway,
-    prelude::{
-        CarBuildPlan, FetchSession as SorafsFetchOutcome,
-        GatewayFetchConfig as SorafsGatewayFetchConfig,
-        GatewayProviderInput as SorafsGatewayProviderInput, GuardSet, RelayDirectory,
-    },
 };
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -6958,46 +6949,6 @@ pub struct SorafsTokenOverrides {
     /// Override the allowed requests per minute.
     pub requests_per_minute: Option<u32>,
 }
-/// Optional tuning knobs applied when orchestrating `SoraFS` gateway fetches.
-#[derive(Debug, Default, Clone)]
-pub struct SorafsGatewayFetchOptions {
-    /// Maximum retry attempts per chunk before aborting the session.
-    pub retry_budget: Option<usize>,
-    /// Hard cap on the number of providers used in a session.
-    pub max_peers: Option<usize>,
-    /// Override the telemetry region label emitted with orchestrator metrics.
-    pub telemetry_region: Option<String>,
-    /// Override the default `soranet-first` transport policy. Use
-    /// [`TransportPolicy::DirectOnly`] only when staging a downgrade or when a compliance policy
-    /// temporarily forbids relay use; pass [`TransportPolicy::SoranetStrict`] to require PQ relays.
-    pub transport_policy: Option<TransportPolicy>,
-    /// Override the staged anonymity policy applied to `SoraNet` providers (defaults to Stage A / `anon-guard-pq`).
-    pub anonymity_policy: Option<AnonymityPolicy>,
-    /// Optional guard cache describing pinned `SoraNet` relays.
-    pub guard_set: Option<GuardSet>,
-    /// Optional `SoraNet` directory describing the available relays.
-    pub relay_directory: Option<RelayDirectory>,
-    /// Optional write-mode hint to tighten PQ requirements (e.g., uploads).
-    pub write_mode_hint: Option<WriteModeHint>,
-    /// Overrides forcing a specific transport/anonymity stage for this request.
-    pub policy_override: PolicyOverride,
-    /// Optional scoreboard controls used for adoption evidence.
-    pub scoreboard: Option<SorafsGatewayScoreboardOptions>,
-    /// Expected cache version advertised by successful gateway responses.
-    pub expected_cache_version: Option<String>,
-}
-/// Scoreboard persistence and evaluation overrides for gateway fetches.
-#[derive(Debug, Default, Clone)]
-pub struct SorafsGatewayScoreboardOptions {
-    /// Persist the scoreboard JSON artefact to the provided path.
-    pub persist_path: Option<PathBuf>,
-    /// Override the Unix timestamp (seconds) used when evaluating adverts.
-    pub now_unix_secs: Option<u64>,
-    /// Optional metadata blob (serialized as JSON) persisted alongside the scoreboard entries.
-    pub metadata: Option<JsonValue>,
-    /// Human-readable label describing the telemetry stream that produced the scoreboard snapshot.
-    pub telemetry_source_label: Option<String>,
-}
 /// Response returned after submitting a DA ingest request via [`Client::submit_da_blob`].
 #[derive(Debug, Clone)]
 pub struct DaIngestSubmitResult {
@@ -7038,108 +6989,6 @@ struct DaIngestResponsePayload {
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
     pin_scope: Option<DaPinScopeV1>,
-}
-/// Aggregated artefacts returned by [`Client::prove_da_availability`].
-#[derive(Debug, Clone)]
-pub struct DaAvailabilityProof {
-    /// Manifest/chunk plan bundle used for verification.
-    pub manifest: DaManifestBundle,
-    /// Detailed orchestrator session, including chunk receipts and provider telemetry.
-    pub fetch_session: SorafsFetchOutcome,
-    /// `PoR` summary mirroring `iroha da prove --json-out`.
-    pub proof_summary: JsonValue,
-    /// Sampling configuration used to derive the proof summary.
-    pub proof_config: DaProofConfig,
-}
-/// File system artefacts produced when persisting a DA availability proof.
-#[derive(Debug, Clone)]
-pub struct DaAvailabilityProofPersistedPaths {
-    /// Paths to the manifest artefacts written to disk.
-    pub manifest: DaManifestPersistedPaths,
-    /// Path to the assembled payload fetched from the gateway.
-    pub payload_path: PathBuf,
-    /// Path to the rendered proof summary JSON.
-    pub proof_summary_path: PathBuf,
-    /// Path to the persisted scoreboard JSON, when enabled.
-    pub scoreboard_path: Option<PathBuf>,
-}
-fn derive_scoreboard_telemetry_label(
-    explicit: Option<&str>,
-    options: &SorafsGatewayFetchOptions,
-    chain_id: &ChainId,
-) -> String {
-    if let Some(label) = explicit {
-        let trimmed = label.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-    if let Some(region) = options.telemetry_region.as_deref() {
-        let trimmed = region.trim();
-        if !trimmed.is_empty() {
-            return format!("region:{trimmed}");
-        }
-    }
-    format!("chain:{chain_id}")
-}
-fn base_scoreboard_metadata() -> JsonMap {
-    let mut map = JsonMap::new();
-    map.insert("version".into(), JsonValue::from(env!("CARGO_PKG_VERSION")));
-    map.insert("use_scoreboard".into(), JsonValue::from(true));
-    map.insert("allow_implicit_metadata".into(), JsonValue::from(false));
-    map.insert("gateway_manifest_provided".into(), JsonValue::Null);
-    map
-}
-fn ensure_scoreboard_metadata(
-    metadata: Option<JsonValue>,
-    telemetry_label: Option<&str>,
-    assume_now: u64,
-) -> JsonValue {
-    let mut map = match metadata {
-        Some(JsonValue::Object(map)) => map,
-        Some(other) => return other,
-        None => base_scoreboard_metadata(),
-    };
-    let insert_if_absent = |map: &mut JsonMap, key: &str, value: JsonValue| match map.get(key) {
-        Some(existing) if !existing.is_null() => {}
-        _ => {
-            map.insert(key.into(), value);
-        }
-    };
-    insert_if_absent(&mut map, "assume_now", JsonValue::from(assume_now));
-    if let Some(label) = telemetry_label
-        && !label.is_empty()
-    {
-        insert_if_absent(&mut map, "telemetry_source", JsonValue::from(label));
-    }
-    JsonValue::Object(map)
-}
-fn annotate_scoreboard_with_gateway_context(
-    metadata: &mut JsonValue,
-    gateway_config: &SorafsGatewayFetchConfig,
-) {
-    let JsonValue::Object(map) = metadata else {
-        return;
-    };
-    let manifest_id = gateway_config.manifest_id_hex.trim().to_ascii_lowercase();
-    map.insert("gateway_manifest_id".into(), JsonValue::from(manifest_id));
-    let manifest_cid_value =
-        gateway_config
-            .expected_manifest_cid_hex
-            .as_deref()
-            .map_or(JsonValue::Null, |cid| {
-                let trimmed = cid.trim();
-                if trimmed.is_empty() {
-                    JsonValue::Null
-                } else {
-                    JsonValue::from(trimmed.to_ascii_lowercase())
-                }
-            });
-    map.insert("gateway_manifest_cid".into(), manifest_cid_value);
-    map.insert(
-        "gateway_manifest_provided".into(),
-        JsonValue::from(gateway_config.manifest_envelope_b64.is_some()),
-    );
 }
 fn normalize_storage_ticket_hex(value: &str) -> Result<String> {
     let trimmed = value
@@ -8656,13 +8505,6 @@ impl SorafsReserveCommandRoute {
             ),
         }
     }
-}
-/// Errors returned when executing a `SoraFS` orchestrated fetch.
-#[derive(Debug, Error)]
-pub enum SorafsFetchError {
-    /// Wrapper around gateway/orchestrator failures.
-    #[error(transparent)]
-    Orchestrator(#[from] sorafs_orchestrator::GatewayOrchestratorError),
 }
 /// Errors raised when the Torii node's data model version is incompatible.
 #[derive(Debug, Error, Clone)]
@@ -11184,8 +11026,7 @@ mod evidence_http_tests {
     use std::{
         collections::HashMap,
         convert::TryInto,
-        panic::{AssertUnwindSafe, catch_unwind},
-        sync::{Arc, Mutex, OnceLock},
+        sync::{Arc, Mutex},
         time::Duration,
     };
     pub(super) type SnapshotStore = Arc<Mutex<Vec<RequestSnapshot>>>;
@@ -11237,10 +11078,6 @@ mod evidence_http_tests {
             norito::to_bytes(value).expect("encode norito response"),
             Some(APPLICATION_NORITO),
         )
-    }
-    fn hook_mutex() -> &'static Mutex<()> {
-        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-        GUARD.get_or_init(|| Mutex::new(()))
     }
     pub(super) fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<HttpResponse<Vec<u8>>> + Send + Sync + 'static,
@@ -12859,53 +12696,6 @@ mod evidence_http_tests {
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
         super::tests::assert_canonical_account_signed_request(&client, &snapshot);
-    }
-    type SorafsFetchHook = Arc<
-        dyn Fn(
-                &CarBuildPlan,
-                &SorafsGatewayFetchConfig,
-                &[SorafsGatewayProviderInput],
-                &SorafsGatewayFetchOptions,
-            ) -> Result<SorafsFetchOutcome, SorafsFetchError>
-            + Send
-            + Sync,
-    >;
-    fn sorafs_fetch_hook_slot() -> &'static Mutex<Option<SorafsFetchHook>> {
-        static HOOK: OnceLock<Mutex<Option<SorafsFetchHook>>> = OnceLock::new();
-        HOOK.get_or_init(|| Mutex::new(None))
-    }
-    /// Fetch the currently installed mocked gateway fetch hook, if any.
-    pub(super) fn sorafs_fetch_hook() -> Option<SorafsFetchHook> {
-        sorafs_fetch_hook_slot()
-            .lock()
-            .expect("lock fetch hook slot")
-            .clone()
-    }
-    /// Install a mocked gateway fetch hook for the duration of the provided closure.
-    pub(super) fn with_mock_sorafs_fetch<R>(
-        hook: impl Fn(
-            &CarBuildPlan,
-            &SorafsGatewayFetchConfig,
-            &[SorafsGatewayProviderInput],
-            &SorafsGatewayFetchOptions,
-        ) -> Result<SorafsFetchOutcome, SorafsFetchError>
-        + Send
-        + Sync
-        + 'static,
-        f: impl FnOnce() -> R,
-    ) -> R {
-        let _guard = hook_mutex().lock().expect("acquire hook mutex");
-        *sorafs_fetch_hook_slot()
-            .lock()
-            .expect("lock fetch hook slot") = Some(Arc::new(hook));
-        let outcome = catch_unwind(AssertUnwindSafe(f));
-        *sorafs_fetch_hook_slot()
-            .lock()
-            .expect("lock fetch hook slot") = None;
-        match outcome {
-            Ok(value) => value,
-            Err(panic) => std::panic::resume_unwind(panic),
-        }
     }
     fn alias_proof_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         let mut bundle = AliasProofBundleV1 {
@@ -15474,7 +15264,12 @@ impl Client {
     fn canonical_query_string(raw: Option<&str>) -> Result<String> {
         canonical_query_string_v1(raw)
     }
-    pub(crate) fn operator_network_request_message(
+    /// Construct the bounded network-separated message signed by operator HTTP requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the URL or request fields cannot be represented canonically.
+    pub fn operator_network_request_message(
         network_id: &NetworkId,
         method: &HttpMethod,
         url: &Url,
@@ -15609,82 +15404,6 @@ impl Client {
         headers.insert(HEADER_TIMESTAMP_MS.to_owned(), timestamp);
         headers.insert(HEADER_NONCE.to_owned(), nonce);
         Ok(headers)
-    }
-    fn build_sorafs_gateway_fetch_config(
-        &self,
-        options: &SorafsGatewayFetchOptions,
-    ) -> (OrchestratorConfig, Option<usize>) {
-        let telemetry_region = options
-            .telemetry_region
-            .clone()
-            .or_else(|| Some(self.chain.to_string()));
-        let mut config = OrchestratorConfig {
-            telemetry_region,
-            ..OrchestratorConfig::default()
-        };
-        config = config.with_rollout_phase(self.rollout_phase);
-        let phase_default_policy = config.anonymity_policy;
-        if self.default_anonymity_policy != phase_default_policy {
-            config.anonymity_policy = self.default_anonymity_policy;
-            config.anonymity_policy_override = Some(self.default_anonymity_policy);
-        }
-        config.write_mode = options.write_mode_hint.unwrap_or(WriteModeHint::ReadOnly);
-        if let Some(budget) = options.retry_budget {
-            config.fetch.per_chunk_retry_limit = if budget == 0 { None } else { Some(budget) };
-        }
-        let max_peers = options
-            .max_peers
-            .and_then(|value| if value == 0 { None } else { Some(value) });
-        let mut explicit_transport = options.transport_policy.is_some_and(|policy| {
-            config.transport_policy = policy;
-            true
-        });
-        let mut explicit_anonymity = options.anonymity_policy.is_some_and(|policy| {
-            config.anonymity_policy = policy;
-            config.anonymity_policy_override = Some(policy);
-            true
-        });
-        config.policy_override = options.policy_override.clone();
-        if config.policy_override.transport_policy.is_some() {
-            explicit_transport = true;
-        }
-        if config.policy_override.anonymity_policy.is_some() {
-            explicit_anonymity = true;
-        }
-        if let Some(guard_set) = options.guard_set.clone() {
-            config.guard_set = Some(guard_set);
-        }
-        if let Some(directory) = options.relay_directory.clone() {
-            config.relay_directory = Some(directory);
-        }
-        if let Some(scoreboard) = &options.scoreboard {
-            if let Some(path) = scoreboard.persist_path.as_ref() {
-                config.scoreboard.persist_path = Some(path.clone());
-            }
-            if let Some(now) = scoreboard.now_unix_secs {
-                config.scoreboard.now_unix_secs = now;
-            }
-            let telemetry_label = derive_scoreboard_telemetry_label(
-                scoreboard.telemetry_source_label.as_deref(),
-                options,
-                &self.chain,
-            );
-            config.scoreboard.persist_metadata = Some(ensure_scoreboard_metadata(
-                scoreboard.metadata.clone(),
-                Some(telemetry_label.as_str()),
-                config.scoreboard.now_unix_secs,
-            ));
-        }
-        if config.write_mode.enforces_pq_only() {
-            if !explicit_anonymity {
-                config.anonymity_policy = AnonymityPolicy::StrictPq;
-                config.anonymity_policy_override = Some(AnonymityPolicy::StrictPq);
-            }
-            if !explicit_transport {
-                config.transport_policy = TransportPolicy::SoranetStrict;
-            }
-        }
-        (config, max_peers)
     }
     fn enforce_alias_policy(&self, response: &Response<Vec<u8>>) -> Result<()> {
         if response.status() != StatusCode::OK {
@@ -19583,17 +19302,6 @@ impl Client {
             response_headers_json,
         })
     }
-    fn build_da_proof_summary_from_session(
-        bundle: &DaManifestBundle,
-        session: &SorafsFetchOutcome,
-        proof: &DaProofConfig,
-    ) -> Result<(JsonValue, DaProofConfig)> {
-        let payload = session.outcome.assemble_payload();
-        let manifest = bundle.decode_manifest()?;
-        let applied = proof.clone();
-        let summary = generate_da_proof_summary(&manifest, &payload, &applied)?;
-        Ok((summary, applied))
-    }
     fn send_da_json_get(&self, path: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, path);
         self.default_request(HttpMethod::GET, url)
@@ -19773,249 +19481,6 @@ impl Client {
             "failed to verify DA pin intent proof",
             "failed to decode DA pin intent verify response",
         )
-    }
-    /// Fetch a DA manifest bundle and persist the artefacts to `output_dir`.
-    ///
-    /// This mirrors the behaviour of `iroha da get-blob`, emitting the Norito
-    /// manifest bytes plus JSON copies so downstream tooling can reuse the
-    /// stored artefacts without invoking the CLI binary.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest bundle cannot be fetched or the artefacts fail to persist.
-    pub fn fetch_da_manifest_to_dir(
-        &self,
-        storage_ticket_hex: &str,
-        output_dir: impl AsRef<Path>,
-    ) -> Result<DaManifestPersistedPaths> {
-        let bundle = self.get_da_manifest_bundle(storage_ticket_hex)?;
-        let label = bundle.storage_ticket_hex.clone();
-        bundle.persist_to_dir(output_dir, &label)
-    }
-    /// Build a CAR plan for the provided DA manifest bundle.
-    ///
-    /// The returned plan can be fed directly into [`Self::sorafs_fetch_via_gateway`] to reproduce
-    /// the `iroha da get` behaviour programmatically.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest fails to decode or chunk metadata is invalid.
-    pub fn build_da_car_plan(bundle: &DaManifestBundle) -> Result<CarBuildPlan> {
-        let manifest = bundle.decode_manifest()?;
-        build_car_plan_from_manifest(&manifest)
-    }
-    /// Generate a `PoR` summary for the provided payload using the supplied manifest bundle.
-    ///
-    /// This mirrors the `iroha da prove --json-out` output so SDK consumers can attach the same
-    /// artefacts without shelling out to the CLI.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest cannot be decoded, the payload does not match the manifest,
-    /// or `PoR` proofs cannot be constructed.
-    pub fn prove_da_payload(
-        bundle: &DaManifestBundle,
-        payload: &[u8],
-        proof: &DaProofConfig,
-    ) -> Result<JsonValue> {
-        let manifest = bundle.decode_manifest()?;
-        generate_da_proof_summary(&manifest, payload, proof)
-    }
-    /// Build a CLI-compatible DA proof artefact with manifest/payload annotations.
-    ///
-    /// This mirrors the JSON that `iroha da prove --json-out` emits, letting SDKs attach
-    /// the same provenance metadata without invoking the CLI.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest fails to decode or proof derivation is unsuccessful.
-    pub fn build_da_proof_artifact(
-        bundle: &DaManifestBundle,
-        payload: &[u8],
-        proof: &DaProofConfig,
-        metadata: &DaProofArtifactMetadata,
-    ) -> Result<JsonValue> {
-        let manifest = bundle.decode_manifest()?;
-        generate_da_proof_artifact(&manifest, payload, proof, metadata)
-    }
-    /// Persist a DA proof artefact to disk (defaults to pretty JSON + newline).
-    ///
-    /// Returns the rendered artefact so callers can attach it to additional outputs without
-    /// re-reading the file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the artefact cannot be rendered or written to disk.
-    pub fn write_da_proof_artifact(
-        bundle: &DaManifestBundle,
-        payload: &[u8],
-        proof: &DaProofConfig,
-        metadata: &DaProofArtifactMetadata,
-        output_path: impl AsRef<Path>,
-        pretty: bool,
-    ) -> Result<JsonValue> {
-        let artifact = Self::build_da_proof_artifact(bundle, payload, proof, metadata)?;
-        let output_path = output_path.as_ref();
-        if let Some(parent) = output_path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).wrap_err_with(|| {
-                format!(
-                    "failed to create DA proof artefact directory `{}`",
-                    parent.display()
-                )
-            })?;
-        }
-        let rendered = if pretty {
-            norito::json::to_json_pretty(&artifact)
-        } else {
-            norito::json::to_json(&artifact)
-        }
-        .map_err(|err| eyre!("failed to render DA proof artefact JSON: {err}"))?;
-        std::fs::write(output_path, format!("{rendered}\n")).wrap_err_with(|| {
-            format!(
-                "failed to write DA proof artefact to `{}`",
-                output_path.display()
-            )
-        })?;
-        Ok(artifact)
-    }
-    /// Reproduce the `iroha da prove-availability` flow with the Rust client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest cannot be fetched, the bundle reconciliation fails,
-    /// or proof generation encounters an error.
-    pub async fn prove_da_availability(
-        &self,
-        storage_ticket_hex: &str,
-        gateway_config: SorafsGatewayFetchConfig,
-        providers: impl IntoIterator<Item = SorafsGatewayProviderInput>,
-        fetch_options: SorafsGatewayFetchOptions,
-        proof_config: DaProofConfig,
-    ) -> Result<DaAvailabilityProof> {
-        let manifest = self.get_da_manifest_bundle(storage_ticket_hex)?;
-        let plan = Self::build_da_car_plan(&manifest)?;
-        let session = self
-            .sorafs_fetch_via_gateway(&plan, gateway_config, providers, fetch_options)
-            .await?;
-        let (proof_summary, applied_config) =
-            Self::build_da_proof_summary_from_session(&manifest, &session, &proof_config)?;
-        Ok(DaAvailabilityProof {
-            manifest,
-            fetch_session: session,
-            proof_summary,
-            proof_config: applied_config,
-        })
-    }
-    /// Reproduce `iroha da prove-availability`, persisting artefacts to `output_dir`.
-    ///
-    /// Writes:
-    /// - Manifest bundle (`manifest_<ticket>.norito/json`, `chunk_plan_<ticket>.json`)
-    /// - Assembled payload (`payload_<ticket>.car`)
-    /// - Proof summary JSON (`proof_summary_<ticket>.json`, matching CLI format)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any network call fails, output can’t be written, or proof generation
-    /// encounters an error.
-    pub async fn prove_da_availability_to_dir(
-        &self,
-        storage_ticket_hex: &str,
-        gateway_config: SorafsGatewayFetchConfig,
-        providers: impl IntoIterator<Item = SorafsGatewayProviderInput>,
-        fetch_options: SorafsGatewayFetchOptions,
-        proof_config: DaProofConfig,
-        output_dir: impl AsRef<Path>,
-    ) -> Result<(DaAvailabilityProof, DaAvailabilityProofPersistedPaths)> {
-        let output_dir = output_dir.as_ref();
-        if output_dir.as_os_str().is_empty() {
-            return Err(eyre!("output directory must not be empty"));
-        }
-        std::fs::create_dir_all(output_dir).wrap_err_with(|| {
-            format!(
-                "failed to create DA proof output directory `{}`",
-                output_dir.display()
-            )
-        })?;
-        let mut fetch_options = fetch_options;
-        let scoreboard_path = {
-            let configured = fetch_options
-                .scoreboard
-                .as_ref()
-                .and_then(|options| options.persist_path.clone());
-            let derived = configured.unwrap_or_else(|| output_dir.join("scoreboard.json"));
-            if fetch_options.scoreboard.is_none() {
-                fetch_options.scoreboard = Some(SorafsGatewayScoreboardOptions {
-                    persist_path: Some(derived.clone()),
-                    ..SorafsGatewayScoreboardOptions::default()
-                });
-            } else if let Some(options) = fetch_options.scoreboard.as_mut()
-                && options.persist_path.is_none()
-            {
-                options.persist_path = Some(derived.clone());
-            }
-            Some(derived)
-        };
-        let proof = self
-            .prove_da_availability(
-                storage_ticket_hex,
-                gateway_config,
-                providers,
-                fetch_options,
-                proof_config,
-            )
-            .await?;
-        let manifest_paths = proof
-            .manifest
-            .persist_to_dir(output_dir, &proof.manifest.storage_ticket_hex)?;
-        let manifest_label = manifest_paths
-            .manifest_raw
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .and_then(|stem| stem.strip_prefix("manifest_"))
-            .ok_or_else(|| {
-                eyre!(
-                    "persisted manifest path `{}` missing expected prefix",
-                    manifest_paths.manifest_raw.display()
-                )
-            })?;
-        let payload_path = output_dir.join(format!("payload_{manifest_label}.car"));
-        let payload_bytes = proof.fetch_session.outcome.assemble_payload();
-        std::fs::write(&payload_path, &payload_bytes).wrap_err_with(|| {
-            format!(
-                "failed to write fetched payload to `{}`",
-                payload_path.display()
-            )
-        })?;
-        let proof_summary_path = output_dir.join(format!("proof_summary_{manifest_label}.json"));
-        let metadata = DaProofArtifactMetadata::new(
-            manifest_paths.manifest_raw.display().to_string(),
-            payload_path.display().to_string(),
-        );
-        let proof_summary = Self::build_da_proof_artifact(
-            &proof.manifest,
-            &payload_bytes,
-            &proof.proof_config,
-            &metadata,
-        )?;
-        let rendered_summary = norito::json::to_json_pretty(&proof_summary)
-            .wrap_err("failed to render proof summary JSON")?;
-        std::fs::write(&proof_summary_path, format!("{rendered_summary}\n")).wrap_err_with(
-            || {
-                format!(
-                    "failed to write proof summary to `{}`",
-                    proof_summary_path.display()
-                )
-            },
-        )?;
-        let paths = DaAvailabilityProofPersistedPaths {
-            manifest: manifest_paths,
-            payload_path,
-            proof_summary_path,
-            scoreboard_path,
-        };
-        Ok((proof, paths))
     }
     fn validate_sorafs_pin_alias_segment(value: &str, field: &str) -> Result<()> {
         let bytes = value.as_bytes();
@@ -20922,41 +20387,6 @@ impl Client {
             .header(HEADER_SORA_NONCE, nonce)
             .build()?
             .send()
-    }
-    /// Execute a multi-provider fetch via the `SoraFS` orchestrator using gateway stream tokens.
-    ///
-    /// The `options` parameter exposes retry-budget and provider selection controls used when
-    /// constructing the underlying orchestrator configuration.
-    ///
-    /// # Errors
-    /// Returns [`SorafsFetchError`] when provider descriptors are invalid or the orchestrator
-    /// encounters an error during the fetch loop.
-    pub async fn sorafs_fetch_via_gateway(
-        &self,
-        plan: &CarBuildPlan,
-        gateway_config: SorafsGatewayFetchConfig,
-        providers: impl IntoIterator<Item = SorafsGatewayProviderInput>,
-        options: SorafsGatewayFetchOptions,
-    ) -> Result<SorafsFetchOutcome, SorafsFetchError> {
-        let provider_inputs: Vec<SorafsGatewayProviderInput> = providers.into_iter().collect();
-        #[cfg(test)]
-        if let Some(hook) = evidence_http_tests::sorafs_fetch_hook() {
-            return hook(plan, &gateway_config, &provider_inputs, &options);
-        }
-        let (mut orchestrator_config, max_peers) = self.build_sorafs_gateway_fetch_config(&options);
-        if let Some(metadata) = orchestrator_config.scoreboard.persist_metadata.as_mut() {
-            annotate_scoreboard_with_gateway_context(metadata, &gateway_config);
-        }
-        orchestrator_fetch_via_gateway(
-            orchestrator_config,
-            plan,
-            gateway_config,
-            provider_inputs,
-            None,
-            max_peers,
-        )
-        .await
-        .map_err(SorafsFetchError::from)
     }
     /// Convenience: POST a ZK verify-batch request to `/v1/zk/verify-batch` with a
     /// Norito-encoded `Vec<OpenVerifyEnvelope>` in the body. Returns JSON `{ ok, statuses }`.
@@ -26136,7 +25566,7 @@ mod tests {
             SnapshotStore, assert_signed_headers, assert_signed_json_headers,
             assert_single_accept_header, base_url, capability_gated_responder, capture_request,
             capture_requests, client_with_base_url, empty_response, json_response,
-            mark_data_model_compatible, respond_with, with_mock_http, with_mock_sorafs_fetch,
+            mark_data_model_compatible, respond_with, with_mock_http,
         },
         *,
     };
@@ -26218,11 +25648,7 @@ mod tests {
     use iroha_torii_shared::status::GovernanceStatus;
     use iroha_version::codec::DecodeVersioned;
     use norito::json::Value;
-    use sorafs_car::{
-        fetch_plan::try_chunk_fetch_plan_to_json,
-        multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport},
-    };
-    use sorafs_orchestrator::{PolicyReport, PolicyStatus, prelude::ChunkStore};
+    use sorafs_car::{CarBuildPlan, ChunkStore, fetch_plan::try_chunk_fetch_plan_to_json};
     use std::{
         collections::HashMap,
         fs,
@@ -31167,76 +30593,6 @@ mod tests {
         assert_eq!(store[1].url.path(), "/v1/da/ingest");
     }
     #[test]
-    fn build_da_proof_summary_from_session_emits_proofs() {
-        let payload = vec![0xAB, 0xCD, 0xEF, 0x01];
-        let bundle = manifest_bundle_from_payload(&payload);
-        let session = sample_fetch_session(&payload);
-        let (summary, applied) = Client::build_da_proof_summary_from_session(
-            &bundle,
-            &session,
-            &DaProofConfig::default(),
-        )
-        .expect("proof summary");
-        assert_eq!(applied.sample_count, DaProofConfig::default().sample_count);
-        let expected_hash = hex::encode(blake3::hash(&payload).as_bytes());
-        assert_eq!(
-            summary.get("blob_hash").and_then(JsonValue::as_str),
-            Some(expected_hash.as_str())
-        );
-        assert!(summary.get("proofs").is_some());
-    }
-    #[test]
-    fn build_da_car_plan_matches_manifest() {
-        let (bundle, payload) = sample_da_manifest_bundle();
-        let manifest = bundle.decode_manifest().expect("manifest decode");
-        let plan = Client::build_da_car_plan(&bundle).expect("car plan");
-        assert_eq!(plan.chunk_profile.min_size, manifest.chunk_size as usize);
-        assert_eq!(plan.chunk_profile.target_size, manifest.chunk_size as usize);
-        assert_eq!(plan.chunk_profile.max_size, manifest.chunk_size as usize);
-        assert_eq!(plan.content_length, manifest.total_size);
-        assert_eq!(plan.content_length, payload.len() as u64);
-        assert_eq!(plan.chunks.len(), manifest.chunks.len());
-        let first_chunk = plan.chunks.first().expect("chunk entry");
-        let expected_chunk = manifest.chunks.first().expect("manifest chunk");
-        assert_eq!(first_chunk.offset, expected_chunk.offset);
-        assert_eq!(first_chunk.length, expected_chunk.length);
-        assert_eq!(first_chunk.digest, *expected_chunk.commitment.as_ref());
-        assert_eq!(plan.files.len(), 1);
-        let file = &plan.files[0];
-        assert_eq!(file.path, vec!["payload.bin".to_owned()]);
-        assert_eq!(file.chunk_count, manifest.chunks.len());
-        assert_eq!(file.size, manifest.total_size);
-    }
-    #[test]
-    fn prove_da_payload_validates_payload_and_emits_summary() {
-        let (bundle, payload) = sample_da_manifest_bundle();
-        let summary =
-            Client::prove_da_payload(&bundle, &payload, &DaProofConfig::default()).expect("proof");
-        let expected_hash = hex::encode(blake3::hash(&payload).as_bytes());
-        assert_eq!(
-            summary.get("blob_hash").and_then(JsonValue::as_str),
-            Some(expected_hash.as_str())
-        );
-        assert!(summary.get("proofs").is_some());
-    }
-    #[test]
-    fn prove_da_payload_rejects_mismatched_payload() {
-        let (bundle, payload) = sample_da_manifest_bundle();
-        let mut corrupted = payload.clone();
-        if let Some(first) = corrupted.first_mut() {
-            *first ^= 0xFF;
-        } else {
-            panic!("non-empty payload");
-        }
-        let err = Client::prove_da_payload(&bundle, &corrupted, &DaProofConfig::default())
-            .expect_err("payload mismatch should fail");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("payload hash mismatch") || msg.contains("ingest payload"),
-            "unexpected error: {msg}"
-        );
-    }
-    #[test]
     fn get_da_manifest_bundle_fetches_without_query_parameters() {
         let (mut bundle, _) = sample_da_manifest_bundle();
         let response = manifest_bundle_response(&mut bundle);
@@ -31258,263 +30614,6 @@ mod tests {
         );
         assert_eq!(snapshot.url.query(), None);
         assert_eq!(fetched.storage_ticket_hex, bundle.storage_ticket_hex);
-    }
-    fn sample_gateway_fetch_inputs(
-        bundle: &DaManifestBundle,
-    ) -> (
-        SorafsGatewayFetchConfig,
-        Vec<SorafsGatewayProviderInput>,
-        SorafsGatewayFetchOptions,
-    ) {
-        let gateway_config = SorafsGatewayFetchConfig {
-            manifest_id_hex: bundle.storage_ticket_hex.clone(),
-            chunker_handle: "sorafs.sf1@1.0.0".into(),
-            manifest_envelope_b64: None,
-            client_id: Some("sdk-tests".into()),
-            expected_manifest_cid_hex: None,
-            blinded_cid_b64: None,
-            salt_epoch: None,
-            expected_cache_version: None,
-        };
-        let providers = vec![SorafsGatewayProviderInput {
-            name: "provider-1".into(),
-            provider_id_hex: hex::encode([0x11u8; 32]),
-            gateway_public_key_hex: hex::encode([0x22u8; 32]),
-            base_url: "https://gateway.test".into(),
-            stream_token_b64: base64::engine::general_purpose::STANDARD.encode(b"stream-token"),
-            privacy_events_url: None,
-        }];
-        let options = SorafsGatewayFetchOptions {
-            telemetry_region: Some("test-region".into()),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        (gateway_config, providers, options)
-    }
-    #[test]
-    fn prove_da_availability_uses_gateway_fetch_hook() {
-        type FetchCall = (u64, usize, String, Option<String>, usize);
-        let (mut bundle, payload) = sample_da_manifest_bundle();
-        let response = manifest_bundle_response(&mut bundle);
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let fetch_calls: Arc<Mutex<Vec<FetchCall>>> = Arc::new(Mutex::new(Vec::new()));
-        let (gateway_config, providers, options) = sample_gateway_fetch_inputs(&bundle);
-        let proof = with_mock_http(respond_with(&snapshots, response), || {
-            with_mock_sorafs_fetch(
-                {
-                    let payload = payload.clone();
-                    let fetch_calls = Arc::clone(&fetch_calls);
-                    move |plan, cfg, provider_inputs, opts| {
-                        fetch_calls.lock().expect("lock fetch calls").push((
-                            plan.content_length,
-                            plan.chunks.len(),
-                            cfg.manifest_id_hex.clone(),
-                            opts.telemetry_region.clone(),
-                            provider_inputs.len(),
-                        ));
-                        Ok(sample_fetch_session(&payload))
-                    }
-                },
-                || {
-                    tokio::runtime::Runtime::new().expect("runtime").block_on(
-                        client.prove_da_availability(
-                            &bundle.storage_ticket_hex,
-                            gateway_config.clone(),
-                            providers.clone(),
-                            options.clone(),
-                            DaProofConfig::default(),
-                        ),
-                    )
-                },
-            )
-        })
-        .expect("availability proof");
-        assert_eq!(proof.manifest.storage_ticket_hex, bundle.storage_ticket_hex);
-        assert_eq!(
-            proof
-                .fetch_session
-                .outcome
-                .chunks
-                .first()
-                .expect("chunk")
-                .as_slice(),
-            payload.as_slice()
-        );
-        let expected_hash = hex::encode(blake3::hash(&payload).as_bytes());
-        assert_eq!(
-            proof
-                .proof_summary
-                .get("blob_hash")
-                .and_then(JsonValue::as_str),
-            Some(expected_hash.as_str())
-        );
-        let calls = fetch_calls.lock().expect("lock fetch calls");
-        assert_eq!(calls.len(), 1);
-        let (content_length, chunk_count, manifest_id, region, provider_count) = &calls[0];
-        assert_eq!(*content_length, payload.len() as u64);
-        assert_eq!(*chunk_count, 1);
-        assert_eq!(manifest_id, &gateway_config.manifest_id_hex);
-        assert_eq!(region.as_deref(), Some("test-region"));
-        assert_eq!(*provider_count, providers.len());
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        assert!(
-            store[0]
-                .url
-                .path()
-                .ends_with(&format!("/v1/da/manifests/{}", bundle.storage_ticket_hex))
-        );
-    }
-    #[test]
-    fn prove_da_availability_to_dir_persists_artifacts() {
-        let (mut bundle, payload) = sample_da_manifest_bundle();
-        let response = manifest_bundle_response(&mut bundle);
-        let client = client_with_base_url(base_url());
-        let dir = tempdir().expect("tempdir");
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let (gateway_config, providers, _) = sample_gateway_fetch_inputs(&bundle);
-        let proof_config = DaProofConfig {
-            sample_count: 2,
-            sample_seed: 99,
-            leaf_indexes: vec![0],
-        };
-        let (proof, paths) = with_mock_http(respond_with(&snapshots, response), || {
-            with_mock_sorafs_fetch(
-                {
-                    let payload = payload.clone();
-                    move |_plan, _cfg, _providers, _opts| Ok(sample_fetch_session(&payload))
-                },
-                || {
-                    tokio::runtime::Runtime::new().expect("runtime").block_on(
-                        client.prove_da_availability_to_dir(
-                            &bundle.storage_ticket_hex,
-                            gateway_config.clone(),
-                            providers.clone(),
-                            SorafsGatewayFetchOptions::default(),
-                            proof_config.clone(),
-                            dir.path(),
-                        ),
-                    )
-                },
-            )
-        })
-        .expect("persisted proof");
-        assert!(paths.manifest.manifest_raw.exists());
-        assert!(paths.manifest.manifest_json.exists());
-        assert!(paths.manifest.chunk_plan.exists());
-        assert!(paths.payload_path.exists());
-        assert!(paths.proof_summary_path.exists());
-        let payload_disk = fs::read(&paths.payload_path).expect("read payload");
-        assert_eq!(payload_disk, payload);
-        let summary_json = fs::read_to_string(&paths.proof_summary_path).expect("summary json");
-        let summary: JsonValue =
-            norito::json::from_str(&summary_json).expect("parse proof summary json");
-        let expected_manifest_path = paths.manifest.manifest_raw.display().to_string();
-        assert_eq!(
-            summary.get("manifest_path").and_then(JsonValue::as_str),
-            Some(expected_manifest_path.as_str())
-        );
-        assert_eq!(proof.proof_config.sample_count, proof_config.sample_count);
-        assert!(
-            summary
-                .get("proofs")
-                .and_then(JsonValue::as_array)
-                .is_some()
-        );
-        let expected_scoreboard = dir.path().join("scoreboard.json");
-        assert_eq!(
-            paths.scoreboard_path.as_deref(),
-            Some(expected_scoreboard.as_path())
-        );
-    }
-    #[test]
-    fn prove_da_availability_to_dir_honours_existing_scoreboard_path() {
-        let (mut bundle, payload) = sample_da_manifest_bundle();
-        let response = manifest_bundle_response(&mut bundle);
-        let client = client_with_base_url(base_url());
-        let dir = tempdir().expect("tempdir");
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let (gateway_config, providers, _) = sample_gateway_fetch_inputs(&bundle);
-        let scoreboard_override = dir.path().join("custom_scoreboard.json");
-        let fetch_options = SorafsGatewayFetchOptions {
-            scoreboard: Some(SorafsGatewayScoreboardOptions {
-                persist_path: Some(scoreboard_override.clone()),
-                now_unix_secs: Some(7),
-                metadata: None,
-                telemetry_source_label: Some("custom".into()),
-            }),
-            ..Default::default()
-        };
-        let (_proof, paths) = with_mock_http(respond_with(&snapshots, response), || {
-            with_mock_sorafs_fetch(
-                {
-                    let payload = payload.clone();
-                    let scoreboard_override = scoreboard_override.clone();
-                    move |_plan, _cfg, _providers, options| {
-                        assert_eq!(
-                            options
-                                .scoreboard
-                                .as_ref()
-                                .and_then(|opt| opt.persist_path.as_ref()),
-                            Some(&scoreboard_override)
-                        );
-                        Ok(sample_fetch_session(&payload))
-                    }
-                },
-                || {
-                    tokio::runtime::Runtime::new().expect("runtime").block_on(
-                        client.prove_da_availability_to_dir(
-                            &bundle.storage_ticket_hex,
-                            gateway_config.clone(),
-                            providers.clone(),
-                            fetch_options.clone(),
-                            DaProofConfig::default(),
-                            dir.path(),
-                        ),
-                    )
-                },
-            )
-        })
-        .expect("prove da availability with scoreboard override");
-        assert_eq!(
-            paths.scoreboard_path.as_deref(),
-            Some(scoreboard_override.as_path())
-        );
-    }
-    #[test]
-    fn fetch_da_manifest_to_dir_persists_outputs() {
-        let (mut bundle, _) = sample_da_manifest_bundle();
-        let response = manifest_bundle_response(&mut bundle);
-        let client = client_with_base_url(base_url());
-        let dir = tempdir().expect("tempdir");
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let paths = with_mock_http(respond_with(&snapshots, response), || {
-            client.fetch_da_manifest_to_dir(&format!("0x{}", bundle.storage_ticket_hex), dir.path())
-        })
-        .expect("persist manifest bundle");
-        assert!(paths.manifest_raw.exists());
-        assert!(paths.manifest_json.exists());
-        assert!(paths.chunk_plan.exists());
-        assert_eq!(
-            fs::read(&paths.manifest_raw).expect("read manifest"),
-            bundle.manifest_bytes
-        );
-        let manifest_json = fs::read_to_string(&paths.manifest_json).expect("read manifest json");
-        let manifest_value: JsonValue =
-            norito::json::from_slice(manifest_json.as_bytes()).expect("manifest json parses");
-        assert!(manifest_value.is_object());
-        let chunk_plan_json = fs::read_to_string(&paths.chunk_plan).expect("read chunk plan");
-        let chunk_plan_value: JsonValue =
-            norito::json::from_slice(chunk_plan_json.as_bytes()).expect("chunk plan json parses");
-        assert!(chunk_plan_value.is_object());
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        assert!(
-            store[0]
-                .url
-                .path()
-                .ends_with(&format!("/v1/da/manifests/{}", bundle.storage_ticket_hex))
-        );
     }
     #[test]
     fn get_da_proof_policies_fetches_bundle() {
@@ -31696,259 +30795,6 @@ mod tests {
         assert_eq!(decoded.pin_scope, Some(scope));
         assert!(receipt_json.is_none());
         assert!(pdp_commitment.is_none());
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_defaults_apply_chain_region() {
-        let client = Client::new(config_factory());
-        let options = SorafsGatewayFetchOptions::default();
-        let (config, max_peers) = client.build_sorafs_gateway_fetch_config(&options);
-        let expected_region = client.chain.to_string();
-        let default_retry = OrchestratorConfig::default().fetch.per_chunk_retry_limit;
-        assert_eq!(
-            config.telemetry_region.as_deref(),
-            Some(expected_region.as_str())
-        );
-        assert_eq!(config.fetch.per_chunk_retry_limit, default_retry);
-        assert!(max_peers.is_none());
-        assert_eq!(config.anonymity_policy, AnonymityPolicy::GuardPq);
-        assert_eq!(config.write_mode, WriteModeHint::ReadOnly);
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_uses_config_stage() {
-        let mut cfg = config_factory();
-        cfg.sorafs_anonymity_policy = AnonymityPolicy::MajorityPq;
-        let client = Client::new(cfg);
-        let options = SorafsGatewayFetchOptions::default();
-        let (config, _) = client.build_sorafs_gateway_fetch_config(&options);
-        assert_eq!(config.anonymity_policy, AnonymityPolicy::MajorityPq);
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_applies_overrides() {
-        let client = Client::new(config_factory());
-        let options = SorafsGatewayFetchOptions {
-            retry_budget: Some(5),
-            max_peers: Some(3),
-            telemetry_region: Some("sea".to_string()),
-            transport_policy: Some(TransportPolicy::DirectOnly),
-            anonymity_policy: Some(AnonymityPolicy::StrictPq),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        let (config, max_peers) = client.build_sorafs_gateway_fetch_config(&options);
-        assert_eq!(config.fetch.per_chunk_retry_limit, Some(5));
-        assert_eq!(config.telemetry_region.as_deref(), Some("sea"));
-        assert_eq!(max_peers, Some(3));
-        assert_eq!(config.transport_policy, TransportPolicy::DirectOnly);
-        assert_eq!(config.anonymity_policy, AnonymityPolicy::StrictPq);
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_sanitises_zero_values() {
-        let client = Client::new(config_factory());
-        let options = SorafsGatewayFetchOptions {
-            retry_budget: Some(0),
-            max_peers: Some(0),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        let (config, max_peers) = client.build_sorafs_gateway_fetch_config(&options);
-        let expected_region = client.chain.to_string();
-        assert_eq!(
-            config.telemetry_region.as_deref(),
-            Some(expected_region.as_str())
-        );
-        assert_eq!(config.fetch.per_chunk_retry_limit, None);
-        assert!(max_peers.is_none());
-        assert_eq!(config.transport_policy, TransportPolicy::SoranetPreferred);
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_enforces_pq_only_for_uploads() {
-        let client = Client::new(config_factory());
-        let options = SorafsGatewayFetchOptions {
-            write_mode_hint: Some(WriteModeHint::UploadPqOnly),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        let (config, _) = client.build_sorafs_gateway_fetch_config(&options);
-        assert_eq!(config.write_mode, WriteModeHint::UploadPqOnly);
-        assert_eq!(config.transport_policy, TransportPolicy::SoranetStrict);
-        assert_eq!(config.anonymity_policy, AnonymityPolicy::StrictPq);
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_respects_explicit_policy_with_write_mode() {
-        let client = Client::new(config_factory());
-        let options = SorafsGatewayFetchOptions {
-            transport_policy: Some(TransportPolicy::SoranetPreferred),
-            anonymity_policy: Some(AnonymityPolicy::MajorityPq),
-            write_mode_hint: Some(WriteModeHint::UploadPqOnly),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        let (config, _) = client.build_sorafs_gateway_fetch_config(&options);
-        assert_eq!(config.write_mode, WriteModeHint::UploadPqOnly);
-        assert_eq!(config.transport_policy, TransportPolicy::SoranetPreferred);
-        assert_eq!(config.anonymity_policy, AnonymityPolicy::MajorityPq);
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_includes_policy_override() {
-        let client = Client::new(config_factory());
-        let options = SorafsGatewayFetchOptions {
-            policy_override: PolicyOverride::new(
-                Some(TransportPolicy::SoranetStrict),
-                Some(AnonymityPolicy::StrictPq),
-            ),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        let (config, _) = client.build_sorafs_gateway_fetch_config(&options);
-        assert_eq!(
-            config.policy_override.transport_policy,
-            Some(TransportPolicy::SoranetStrict)
-        );
-        assert_eq!(
-            config.policy_override.anonymity_policy,
-            Some(AnonymityPolicy::StrictPq)
-        );
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_matches_policy_override_fixture() {
-        let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("fixtures/sorafs_gateway/policy_override/override.json");
-        let fixture_bytes = std::fs::read(&fixture_path).expect("read policy override fixture");
-        let fixture: norito::json::Value =
-            norito::json::from_slice(&fixture_bytes).expect("parse policy override fixture");
-        let expected = fixture
-            .get("policy_override")
-            .cloned()
-            .expect("fixture policy_override");
-        let client = Client::new(config_factory());
-        let options = SorafsGatewayFetchOptions {
-            policy_override: PolicyOverride::new(
-                Some(TransportPolicy::SoranetStrict),
-                Some(AnonymityPolicy::StrictPq),
-            ),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        let (config, _) = client.build_sorafs_gateway_fetch_config(&options);
-        let serialized = sorafs_orchestrator::bindings::config_to_json(&config);
-        let actual = serialized
-            .get("policy_override")
-            .cloned()
-            .expect("config policy_override");
-        assert_eq!(actual, expected);
-    }
-    #[test]
-    fn sorafs_gateway_fetch_config_applies_scoreboard_overrides() {
-        let client = Client::new(config_factory());
-        let persist_path = PathBuf::from("/tmp/sorafs_scoreboard.json");
-        let metadata = norito::json!({
-            "capture_id": "unit-test",
-            "fixture": "multi_peer_parity_v1"
-        });
-        let options = SorafsGatewayFetchOptions {
-            scoreboard: Some(SorafsGatewayScoreboardOptions {
-                persist_path: Some(persist_path.clone()),
-                now_unix_secs: Some(42),
-                metadata: Some(metadata.clone()),
-                telemetry_source_label: None,
-            }),
-            ..SorafsGatewayFetchOptions::default()
-        };
-        let (config, _) = client.build_sorafs_gateway_fetch_config(&options);
-        assert_eq!(config.scoreboard.persist_path.as_ref(), Some(&persist_path));
-        assert_eq!(config.scoreboard.now_unix_secs, 42);
-        let persisted = config
-            .scoreboard
-            .persist_metadata
-            .clone()
-            .expect("metadata persisted");
-        let object = persisted
-            .as_object()
-            .expect("metadata should remain a JSON object");
-        assert_eq!(
-            object.get("capture_id"),
-            metadata.as_object().and_then(|obj| obj.get("capture_id"))
-        );
-        assert_eq!(
-            object.get("fixture"),
-            metadata.as_object().and_then(|obj| obj.get("fixture"))
-        );
-        assert_eq!(
-            object.get("telemetry_source").and_then(JsonValue::as_str),
-            Some("chain:00000000-0000-0000-0000-000000000000")
-        );
-        assert_eq!(
-            object.get("assume_now").and_then(JsonValue::as_u64),
-            Some(42)
-        );
-    }
-    #[test]
-    fn gateway_scoreboard_metadata_records_manifest_context() {
-        let mut metadata = ensure_scoreboard_metadata(None, Some("region:test"), 0);
-        let config = SorafsGatewayFetchConfig {
-            manifest_id_hex: "ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00"
-                .into(),
-            chunker_handle: "sorafs.sf1@1.0.0".into(),
-            manifest_envelope_b64: Some("ZW52ZWxvcGU=".into()),
-            client_id: Some("sdk".into()),
-            expected_manifest_cid_hex: Some("C0FFEE".into()),
-            blinded_cid_b64: Some("YmFzZQ".into()),
-            salt_epoch: Some(7),
-            expected_cache_version: None,
-        };
-        annotate_scoreboard_with_gateway_context(&mut metadata, &config);
-        let object = metadata
-            .as_object()
-            .expect("metadata should stay a JSON object");
-        assert_eq!(
-            object
-                .get("gateway_manifest_id")
-                .and_then(JsonValue::as_str),
-            Some("abcdef00abcdef00abcdef00abcdef00abcdef00abcdef00abcdef00abcdef00")
-        );
-        assert_eq!(
-            object
-                .get("gateway_manifest_cid")
-                .and_then(JsonValue::as_str),
-            Some("c0ffee")
-        );
-        assert_eq!(
-            object
-                .get("gateway_manifest_provided")
-                .and_then(JsonValue::as_bool),
-            Some(true)
-        );
-    }
-    #[test]
-    fn gateway_scoreboard_metadata_handles_missing_envelope_and_cid() {
-        let mut metadata = ensure_scoreboard_metadata(None, Some("region:test"), 0);
-        let config = SorafsGatewayFetchConfig {
-            manifest_id_hex: "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
-                .into(),
-            chunker_handle: "sorafs.sf1@1.0.0".into(),
-            manifest_envelope_b64: None,
-            client_id: None,
-            expected_manifest_cid_hex: None,
-            blinded_cid_b64: None,
-            salt_epoch: None,
-            expected_cache_version: None,
-        };
-        annotate_scoreboard_with_gateway_context(&mut metadata, &config);
-        let object = metadata
-            .as_object()
-            .expect("metadata should stay a JSON object");
-        assert_eq!(
-            object
-                .get("gateway_manifest_id")
-                .and_then(JsonValue::as_str),
-            Some("feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface")
-        );
-        assert!(
-            object
-                .get("gateway_manifest_cid")
-                .is_some_and(JsonValue::is_null)
-        );
-        assert_eq!(
-            object
-                .get("gateway_manifest_provided")
-                .and_then(JsonValue::as_bool),
-            Some(false)
-        );
     }
     #[test]
     fn get_uaid_portfolio_parses_payload() {
@@ -35669,56 +34515,6 @@ mod tests {
             Some(6)
         );
     }
-    #[test]
-    fn build_da_proof_artifact_matches_cli_schema() {
-        let (bundle, payload) = sample_da_manifest_bundle();
-        let metadata = DaProofArtifactMetadata::new(
-            "artifacts/sample_manifest.norito",
-            "artifacts/sample_payload.car",
-        );
-        let artifact = Client::build_da_proof_artifact(
-            &bundle,
-            &payload,
-            &DaProofConfig::default(),
-            &metadata,
-        )
-        .expect("artifact");
-        let map = artifact.as_object().expect("artifact object");
-        assert_eq!(
-            map.get("manifest_path").and_then(JsonValue::as_str),
-            Some("artifacts/sample_manifest.norito")
-        );
-        assert_eq!(
-            map.get("payload_path").and_then(JsonValue::as_str),
-            Some("artifacts/sample_payload.car")
-        );
-        assert!(
-            map.get("proofs")
-                .and_then(JsonValue::as_array)
-                .is_some_and(|array| !array.is_empty()),
-            "proof array missing"
-        );
-    }
-    #[test]
-    fn write_da_proof_artifact_persists_json() {
-        let (bundle, payload) = sample_da_manifest_bundle();
-        let metadata =
-            DaProofArtifactMetadata::new("manifests/latest.norito", "payloads/latest.car");
-        let temp_dir = tempdir().expect("temp dir");
-        let output_path = temp_dir.path().join("proofs/proof.json");
-        Client::write_da_proof_artifact(
-            &bundle,
-            &payload,
-            &DaProofConfig::default(),
-            &metadata,
-            &output_path,
-            true,
-        )
-        .expect("write artifact");
-        let contents = std::fs::read_to_string(&output_path).expect("read proof artefact");
-        assert!(contents.contains("manifests/latest.norito"));
-        assert!(contents.ends_with('\n'));
-    }
     fn manifest_bundle_from_payload(payload: &[u8]) -> DaManifestBundle {
         let mut store = ChunkStore::new();
         store
@@ -35784,7 +34580,7 @@ mod tests {
         };
         let manifest_bytes = norito::to_bytes(&manifest).expect("serialize manifest");
         let chunk_plan = try_chunk_fetch_plan_to_json(
-            &crate::da::build_car_plan_from_manifest(&manifest).expect("build manifest CAR plan"),
+            &CarBuildPlan::single_file(payload).expect("build fixture CAR plan"),
         )
         .expect("render canonical chunk fetch plan");
         DaManifestBundle {
@@ -38436,13 +37232,10 @@ mod tests {
             bundle.manifest_json =
                 norito::json::value::to_value(&manifest).expect("render manifest json");
         }
-        if bundle.chunk_plan.is_null() {
-            bundle.chunk_plan = try_chunk_fetch_plan_to_json(
-                &crate::da::build_car_plan_from_manifest(&manifest)
-                    .expect("build manifest CAR plan"),
-            )
-            .expect("render canonical chunk fetch plan");
-        }
+        assert!(
+            !bundle.chunk_plan.is_null(),
+            "fixture chunk plan is required"
+        );
         let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(&bundle.manifest_bytes);
         let response_map = JsonMap::from_iter([
             (
@@ -38478,40 +37271,6 @@ mod tests {
             .header("content-type", APPLICATION_JSON)
             .body(norito::json::to_vec(&response_value).expect("encode manifest response"))
             .expect("response build")
-    }
-    fn sample_fetch_session(payload: &[u8]) -> SorafsFetchOutcome {
-        let provider = Arc::new(FetchProvider::new("provider-1"));
-        let outcome = FetchOutcome {
-            chunks: vec![payload.to_owned()],
-            chunk_receipts: vec![ChunkReceipt {
-                chunk_index: 0,
-                provider: provider.id().clone(),
-                attempts: 1,
-                latency_ms: 0.0,
-                bytes: u32::try_from(payload.len()).expect("payload length fits u32"),
-            }],
-            provider_reports: vec![ProviderReport {
-                provider: provider.clone(),
-                successes: 1,
-                failures: 0,
-                disabled: false,
-            }],
-        };
-        SorafsFetchOutcome {
-            outcome,
-            policy_report: PolicyReport {
-                policy: AnonymityPolicy::GuardPq,
-                effective_policy: AnonymityPolicy::GuardPq,
-                total_candidates: 1,
-                pq_candidates: 1,
-                selected_soranet_total: 1,
-                selected_pq: 1,
-                status: PolicyStatus::Met,
-                fallback_reason: None,
-            },
-            local_proxy_manifest: None,
-            car_verification: None,
-        }
     }
     #[cfg(test)]
     mod join_torii_url {

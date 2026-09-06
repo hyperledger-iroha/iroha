@@ -2002,7 +2002,7 @@ mod wire {
             if field.encoded_len_exact().is_none() {
                 return Err(Error::LengthMismatch);
             }
-            norito::core::write_len_prefixed_exact(writer, *field, &mut field_buffer)?;
+            norito::core::write_len_prefixed(writer, *field, &mut field_buffer)?;
         }
         Ok(())
     }

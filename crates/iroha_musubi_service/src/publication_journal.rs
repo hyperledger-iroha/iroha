@@ -13,9 +13,7 @@ use super::{
     MusubiPublicationServiceJournalV1, valid_storage_generation_target,
 };
 #[cfg(unix)]
-use iroha_primitives::fs::{
-    secure_directory_open_flags, secure_no_follow_nonblocking_flags,
-};
+use iroha_primitives::fs::{secure_directory_open_flags, secure_no_follow_nonblocking_flags};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::{
@@ -44,7 +42,9 @@ const JOURNAL_DECODE_FIXED_ALLOCATION_BYTES_V1: usize = 64 * 1024;
     reason = "the stable max_* names distinguish immutable upper bounds from live journal counts"
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurableMusubiPublicationServiceJournalLimitsV1")]
+#[norito_schema(
+    name = "iroha::musubi_runtime::publication_journal::DurableMusubiPublicationServiceJournalLimitsV1"
+)]
 pub struct DurableMusubiPublicationServiceJournalLimitsV1 {
     max_operations: u32,
     max_authorizations: u32,
@@ -184,16 +184,34 @@ impl fmt::Display for DurableMusubiPublicationServiceJournalOpenErrorV1 {
     }
 }
 impl std::error::Error for DurableMusubiPublicationServiceJournalOpenErrorV1 {}
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationOperationRecordV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha::musubi_runtime::publication_journal::DurablePublicationOperationRecordV1"
+)]
 struct DurablePublicationOperationRecordV1 {
     operation_id: [u8; 32],
     binding: MusubiPublicationOperationBindingV1,
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultStateV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultStateV1"
+)]
 enum DurablePublicationResultStateV1 {
     #[codec(index = 0)]
     Pending {
@@ -214,23 +232,50 @@ enum DurablePublicationResultStateV1 {
         response: Vec<u8>,
     },
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultRecordV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultRecordV1"
+)]
 struct DurablePublicationResultRecordV1 {
     key: MusubiPublicationIdempotencyKeyV1,
     state: DurablePublicationResultStateV1,
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationAuthorizationRecordV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha::musubi_runtime::publication_journal::DurablePublicationAuthorizationRecordV1"
+)]
 struct DurablePublicationAuthorizationRecordV1 {
     authorization_digest: [u8; 32],
     expires_at_ms: u64,
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalStateV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalStateV1"
+)]
 struct DurablePublicationJournalStateV1 {
     domain: [u8; 32],
     schema: u8,
@@ -252,9 +297,18 @@ impl DurablePublicationJournalStateV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalEnvelopeV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalEnvelopeV1"
+)]
 struct DurablePublicationJournalEnvelopeV1 {
     state: DurablePublicationJournalStateV1,
     state_digest: [u8; 32],
@@ -1801,7 +1855,7 @@ fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::musubi_runtime::MusubiPublicationServiceConfigurationV1;
+    use crate::MusubiPublicationServiceConfigurationV1;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -2054,8 +2108,7 @@ mod tests {
             let mut generation_attempt = attempt(&configuration, 0x35, 0x40 + generation);
             generation_attempt.key.operation =
                 MusubiPublicationRuntimeOperationV1::StorageCoordination;
-            generation_attempt.key.target =
-                crate::musubi_runtime::storage_generation_target(generation);
+            generation_attempt.key.target = crate::storage_generation_target(generation);
             generation_attempt.request_digest = [0x50 + generation; 32];
             assert_eq!(
                 journal
@@ -2074,7 +2127,7 @@ mod tests {
         let revision = journal.revision();
         let mut ninth = attempt(&configuration, 0x35, 0x70);
         ninth.key.operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
-        ninth.key.target = crate::musubi_runtime::storage_generation_target(
+        ninth.key.target = crate::storage_generation_target(
             u8::try_from(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 + 1)
                 .expect("ninth generation fits u8"),
         );
@@ -2084,7 +2137,7 @@ mod tests {
             Err(MusubiPublicationServiceJournalErrorV1::Invalid)
         );
         let mut malformed = ninth;
-        malformed.key.target = crate::musubi_runtime::storage_generation_target(1);
+        malformed.key.target = crate::storage_generation_target(1);
         malformed.key.target[1] = 1;
         malformed.authorization_digest = [0x72; 32];
         assert_eq!(
@@ -2103,7 +2156,7 @@ mod tests {
             let generation = u8::try_from(generation).expect("generation fits u8");
             let mut retry = attempt(&configuration, 0x35, 0x80 + generation);
             retry.key.operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
-            retry.key.target = crate::musubi_runtime::storage_generation_target(generation);
+            retry.key.target = crate::storage_generation_target(generation);
             retry.request_digest = [0x50 + generation; 32];
             assert_eq!(
                 reopened

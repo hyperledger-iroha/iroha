@@ -39,6 +39,22 @@
         "package": "soranet_incentives",
         "target": "all"
       },
+      "musubi-service-default": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution"
+        ],
+        "package": "iroha_musubi_service",
+        "target": "all"
+      },
       "sdk-default": {
         "default_features": true,
         "features": [],
@@ -165,6 +181,107 @@
         "package": "iroha_service_model",
         "target": "all"
       },
+      "storage-client-default": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-native": {
+        "default_features": false,
+        "features": [
+          "tls-native",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-native-vendored": {
+        "default_features": false,
+        "features": [
+          "tls-native-vendored",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-rustls-native-roots": {
+        "default_features": false,
+        "features": [
+          "tls-rustls-native-roots",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-rustls-webpki-roots": {
+        "default_features": false,
+        "features": [
+          "tls-rustls-webpki-roots",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
       "torii-wire": {
         "default_features": true,
         "features": [],
@@ -213,9 +330,15 @@
       "service_model": [
         "iroha_service_model"
       ],
+      "service_runtime": [
+        "iroha_musubi_service"
+      ],
       "storage_runtime": [
         "sorafs_car",
         "sorafs_orchestrator"
+      ],
+      "storage_client": [
+        "iroha_storage_client"
       ],
       "telemetry_runtime": [
         "iroha_telemetry"

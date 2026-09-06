@@ -1,0 +1,48 @@
+[package]
+name = "iroha_musubi_service"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+description = "Private Musubi publication service and durable replay runtime"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["tls-rustls-native-roots"]
+tls-native = ["iroha/tls-native", "reqwest/native-tls"]
+tls-native-vendored = ["iroha/tls-native-vendored", "reqwest/native-tls-vendored"]
+tls-rustls-native-roots = [
+    "iroha/tls-rustls-native-roots",
+    "reqwest/rustls-tls-native-roots",
+]
+tls-rustls-webpki-roots = [
+    "iroha/tls-rustls-webpki-roots",
+    "reqwest/rustls-tls-webpki-roots",
+]
+
+[dependencies]
+base64 = { workspace = true }
+blake3 = { workspace = true }
+iroha = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+iroha_primitives = { workspace = true }
+iroha_telemetry = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
+reqwest = { workspace = true, features = ["blocking"] }
+sorafs_car = { workspace = true, features = ["manifest"] }
+tempfile = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }

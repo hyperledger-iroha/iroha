@@ -678,9 +678,8 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
     for field in ["total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance"] {
         assert_eq!(contract_property(schemas, "NativeAmxParticipantSettlementCommitment", field).get("const").and_then(Value::as_str), Some("0"));
     }
-    for field in ["nexus_fee_receipts", "native_amx_receipts"] {
-        assert_eq!(contract_property(schemas, "NativeAmxParticipantSettlementCommitment", field).get("maxItems").and_then(Value::as_u64), Some(0));
-    }
+    assert_eq!(contract_property(schemas, "NativeAmxParticipantSettlementCommitment", "nexus_fee_receipts").get("maxItems").and_then(Value::as_u64), Some(0));
+    assert!(participant.get("properties").and_then(Value::as_object).is_some_and(|properties| !properties.contains_key("native_amx_receipts")));
     let participant_receipts = contract_property(schemas, "NativeAmxParticipantSettlementCommitment", "receipts");
     assert_array_bounds(participant_receipts, 1, 4_096, Some(true));
     assert_item_ref(participant_receipts, "#/components/schemas/NativeAmxParticipantSettlementReceipt", "participant receipts");
