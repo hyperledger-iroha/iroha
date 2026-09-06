@@ -10348,6 +10348,122 @@ class SumeragiNativeAmxParticipantLaneBlockProposal:
 
 
 @dataclass(frozen=True)
+class SumeragiNativeAmxParticipantSettlement:
+    """Finite zero-effect settlement certified by a native AMX participant."""
+
+    block_height: int
+    lane_id: int
+    lane_incarnation: str
+    dataspace_id: int
+    tx_count: int
+    total_local_amount: str
+    total_xor_due: str
+    total_xor_after_haircut: str
+    total_xor_variance: str
+    swap_metadata: None
+    receipts: Tuple[SumeragiLaneSettlementReceipt, ...]
+    nexus_fee_receipts: Tuple[()]
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNativeAmxParticipantSettlement":
+        context = "native AMX participant settlement"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "block_height",
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "tx_count",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
+                "swap_metadata",
+                "receipts",
+                "nexus_fee_receipts",
+            },
+            context,
+        )
+        if payload["swap_metadata"] is not None:
+            raise ValueError(f"{context} `swap_metadata` must be null")
+        if payload["nexus_fee_receipts"] != []:
+            raise ValueError(f"{context} `nexus_fee_receipts` must be empty")
+        receipt_payloads = payload["receipts"]
+        if (
+            not isinstance(receipt_payloads, list)
+            or not receipt_payloads
+            or len(receipt_payloads) > _MAX_NATIVE_AMX_GROUP_SOURCES
+        ):
+            raise ValueError(
+                f"{context} `receipts` must be a bounded non-empty list"
+            )
+        receipts = []
+        for index, receipt in enumerate(receipt_payloads):
+            receipt_context = f"{context} receipt at index {index}"
+            if not isinstance(receipt, Mapping):
+                raise TypeError(f"{receipt_context} must be an object")
+            _strict_exact_fields(
+                receipt,
+                {
+                    "source_id",
+                    "local_amount",
+                    "xor_due",
+                    "xor_after_haircut",
+                    "xor_variance",
+                    "timestamp_ms",
+                },
+                receipt_context,
+            )
+            receipts.append(
+                SumeragiLaneSettlementReceipt(
+                    source_id=_strict_hex_string(
+                        receipt, "source_id", 32, receipt_context
+                    ),
+                    local_amount=_strict_quantity_string(
+                        receipt, "local_amount", receipt_context
+                    ),
+                    xor_due=_strict_quantity_string(
+                        receipt, "xor_due", receipt_context
+                    ),
+                    xor_after_haircut=_strict_quantity_string(
+                        receipt, "xor_after_haircut", receipt_context
+                    ),
+                    xor_variance=_strict_quantity_string(
+                        receipt, "xor_variance", receipt_context
+                    ),
+                    timestamp_ms=_strict_uint(
+                        receipt, "timestamp_ms", 64, receipt_context
+                    ),
+                )
+            )
+        return cls(
+            block_height=_strict_uint(payload, "block_height", 64, context),
+            lane_id=_strict_uint(payload, "lane_id", 32, context),
+            lane_incarnation=_strict_hash_literal(payload, "lane_incarnation", context),
+            dataspace_id=_strict_uint(payload, "dataspace_id", 64, context),
+            tx_count=_strict_uint(payload, "tx_count", 64, context),
+            total_local_amount=_strict_quantity_string(
+                payload, "total_local_amount", context
+            ),
+            total_xor_due=_strict_quantity_string(payload, "total_xor_due", context),
+            total_xor_after_haircut=_strict_quantity_string(
+                payload, "total_xor_after_haircut", context
+            ),
+            total_xor_variance=_strict_quantity_string(
+                payload, "total_xor_variance", context
+            ),
+            swap_metadata=None,
+            receipts=tuple(receipts),
+            nexus_fee_receipts=(),
+        )
+
+
+@dataclass(frozen=True)
 class SumeragiNativeAmxLeg:
     """Prepare and commit v2 certificates for one participant lane/dataspace."""
 
@@ -10355,7 +10471,7 @@ class SumeragiNativeAmxLeg:
     dataspace_id: int
     lane_incarnation: str
     participant_proposal: SumeragiNativeAmxParticipantLaneBlockProposal
-    participant_settlement: SumeragiLaneSettlementCommitment
+    participant_settlement: SumeragiNativeAmxParticipantSettlement
     participant_settlement_hash: str
     requires_mixed_role_anchor_validation: bool
     prepare_qc: SumeragiNativeAmxAttestationQc
@@ -10390,23 +10506,10 @@ class SumeragiNativeAmxLeg:
             or not isinstance(commit_payload, Mapping)
         ):
             raise TypeError(f"{context} participant artifacts and QCs must be objects")
-        # The protocol-defined participant settlement is terminal and cannot
-        # recursively embed another native AMX receipt.
-        if settlement_payload.get("native_amx_receipts") != []:
-            raise ValueError(f"{context} participant settlement must be terminal")
-        if settlement_payload.get("nexus_fee_receipts") != []:
-            raise ValueError(f"{context} participant settlement cannot charge a fee")
-        settlement_receipts_payload = settlement_payload.get("receipts")
-        if (
-            not isinstance(settlement_receipts_payload, list)
-            or not settlement_receipts_payload
-            or len(settlement_receipts_payload) > _MAX_NATIVE_AMX_GROUP_SOURCES
-        ):
-            raise ValueError(
-                f"{context} participant settlement receipts must be bounded and non-empty"
-            )
         proposal = SumeragiNativeAmxParticipantLaneBlockProposal.from_payload(proposal_payload)
-        settlement = SumeragiLaneSettlementCommitment.from_payload(settlement_payload)
+        settlement = SumeragiNativeAmxParticipantSettlement.from_payload(
+            settlement_payload
+        )
         prepare = SumeragiNativeAmxAttestationQc.from_payload(prepare_payload)
         commit = SumeragiNativeAmxAttestationQc.from_payload(commit_payload)
         if prepare.body.phase is not SumeragiNativeAmxPhase.PREPARE:
@@ -10498,7 +10601,6 @@ class SumeragiNativeAmxLeg:
                 for receipt in settlement.receipts
             )
             or settlement.nexus_fee_receipts
-            or settlement.native_amx_receipts
         ):
             raise ValueError(f"{context} participant settlement differs from its QC body")
         return cls(
@@ -13632,6 +13734,7 @@ __all__ = [
     "SumeragiNativeAmxAttestationQc",
     "SumeragiNativeAmxParticipantLaneBlockDescriptor",
     "SumeragiNativeAmxParticipantLaneBlockProposal",
+    "SumeragiNativeAmxParticipantSettlement",
     "SumeragiNativeAmxLeg",
     "SumeragiNativeAmxReceipt",
     "SumeragiParamsSnapshot",

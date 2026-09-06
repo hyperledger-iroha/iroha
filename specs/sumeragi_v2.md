@@ -740,8 +740,9 @@ and commits its state transition; participant proposals are not executable-paylo
 cannot appear as independent merge executions. Participant committees may deterministically
 preflight the settlement against the frozen state, but preflight cannot mutate State. The signed
 participant settlement binds the proposal, included sources, resulting effect commitment, and
-participant coordinates. It does not recursively contain the Native AMX receipt whose leg commits
-its hash, avoiding a receipt-to-settlement hash cycle.
+participant coordinates. The wire value is `NativeAmxParticipantSettlement`; its typed hash uses
+the `iroha.consensus.native-amx.participant-settlement.v1` domain. It does not recursively contain
+the Native AMX receipt whose leg commits its hash, avoiding a receipt-to-settlement hash cycle.
 One shared participant-application predicate is used by block validation,
 Kura, State frontiers, recovery, diagnostics, drain, and retirement. A
 coordinator leg on the same route is not a separate participant application

@@ -75,7 +75,6 @@ iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 iroha_sccp = { workspace = true }
 sorafs_manifest = { workspace = true }
-sorafs_car = { workspace = true, features = ["manifest"] }
 
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http", "transparent_api"] }
 iroha_executor_data_model = { workspace = true }
