@@ -52,13 +52,14 @@ use snark_verifier::{
 use super::{
     DigestV1, KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaPastaParityV1,
     deferred_parent::{
-        DeferredAccumulator, DeferredLoader, DeferredScalar, KagemushaNativeDeferredBatchV1,
-        bind_accumulator_limbs, constrain_reciprocal_native_batch_v1, deferred_field_chips_v1,
-        deferred_loader_v1, derive_mint_hash_claim_native_deferred_batch_v1,
-        kagemusha_protocol_structure_digest_v1, load_and_constrain_claim_protocol_native_v1,
-        load_native_accumulator, select_accumulator_v1, verify_fold_with_transcript_binding_v1,
-        verify_ordinary_proof_with_transcript_binding_at_k_v1,
-        verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
+        ClaimProofTranscriptPlanV1, DeferredAccumulator, DeferredLoader, DeferredScalar,
+        KagemushaNativeDeferredBatchV1, bind_accumulator_limbs,
+        constrain_reciprocal_native_batch_v1, deferred_field_chips_v1, deferred_loader_v1,
+        derive_mint_hash_claim_native_deferred_batch_v1, kagemusha_protocol_structure_digest_v1,
+        load_and_constrain_claim_protocol_native_v1, load_native_accumulator,
+        select_accumulator_v1, verify_claim_fold_with_transcript_binding_v1,
+        verify_ordinary_proof_with_native_binding_at_k_v1,
+        verify_two_carrier_hybrid_ordinary_proof_with_native_v1,
     },
     mint_hash_shard::{
         KAGEMUSHA_MINT_HASH_SHARD_K_V1, KAGEMUSHA_MINT_HASH_SHARD_PUBLIC_INSTANCE_COUNT_V1,
@@ -640,7 +641,8 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
                         } else {
                             Value::known(row.values[column_index])
                         };
-                        let assigned = region.assign_advice(column, row_index, value).cell();
+                        let assigned =
+                            region.assign_advice_discarding_value(column, row_index, value);
                         if column_index == CLAIM_RLC_BUS {
                             bus = Some(assigned);
                         }
@@ -3411,6 +3413,9 @@ where
     builder.assigned_instances = vec![public.clone()];
     profile_cells!("public", builder);
 
+    let proof_transcript_plan =
+        ClaimProofTranscriptPlanV1::new(witness.parent_protocol, witness.shard_protocol)?;
+    let fold_transcript_plan = proof_transcript_plan.folds();
     let mut native_poseidon_jobs = PastaNativePoseidonJobsV1::new(
         KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1,
         (1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS,
@@ -3457,7 +3462,7 @@ where
         .iter()
         .map(|value| loader.assign_scalar(*value))
         .collect::<Vec<_>>();
-    let parent_assigned = verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
+    let parent_assigned = verify_two_carrier_hybrid_ordinary_proof_with_native_v1(
         &loader,
         carrier_svk,
         &loaded_parent.protocol,
@@ -3485,6 +3490,8 @@ where
             ],
         },
         witness.parent_proof,
+        proof_transcript_plan.parent(),
+        &mut native_poseidon_jobs,
     )
     .map_err(|error| format!("failed to verify mint hash claim predecessor: {error:?}"))?;
     profile_loader_cells!("parent_proof", loader, builder);
@@ -3502,11 +3509,13 @@ where
         .collect::<Vec<_>>();
     bind_accumulator_limbs(&loader, &parent_history, &parent_history_cells)
         .map_err(|error| format!("failed to bind mint hash predecessor history: {error:?}"))?;
-    let parent_fold = verify_fold_with_transcript_binding_v1(
+    let parent_fold = verify_claim_fold_with_transcript_binding_v1(
         &loader,
         carrier_svk,
         &[parent_accumulator, parent_history.clone()],
         witness.parent_fold_proof,
+        fold_transcript_plan.parent(),
+        &mut native_poseidon_jobs,
     )
     .map_err(|error| format!("failed to fold mint hash claim predecessor: {error:?}"))?;
     profile_loader_cells!("parent_fold", loader, builder);
@@ -3547,13 +3556,15 @@ where
             .collect::<Vec<_>>(),
     ];
     let (shard_accumulator, shard_transcript_binding) =
-        verify_ordinary_proof_with_transcript_binding_at_k_v1(
+        verify_ordinary_proof_with_native_binding_at_k_v1(
             &loader,
             shard_svk,
             &loaded_shard.protocol,
             &shard_instances,
             witness.shard_proof,
             KAGEMUSHA_MINT_HASH_SHARD_K_V1 as usize,
+            proof_transcript_plan.shard(),
+            &mut native_poseidon_jobs,
         )
         .map_err(|error| format!("failed to verify mint hash shard proof: {error:?}"))?;
     profile_loader_cells!("shard_proof", loader, builder);
@@ -3569,11 +3580,13 @@ where
     )?;
     profile_loader_cells!("cursor", loader, builder);
     let lifted = lift_mint_hash_shard_accumulator_v1(&loader, shard_accumulator)?;
-    let successor_history = verify_fold_with_transcript_binding_v1(
+    let successor_history = verify_claim_fold_with_transcript_binding_v1(
         &loader,
         carrier_svk,
         &[lifted, prior_history],
         witness.leaf_fold_proof,
+        fold_transcript_plan.successor(),
+        &mut native_poseidon_jobs,
     )
     .map_err(|error| format!("failed to fold lifted mint hash shard: {error:?}"))?;
     profile_loader_cells!("leaf_fold", loader, builder);
@@ -3640,7 +3653,8 @@ where
     profile_cells!("deferred_batch", builder);
     #[cfg(test)]
     {
-        // Bind the capacity derivation to the real emitted input and source inventory.
+        // Bind the capacity derivation to the real emitted input and source inventory,
+        // including every complete native fold selected before advice assignment.
         assert_eq!(common_cells.len(), 58);
         let protocol_points =
             witness.parent_protocol.preprocessed.len() + witness.shard_protocol.preprocessed.len();
@@ -3652,8 +3666,12 @@ where
             native_poseidon_jobs
                 .required_rows()
                 .expect("complete Claim Poseidon queue"),
-            (39 + output.batch.source_count() + equation_count + protocol_points + 14)
-                .div_ceil(KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1)
+            (39 + output.batch.source_count()
+                + equation_count
+                + protocol_points
+                + 14
+                + proof_transcript_plan.native_permutation_count())
+            .div_ceil(KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1)
                 * 66,
         );
     }

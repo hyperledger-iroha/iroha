@@ -341,6 +341,30 @@ mod tests {
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked config fixture keypair")
     }
+
+    #[test]
+    fn web_login_string_boundaries_preserve_text_json_and_colon_rejection() {
+        for sample in [
+            String::new(),
+            "a".repeat(15),
+            "a".repeat(16),
+            "a".repeat(32),
+            "a".repeat(33),
+            "Δ🔥\\\n".repeat(32),
+        ] {
+            let login: WebLogin = sample.parse().expect("login without a colon");
+            assert_eq!(login.as_str(), sample);
+            let encoded = json::to_json(&login).expect("login JSON");
+            assert_eq!(encoded, json::to_json(&sample).expect("string JSON"));
+            let decoded: WebLogin = json::from_json(&encoded).expect("login decode");
+            assert_eq!(decoded, login);
+            let invalid = format!("{sample}:suffix");
+            assert!(invalid.parse::<WebLogin>().is_err());
+            let invalid_json = json::to_json(&invalid).expect("invalid login JSON");
+            assert!(json::from_json::<WebLogin>(&invalid_json).is_err());
+        }
+    }
+
     #[test]
     fn web_login_ok() {
         let _ok: WebLogin = "alice".parse().expect("input is valid");

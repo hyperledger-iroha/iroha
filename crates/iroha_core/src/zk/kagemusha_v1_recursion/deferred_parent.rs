@@ -104,6 +104,20 @@ mod proof_bytes_tests;
 #[path = "deferred_parent_protocol_identity_tests.rs"]
 mod protocol_identity_tests;
 
+#[path = "deferred_claim_fold_transcript.rs"]
+mod claim_fold_transcript;
+pub(super) use claim_fold_transcript::{
+    ClaimFoldTranscriptPlanV1, verify_claim_fold_with_transcript_binding_v1,
+};
+
+#[path = "ordinary_poseidon_schedule.rs"]
+mod ordinary_poseidon_schedule;
+pub(super) use ordinary_poseidon_schedule::ClaimProofTranscriptPlanV1;
+pub(super) use proof_bytes::{
+    verify_ordinary_proof_with_native_binding_at_k_v1,
+    verify_two_carrier_hybrid_ordinary_proof_with_native_v1,
+};
+
 const KAGEMUSHA_PROTOCOL_STRUCTURE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:compiled-protocol-structure";
 const KAGEMUSHA_PROTOCOL_IDENTITY_DOMAIN_V1: &[u8] =
@@ -174,23 +188,15 @@ where
         .ok_or_else(|| "Kagemusha witness-commitment count overflowed".to_owned())?;
     let quotient_commitments = protocol.quotient.num_chunk();
     let evaluations = protocol.evaluations.len();
-    // The BGH19 parser groups queries by their evaluation-point shifts, not
-    // by the source `Rotation` integers.  Rotations that differ by the domain
-    // order therefore share one transcript evaluation (for example `-1` and
-    // `2^k - 1`).  Normalize modulo the authenticated domain order so this
-    // inventory exactly matches `query_sets` in snark-verifier.
-    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i64>>::new();
-    for query in &protocol.queries {
-        rotations_by_polynomial
-            .entry(query.poly)
-            .or_default()
-            .insert(canonical_rotation_v1(protocol.domain.k, query.rotation.0));
-    }
-    let bgh19_rotation_sets = rotations_by_polynomial
-        .into_values()
-        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
-        .collect::<BTreeSet<_>>()
-        .len();
+    // The pinned BGH19 reader receives `Query<Rotation>` from `empty_queries`.
+    // Its grouping compares the signed rotation integers, before evaluating
+    // domain shifts. Preserve that exact inventory even for domain aliases.
+    let bgh19_rotation_sets = ordinary_ipa_rotation_set_count_v1(
+        protocol
+            .queries
+            .iter()
+            .map(|query| (query.poly, query.rotation.0)),
+    );
     ordinary_ipa_proof_profile_from_counts_v1(
         expected_k,
         witness_commitments,
@@ -200,8 +206,18 @@ where
     )
 }
 
-fn canonical_rotation_v1(domain_k: usize, rotation: i32) -> i64 {
-    i64::from(rotation).rem_euclid(1_i64 << domain_k)
+fn ordinary_ipa_rotation_set_count_v1(queries: impl IntoIterator<Item = (usize, i32)>) -> usize {
+    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i32>>::new();
+    for (polynomial, rotation) in queries {
+        rotations_by_polynomial
+            .entry(polynomial)
+            .or_default()
+            .insert(rotation);
+    }
+    rotations_by_polynomial
+        .into_values()
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn validate_ordinary_ipa_protocol_shape_v1(
@@ -2376,6 +2392,10 @@ const _: () = {
 };
 
 #[cfg(test)]
+#[path = "deferred_parent_rotation_inventory_tests.rs"]
+mod rotation_inventory_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2389,13 +2409,17 @@ mod tests {
     }
 
     #[test]
-    fn bgh19_rotation_inventory_uses_domain_shifts() {
-        let k = KAGEMUSHA_RECURSION_IPA_K_V1 as usize;
+    fn bgh19_rotation_inventory_preserves_reader_rotation_integers() {
         assert_eq!(
-            canonical_rotation_v1(k, -1),
-            canonical_rotation_v1(k, 65_535)
+            ordinary_ipa_rotation_set_count_v1([(0, -1), (1, 65_535)]),
+            2
         );
-        assert_ne!(canonical_rotation_v1(k, -1), canonical_rotation_v1(k, 0));
+        assert_eq!(ordinary_ipa_rotation_set_count_v1([(0, -1), (1, -1)]), 1);
+        assert_eq!(ordinary_ipa_rotation_set_count_v1([(0, -1), (0, -1)]), 1);
+        assert_eq!(
+            ordinary_ipa_rotation_set_count_v1([(0, -1), (0, 1), (1, 1), (1, -1)]),
+            1,
+        );
     }
 
     #[test]

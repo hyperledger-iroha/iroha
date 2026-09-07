@@ -248,20 +248,20 @@ impl<'r, F: Field> Region<'r, F> {
         */
     }
 
-    /// Assign an advice value when its returned value and cell are not needed.
+    /// Assign an advice value and return its physical cell without its value.
     ///
-    /// This is intended for bulk witness-only assignment. Callers that need to
-    /// copy or otherwise reference the assigned cell must use
-    /// [`Self::assign_advice`] instead.
+    /// The returned cell supports copy constraints without retaining a reference
+    /// to the assigned value. Bulk witness-only callers may ignore it. Callers
+    /// that need the assigned value must use [`Self::assign_advice`] instead.
     #[doc(hidden)]
     pub fn assign_advice_discarding_value(
         &mut self,
         column: Column<Advice>,
         offset: usize,
         to: Value<impl Into<Assigned<F>>>,
-    ) {
+    ) -> Cell {
         self.region
-            .assign_advice_discarding_value(column, offset, to.map(Into::into));
+            .assign_advice_discarding_value(column, offset, to.map(Into::into))
     }
 
     /// Assigns a constant value to the column `advice` at `offset` within this region.
