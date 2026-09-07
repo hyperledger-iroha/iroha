@@ -49,6 +49,13 @@ STAGES = (
     ("KVM ioctl error handling", (
         "taira_public_reset::host::tests::kvm_api_query_preserves_notty_for_regular_files",
     )),
+    ("bounded duplex process streaming", (
+        "taira_public_reset::host::tests::process_runner_streams_large_closure_with_bidirectional_backpressure",
+        "taira_public_reset::host::tests::process_runner_output_budget_bounds_continuous_and_interrupted_readers",
+        "taira_public_reset::host::tests::process_runner_deadline_kills_descendant_holding_output_pipes",
+        "taira_public_reset::host::tests::process_runner_enforces_one_absolute_timeout",
+        "taira_public_reset::host::tests::process_runner_handles_child_that_closes_stdin_early",
+    )),
     ("read-only host preflight", (
         "taira_public_reset::host::tests::preflight_dispatches_five_read_only_hosts_without_runtime_custody",
     )),
@@ -143,13 +150,13 @@ def require_one_pass(name: str, result: subprocess.CompletedProcess[str]) -> Non
         raise CheckError(f"regression did not execute and pass: {name} (exit {result.returncode})")
 
 
-def run_checks(root: Path) -> None:
+def run_checks(root: Path, *, environment: dict[str, str] | None = None) -> None:
     if sys.platform not in {"darwin", "linux"}:
         raise CheckError("the Taira descriptor/stage gate requires macOS or Linux")
     started = time.monotonic()
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root,
                                    stdin=subprocess.DEVNULL, text=True).strip()
-    env = os.environ.copy()
+    env = dict(os.environ if environment is None else environment)
     env.pop("CARGO_BUILD_TARGET", None)  # This check executes a host-native harness.
     env["VERGEN_GIT_SHA"] = head
     env["IROHA_GIT_COMMIT_HASH"] = head

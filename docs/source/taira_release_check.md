@@ -7,11 +7,15 @@ reports build, stage and test durations. Python 3.11+ and the repository Rust
 and Cargo toolchain are required. Use an existing `CARGO_TARGET_DIR` only for
 an established separate native build lane; no clean or per-run target is needed.
 
-The check runs 14 regressions for secure inherited configuration FDs,
+The check runs 19 regressions for secure inherited configuration FDs,
 network-369 inventory decoding, aggregate timeout admission before custody,
 generated stages frozen to 0400 and their native consumers, preseed receipt
 ordering, KVM ioctl error preservation on a regular file, and all five read-only
-host preflights. The KVM regression needs no KVM device or root access and runs
+host preflights. The process-stream checks send an exact-digest 64 MiB closure
+through real pipes with both outputs backpressured, bound each output turn,
+retry interruptions, and verify absolute deadlines, early stdin closure, and
+cleanup of a descendant retaining the output pipes. They use the system
+`/usr/bin/python3` only for harmless disposable child fixtures. The KVM regression needs no KVM device or root access and runs
 on macOS and Linux. Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test

@@ -10611,18 +10611,44 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     loop {
         if Instant::now() >= deadline {
             terminate_owned_child(&mut child)?;
+            let copied = sources
+                .iter()
+                .fold(prefix_offset as u64, |total, (_, _, copied)| {
+                    total.saturating_add(*copied)
+                });
+            let expected = sources
+                .iter()
+                .fold(spec.stdin_prefix.len() as u64, |total, (_, size, _)| {
+                    total.saturating_add(*size)
+                });
             return Err(eyre!(
-                "`{}` exceeded its absolute deadline while streaming or draining pipes",
-                spec.program.display()
+                "`{}` exceeded its absolute deadline while streaming or draining pipes: \
+                 copied_bytes={copied} expected_bytes={expected} source_index={source_index} \
+                 sources={} stdin_complete={stdin_complete} stdout_bytes={} stderr_bytes={} \
+                 stdout_eof={stdout_eof} stderr_eof={stderr_eof} child_exit_observed={}",
+                spec.program.display(),
+                sources.len(),
+                stdout_bytes.len(),
+                stderr_bytes.len(),
+                status.is_some()
             ));
         }
+        let mut made_progress = false;
         if !stdin_complete && !stdin_aborted {
             let writer = stdin.as_mut().expect("stdin exists until complete");
             let write_result = if prefix_offset < spec.stdin_prefix.len() {
                 writer
                     .write(&spec.stdin_prefix[prefix_offset..])
-                    .map(|written| {
+                    .and_then(|written| {
+                        if written == 0 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::WriteZero,
+                                "child stdin accepted zero bytes",
+                            ));
+                        }
                         prefix_offset += written;
+                        made_progress = true;
+                        Ok(())
                     })
             } else if let Some((file, expected, copied)) = sources.get_mut(source_index) {
                 if file_range.is_empty() && *copied < *expected {
@@ -10630,39 +10656,59 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                         usize::try_from((*expected - *copied).min(file_buffer.len() as u64))
                             .expect("bounded stream chunk");
                     let read = match file.read(&mut file_buffer[..remaining]) {
-                        Ok(read) => read,
+                        Ok(read) => Some(read),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => None,
                         Err(error) => {
                             terminate_owned_child(&mut child)?;
                             return Err(error).wrap_err("failed to read pinned streamed input");
                         }
                     };
-                    if read == 0 {
-                        terminate_owned_child(&mut child)?;
-                        return Err(eyre!(
-                            "pinned streamed input ended before its declared length"
-                        ));
+                    if let Some(read) = read {
+                        if read == 0 {
+                            terminate_owned_child(&mut child)?;
+                            return Err(eyre!(
+                                "pinned streamed input ended before its declared length"
+                            ));
+                        }
+                        file_range = 0..read;
                     }
-                    file_range = 0..read;
                 }
-                if file_range.is_empty() {
+                if file_range.is_empty() && *copied < *expected {
+                    // An interrupted read retries on the next fair, deadline-checked turn.
+                    Ok(())
+                } else if file_range.is_empty() {
                     source_index += 1;
                     stdin_complete = source_index == sources.len();
+                    made_progress = true;
                     Ok(())
                 } else {
                     writer
                         .write(&file_buffer[file_range.clone()])
-                        .map(|written| {
+                        .and_then(|written| {
+                            if written == 0 {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::WriteZero,
+                                    "child stdin accepted zero bytes",
+                                ));
+                            }
                             file_range.start += written;
                             *copied += u64::try_from(written).expect("write count fits u64");
+                            made_progress = true;
+                            Ok(())
                         })
                 }
             } else {
                 stdin_complete = true;
+                made_progress = true;
                 Ok(())
             };
             match write_result {
                 Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
                 Err(error) => {
                     terminate_owned_child(&mut child)?;
                     return Err(error).wrap_err("failed to stream bounded child stdin");
@@ -10672,14 +10718,32 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                 drop(stdin.take());
             }
         }
-        if let Err(error) = drain_nonblocking(&mut stdout, &mut stdout_bytes, &mut stdout_eof) {
+        let output_before = (
+            stdout_bytes.len(),
+            stderr_bytes.len(),
+            stdout_eof,
+            stderr_eof,
+        );
+        // Bound both drains: a chatty stdout must not starve stdin, stderr or the deadline.
+        if let Err(error) =
+            drain_nonblocking_with_read_budget(&mut stdout, &mut stdout_bytes, &mut stdout_eof, 4)
+        {
             terminate_owned_child(&mut child)?;
             return Err(error).wrap_err("failed to drain bounded child stdout");
         }
-        if let Err(error) = drain_nonblocking(&mut stderr, &mut stderr_bytes, &mut stderr_eof) {
+        if let Err(error) =
+            drain_nonblocking_with_read_budget(&mut stderr, &mut stderr_bytes, &mut stderr_eof, 4)
+        {
             terminate_owned_child(&mut child)?;
             return Err(error).wrap_err("failed to drain bounded child stderr");
         }
+        made_progress |= output_before
+            != (
+                stdout_bytes.len(),
+                stderr_bytes.len(),
+                stdout_eof,
+                stderr_eof,
+            );
         if status.is_none() {
             status = match child.try_wait() {
                 Ok(value) => value,
@@ -10689,6 +10753,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                 }
             };
             if status.is_some() {
+                made_progress = true;
                 stdin_aborted = !stdin_complete;
                 drop(stdin.take());
             }
@@ -10696,11 +10761,44 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
         if status.is_some() && stdout_eof && stderr_eof {
             break;
         }
+        if made_progress {
+            continue;
+        }
         let remaining = spec.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             continue;
         }
-        std::thread::sleep(PROCESS_POLL_INTERVAL.min(remaining));
+        // Wait only after a turn made no progress. POLLOUT wakes immediately
+        // when SSH consumes input; the polling interval limits child-exit checks,
+        // never the stream throughput. EOF streams must not cause HUP busy loops.
+        let mut descriptors = Vec::with_capacity(3);
+        if let Some(stdin) = stdin.as_ref() {
+            descriptors.push(rustix::event::PollFd::new(
+                stdin,
+                rustix::event::PollFlags::OUT,
+            ));
+        }
+        if !stdout_eof {
+            descriptors.push(rustix::event::PollFd::new(
+                &stdout,
+                rustix::event::PollFlags::IN,
+            ));
+        }
+        if !stderr_eof {
+            descriptors.push(rustix::event::PollFd::new(
+                &stderr,
+                rustix::event::PollFlags::IN,
+            ));
+        }
+        let timeout = rustix::event::Timespec::try_from(PROCESS_POLL_INTERVAL.min(remaining))
+            .expect("bounded process poll timeout");
+        match rustix::event::poll(&mut descriptors, Some(&timeout)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(error) => {
+                terminate_owned_child(&mut child)?;
+                return Err(error).wrap_err("failed to wait for bounded child pipe readiness");
+            }
+        }
     }
     if !stdin_complete {
         return Err(eyre!(
@@ -10884,8 +10982,18 @@ fn run_locked_preseed_session(
 }
 
 fn drain_nonblocking(reader: &mut impl Read, output: &mut Vec<u8>, eof: &mut bool) -> Result<()> {
+    // Preserve the preseed barrier's full drain-to-WouldBlock/EOF contract.
+    drain_nonblocking_with_read_budget(reader, output, eof, usize::MAX)
+}
+
+fn drain_nonblocking_with_read_budget(
+    reader: &mut impl Read,
+    output: &mut Vec<u8>,
+    eof: &mut bool,
+    read_budget: usize,
+) -> Result<()> {
     let mut buffer = [0_u8; 16 * 1024];
-    loop {
+    for _ in 0..read_budget {
         match reader.read(&mut buffer) {
             Ok(0) => {
                 *eof = true;
@@ -10898,9 +11006,11 @@ fn drain_nonblocking(reader: &mut impl Read, output: &mut Vec<u8>, eof: &mut boo
                 output.extend_from_slice(&buffer[..count]);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error.into()),
         }
     }
+    Ok(())
 }
 
 fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
@@ -18675,6 +18785,147 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(output.stdout, b"prefix-first-second");
         assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn process_runner_streams_large_closure_with_bidirectional_backpressure() {
+        let directory = tempfile::tempdir().expect("temporary large stream directory");
+        let prefix = b"exact-framed-prefix\n".to_vec();
+        let mut expected = Sha256::new();
+        expected.update(&prefix);
+        let file_size = 32_u64 * 1024 * 1024;
+        let mut files = Vec::new();
+        for (name, byte) in [("first", b'a'), ("second", b'b')] {
+            let path = directory.path().join(name);
+            let mut file = File::create(&path).expect("create harmless streamed fixture");
+            let chunk = [byte; 64 * 1024];
+            for _ in 0..512 {
+                file.write_all(&chunk)
+                    .expect("write harmless streamed fixture");
+                expected.update(chunk);
+            }
+            drop(file);
+            files.push((
+                File::open(path).expect("pin harmless streamed fixture"),
+                file_size,
+            ));
+        }
+        let expected_len = prefix.len() as u64 + 2 * file_size;
+        // Each output exceeds real pipe capacity before the child consumes input.
+        // The old one-64KiB-write/20ms loop takes at least 20s for these files;
+        // the 10s bound allows loaded CI without accepting that rate limiter.
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import hashlib, sys
+sys.stdout.buffer.write(b'o' * 131072)
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(b'e' * 131072)
+sys.stderr.buffer.flush()
+h = hashlib.sha256()
+count = 0
+while True:
+    chunk = sys.stdin.buffer.read(131072)
+    if not chunk:
+        break
+    h.update(chunk)
+    count += len(chunk)
+sys.stdout.buffer.write((h.hexdigest() + ' ' + str(count) + '\n').encode())
+sys.stdout.buffer.flush()
+"#
+                .into(),
+            ],
+            stdin_prefix: prefix,
+            stdin_file: Some(files.remove(0)),
+            stdin_files: files,
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("readiness-driven 64MiB exact stream with both output pipes backpressured");
+        assert!(output.status.success());
+        let mut expected_stdout = vec![b'o'; 131072];
+        expected_stdout
+            .extend_from_slice(format!("{:x} {expected_len}\n", expected.finalize()).as_bytes());
+        assert_eq!(output.stdout, expected_stdout);
+        assert_eq!(output.stderr, vec![b'e'; 131072]);
+    }
+
+    #[test]
+    fn process_runner_output_budget_bounds_continuous_and_interrupted_readers() {
+        struct ReadyReader {
+            calls: usize,
+            interrupted: bool,
+        }
+        impl Read for ReadyReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.calls += 1;
+                if self.interrupted {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                buffer.fill(b'x');
+                Ok(buffer.len())
+            }
+        }
+        for interrupted in [false, true] {
+            let mut reader = ReadyReader {
+                calls: 0,
+                interrupted,
+            };
+            let mut output = Vec::new();
+            let mut eof = false;
+            drain_nonblocking_with_read_budget(&mut reader, &mut output, &mut eof, 4)
+                .expect("one bounded fair output turn");
+            assert_eq!(reader.calls, 4);
+            assert_eq!(output.len(), if interrupted { 0 } else { 64 * 1024 });
+            assert!(!eof);
+        }
+    }
+
+    #[test]
+    fn process_runner_deadline_kills_descendant_holding_output_pipes() {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        let (mut observer, held) = UnixStream::pair().expect("owned descendant witness socket");
+        observer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let held = File::from(OwnedFd::from(held));
+        let descriptor = held.as_raw_fd();
+        let started = Instant::now();
+        let error = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys, time
+if os.fork():
+    os._exit(0)
+os.write(int(sys.argv[1]), b'descendant-ready')
+time.sleep(30)
+"#
+                .into(),
+                descriptor.to_string().into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![held],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .expect_err("a descendant retaining output must obey the same absolute deadline");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("copied_bytes=0 expected_bytes=0"));
+        assert!(diagnostic.contains("child_exit_observed=true"));
+        assert!(diagnostic.contains("stdout_eof=false stderr_eof=false"));
+        let mut witness = Vec::new();
+        observer
+            .read_to_end(&mut witness)
+            .expect("owned descendant must close its inherited socket");
+        assert_eq!(witness, b"descendant-ready");
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]
