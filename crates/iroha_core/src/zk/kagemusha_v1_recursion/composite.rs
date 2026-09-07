@@ -301,7 +301,7 @@ where
     pub(super) parent_fold_proof: &'a [u8],
     pub(super) successor_history: &'a [u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
     pub(super) incoming_protocol: &'a PlonkProtocol<C>,
-    pub(super) incoming_credits: &'a [KagemushaRecursiveIncomingParityWitnessV1<'a, C>],
+    incoming_credits: &'a [KagemushaRecursiveIncomingParityWitnessV1<'a, C>],
     pub(super) guard_protocol: &'a PlonkProtocol<C>,
     pub(super) guard_proof: &'a [u8],
     pub(super) guard_history: &'a IpaAccumulator<C, NativeLoader>,

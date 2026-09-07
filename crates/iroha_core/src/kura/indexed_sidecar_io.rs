@@ -2396,6 +2396,7 @@ impl Kura {
         }
         true
     }
+    #[cfg(test)]
     fn indexed_sidecar_height_range(
         index_path: &Path,
         kind: &str,

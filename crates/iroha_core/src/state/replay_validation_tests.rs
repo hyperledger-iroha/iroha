@@ -463,7 +463,8 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         .with_authenticated_v2_commit_authority(&artifact),
     )
     .expect("retain correlated complete manifest");
-    kura.store_v2_finality_artifact(&artifact)
+    let _ = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("retain the exact signed CommitQC tuple");
     super::replay_blocks_from_kura(&kura, &mut state, 1)
         .expect("authenticate the exact preceding genesis");

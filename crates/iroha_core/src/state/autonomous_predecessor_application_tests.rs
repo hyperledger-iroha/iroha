@@ -90,7 +90,7 @@ fn autonomous_lane_predecessor_authenticates_receipt_and_preserves_occupied_corr
         merge_carrier_finality_artifact_with_network(&block, None, *state.network_id_ref());
     kura.store_block(Arc::new(block))
         .expect("store canonical predecessor block");
-    kura.store_v2_finality_artifact(&finality)
+    let _ = kura.store_v2_finality_artifact(&finality)
         .expect("publish exact signed complete-wire predecessor finality");
     kura.persist_committed_lane_block_session(&predecessor, &signer_pops)
         .expect("persist canonical predecessor certificate");

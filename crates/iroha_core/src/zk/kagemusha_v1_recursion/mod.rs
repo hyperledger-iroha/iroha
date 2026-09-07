@@ -56,6 +56,7 @@ pub(crate) use real_handoff_qualification_tests::DiagnosticMintStageProofV1;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub use super::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1;
 pub use accumulation::{
     KagemushaEpAccumulatorV1, KagemushaEpFoldOutputV1, KagemushaEpFoldProofV1,
     KagemushaEqAccumulatorV1, KagemushaEqFoldOutputV1, KagemushaEqFoldProofV1,

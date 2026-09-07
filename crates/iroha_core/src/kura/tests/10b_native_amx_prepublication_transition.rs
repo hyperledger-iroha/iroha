@@ -1720,7 +1720,7 @@ fn append_ordinary_carrier_for_native_chain(
         &v2_finality_fixture_keys(),
         v2_finality_fixture_execution_commitment(),
     );
-    kura.store_v2_finality_artifact(&finality)
+    let _ = kura.store_v2_finality_artifact(&finality)
         .expect("publish ordinary carrier finality");
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("publish ordinary shared-lane application receipt");

@@ -20576,7 +20576,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist durable lane-history carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish complete-wire durable lane-history authority");
@@ -21079,7 +21079,8 @@ pub(super) mod tests {
                 );
                 kura.store_block(block.clone())
                     .expect("persist exact merge-signing parent fixture");
-                kura.store_v2_finality_artifact(&finality)
+                let _ = kura
+                    .store_v2_finality_artifact(&finality)
                     .expect("authenticate every durable fixture parent");
                 durable_parent_qc = Some(finality.commit_qc);
             }
@@ -25520,7 +25521,7 @@ pub(super) mod tests {
             .expect("unpublished current-height finality is a pending state")
         );
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact canonical recovery finality");
@@ -25978,7 +25979,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist globally applied canonical block");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("authenticate complete executed carrier before lane recovery");
@@ -26435,7 +26436,7 @@ pub(super) mod tests {
                 .store_block(block.clone())
                 .expect("persist canonical external-only carrier");
             let finality_artifact = finality_artifact_for_block(&adapter, &keys, &block);
-            adapter
+            let _ = adapter
                 .kura
                 .store_v2_finality_artifact(&finality_artifact)
                 .expect("publish exact finality before external-only rollover");
@@ -26455,7 +26456,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist canonical decided lane carrier");
         let finality_artifact = finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality_artifact)
             .expect("publish exact finality before decided lane completion checks");
@@ -26632,7 +26633,7 @@ pub(super) mod tests {
             .store_block(parent_block.clone())
             .expect("persist the exact globally anchored lane proposal");
         let finality = verified_finality_artifact_for_block(&parent_adapter, &keys, &parent_block);
-        parent_adapter
+        let _ = parent_adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact parent finality before successor recovery");
@@ -26754,7 +26755,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist current-height lane carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact global finality before lane recovery");
@@ -26812,7 +26813,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist canonical lane anchor");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact global finality before lane recovery");
@@ -26991,7 +26992,7 @@ pub(super) mod tests {
                 .store_block(block.clone())
                 .expect("persist canonical lane anchor");
             let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-            adapter
+            let _ = adapter
                 .kura
                 .store_v2_finality_artifact(&finality)
                 .expect("publish exact global finality before lane recovery");
@@ -27078,7 +27079,7 @@ pub(super) mod tests {
                 .store_block(block.clone())
                 .expect("persist canonical lane anchor");
             let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-            adapter
+            let _ = adapter
                 .kura
                 .store_v2_finality_artifact(&finality)
                 .expect("authenticate exact carrier before the invalid-QC retry cases");
@@ -27194,7 +27195,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist canonical lane anchor");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact global finality before lane recovery");
@@ -27262,7 +27263,7 @@ pub(super) mod tests {
         let (decided_round, decided_subject) = global_lock_for_block(&adapter, &block);
         let finality_artifact = finality_artifact_for_block(&adapter, &keys, &block);
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact global finality before lane recovery");
@@ -27524,7 +27525,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist globally anchored lane block");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact global finality before lane recovery");
@@ -28297,7 +28298,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist exact ordinary carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("authenticate exact ordinary carrier");
@@ -29236,7 +29237,7 @@ pub(super) mod tests {
             .store_block(parent_block.clone())
             .expect("persist the globally committed lane carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &parent_block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact parent finality before successor recovery");
@@ -29385,7 +29386,7 @@ pub(super) mod tests {
             .store_block(parent_block.clone())
             .expect("persist the canonical winning carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &parent_block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact parent finality before successor recovery");
@@ -29594,7 +29595,7 @@ pub(super) mod tests {
             .store_v2_finality_artifact(&finality)
             .expect("persist historical request finality");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact global finality before lane recovery");
@@ -30694,7 +30695,7 @@ pub(super) mod tests {
             .store_block(parent_block.clone())
             .expect("persist the globally committed lane carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &parent_block);
-        adapter
+        let _ = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("publish exact parent finality before successor recovery");

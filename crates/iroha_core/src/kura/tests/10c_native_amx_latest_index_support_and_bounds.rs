@@ -29,7 +29,7 @@ fn install_native_amx_startup_carrier_without_participant_evidence(kura: &Kura) 
     let block = Arc::new(block);
     kura.store_block(Arc::clone(&block))
         .expect("store exact non-Native startup carrier");
-    kura.store_v2_finality_artifact(&finality)
+    let _ = kura.store_v2_finality_artifact(&finality)
         .expect("publish authenticated non-Native startup carrier finality");
     assert!(
         kura.read_native_amx_participant_application_history(LaneId::SINGLE)
