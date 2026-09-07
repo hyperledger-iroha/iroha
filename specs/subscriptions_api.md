@@ -429,52 +429,59 @@ Prepares an `ExecuteTrigger` transaction carrying `SubscriptionUsageDelta`.
 Returns a draft that updates `next_charge_ms` and re-registers the billing trigger to execute at
 `charge_at_ms` (defaults to current network time when omitted).
 
-## CLI Helpers
-The CLI mirrors the Torii endpoints for plan and subscription management.
+## Rust SDK and CLI
 
-Register a plan from a JSON file (or stdin when `--plan-json` is omitted):
-```bash
-iroha_cli subscriptions plan create \
-  --authority <i105-account-id> \
-  --private-key <hex> \
-  --plan-id aws_compute#commerce \
-  --plan-json plan.json
-```
+The canonical HTTP records live in `iroha_torii_shared::subscriptions` and are
+consumed directly by Torii. The SDK exposes public reads through
+`client.subscriptions().list_plans(...)`, `.list(...)`, and `.get(...)`.
+Account-bound preparation uses `account.subscriptions().prepare_plan(...)`,
+`.prepare(...)`, `.prepare_pause(...)`, `.prepare_resume(...)`,
+`.prepare_cancel(...)`, `.prepare_keep(...)`, `.prepare_charge(...)`, and
+`.prepare_usage(...)`. Every network method is asynchronous.
 
-List plans for a provider:
-```bash
-iroha_cli subscriptions plan list --provider <i105-account-id> --limit 10
-```
+All preparation operations return one typed `iroha::subscriptions::SubscriptionDraft`.
+It contains the bound network/account, the exact operation and resources, and
+existing data-model transaction material: either a decoded `TransactionPayload`
+or a list of decoded `InstructionBox` values. Plan and usage drafts preserve the
+server's exact payload and verify its signing-message hash. Instruction drafts
+require explicit local fee selection and transaction preparation. Drafts never
+establish submission or finality. Executable programs in instruction drafts
+remain available for explicit review before signing.
 
-Create a subscription:
-```bash
-iroha_cli subscriptions subscription create \
-  --authority <i105-account-id> \
-  --private-key <hex> \
-  --subscription-id sub-001$subscriptions \
-  --plan-id aws_compute#commerce
-```
+The explicit blocking capability uses the same implementation and one owned
+runtime: `iroha::blocking::Client::subscriptions()` for public reads and
+`iroha::blocking::AccountClient::subscriptions()` for preparation. A blocking
+call from a Tokio runtime returns a typed error.
 
-Pause, resume, cancel, or charge now:
-```bash
-iroha_cli subscriptions subscription pause --subscription-id sub-001$subscriptions \
-  --authority <i105-account-id> --private-key <hex>
-iroha_cli subscriptions subscription resume --subscription-id sub-001$subscriptions \
-  --authority <i105-account-id> --private-key <hex>
-iroha_cli subscriptions subscription cancel --subscription-id sub-001$subscriptions \
-  --authority <i105-account-id> --private-key <hex> --cancel-at-period-end
-iroha_cli subscriptions subscription keep --subscription-id sub-001$subscriptions \
-  --authority <i105-account-id> --private-key <hex>
-iroha_cli subscriptions subscription charge-now --subscription-id sub-001$subscriptions \
-  --authority <i105-account-id> --private-key <hex>
-```
+CLI preparation uses the configured signing account. Preparation commands emit
+typed unsigned drafts, and do not accept account or private-key overrides:
 
-Record usage:
 ```bash
-iroha_cli subscriptions subscription usage --subscription-id sub-001$subscriptions \
-  --authority <i105-account-id> --private-key <hex> \
+iroha --config client.toml subscriptions plan prepare \
+  --plan-id '<canonical-asset-definition-id>' --plan-json plan.json
+iroha --config client.toml subscriptions plan list \
+  --provider '<canonical-account-id-or-alias>' --limit 10 --count-mode exact
+iroha --config client.toml subscriptions subscription prepare \
+  --subscription-id 'sub-001$subscriptions.universal' \
+  --plan-id '<canonical-asset-definition-id>'
+iroha --config client.toml subscriptions subscription pause \
+  --subscription-id 'sub-001$subscriptions.universal'
+iroha --config client.toml subscriptions subscription resume \
+  --subscription-id 'sub-001$subscriptions.universal' --charge-at-ms 1700000000000
+iroha --config client.toml subscriptions subscription cancel \
+  --subscription-id 'sub-001$subscriptions.universal' --mode period-end
+iroha --config client.toml subscriptions subscription keep \
+  --subscription-id 'sub-001$subscriptions.universal'
+iroha --config client.toml subscriptions subscription charge-now \
+  --subscription-id 'sub-001$subscriptions.universal'
+iroha --config client.toml subscriptions subscription usage \
+  --subscription-id 'sub-001$subscriptions.universal' \
   --unit-key compute_ms --delta 3600000
 ```
+
+Cancellation requires an explicit `--mode immediate` or `--mode period-end`.
+Only resume and charge-now accept `--charge-at-ms`. Public lists forward the
+selected `count_mode` exactly.
 
 ## Query Patterns
 - List subscriptions for an account:

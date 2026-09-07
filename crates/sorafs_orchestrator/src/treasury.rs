@@ -1646,9 +1646,9 @@ mod tests {
         let TransferBox::Asset(transfer) = transfer_box else {
             panic!("expected asset transfer, found {transfer_box:?}");
         };
-        assert_eq!(transfer.source, AssetId::new(asset_id(), treasury));
-        assert_eq!(transfer.destination, beneficiary);
-        assert_eq!(transfer.object, quantity(25));
+        assert_eq!(transfer.source(), &AssetId::new(asset_id(), treasury));
+        assert_eq!(transfer.destination(), &beneficiary);
+        assert_eq!(transfer.object(), &quantity(25));
     }
     #[test]
     fn debit_resolution_claws_back() {
@@ -1691,9 +1691,9 @@ mod tests {
         let TransferBox::Asset(transfer) = transfer_box else {
             panic!("expected asset transfer, found {transfer_box:?}");
         };
-        assert_eq!(transfer.source, AssetId::new(asset_id(), beneficiary));
-        assert_eq!(transfer.destination, treasury);
-        assert_eq!(transfer.object, quantity(40));
+        assert_eq!(transfer.source(), &AssetId::new(asset_id(), beneficiary));
+        assert_eq!(transfer.destination(), &treasury);
+        assert_eq!(transfer.object(), &quantity(40));
     }
     #[test]
     fn failed_debit_resolution_keeps_dispute_open_for_retry() {
@@ -1940,7 +1940,7 @@ mod tests {
             .as_ref()
             .expect("last transfer summary present");
         assert_eq!(last_transfer.epoch, 6);
-        assert_eq!(last_transfer.source_asset.account, treasury);
+        assert_eq!(last_transfer.source_asset.account(), &treasury);
         assert_eq!(last_transfer.destination, account(5));
         assert_eq!(last_transfer.amount, quantity(80));
     }
@@ -2144,13 +2144,13 @@ mod tests {
             .iter()
             .find(|record| record.kind == TransferKind::Credit)
             .expect("credit record present");
-        assert_eq!(credit.source_asset.account, treasury);
+        assert_eq!(credit.source_asset.account(), &treasury);
         assert_eq!(credit.destination, relay_account);
         let debit = exports
             .iter()
             .find(|record| record.kind == TransferKind::Debit)
             .expect("debit record present");
-        assert_eq!(debit.source_asset.account, relay_account);
+        assert_eq!(debit.source_asset.account(), &relay_account);
         assert_eq!(debit.destination, treasury);
     }
     #[test]

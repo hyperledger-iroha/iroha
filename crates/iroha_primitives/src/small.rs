@@ -119,6 +119,35 @@ mod tests {
         assert_eq!(vec, decoded);
     }
     #[test]
+    fn nested_smallvec_counts_once_and_retains_fixed_element_prefixes() {
+        struct Leaf<'a>(&'a std::cell::Cell<usize>);
+        impl NoritoSerialize for Leaf<'_> {
+            fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
+                self.0.set(self.0.get() + 1);
+                writer.write_all(&[0xAB])?;
+                Ok(())
+            }
+        }
+        for flags in (0..=ncore::supported_header_flags())
+            .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
+        {
+            let _flags = ncore::DecodeFlagsGuard::enter(flags);
+            let calls = std::cell::Cell::new(0);
+            let inner: SmallVec<[Leaf<'_>; 1]> = SmallVec(smallvec![Leaf(&calls)]);
+            let value: SmallVec<[SmallVec<[Leaf<'_>; 1]>; 1]> = SmallVec(smallvec![inner]);
+            assert_eq!(ncore::encoded_payload_len(&value).unwrap(), 33);
+            assert_eq!(calls.get(), 1);
+            let mut bytes = Vec::new();
+            ncore::serialize_to_buffer(&value, &mut bytes).unwrap();
+            let mut expected = [1_u64, 17, 1, 1]
+                .into_iter()
+                .flat_map(u64::to_le_bytes)
+                .collect::<Vec<_>>();
+            expected.push(0xAB);
+            assert_eq!(bytes, expected, "fixed prefix layout for flags {flags:#x}");
+        }
+    }
+    #[test]
     fn smallvec_decode_heap_allocation() {
         let vec: SmallVec<[u32; 4]> = SmallVec(smallvec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
         let bytes = vec.encode();
@@ -465,11 +494,7 @@ mod small_vector {
                 u64::try_from(self.0.len()).map_err(|_| ncore::Error::LengthMismatch)?,
             )?;
             for item in &self.0 {
-                let encoded_len = ncore::encoded_payload_len(item)?;
-                writer.write_u64::<ncore::LittleEndian>(
-                    u64::try_from(encoded_len).map_err(|_| ncore::Error::LengthMismatch)?,
-                )?;
-                ncore::serialize_to_writer_exact(item, writer, encoded_len)?;
+                ncore::write_fixed_len_prefixed(writer, item)?;
             }
             Ok(())
         }

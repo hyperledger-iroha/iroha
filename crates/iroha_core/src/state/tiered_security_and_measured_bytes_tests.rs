@@ -145,6 +145,19 @@
         assert_eq!(measured, expected);
     }
     #[test]
+    fn measured_bytes_cover_both_domain_id_labels() {
+        use iroha_data_model::domain::DomainId;
+
+        for (name, dataspace) in [("a", "b"), ("treasury", "b"), ("a", "centralbank")] {
+            let id = DomainId::try_new(name, dataspace).expect("canonical domain labels");
+            assert_eq!(
+                MeasuredBytes::measured_bytes(&id),
+                std::mem::size_of::<DomainId>() + name.len() + dataspace.len(),
+                "both independently sized domain labels must be accounted for"
+            );
+        }
+    }
+    #[test]
     fn measured_bytes_account_for_proof_attachment_list_capacity() {
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),

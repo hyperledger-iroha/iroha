@@ -11,7 +11,7 @@ async fn handler_subscription_plans_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::SubscriptionPlanListParams>,
+    AxQuery(p): AxQuery<iroha_torii_shared::subscriptions::SubscriptionPlanListParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {

@@ -27,3 +27,25 @@ TODO: Complete the canonical capability/request/response mapping and consumer
 migration against this inventory, then check that each supported operation has
 one authority-appropriate API and that no stale public wrappers remain. This
 inventory alone does not establish SDK coverage or qualify node features.
+
+
+## Subscription capability coverage
+
+All eleven `application.subscriptions*` route identities have one asynchronous
+Rust SDK operation. The flat synchronous methods have been removed.
+
+| Context | Capability operations | Routes |
+| --- | --- | --- |
+| `Client::subscriptions()` | `list_plans`, `list`, `get` | GET plans, subscriptions, and subscription by ID |
+| `AccountClient::subscriptions()` | `prepare_plan`, `prepare` | POST plans and subscriptions |
+| `AccountClient::subscriptions()` | `prepare_pause`, `prepare_resume`, `prepare_cancel`, `prepare_keep`, `prepare_charge`, `prepare_usage` | POST subscription action and usage routes |
+
+Wire records are owned by `iroha_torii_shared::subscriptions`. SDK preparation
+results expose one typed `SubscriptionDraft`, including context identity,
+operation metadata and decoded `TransactionPayload` or `InstructionBox` values.
+The explicit blocking capabilities run these same async operations on an owned
+runtime. The CLI consumes those facades and prints unsigned preparation results.
+The subscription contract suites cover every route, exact signed requests,
+count-mode forwarding, authority/resource binding and asynchronous dispatch.
+Qualification evidence is recorded separately; this mapping is implementation
+coverage, not a claim that the complete SDK migration is qualified.

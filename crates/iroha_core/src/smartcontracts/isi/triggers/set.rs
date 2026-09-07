@@ -120,8 +120,7 @@ impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
         writer: &mut norito::core::Encoder<'_>,
     ) -> core::result::Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.discriminant, writer)?;
-        let mut scratch = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(writer, self.value, &mut scratch)
+        norito::core::write_len_prefixed(writer, self.value)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let discriminant = self.discriminant.encoded_len_exact()?;

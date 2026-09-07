@@ -458,7 +458,7 @@ async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
     let plan_id: AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f8");
     let plan = sample_plan(provider.clone());
-    let req = SubscriptionPlanCreateDto {
+    let req = SubscriptionPlanCreateRequest {
         authority: provider,
         plan_id: plan_id.clone(),
         plan,
@@ -492,7 +492,7 @@ async fn handle_post_v1_subscription_create_returns_exact_unsigned_draft() {
         Vec::new(),
     );
     let subscription_id: NftId = "sub-create$wonderland.universal".parse().unwrap();
-    let req = SubscriptionCreateDto {
+    let req = SubscriptionCreateRequest {
         authority: subscriber.clone(),
         subscription_id: subscription_id.clone(),
         plan_id: plan_id.clone(),
@@ -573,7 +573,7 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
             (keep_id.clone(), keep_state, None),
         ],
     );
-    let pause_req = SubscriptionActionDto {
+    let pause_req = SubscriptionActionRequest {
         authority: subscriber.clone(),
         charge_at_ms: None,
         cancel_mode: None,
@@ -588,7 +588,7 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         pause["details"]["resulting_subscription"]["status"]["status"].as_str(),
         Some("paused")
     );
-    let resume_req = SubscriptionActionDto {
+    let resume_req = SubscriptionActionRequest {
         authority: subscriber.clone(),
         charge_at_ms: Some(5_000),
         cancel_mode: None,
@@ -606,7 +606,7 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         resume["details"]["effective_charge_ms"].as_u64(),
         Some(5_000)
     );
-    let cancel_req = SubscriptionActionDto {
+    let cancel_req = SubscriptionActionRequest {
         authority: subscriber.clone(),
         charge_at_ms: None,
         cancel_mode: Some(SubscriptionCancelMode::Immediate),
@@ -624,7 +624,7 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         cancel["details"]["resulting_subscription"]["status"]["status"].as_str(),
         Some("canceled")
     );
-    let keep_req = SubscriptionActionDto {
+    let keep_req = SubscriptionActionRequest {
         authority: subscriber.clone(),
         charge_at_ms: None,
         cancel_mode: None,
@@ -635,7 +635,7 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
             .expect("keep ok")
             .into_response();
     assert_action_draft(resp, &keep_id, &subscriber, "keep", "none").await;
-    let charge_req = SubscriptionActionDto {
+    let charge_req = SubscriptionActionRequest {
         authority: subscriber.clone(),
         charge_at_ms: Some(9_000),
         cancel_mode: None,
@@ -654,7 +654,7 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         Some(9_000)
     );
     let queue = test_queue();
-    let usage_req = SubscriptionUsageRequestDto {
+    let usage_req = SubscriptionUsageRequest {
         authority: subscriber,
         unit_key: "requests".parse().unwrap(),
         delta: Quantity::from(5_u32),
@@ -706,7 +706,7 @@ async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window
         vec![(plan_id, plan)],
         vec![(subscription_id.clone(), subscription_state, None)],
     );
-    let req = SubscriptionActionDto {
+    let req = SubscriptionActionRequest {
         authority: subscriber.clone(),
         charge_at_ms: None,
         cancel_mode: Some(SubscriptionCancelMode::PeriodEnd),
@@ -739,7 +739,7 @@ async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window
 }
 #[test]
 fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
-    let plan = SubscriptionPlanCreateDto {
+    let plan = SubscriptionPlanCreateRequest {
         authority: ALICE_ID.clone(),
         plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554404f9"),
         plan: sample_plan(ALICE_ID.clone()),
@@ -754,9 +754,10 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
         Value::String("forbidden".to_owned()),
     );
     assert!(
-        norito::json::from_value::<SubscriptionPlanCreateDto>(Value::Object(plan_value)).is_err()
+        norito::json::from_value::<SubscriptionPlanCreateRequest>(Value::Object(plan_value))
+            .is_err()
     );
-    let create = SubscriptionCreateDto {
+    let create = SubscriptionCreateRequest {
         authority: BOB_ID.clone(),
         subscription_id: "sub-strict-create$wonderland.universal".parse().unwrap(),
         plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554404fa"),
@@ -775,9 +776,9 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
         Value::String("forbidden".to_owned()),
     );
     assert!(
-        norito::json::from_value::<SubscriptionCreateDto>(Value::Object(create_value)).is_err()
+        norito::json::from_value::<SubscriptionCreateRequest>(Value::Object(create_value)).is_err()
     );
-    let action = SubscriptionActionDto {
+    let action = SubscriptionActionRequest {
         authority: BOB_ID.clone(),
         charge_at_ms: None,
         cancel_mode: None,
@@ -792,9 +793,9 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
         Value::String("pause".to_owned()),
     );
     assert!(
-        norito::json::from_value::<SubscriptionActionDto>(Value::Object(action_value)).is_err()
+        norito::json::from_value::<SubscriptionActionRequest>(Value::Object(action_value)).is_err()
     );
-    let usage = SubscriptionUsageRequestDto {
+    let usage = SubscriptionUsageRequest {
         authority: BOB_ID.clone(),
         unit_key: "requests".parse().unwrap(),
         delta: Quantity::from(1_u32),
@@ -810,8 +811,7 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
         Value::String("forbidden".to_owned()),
     );
     assert!(
-        norito::json::from_value::<SubscriptionUsageRequestDto>(Value::Object(usage_value))
-            .is_err()
+        norito::json::from_value::<SubscriptionUsageRequest>(Value::Object(usage_value)).is_err()
     );
 }
 #[test]
@@ -853,7 +853,7 @@ async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
     let pause = handle_post_v1_subscription_pause(
         state.clone(),
         subscription_id.clone(),
-        NoritoJson(SubscriptionActionDto {
+        NoritoJson(SubscriptionActionRequest {
             authority: subscriber.clone(),
             charge_at_ms: Some(1_000),
             cancel_mode: None,
@@ -864,7 +864,7 @@ async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
     let cancel = handle_post_v1_subscription_cancel(
         state,
         subscription_id,
-        NoritoJson(SubscriptionActionDto {
+        NoritoJson(SubscriptionActionRequest {
             authority: subscriber,
             charge_at_ms: None,
             cancel_mode: None,

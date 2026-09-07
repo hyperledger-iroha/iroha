@@ -62,6 +62,8 @@ TEST_NAME = (
 )
 RUN_COUNT = 10
 PEER_COUNT = 16
+RAYON_WORKER_THREADS = 8
+WORKER_ENVIRONMENT_KEYS = ("RAYON_NUM_THREADS", "RUST_TEST_THREADS", "CARGO_BUILD_JOBS", "CARGO_INCREMENTAL")
 MAX_JSON_BYTES = 16 * 1024 * 1024
 REQUEST_FIELDS = {
     "version", "protocol", "kind", "request_id", "invocation_nonce", "commit", "seed", "run"
@@ -707,7 +709,8 @@ def command(arguments: list[str], repo: Path, environment: dict[str, str], direc
             os.fsync(descriptor)
         record = {"version": 1, "command": arguments, "exit_code": completed.returncode,
                   "started_ns": started, "finished_ns": time.time_ns(), "log": output.name,
-                  "log_sha256": file_digest(output)}
+                  "log_sha256": file_digest(output),
+                  "worker_environment": {key: environment.get(key) for key in WORKER_ENVIRONMENT_KEYS}}
     finally:
         os.close(descriptor)
     write_json(directory / f"{name}.json", record)
@@ -764,7 +767,8 @@ def validate_discovery(output: str) -> None:
 def invocation_environment(request_path: Path, evidence: Path, result_path: Path, validator: dict[str, str]) -> dict[str, str]:
     """Construct the strict network/request environment from retained bytes only."""
     environment = sanitized_environment()
-    environment.update({"IROHA_TEST_REQUIRE_NETWORK": "1", "IROHA_TEST_NETWORK_START_ATTEMPTS": "1",
+    environment.update({"RAYON_NUM_THREADS": str(RAYON_WORKER_THREADS),
+        "IROHA_TEST_REQUIRE_NETWORK": "1", "IROHA_TEST_NETWORK_START_ATTEMPTS": "1",
         "IROHA_TEST_SKIP_BUILD": "1", "IROHA_TEST_BUILD_PROFILE": "release",
         "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": validator["path"],
         "APS_REAL_PROCESS_REQUEST": str(request_path), "APS_REAL_PROCESS_RESULT": str(result_path),
@@ -851,14 +855,18 @@ def run_campaign(repo: Path, output: Path, target: Path, commit: str) -> dict[st
         raise
 
 
-def validate_command_record(path: Path, arguments: list[str]) -> dict[str, Any]:
-    """Validate an exact successful terminal command receipt and its retained log."""
+def validate_command_record(path: Path, arguments: list[str], *, proving: bool = False) -> dict[str, Any]:
+    """Validate a successful terminal command, its worker environment, and retained log."""
     record = fields(read_json(path), {"version", "command", "exit_code", "started_ns", "finished_ns", "log",
-                                     "log_sha256"}, "command receipt")
+                                     "log_sha256", "worker_environment"}, "command receipt")
     require(type(record["version"]) is int and record["version"] == 1
             and type(record["exit_code"]) is int and record["exit_code"] == 0
             and record["command"] == arguments and record["log"] == path.with_suffix(".log").name,
             "failed/substituted command receipt")
+    require(record["worker_environment"] == {
+        "RAYON_NUM_THREADS": str(RAYON_WORKER_THREADS) if proving else None,
+        "RUST_TEST_THREADS": None, "CARGO_BUILD_JOBS": "4", "CARGO_INCREMENTAL": "0",
+    }, "command worker environment differs from the pinned invocation")
     start = integer(record["started_ns"], 1, 2**64 - 1, "command start")
     integer(record["finished_ns"], start, 2**64 - 1, "command finish")
     raw = read_bytes(path.with_suffix(".log"), limit=256 * 1024 * 1024)
@@ -939,7 +947,7 @@ def validate_campaign(path: Path | str, *, expected_commit: str | None = None) -
             require(read_json(directory / f"{phase}.json") == {"source": seal, "artifacts": binaries},
                     "per-run source/executable seal changed")
         record = validate_command_record(directory / "stdout.json", [integration, TEST_NAME, "--exact", "--ignored",
-                                        "--nocapture", "--test-threads=1"])
+                                        "--nocapture", "--test-threads=1"], proving=True)
         require(record["started_ns"] >= previous_end and row["command_sha256"] == sha(canonical(record)),
                 "smoke runs overlap or command receipt changed")
         previous_end = record["finished_ns"]

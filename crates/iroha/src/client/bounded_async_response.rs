@@ -20,9 +20,13 @@ pub async fn into_response(
         .content_length()
         .is_some_and(|length| length > u64::try_from(maximum_body_bytes).unwrap_or(u64::MAX))
     {
-        return Err(eyre!(
-            "async HTTP response exceeds the {maximum_body_bytes} byte limit"
-        ));
+        return Err(crate::Error::ResponseTooLarge {
+            maximum: maximum_body_bytes,
+            actual: response
+                .content_length()
+                .and_then(|length| usize::try_from(length).ok()),
+        }
+        .into());
     }
     let mut body = Vec::new();
     body.try_reserve_exact(
@@ -42,9 +46,11 @@ pub async fn into_response(
             .checked_add(chunk.len())
             .is_none_or(|length| length > maximum_body_bytes)
         {
-            return Err(eyre!(
-                "async HTTP response exceeds the {maximum_body_bytes} byte limit"
-            ));
+            return Err(crate::Error::ResponseTooLarge {
+                maximum: maximum_body_bytes,
+                actual: body.len().checked_add(chunk.len()),
+            }
+            .into());
         }
         body.extend_from_slice(&chunk);
     }
@@ -53,7 +59,8 @@ pub async fn into_response(
         .headers_mut()
         .ok_or_else(|| eyre!("Failed to get headers map reference."))?;
     for (key, value) in headers {
-        headers_map.insert(key, value);
+        // Singleton validation must see every received value, including duplicates.
+        headers_map.append(key, value);
     }
     builder
         .body(body)

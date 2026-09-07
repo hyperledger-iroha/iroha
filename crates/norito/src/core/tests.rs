@@ -1123,32 +1123,79 @@ fn bounded_frame_rejects_second_pass_shrinkage() {
 fn write_len_prefixed_uses_actual_length() {
     let value = BadExactLen(0xDEADBEEF);
     let mut out = Vec::new();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
     let mut encoder = Encoder::for_buffer(&mut out);
-    write_len_prefixed(&mut encoder, &value, &mut tmp).expect("write len prefixed");
+    write_len_prefixed(&mut encoder, &value).expect("write len prefixed");
     let (len, hdr) = read_len_from_slice(&out).expect("read len");
     assert_eq!(len, out.len() - hdr);
 }
 #[test]
-fn write_len_prefixed_does_not_materialize_an_unhinted_field() {
-    struct UnhintedField(Vec<u8>);
-    impl NoritoSerialize for UnhintedField {
+fn write_len_prefixed_streams_unhinted_field_without_staging() {
+    struct UnhintedField<'a> {
+        bytes: &'a [u8],
+        visits: std::cell::Cell<usize>,
+    }
+    impl NoritoSerialize for UnhintedField<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-            writer.write_all(&self.0)?;
+            self.visits.set(self.visits.get() + 1);
+            writer.write_all(self.bytes)?;
             Ok(())
         }
     }
-    let value = UnhintedField(vec![0x5a; DERIVE_SMALLBUF_SIZE * 4]);
-    let mut out = Vec::new();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
-    let mut encoder = Encoder::for_buffer(&mut out);
-    write_len_prefixed(&mut encoder, &value, &mut tmp).expect("write unhinted field");
-    let (len, header_bytes) = read_len_from_slice(&out).expect("read field length");
-    assert_eq!(len, value.0.len());
-    assert_eq!(&out[header_bytes..], value.0.as_slice());
-    assert!(
-        !tmp.spilled && tmp.spill.capacity() == 0,
-        "count-first direct serialization must not retain a field-sized spill buffer"
+    struct DirectFieldWriter<'a> {
+        payload: &'a [u8],
+        prefix: [u8; 9],
+        prefix_len: usize,
+        payload_writes: usize,
+    }
+    impl Write for DirectFieldWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() == self.payload.len() {
+                assert!(
+                    core::ptr::eq(bytes.as_ptr(), self.payload.as_ptr()),
+                    "the original payload slice must reach the destination directly"
+                );
+                assert_eq!(bytes, self.payload);
+                self.payload_writes += 1;
+            } else {
+                assert_eq!(
+                    self.payload_writes, 0,
+                    "the length must precede the payload"
+                );
+                let end = self.prefix_len + bytes.len();
+                self.prefix[self.prefix_len..end].copy_from_slice(bytes);
+                self.prefix_len = end;
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let bytes = vec![0x5a; 1536];
+    let value = UnhintedField {
+        bytes: &bytes,
+        visits: std::cell::Cell::new(0),
+    };
+    assert_eq!(value.encoded_len_exact(), None);
+    let mut destination = DirectFieldWriter {
+        payload: &bytes,
+        prefix: [0; 9],
+        prefix_len: 0,
+        payload_writes: 0,
+    };
+    {
+        let mut encoder = Encoder::new(&mut destination);
+        write_len_prefixed(&mut encoder, &value).expect("write unhinted field");
+    }
+    let (len, header_bytes) = read_len_from_slice(&destination.prefix[..destination.prefix_len])
+        .expect("read field length");
+    assert_eq!(len, bytes.len());
+    assert_eq!(header_bytes, destination.prefix_len);
+    assert_eq!(destination.payload_writes, 1);
+    assert_eq!(
+        value.visits.get(),
+        2,
+        "one measurement and one checked write"
     );
 }
 #[test]
@@ -1156,11 +1203,9 @@ fn write_len_prefixed_rejects_a_changed_second_pass() {
     let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
     let mut out = Vec::with_capacity(32);
     let initial_capacity = out.capacity();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
     let error = {
         let mut encoder = Encoder::for_buffer(&mut out);
-        write_len_prefixed(&mut encoder, &value, &mut tmp)
-            .expect_err("second-pass growth must fail")
+        write_len_prefixed(&mut encoder, &value).expect_err("second-pass growth must fail")
     };
     assert!(matches!(error, Error::LengthMismatch));
     assert_eq!(value.0.get(), 2);

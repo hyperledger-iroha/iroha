@@ -212,6 +212,16 @@ impl AssetId {
     /// `<base58-asset-definition-id>#<i105-account-id>` form, or uses an invalid
     /// dataspace scope suffix.
     pub fn parse_literal(input: &str) -> Result<Self, ParseError> {
+        let (definition, account_literal, scope) = Self::parse_literal_parts(input)?;
+        let account = AccountId::parse_encoded(account_literal)
+            .map_err(|_| ParseError::new("Asset ID account is invalid"))?;
+        Ok(Self::with_scope(definition, account, scope))
+    }
+
+    /// Parse the allocation-free envelope shared by text and JSON key decoders.
+    pub(crate) fn parse_literal_parts(
+        input: &str,
+    ) -> Result<(AssetDefinitionId, &str, AssetBalanceScope), ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(ParseError::new(
@@ -232,8 +242,6 @@ impl AssetId {
             ));
         }
         let definition = AssetDefinitionId::parse_address_literal(definition_literal)?;
-        let account = AccountId::parse_encoded(account_literal)
-            .map_err(|_| ParseError::new("Asset ID account is invalid"))?;
         let scope = match scope_literal {
             None => AssetBalanceScope::Global,
             Some(raw) => {
@@ -249,7 +257,7 @@ impl AssetId {
                 AssetBalanceScope::Dataspace(dataspace)
             }
         };
-        Ok(Self::with_scope(definition, account, scope))
+        Ok((definition, account_literal, scope))
     }
 }
 impl AssetDefinitionId {

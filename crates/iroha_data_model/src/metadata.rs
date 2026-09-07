@@ -52,9 +52,8 @@ impl ncore::NoritoSerialize for Metadata {
             return Ok(());
         }
         // Use canonical field writers so entry lengths inherit the exact frame layout.
-        let mut scratch = ncore::DeriveSmallBuf::new();
         for (name, json) in &self.0 {
-            ncore::write_len_prefixed(writer, &MetadataEntryRef(name, json), &mut scratch)?;
+            ncore::write_len_prefixed(writer, &MetadataEntryRef(name, json))?;
         }
         Ok(())
     }
@@ -84,9 +83,8 @@ struct MetadataEntryRef<'a>(&'a Name, &'a Json);
 
 impl ncore::NoritoSerialize for MetadataEntryRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let mut scratch = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(writer, self.0, &mut scratch)?;
-        ncore::write_len_prefixed(writer, self.1, &mut scratch)
+        ncore::write_len_prefixed(writer, self.0)?;
+        ncore::write_len_prefixed(writer, self.1)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let name = self.0.encoded_len_exact()?;

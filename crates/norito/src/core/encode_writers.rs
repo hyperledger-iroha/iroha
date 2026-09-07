@@ -4,50 +4,38 @@ use std::io::{self, Write};
 #[derive(Default)]
 pub(super) struct LengthCountingWriter {
     pub(super) len: usize,
+    overflowed: bool,
+}
+impl LengthCountingWriter {
+    pub(super) fn add(&mut self, bytes: usize) -> io::Result<()> {
+        if !self.overflowed {
+            if let Some(length) = self.len.checked_add(bytes) {
+                self.len = length;
+                return Ok(());
+            }
+            self.overflowed = true;
+        }
+        Err(io::Error::other("Norito encoded length overflow"))
+    }
+
+    pub(super) fn finish(self) -> Result<usize, super::Error> {
+        if self.overflowed {
+            Err(super::Error::LengthMismatch)
+        } else {
+            Ok(self.len)
+        }
+    }
 }
 impl Write for LengthCountingWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.len = self
-            .len
-            .checked_add(buf.len())
-            .ok_or_else(|| io::Error::other("Norito encoded length overflow"))?;
+        self.add(buf.len())?;
         Ok(buf.len())
     }
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.len = self
-            .len
-            .checked_add(buf.len())
-            .ok_or_else(|| io::Error::other("Norito encoded length overflow"))?;
-        Ok(())
+        self.add(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
-    }
-}
-/// Writer which forwards bytes while recording their length.
-pub(super) struct CountingWriter<'a, W> {
-    pub(super) inner: &'a mut W,
-    pub(super) len: usize,
-}
-impl<W: Write> Write for CountingWriter<'_, W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let written = self.inner.write(buf)?;
-        self.len = self
-            .len
-            .checked_add(written)
-            .ok_or_else(|| io::Error::other("Norito encoded length overflow"))?;
-        Ok(written)
-    }
-    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.inner.write_all(buf)?;
-        self.len = self
-            .len
-            .checked_add(buf.len())
-            .ok_or_else(|| io::Error::other("Norito encoded length overflow"))?;
-        Ok(())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
     }
 }
 /// Writer which refuses a counted second-pass overrun before forwarding it.
