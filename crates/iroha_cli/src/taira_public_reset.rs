@@ -925,8 +925,7 @@ fn admit_signed_inputs(
     ssh_identity: &Path,
     known_hosts: &Path,
 ) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
-    let (inventory, inventory_bytes) = read_json::<InventoryV1>(inventory_path, "inventory")?;
-    let chain_guard = enter_inventory_chain_discriminant(&inventory)?;
+    let (inventory, inventory_bytes, chain_guard) = read_inventory(inventory_path, "inventory")?;
     validate_inventory(&inventory)?;
     validate_shared_validator_closure(&inventory)?;
     // Reject unsupported placement before opening any deployment credential.
@@ -1035,6 +1034,19 @@ fn authorization_semantic_sha256(
     update_framed(&mut digest, trusted.algorithm.as_bytes());
     update_framed(&mut digest, trusted.public_key.as_bytes());
     Ok(hex::encode(digest.finalize()))
+}
+
+fn read_inventory(
+    path: &Path,
+    label: &str,
+) -> Result<(InventoryV1, Vec<u8>, ChainDiscriminantGuard)> {
+    let (file, snapshot) = open_pinned_regular(path, label)?;
+    if snapshot.len == 0 || snapshot.len > MAX_JSON_BYTES {
+        return Err(eyre!("{label} is empty or exceeds the V1 JSON bound"));
+    }
+    let bytes = read_pinned_bytes(path, label, file, &snapshot, MAX_JSON_BYTES)?;
+    let (inventory, guard) = decode_inventory(&bytes, label)?;
+    Ok((inventory, bytes, guard))
 }
 
 fn read_json<T: JsonDeserialize>(path: &Path, label: &str) -> Result<(T, Vec<u8>)> {
@@ -1427,13 +1439,53 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     Ok(())
 }
 
-fn enter_inventory_chain_discriminant(inventory: &InventoryV1) -> Result<ChainDiscriminantGuard> {
+fn validate_inventory_chain_identity(inventory: &InventoryV1) -> Result<()> {
     if inventory.chain_id != CHAIN_ID || inventory.chain_discriminant != CHAIN_DISCRIMINANT {
         return Err(eyre!(
             "inventory must target the canonical Taira V1 chain identity"
         ));
     }
-    Ok(ChainDiscriminantGuard::enter(inventory.chain_discriminant))
+    Ok(())
+}
+
+fn enter_inventory_chain_discriminant(inventory: &InventoryV1) -> Result<ChainDiscriminantGuard> {
+    validate_inventory_chain_identity(inventory)?;
+    Ok(ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT))
+}
+
+fn decode_inventory(bytes: &[u8], label: &str) -> Result<(InventoryV1, ChainDiscriminantGuard)> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_JSON_BYTES {
+        return Err(eyre!("{label} is empty or exceeds the V1 JSON bound"));
+    }
+    // Nested placement AccountIds must be decoded under this protocol's fixed network,
+    // before the untrusted top-level fields can be inspected. Never infer the network
+    // from the ambient process or use an unvalidated field to choose the decoder.
+    let guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let inventory: InventoryV1 = json::from_slice(bytes)
+        .map_err(|_| eyre!("{label} is not exact Taira inventory V1 JSON"))?;
+    validate_inventory_chain_identity(&inventory)?;
+    Ok((inventory, guard))
+}
+
+fn canonical_inventory_bytes(inventory: &InventoryV1) -> Result<Vec<u8>> {
+    let _guard = enter_inventory_chain_discriminant(inventory)?;
+    let mut bytes = json::to_json(inventory)?.into_bytes();
+    bytes.push(b'\n');
+    if bytes.len() as u64 > MAX_JSON_BYTES {
+        return Err(eyre!("inventory exceeds the V1 JSON bound"));
+    }
+    Ok(bytes)
+}
+
+fn assembled_inventory_bytes(inventory: &InventoryV1) -> Result<Vec<u8>> {
+    let bytes = canonical_inventory_bytes(inventory)?;
+    let (decoded, _guard) = decode_inventory(&bytes, "assembled inventory")?;
+    if canonical_inventory_bytes(&decoded)? != bytes {
+        return Err(eyre!(
+            "assembled inventory failed its canonical V1 roundtrip"
+        ));
+    }
+    Ok(bytes)
 }
 
 fn validate_revision(revision: &RevisionV1) -> Result<()> {
@@ -5190,6 +5242,153 @@ mod executor_model {
         }
 
         #[test]
+        fn inventory_wire_roundtrip_scopes_nonempty_placements_before_decode() {
+            use iroha::data_model::account::address::chain_discriminant;
+            let _ambient = ChainDiscriminantGuard::enter(753);
+            let inventory = sample_inventory();
+            assert_eq!(inventory.inrou_canary.placement_targets.len(), 4);
+            let bytes = canonical_inventory_bytes(&inventory).expect("canonical Taira inventory");
+            assert_eq!(chain_discriminant(), 753, "serializer restores its caller");
+            let value: Value = json::from_slice(&bytes).expect("public inventory JSON");
+            for target in value
+                .pointer("/inrou_canary/placement_targets")
+                .and_then(Value::as_array)
+                .expect("four serialized placements")
+            {
+                assert!(
+                    target
+                        .get("validator_account_id")
+                        .and_then(Value::as_str)
+                        .expect("typed placement account")
+                        .starts_with("test")
+                );
+            }
+            assert!(
+                json::from_slice::<InventoryV1>(&bytes).is_err(),
+                "unscoped fresh-process decoding reproduces the original failure"
+            );
+            {
+                let (decoded, _guard) = decode_inventory(&bytes, "retained inventory")
+                    .expect("fixed-network boundary decodes all four placements");
+                assert_eq!(chain_discriminant(), CHAIN_DISCRIMINANT);
+                assert_eq!(
+                    decoded.inrou_canary.placement_targets,
+                    inventory.inrou_canary.placement_targets
+                );
+                validate_inventory(&decoded).expect("decoded inventory remains admissible");
+                assert_eq!(
+                    canonical_inventory_bytes(&decoded).expect("reencode"),
+                    bytes
+                );
+            }
+            assert_eq!(
+                chain_discriminant(),
+                753,
+                "decoder guard restores its caller"
+            );
+            assert_eq!(
+                assembled_inventory_bytes(&inventory).expect("assembler self-roundtrip"),
+                bytes
+            );
+            assert_eq!(
+                chain_discriminant(),
+                753,
+                "assembly check restores its caller"
+            );
+        }
+
+        #[test]
+        fn inventory_wire_rejects_wrong_chain_foreign_accounts_and_unknown_fields() {
+            use iroha::data_model::account::address::chain_discriminant;
+            let _ambient = ChainDiscriminantGuard::enter(753);
+            let inventory = sample_inventory();
+            let bytes = canonical_inventory_bytes(&inventory).expect("valid inventory");
+            let canonical: Value = json::from_slice(&bytes).expect("public inventory value");
+            let foreign_account = inventory
+                .inrou_canary
+                .placement_targets
+                .iter()
+                .next()
+                .expect("placement")
+                .validator_account_id
+                .to_string();
+            assert!(foreign_account.starts_with("sora"));
+            for (path, replacement) in [
+                ("/chain_discriminant", Value::from(753_u16)),
+                ("/chain_id", Value::String("wrong-chain".to_owned())),
+                (
+                    "/inrou_canary/placement_targets/0/validator_account_id",
+                    Value::String(foreign_account),
+                ),
+            ] {
+                let mut invalid = canonical.clone();
+                *invalid.pointer_mut(path).expect("exact inventory field") = replacement;
+                assert!(
+                    decode_inventory(
+                        &json::to_vec(&invalid).expect("invalid inventory bytes"),
+                        "inventory"
+                    )
+                    .is_err()
+                );
+                assert_eq!(
+                    chain_discriminant(),
+                    753,
+                    "failed decoding restores its caller"
+                );
+            }
+            for path in ["", "/inrou_canary/placement_targets/0"] {
+                let mut invalid = canonical.clone();
+                let object = if path.is_empty() {
+                    &mut invalid
+                } else {
+                    invalid.pointer_mut(path).expect("placement")
+                };
+                object
+                    .as_object_mut()
+                    .expect("inventory object")
+                    .insert("retired_field".to_owned(), Value::Null);
+                assert!(
+                    decode_inventory(
+                        &json::to_vec(&invalid).expect("unknown-field inventory"),
+                        "inventory"
+                    )
+                    .is_err()
+                );
+                assert_eq!(chain_discriminant(), 753);
+            }
+            let mut wrong = inventory;
+            wrong.chain_discriminant = 753;
+            assert!(canonical_inventory_bytes(&wrong).is_err());
+            assert_eq!(chain_discriminant(), 753);
+        }
+
+        #[test]
+        fn inventory_file_boundary_preserves_original_bytes_and_decode_guard() {
+            use iroha::data_model::account::address::chain_discriminant;
+            let _ambient = ChainDiscriminantGuard::enter(753);
+            let directory = private_tempdir();
+            let path = directory
+                .path()
+                .canonicalize()
+                .expect("fixture root")
+                .join("inventory.json");
+            let inventory = sample_inventory();
+            let bytes = assembled_inventory_bytes(&inventory).expect("assembler output");
+            let mut file = create_private_new(&path).expect("private inventory file");
+            file.write_all(&bytes)
+                .expect("write exact assembler output");
+            drop(file);
+            {
+                let (decoded, retained, _guard) = read_inventory(&path, "inventory")
+                    .expect("read real retained inventory under ambient SORA context");
+                assert_eq!(retained, bytes);
+                assert_eq!(decoded.inrou_canary.placement_targets.len(), 4);
+                assert_eq!(chain_discriminant(), CHAIN_DISCRIMINANT);
+            }
+            assert_eq!(chain_discriminant(), 753);
+        }
+
+        #[test]
         fn recovery_intent_rejects_noncanonical_idempotency_digests() {
             let canonical = test_recovery_intent(ExecutionStep::Canary);
             validate_recovery_intent(&canonical, ExecutionStep::Canary)
@@ -5470,8 +5669,8 @@ mod executor_model {
         #[test]
         fn authorization_rejects_wrong_signature() {
             let inventory = sample_inventory();
-            let raw = json::to_json(&inventory).expect("inventory JSON");
-            let inventory_sha = sha256_hex(raw.as_bytes());
+            let raw = canonical_inventory_bytes(&inventory).expect("inventory JSON");
+            let inventory_sha = sha256_hex(&raw);
             let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("key");
             let wrong = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("wrong key");
             let claims = sample_claims(&inventory, &inventory_sha);
@@ -5716,7 +5915,9 @@ mod executor_model {
         #[test]
         fn signed_reset_documents_require_explicit_nullable_fee_policy_slots() {
             let inventory = sample_inventory();
-            let canonical = json::to_value(&inventory).expect("inventory JSON value");
+            let canonical: Value =
+                json::from_slice(&canonical_inventory_bytes(&inventory).expect("inventory bytes"))
+                    .expect("inventory JSON value");
             let fee_intent = canonical
                 .as_object()
                 .and_then(|object| object.get("fee_intent"))
@@ -5730,8 +5931,11 @@ mod executor_model {
                     "authority fee intent must serialize `{field}` as explicit null"
                 );
             }
-            json::from_value::<InventoryV1>(canonical.clone())
-                .expect("explicit nullable inventory slots");
+            decode_inventory(
+                &json::to_vec(&canonical).expect("inventory value bytes"),
+                "inventory",
+            )
+            .expect("explicit nullable inventory slots");
 
             for field in ["sponsor_program", "sponsor_program_revision"] {
                 let mut missing = canonical.clone();
@@ -5742,7 +5946,11 @@ mod executor_model {
                     .expect("fee-intent object")
                     .remove(field);
                 assert!(
-                    json::from_value::<InventoryV1>(missing).is_err(),
+                    decode_inventory(
+                        &json::to_vec(&missing).expect("missing slot bytes"),
+                        "inventory"
+                    )
+                    .is_err(),
                     "the signed V1 inventory must reject omitted `{field}`"
                 );
             }
@@ -6844,12 +7052,8 @@ mod executor_model {
             let mut inventory = sample_inventory();
             inventory.edge.endpoint.host_identity_sha256 = "f".repeat(64);
             let mut file = create_private_new(&path).expect("private inventory fixture");
-            file.write_all(
-                json::to_json(&inventory)
-                    .expect("inventory JSON")
-                    .as_bytes(),
-            )
-            .expect("write inventory");
+            file.write_all(&canonical_inventory_bytes(&inventory).expect("inventory JSON"))
+                .expect("write inventory");
             drop(file);
             let absent = root.join("must-not-open");
             let error = admit_signed_inputs(&path, &absent, &absent, &absent, &absent)
@@ -6952,12 +7156,13 @@ mod executor_model {
             check(&ValidatorInitialStateV1::Vacant, vacant);
             check(&EdgeInitialStateV1::Vacant, vacant);
             let inventory = sample_inventory();
-            let encoded = json::to_json(&inventory).expect("canonical admitted inventory");
-            let decoded: InventoryV1 =
-                json::from_slice(encoded.as_bytes()).expect("admitted inventory roundtrip");
+            let encoded =
+                canonical_inventory_bytes(&inventory).expect("canonical admitted inventory");
+            let (decoded, _inventory_guard) =
+                decode_inventory(&encoded, "inventory").expect("admitted inventory roundtrip");
             validate_inventory(&decoded).expect("roundtripped admitted inventory is admissible");
             assert_eq!(
-                json::to_json(&decoded).expect("reencoded inventory"),
+                canonical_inventory_bytes(&decoded).expect("reencoded inventory"),
                 encoded
             );
             let validator_payload = json::to_json(
@@ -7048,17 +7253,20 @@ mod executor_model {
             let canonical = vacant_execution_fixture();
             let path = root.join("vacant.json");
             let mut file = create_private_new(&path).expect("private vacant fixture");
-            file.write_all(json::to_json(&canonical).expect("vacant JSON").as_bytes())
+            file.write_all(&canonical_inventory_bytes(&canonical).expect("vacant JSON"))
                 .expect("write vacant inventory");
             drop(file);
-            let (decoded, _) = read_json::<InventoryV1>(&path, "inventory")
+            let (decoded, _, _inventory_guard) = read_inventory(&path, "inventory")
                 .expect("canonical vacant inventory decodes at admission boundary");
             validate_inventory(&decoded).expect("canonical vacant inventory is admissible");
             assert!(decoded.validators.iter().all(ValidatorV1::is_vacant));
             assert!(decoded.edge.is_vacant());
 
             for edge in [false, true] {
-                let mut invalid = json::to_value(&sample_inventory()).expect("admitted inventory");
+                let mut invalid: Value = json::from_slice(
+                    &canonical_inventory_bytes(&sample_inventory()).expect("admitted bytes"),
+                )
+                .expect("admitted inventory");
                 let inventory = invalid.as_object_mut().expect("inventory object");
                 let target = if edge {
                     inventory.get_mut("edge").expect("edge")
@@ -7091,7 +7299,7 @@ mod executor_model {
                     .expect("write malformed inventory");
                 drop(file);
                 assert!(
-                    read_json::<InventoryV1>(&path, "inventory").is_err(),
+                    read_inventory(&path, "inventory").is_err(),
                     "vacant target cannot discard admitted release content (edge={edge})"
                 );
             }

@@ -14,7 +14,7 @@ fn owner() -> (KeyPair, TrustedKeyV1) {
 fn owner_authorization_uses_real_norito_claims_and_existing_admission_verifier() {
     let inventory = sample_inventory_fixture();
     let (key, trusted) = owner();
-    let bytes = canonical_bytes(&inventory).expect("inventory");
+    let bytes = canonical_inventory_bytes(&inventory).expect("inventory");
     let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, 1_000_000).expect("sign");
     assert_eq!(envelope.claims.inventory_sha256, sha256_hex(&bytes));
     assert_eq!(
@@ -51,7 +51,7 @@ fn owner_authorization_uses_real_norito_claims_and_existing_admission_verifier()
 fn inventory_reformatting_and_claim_tampering_invalidate_authorization() {
     let inventory = sample_inventory_fixture();
     let (key, trusted) = owner();
-    let bytes = canonical_bytes(&inventory).unwrap();
+    let bytes = canonical_inventory_bytes(&inventory).unwrap();
     let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, 1_000_000).unwrap();
     let mut reformatted = bytes.clone();
     reformatted.push(b'\n');
@@ -116,7 +116,7 @@ fn independently_trusted_owner_key_cannot_be_replaced_by_signer() {
     assert!(
         sign_inventory(
             &inventory,
-            &canonical_bytes(&inventory).unwrap(),
+            &canonical_inventory_bytes(&inventory).unwrap(),
             &other_trusted,
             &key,
             1_000_000
@@ -135,7 +135,7 @@ fn authorization_cannot_extend_the_bounded_plan_or_overflow_time() {
     assert!(
         sign_inventory(
             &inventory,
-            &canonical_bytes(&inventory).unwrap(),
+            &canonical_inventory_bytes(&inventory).unwrap(),
             &trusted,
             &key,
             u64::MAX
@@ -146,7 +146,7 @@ fn authorization_cannot_extend_the_bounded_plan_or_overflow_time() {
     assert!(
         sign_inventory(
             &inventory,
-            &canonical_bytes(&inventory).unwrap(),
+            &canonical_inventory_bytes(&inventory).unwrap(),
             &trusted,
             &key,
             1_000_000

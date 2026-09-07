@@ -60,23 +60,22 @@ pub(super) struct Authorize {
 }
 
 pub(super) fn assemble(args: &Assemble) -> Result<()> {
-    let (mut inventory, _) =
-        read_private_json::<InventoryV1>(&args.inventory_draft, "inventory draft")?;
-    let _guard = enter_inventory_chain_discriminant(&inventory)?;
+    let input = pin_owner_private_file(&args.inventory_draft, "inventory draft")?;
+    let bytes = pinned_bytes(&input, MAX_JSON_BYTES)?;
+    let (mut inventory, _guard) = decode_inventory(&bytes, "inventory draft")?;
     derive_inventory(&mut inventory, &args.local)?;
-    write_new_private(&args.output, &canonical_bytes(&inventory)?)
+    revalidate_pinned(&input, "inventory draft")?;
+    write_new_private(&args.output, &assembled_inventory_bytes(&inventory)?)
 }
 
 pub(super) fn authorize(args: &Authorize) -> Result<()> {
     let input = pin_owner_private_file(&args.inventory, "retained inventory")?;
     let bytes = pinned_bytes(&input, MAX_JSON_BYTES)?;
-    let inventory: InventoryV1 =
-        json::from_slice(&bytes).map_err(|_| eyre!("retained inventory is not exact V1 JSON"))?;
-    let _guard = enter_inventory_chain_discriminant(&inventory)?;
+    let (inventory, _guard) = decode_inventory(&bytes, "retained inventory")?;
     validate_inventory(&inventory)?;
     let mut derived = inventory.clone();
     derive_inventory(&mut derived, &args.local)?;
-    if canonical_bytes(&derived)? != canonical_bytes(&inventory)? {
+    if canonical_inventory_bytes(&derived)? != canonical_inventory_bytes(&inventory)? {
         return Err(eyre!(
             "retained inventory differs from actual local release inputs"
         ));

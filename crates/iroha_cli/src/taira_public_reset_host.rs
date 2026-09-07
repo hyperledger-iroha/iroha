@@ -3111,13 +3111,12 @@ fn admit_host_request(
             "host request embedded closure exceeded a bound or hash drifted"
         ));
     }
-    let inventory: InventoryV1 =
-        json::from_slice(&inventory_bytes).wrap_err("host request inventory is invalid")?;
+    let (inventory, chain_guard) =
+        super::decode_inventory(&inventory_bytes, "host request inventory")?;
     let authorization: AuthorizationEnvelopeV1 =
         json::from_slice(&authorization_bytes).wrap_err("host request authorization is invalid")?;
     let trusted_key: TrustedKeyV1 =
         json::from_slice(&trusted_key_bytes).wrap_err("host request trusted key is invalid")?;
-    let chain_guard = super::enter_inventory_chain_discriminant(&inventory)?;
     validate_inventory(&inventory)?;
     let inventory_sha256 = sha256_hex(&inventory_bytes);
     let authorization_sha256 = authorization_semantic_sha256(&authorization, &trusted_key)?;
@@ -16882,8 +16881,8 @@ fn verify_remote_receipt(request: &HostRequestV1, receipt: &HostReceiptV1) -> Re
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -16909,8 +16908,8 @@ fn verify_remote_recovery_receipt(request: &HostRequestV1, receipt: &HostReceipt
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -16946,8 +16945,8 @@ fn verify_remote_reservation_receipt(
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -18127,9 +18126,8 @@ mod tests {
             validator.endpoint.host_identity_sha256 = shared_identity.clone();
         }
         inventory.edge.endpoint.host_identity_sha256 = shared_identity;
-        let inventory_bytes = json::to_json(&inventory)
-            .expect("inventory JSON")
-            .into_bytes();
+        let inventory_bytes =
+            super::super::canonical_inventory_bytes(&inventory).expect("inventory JSON");
         let inventory_sha256 = sha256_hex(&inventory_bytes);
         let claims = super::super::AuthorizationClaimsV1 {
             action: "reset_and_deploy".to_owned(),
@@ -18773,7 +18771,8 @@ mod tests {
 
     fn admitted_reset_fixture() -> AdmittedReset {
         let remote = progress_admission();
-        let inventory_bytes = json::to_vec(&remote.inventory).expect("fixture inventory JSON");
+        let inventory_bytes = super::super::canonical_inventory_bytes(&remote.inventory)
+            .expect("fixture inventory JSON");
         let authorization_bytes =
             json::to_vec(&remote.authorization).expect("fixture authorization JSON");
         let ssh = File::open("/dev/null").expect("open fixture SSH input");
@@ -19730,7 +19729,12 @@ mod tests {
         admitted.request.mutation_phase = typed_result.binding.phase.clone();
         admitted.request.mutation_idempotency_key = typed_result.binding.idempotency_key.clone();
         admitted.action_deadline = Instant::now() + Duration::from_secs(10);
-        let inventory_bytes = json::to_vec(&admitted.inventory).expect("fixture inventory");
+        // This captured signed proof fixture deliberately uses a foreign chain_id. Its
+        // inventory is only hashed here, never passed to the Taira admission decoder.
+        let inventory_bytes = {
+            let _guard = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+            json::to_vec(&admitted.inventory).expect("foreign-chain proof fixture inventory")
+        };
         admitted.inventory_sha256 = sha256_hex(&inventory_bytes);
 
         let envelope = norito::json!({
@@ -20428,8 +20432,9 @@ mod tests {
             {
                 let mut request = admitted.request.clone();
                 request.host_slug = slug.to_owned();
-                request.inventory_base64 =
-                    BASE64.encode(json::to_json(&inventory).expect("inventory JSON"));
+                request.inventory_base64 = BASE64.encode(
+                    super::super::canonical_inventory_bytes(&inventory).expect("inventory JSON"),
+                );
                 request.authorization_base64 = BASE64
                     .encode(json::to_json(&admitted.authorization).expect("authorization JSON"));
                 request.trusted_key_base64 = BASE64.encode(trusted_bytes.as_bytes());
