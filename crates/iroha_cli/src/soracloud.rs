@@ -6985,7 +6985,7 @@ fn validate_taira_inrou_canary_container(container: &SoraContainerManifestV1) ->
         || resources.max_tasks.get() != TAIRA_INROU_CANARY_MAX_TASKS_V1
     {
         return Err(eyre!(
-            "Taira Inrou canary resource request must be exactly 750 CPU millis, 512 MiB memory, 2 GiB ephemeral storage, 512 open files, and 64 tasks"
+            "Taira Inrou canary resource request must match the configured canonical CPU, memory, temporary storage, open-file, and task limits"
         ));
     }
     if container.lifecycle.healthcheck_path.as_deref() != Some(TAIRA_INROU_CANARY_HEALTHCHECK_V1) {
@@ -7085,7 +7085,7 @@ fn install_taira_inrou_canary_service_version(bundle: &mut SoraDeploymentBundleV
     Ok(())
 }
 fn validate_taira_inrou_canary_storage(
-    container: &SoraContainerManifestV1,
+    resources: &SoraResourceLimitsV1,
     service: &SoraServiceManifestV1,
 ) -> Result<()> {
     let [root, shared] = service.lease_volumes.as_slice() else {
@@ -7105,25 +7105,22 @@ fn validate_taira_inrou_canary_storage(
         || shared.max_total_bytes.get() != TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1
     {
         return Err(eyre!(
-            "Taira Inrou canary requires canonical 8 GiB root and 2 GiB shared service-volume geometry"
+            "Taira Inrou canary requires the configured canonical root and shared service-volume geometry"
         ));
     }
-    let per_host_storage_bytes = container
-        .resources
+    let per_host_storage_bytes = resources
         .ephemeral_storage_bytes
         .get()
         .checked_add(root.max_total_bytes.get())
         .ok_or_else(|| eyre!("Taira Inrou canary per-host storage geometry overflow"))?;
-    let lease_storage_bytes = root
-        .max_total_bytes
-        .get()
+    let total_storage_bytes = per_host_storage_bytes
         .checked_add(shared.max_total_bytes.get())
-        .ok_or_else(|| eyre!("Taira Inrou canary lease storage geometry overflow"))?;
+        .ok_or_else(|| eyre!("Taira Inrou canary total storage geometry overflow"))?;
     if per_host_storage_bytes != TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1
-        || lease_storage_bytes != TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1
+        || total_storage_bytes != defaults::taira::INROU_MAX_STORAGE_BYTES
     {
         return Err(eyre!(
-            "Taira Inrou canary storage geometry must total exactly 10 GiB"
+            "Taira Inrou canary root, temporary, and shared storage must match the configured host limits"
         ));
     }
     Ok(())
@@ -7139,7 +7136,7 @@ fn validate_taira_inrou_canary_bundle(bundle: &SoraDeploymentBundleV1) -> Result
     }
     validate_taira_inrou_canary_container(&bundle.container)?;
     validate_taira_inrou_canary_service(&bundle.service)?;
-    validate_taira_inrou_canary_storage(&bundle.container, &bundle.service)?;
+    validate_taira_inrou_canary_storage(&bundle.container.resources, &bundle.service)?;
     let expected_service_version = derive_taira_inrou_canary_service_version(bundle)?;
     if bundle.service.service_version != expected_service_version {
         return Err(eyre!(
@@ -7150,6 +7147,7 @@ fn validate_taira_inrou_canary_bundle(bundle: &SoraDeploymentBundleV1) -> Result
 }
 fn validate_taira_inrou_canary_source_bundle(bundle: &UnpublishedDeploymentBundleV1) -> Result<()> {
     validate_unpublished_deployment_source(bundle)?;
+    validate_taira_inrou_canary_storage(&bundle.container.resources, &bundle.service)?;
     let (canonical, _) = canonical_taira_inrou_canary_deploy_bundle()?;
     if bundle != &canonical {
         return Err(eyre!(
@@ -23603,6 +23601,31 @@ mod tests {
             .expect("canonical Taira Inrou V1 source bundle");
     }
     #[test]
+    fn taira_inrou_canary_storage_accounts_for_distinct_temporary_and_shared_limits() {
+        let bundle = canonical_taira_inrou_bundle_fixture();
+        let resources = &bundle.container.resources;
+        let [root, shared] = bundle.service.lease_volumes.as_slice() else {
+            panic!("canonical root and shared volumes");
+        };
+        assert_ne!(resources.ephemeral_storage_bytes, shared.max_total_bytes);
+        assert_eq!(
+            root.max_total_bytes.get()
+                + resources.ephemeral_storage_bytes.get()
+                + shared.max_total_bytes.get(),
+            defaults::taira::INROU_MAX_STORAGE_BYTES
+        );
+        validate_taira_inrou_canary_storage(resources, &bundle.service)
+            .expect("temporary storage and shared leases have separate budgets");
+        let mut wrong_resources = resources.clone();
+        wrong_resources.ephemeral_storage_bytes = shared.max_total_bytes;
+        validate_taira_inrou_canary_storage(&wrong_resources, &bundle.service)
+            .expect_err("shared volume capacity must not replace the temporary budget");
+        let mut wrong_service = bundle.service.clone();
+        wrong_service.lease_volumes[1].max_total_bytes = resources.ephemeral_storage_bytes;
+        validate_taira_inrou_canary_storage(resources, &wrong_service)
+            .expect_err("temporary capacity must not replace the shared volume budget");
+    }
+    #[test]
     fn taira_inrou_canary_source_rejects_valid_noncanonical_policy_values() {
         let mut lifecycle = canonical_taira_inrou_source_fixture();
         lifecycle.container.lifecycle.start_grace_secs =
@@ -24596,7 +24619,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         bundle.service.lease_volumes[0].max_total_bytes =
             NonZeroU64::new(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1 - 1)
                 .expect("smaller root volume");
-        assert_taira_canary_validation_error(&bundle, "canonical 8 GiB root");
+        assert_taira_canary_validation_error(&bundle, "canonical root");
 
         validate_taira_inrou_rootfs_source_bytes(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1)
             .expect("rootfs at the root-volume boundary");
@@ -25170,16 +25193,18 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         );
     }
     #[test]
-    fn taira_stage_guest_budget_accepts_real_multi_gibibyte_layout() {
-        let sizes = [27_236_288_u64, 3_085_959_168, 13_923_072];
+    fn taira_stage_guest_budget_accepts_normalized_layout_and_rejects_upstream_image() {
+        let sizes = [27_236_288_u64, 1536 * 1024 * 1024, 13_923_072];
         let total = sizes.into_iter().sum::<u64>();
-        assert_eq!(total, 3_127_118_528);
         assert_eq!(
-            taira_stage_guest_total_bytes(sizes).expect("real Taira guest layout"),
+            taira_stage_guest_total_bytes(sizes).expect("normalized Taira guest layout"),
             total
         );
-        assert!(total > 3_000_000_000);
-        assert!(total > 512 * 1024 * 1024);
+        assert!(total <= TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1);
+        assert!(
+            taira_stage_guest_total_bytes([27_236_288_u64, 3_085_959_168, 13_923_072]).is_err(),
+            "upstream images must be normalized before Taira staging"
+        );
         assert!(taira_stage_guest_total_bytes([TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1 + 1]).is_err());
     }
     #[test]
