@@ -22,18 +22,15 @@ use fastpq_isi::GoldilocksDigestDomainV1;
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use rayon::prelude::*;
-use sha2::{Digest as _, Sha256};
+use sha2::Digest as _;
 use std::collections::BTreeMap;
 use thiserror::Error;
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
-/// `2^64 - p = 2^32 - 1`, used for division-free canonical reduction.
-const GOLDILOCKS_EPSILON_V1: u64 = 0xffff_ffff;
 /// Canonical generator used for every compiled domain and coset.
 pub(crate) const GOLDILOCKS_GENERATOR_V1: u64 = 7;
 /// Two-adicity of the Goldilocks multiplicative group.
 pub(crate) const GOLDILOCKS_TWO_ADICITY_V1: u32 = 32;
-const TRANSCRIPT_FRAME_DOMAIN_V1: &[u8] = b"iroha:execution:transparent-stark:frame:v1";
 const TRANSCRIPT_INIT_DOMAIN_V1: &[u8] = b"iroha:execution:transparent-stark:init:v1";
 const TRANSCRIPT_ABSORB_DOMAIN_V1: &[u8] = b"iroha:execution:transparent-stark:absorb:v1";
 const TRANSCRIPT_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:execution:transparent-stark:challenge:v1";
@@ -48,16 +45,10 @@ const MERKLE_PARALLEL_PARENT_THRESHOLD_V1: usize = 256;
 const GRINDING_PARALLEL_MIN_BITS_V1: u8 = 12;
 /// Search canonical nonce intervals in this fixed order while parallelizing within each interval.
 const GRINDING_PARALLEL_CHUNK_SIZE_V1: u64 = 4_096;
-const FRAME_PHASE_V1: &[u8] = b"framed-message";
 /// Fixed rejection budget for canonical field and transcript sampling.
 pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
 /// Fixed rejection budget for each unbiased query-index range sample.
 const MAX_QUERY_INDEX_REJECTION_ATTEMPTS_V1: u64 = 256;
-/// Degree of the compiled Goldilocks extension.
-pub(crate) const GOLDILOCKS_FP4_DEGREE_V1: usize = 4;
-/// Canonical encoded size of one quartic-extension value.
-pub(crate) const GOLDILOCKS_FP4_WIRE_BYTES_V1: usize = GOLDILOCKS_FP4_DEGREE_V1 * 8;
-const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDILOCKS_GENERATOR_V1);
 
 /// Exact catalog/protocol/profile context for every native-STARK digest.
 ///
@@ -71,13 +62,6 @@ pub(crate) struct TransparentStarkDigestContextV1 {
     profile: &'static [u8],
 }
 impl TransparentStarkDigestContextV1 {
-    /// Construct a typed context for one final protocol/profile pair.
-    pub(crate) const fn new(protocol: PrivacyProtocolIdV1, profile: &'static [u8]) -> Self {
-        Self {
-            protocol: Some(protocol),
-            profile,
-        }
-    }
     /// Native execution proofs occupy a separate catalog and protocol namespace.
     pub(crate) const fn execution_v1(profile: &'static [u8]) -> Self {
         Self {
@@ -139,26 +123,6 @@ pub(crate) struct TransparentStarkZkMaskGeometryV1 {
     pub(crate) minimum_mask_coefficients: usize,
     /// Largest degree of a minimum-size randomizer polynomial.
     pub(crate) minimum_mask_degree: usize,
-}
-/// Conservative classical-ROM work-normalized Fiat--Shamir certificate.
-///
-/// The caller must separately prove the supplied round-by-round soundness exponent for its concrete
-/// FRI/DEEP construction. This helper checks the protocol-neutral BCS accounting
-///
-/// `epsilon_FS / Q <= epsilon_RBR + 3 * (Q + 1/Q) / 2^kappa`
-///
-/// using an exact power-of-two split of the target error budget. It deliberately does not use
-/// floating-point arithmetic and makes no qROM or post-quantum claim for the Fiat--Shamir layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TransparentStarkWorkSecurityV1 {
-    /// Claimed work-normalized security level.
-    pub(crate) target_bits: u16,
-    /// Proven exponent in `epsilon_RBR <= 2^-round_by_round_bits`.
-    pub(crate) round_by_round_bits: u16,
-    /// Random-oracle digest size.
-    pub(crate) random_oracle_bits: u16,
-    /// Bound `Q <= 2^max_random_oracle_query_log2`.
-    pub(crate) max_random_oracle_query_log2: u16,
 }
 pub(crate) use crate::privacy_engines::transparent_stark::{GoldilocksFieldV1, GoldilocksFp4V1};
 /// Failure in protocol-neutral transparent-proof machinery.
@@ -246,40 +210,6 @@ pub(crate) fn transparent_stark_zk_mask_geometry_v1(
         fri_query_count,
         minimum_mask_coefficients,
         minimum_mask_degree,
-    })
-}
-/// Check a classical-ROM work-normalized BCS/Fiat--Shamir claim without rounding.
-///
-/// Half of the target error budget is assigned to round-by-round soundness and
-/// half to the random-oracle term. For `Q <= 2^q`,
-/// `3 * (Q + 1/Q) / 2^kappa < 2^(q + 3 - kappa)`, so the checked conditions
-/// are `rbr_bits >= lambda + 1` and `q <= kappa - lambda - 4`.
-pub(crate) fn checked_transparent_stark_work_security_v1(
-    target_bits: u16,
-    round_by_round_bits: u16,
-    random_oracle_bits: u16,
-    max_random_oracle_query_log2: u16,
-) -> Result<TransparentStarkWorkSecurityV1, TransparentStarkErrorV1> {
-    if target_bits == 0 {
-        return Err(TransparentStarkErrorV1::InvalidDomain);
-    }
-    let minimum_round_by_round_bits = target_bits
-        .checked_add(1)
-        .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
-    let maximum_query_log2 = random_oracle_bits
-        .checked_sub(target_bits)
-        .and_then(|remaining| remaining.checked_sub(4))
-        .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
-    if round_by_round_bits < minimum_round_by_round_bits
-        || max_random_oracle_query_log2 > maximum_query_log2
-    {
-        return Err(TransparentStarkErrorV1::InvalidDomain);
-    }
-    Ok(TransparentStarkWorkSecurityV1 {
-        target_bits,
-        round_by_round_bits,
-        random_oracle_bits,
-        max_random_oracle_query_log2,
     })
 }
 /// Compute the primitive root for an exact power-of-two order.
@@ -744,29 +674,6 @@ fn exact12_catalog_commitment_bytes_v1() -> [u8; 48] {
         .to_le_bytes()
 }
 
-/// Hash an unambiguous domain-and-field frame with SHA-256.
-pub(crate) fn sha256_frame_v1(
-    domain: &[u8],
-    fields: &[&[u8]],
-) -> Result<[u8; 32], TransparentStarkErrorV1> {
-    let domain_len =
-        u16::try_from(domain.len()).map_err(|_| TransparentStarkErrorV1::FrameLengthOverflow)?;
-    let field_count =
-        u16::try_from(fields.len()).map_err(|_| TransparentStarkErrorV1::FrameLengthOverflow)?;
-    let mut hash = Sha256::new();
-    hash.update(TRANSCRIPT_FRAME_DOMAIN_V1);
-    hash.update(domain_len.to_be_bytes());
-    hash.update(domain);
-    hash.update(field_count.to_be_bytes());
-    for field in fields {
-        let length =
-            u64::try_from(field.len()).map_err(|_| TransparentStarkErrorV1::FrameLengthOverflow)?;
-        hash.update(length.to_be_bytes());
-        hash.update(field);
-    }
-    Ok(hash.finalize().into())
-}
-
 /// Hash one fully typed native-STARK frame with the canonical wide Poseidon2 digest.
 pub(crate) fn goldilocks_digest384_frame_v1(
     context: TransparentStarkDigestContextV1,
@@ -1019,17 +926,6 @@ pub(crate) fn verify_goldilocks_merkle_path_v1(
         return Err(TransparentStarkErrorV1::InvalidMerkleShape);
     }
     Ok(())
-}
-/// Hash an unambiguous role-and-field frame.
-#[cfg(test)]
-pub(crate) fn goldilocks_frame_v1(
-    context: TransparentStarkDigestContextV1,
-    role: &[u8],
-    level: u64,
-    index: u64,
-    fields: &[&[u8]],
-) -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1> {
-    goldilocks_digest384_frame_v1(context, role, FRAME_PHASE_V1, level, index, 0, fields)
 }
 /// Stateful framed Fiat–Shamir transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1580,10 +1476,5 @@ pub(crate) fn append_u32_v1(bytes: &mut Vec<u8>, value: u32) {
 }
 /// Append big-endian fixed integers to a canonical proof.
 pub(crate) fn append_u64_v1(bytes: &mut Vec<u8>, value: u64) {
-    bytes.extend_from_slice(&value.to_be_bytes());
-}
-/// Append one canonical quartic-extension value.
-#[cfg_attr(not(any(test, feature = "zk-stark")), allow(dead_code))]
-pub(crate) fn append_goldilocks_fp4_v1(bytes: &mut Vec<u8>, value: GoldilocksFp4V1) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }

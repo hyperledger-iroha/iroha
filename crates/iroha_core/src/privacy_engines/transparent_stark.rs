@@ -46,6 +46,7 @@ const MERKLE_PARALLEL_PARENT_THRESHOLD_V1: usize = 256;
 const GRINDING_PARALLEL_MIN_BITS_V1: u8 = 12;
 /// Search canonical nonce intervals in this fixed order while parallelizing within each interval.
 const GRINDING_PARALLEL_CHUNK_SIZE_V1: u64 = 4_096;
+#[cfg(test)]
 const FRAME_PHASE_V1: &[u8] = b"framed-message";
 /// Fixed rejection budget for canonical field and transcript sampling.
 pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
@@ -77,6 +78,7 @@ impl TransparentStarkDigestContextV1 {
         }
     }
     /// Native execution proofs occupy a separate catalog and protocol namespace.
+    #[cfg(test)]
     pub(crate) const fn execution_v1(profile: &'static [u8]) -> Self {
         Self {
             protocol: None,
@@ -302,6 +304,7 @@ impl GoldilocksFp4V1 {
         ])
     }
     /// Decode the canonical fixed-width big-endian wire encoding.
+    #[cfg(test)]
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
         for (index, chunk) in bytes.chunks_exact(8).enumerate() {

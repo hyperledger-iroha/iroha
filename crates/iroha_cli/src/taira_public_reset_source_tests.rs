@@ -1,7 +1,7 @@
 //! Regressions for exact source types, substitutions, and typed manifest export.
 
 use super::*;
-use std::os::unix::fs::{PermissionsExt as _, symlink};
+use std::os::unix::fs::symlink;
 
 fn indexed(mode: &str, object: &str, stage: &str, path: &str) -> Vec<u8> {
     format!("{mode} {object} {stage}\t{path}\0").into_bytes()

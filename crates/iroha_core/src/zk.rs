@@ -821,6 +821,7 @@ pub(crate) fn halo2_open_verify_circuit_id_matches_backend(
     }
     backend == ZK_BACKEND_HALO2_IPA || normalize_halo2_ipa_circuit_id(backend) == Some(canonical)
 }
+#[cfg(test)]
 fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
     normalize_halo2_ipa_circuit_id(circuit_id).is_some_and(|normalized| {
         HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&normalized.as_str())

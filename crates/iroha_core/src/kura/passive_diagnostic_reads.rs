@@ -690,30 +690,6 @@ impl Kura {
             }
         }
     }
-    fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => self
-                .lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                if repair_missing_sidecars {
-                    self.lane_block_application_receipt_matches_merge_log_under_prune_guard(
-                        artifact,
-                    )
-                } else {
-                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
-                        artifact,
-                    )
-                }
-            }
-        }
-    }
     fn lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,

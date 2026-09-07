@@ -1,7 +1,9 @@
 //! Complete RaceV1 integer transition relation for the native transparent proof driver.
 
+#[cfg(test)]
+use super::integer_air::Source;
 use super::{
-    integer_air::{IntegerAirV1, Source, Value},
+    integer_air::{IntegerAirV1, Value},
     race::initial_race_state_v1,
 };
 use iroha_data_model::execution_proofs::{RaceCarStateV1, RaceReplayV1, RaceStateV1};
@@ -259,6 +261,7 @@ impl RaceAirV1 {
         fixed
     }
 
+    #[cfg(test)]
     pub(super) fn next_inputs(&self, row: &[i64]) -> Vec<i64> {
         self.outputs
             .iter()

@@ -2328,7 +2328,7 @@ impl StateTelemetry {
         }
     }
     /// Replace Parliament attempt gauges with a snapshot of committed state.
-    #[cfg(feature = "telemetry")]
+    #[cfg(all(test, feature = "telemetry"))]
     pub(crate) fn seed_parliament_attempts(
         &self,
         attempts: impl IntoIterator<

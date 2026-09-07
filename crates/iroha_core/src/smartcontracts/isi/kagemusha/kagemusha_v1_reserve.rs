@@ -10,13 +10,15 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use iroha_data_model::isi::{KagemushaFinalityTrustAnchorV1, KagemushaTopUpResultV1};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId, AssetValue},
     isi::{
-        KagemushaFinalityTrustAnchorV1, KagemushaOperationKindV1, KagemushaRedemptionRequestV1,
-        KagemushaReserveReceiptV1, KagemushaTopUpRequestV1, KagemushaTopUpResultV1,
+        KagemushaOperationKindV1, KagemushaRedemptionRequestV1, KagemushaReserveReceiptV1,
+        KagemushaTopUpRequestV1,
     },
     kagemusha::{
         KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaLifecycleBindingV1,
@@ -28,6 +30,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::codec::{Decode, Encode};
 use norito::derive::{JsonDeserialize, JsonSerialize};
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -37,6 +40,7 @@ use crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1;
 /// Version of pooled Kagemusha reserve state and durable records.
 pub const KAGEMUSHA_RESERVE_VERSION_V1: u16 = 1;
 
+#[cfg(test)]
 const TOP_UP_RESULT_WIRE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:reserve:top-up-result-wire\0";
 
@@ -402,6 +406,8 @@ impl KagemushaTopUpIssuanceIntentV1 {
 ///
 /// `verified_anchor_identity` records which locally authenticated context admitted
 /// the result. It cannot authenticate itself during snapshot hydration.
+/// This attachment model exercises finality binding in reserve unit tests.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaMintFinalityAttachmentV1 {
     /// Attachment layout version.
@@ -703,6 +709,7 @@ pub struct KagemushaTopUpPlanV1 {
 
 impl KagemushaTopUpPlanV1 {
     /// Return the pool head that must still be present at commit.
+    #[cfg(test)]
     #[must_use]
     pub fn expected_pool_head(&self) -> Option<[u8; 32]> {
         self.expected_pool_head
@@ -731,12 +738,6 @@ pub struct KagemushaRedemptionPlanV1 {
 }
 
 impl KagemushaRedemptionPlanV1 {
-    /// Return the pool head that must still be present at commit.
-    #[must_use]
-    pub fn expected_pool_head(&self) -> Option<[u8; 32]> {
-        self.expected_pool_head
-    }
-
     /// Borrow the one projected pool entry to write.
     #[must_use]
     pub fn next_pool(&self) -> &KagemushaReservePoolV1 {
@@ -771,6 +772,7 @@ pub enum KagemushaReservePlanOutcomeV1 {
 }
 
 /// Result of committing a prepared reserve operation.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KagemushaReserveCommitOutcomeV1 {
     /// A new operation and authenticated pool head were installed.
@@ -780,6 +782,7 @@ pub enum KagemushaReserveCommitOutcomeV1 {
 }
 
 /// Result of attaching terminal consensus finality to an applied top-up.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KagemushaMintFinalizationOutcomeV1 {
     /// A new exact local result/outbox attachment must be persisted.
@@ -813,6 +816,7 @@ impl VerifiedKagemushaTopUpIntentV1 {
         &self.intent
     }
 
+    #[cfg(test)]
     fn mint_statement(
         &self,
         minted_at_ms: u64,
@@ -830,12 +834,14 @@ impl VerifiedKagemushaTopUpIntentV1 {
 }
 
 /// Fully admitted mint result and canonical finality identity used to verify it.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct VerifiedKagemushaMintFinalizationV1 {
     result: KagemushaTopUpResultV1,
     trusted_anchor_identity: KagemushaFinalityTrustAnchorV1,
 }
 
+#[cfg(test)]
 impl VerifiedKagemushaMintFinalizationV1 {
     /// Seal a terminal result after verification against locally pinned consensus context.
     ///
@@ -859,12 +865,6 @@ impl VerifiedKagemushaMintFinalizationV1 {
     #[must_use]
     pub fn operation_id(&self) -> [u8; 32] {
         self.result.request.operation_id
-    }
-
-    /// Borrow the exact finalized top-up result.
-    #[must_use]
-    pub fn result(&self) -> &KagemushaTopUpResultV1 {
-        &self.result
     }
 
     /// Return the canonical finality identity used at admission.
@@ -908,6 +908,7 @@ impl VerifiedKagemushaRedemptionV1 {
 }
 
 /// Resolve a persisted finality identity from locally authenticated chain state.
+#[cfg(test)]
 pub trait KagemushaFinalityAnchorResolverV1 {
     /// Resolve an identity only when canonical local consensus state trusts it.
     fn resolve(
@@ -916,6 +917,7 @@ pub trait KagemushaFinalityAnchorResolverV1 {
     ) -> Option<KagemushaFinalityTrustAnchorV1>;
 }
 
+#[cfg(test)]
 impl<F> KagemushaFinalityAnchorResolverV1 for F
 where
     F: Fn(&KagemushaFinalityTrustAnchorV1) -> Option<KagemushaFinalityTrustAnchorV1>,
@@ -966,66 +968,18 @@ impl KagemushaReserveBookV1 {
         }
     }
 
-    /// Return the reserve-state version.
-    #[must_use]
-    pub fn version(&self) -> u16 {
-        self.version
-    }
-
     /// Return the number of durably committed public operations.
+    #[cfg(test)]
     #[must_use]
     pub fn operation_count(&self) -> usize {
         self.operations.len()
     }
 
     /// Look up one idempotent operation record.
+    #[cfg(test)]
     #[must_use]
     pub fn operation(&self, operation_id: &[u8; 32]) -> Option<&KagemushaReserveOperationRecordV1> {
         self.operations.get(operation_id)
-    }
-
-    /// Look up the operation that emitted a mint credit.
-    #[must_use]
-    pub fn operation_for_mint_credit(
-        &self,
-        credit_id: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.mint_credit_operations
-            .get(credit_id)
-            .and_then(|operation_id| self.operations.get(operation_id))
-    }
-
-    /// Look up the operation that consumed an issuance commitment.
-    #[must_use]
-    pub fn operation_for_issuance(
-        &self,
-        issuance_commitment: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.issuance_operations
-            .get(issuance_commitment)
-            .and_then(|operation_id| self.operations.get(operation_id))
-    }
-
-    /// Look up the operation that emitted a redemption identifier.
-    #[must_use]
-    pub fn operation_for_redemption(
-        &self,
-        redemption_id: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.redemption_id_operations
-            .get(redemption_id)
-            .and_then(|operation_id| self.operations.get(operation_id))
-    }
-
-    /// Look up the operation that consumed a terminal nullifier.
-    #[must_use]
-    pub fn operation_for_terminal_nullifier(
-        &self,
-        terminal_nullifier: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.terminal_nullifier_operations
-            .get(terminal_nullifier)
-            .and_then(|operation_id| self.operations.get(operation_id))
     }
 
     /// Look up one canonical pool without creating it.
@@ -1033,6 +987,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an encoding error if the canonical key cannot be derived.
+    #[cfg(test)]
     pub fn pool(
         &self,
         network_id: NetworkId,
@@ -1048,6 +1003,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error if key derivation fails or persisted totals underflow.
+    #[cfg(test)]
     pub fn available(
         &self,
         network_id: NetworkId,
@@ -1066,6 +1022,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error for conflicts, malformed context, scale mismatch, or overflow.
+    #[cfg(test)]
     pub(in crate::smartcontracts::isi) fn plan_top_up(
         &self,
         verified: &VerifiedKagemushaTopUpIntentV1,
@@ -1099,6 +1056,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error for replay, conflicts, insufficient reserve, or overflow.
+    #[cfg(test)]
     pub(in crate::smartcontracts::isi) fn plan_redemption(
         &self,
         verified: &VerifiedKagemushaRedemptionV1,
@@ -1139,6 +1097,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error for a stale plan, conflict, replay, or invalid projection.
+    #[cfg(test)]
     pub(in crate::smartcontracts::isi) fn commit(
         &mut self,
         plan: KagemushaReserveMutationPlanV1,
@@ -1858,6 +1817,7 @@ pub(in crate::smartcontracts::isi) fn validate_redemption_commit_entries(
 /// # Errors
 ///
 /// Returns an error for result/intent mismatch or different already-finalized bytes.
+#[cfg(test)]
 pub(in crate::smartcontracts::isi) fn finalize_mint_credit_record(
     existing: &KagemushaTopUpRecordV1,
     existing_attachment: Option<&KagemushaMintFinalityAttachmentV1>,
@@ -1899,6 +1859,7 @@ pub(in crate::smartcontracts::isi) fn finalize_mint_credit_record(
 ///
 /// Returns an error when the immutable WSV record differs, the anchor cannot be resolved exactly,
 /// or typed finality fails cryptographic verification.
+#[cfg(test)]
 pub fn validate_mint_finality_attachment_with_anchor(
     record: &KagemushaTopUpRecordV1,
     attachment: &KagemushaMintFinalityAttachmentV1,
@@ -2130,6 +2091,7 @@ fn receipt_matches_pool_projection(
         && next.latest_receipt.as_ref() == Some(receipt)
 }
 
+#[cfg(test)]
 fn validate_mint_finality_attachment(
     record: &KagemushaTopUpRecordV1,
     attachment: &KagemushaMintFinalityAttachmentV1,
@@ -2183,6 +2145,7 @@ fn validate_mint_finality_attachment(
     Ok(())
 }
 
+#[cfg(test)]
 fn canonical_wire_digest<T: Encode>(
     domain: &[u8],
     value: &T,

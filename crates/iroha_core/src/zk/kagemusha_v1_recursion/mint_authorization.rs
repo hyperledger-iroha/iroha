@@ -692,6 +692,10 @@ fn validate_recursive_witness_v1(
 }
 
 /// Build the release-pinned, mutually audited mint-authorization pair.
+#[expect(
+    dead_code,
+    reason = "Retain paired construction for circuit qualification; production builds one parity at a time"
+)]
 pub(crate) fn build_kagemusha_mint_authorization_pair_v1(
     eq_parameters: &ParamsIPA<EqAffine>,
     ep_parameters: &ParamsIPA<EpAffine>,
@@ -857,8 +861,8 @@ pub(crate) fn build_kagemusha_mint_authorization_eq_v1(
     )?;
     append_inner_carrier_commitments_v1(
         &mut semantic_instances,
-        audits.eq_carrier_commitment,
-        audits.ep_carrier_commitment,
+        audits.eq_carrier_commitment(),
+        audits.ep_carrier_commitment(),
         witness.relation.platform_credential.hardware_policy_id,
     )?;
     let credential_claim_history =
@@ -896,7 +900,10 @@ pub(crate) fn build_kagemusha_mint_authorization_eq_v1(
         hardware_authorization,
         witness.eq_deferred_audit,
         witness.ep_deferred_audit,
-        Some((audits.eq_carrier_commitment, audits.ep_carrier_commitment)),
+        Some((
+            audits.eq_carrier_commitment(),
+            audits.ep_carrier_commitment(),
+        )),
     )?;
     let expected_ep = audit_cells(&builder, public_instance::EP_AUDIT_LO)?;
     let expected_ep_commitment = audit_cells(&builder, public_instance::EP_CARRIER_COMMITMENT_LO)?;
@@ -912,7 +919,7 @@ pub(crate) fn build_kagemusha_mint_authorization_eq_v1(
         &expected_ep,
         ep_lagrange_bases,
         ep_parameters.get_blind_base(),
-        audits.ep_carrier_commitment,
+        audits.ep_carrier_commitment(),
         &expected_ep_commitment,
         &output.bound_values,
         &mut dense_jobs,
@@ -957,8 +964,8 @@ pub(crate) fn build_kagemusha_mint_authorization_ep_v1(
     )?;
     append_inner_carrier_commitments_v1(
         &mut semantic_instances,
-        audits.eq_carrier_commitment,
-        audits.ep_carrier_commitment,
+        audits.eq_carrier_commitment(),
+        audits.ep_carrier_commitment(),
         witness.relation.platform_credential.hardware_policy_id,
     )?;
     let credential_claim_history =
@@ -996,7 +1003,10 @@ pub(crate) fn build_kagemusha_mint_authorization_ep_v1(
         hardware_authorization,
         witness.eq_deferred_audit,
         witness.ep_deferred_audit,
-        Some((audits.eq_carrier_commitment, audits.ep_carrier_commitment)),
+        Some((
+            audits.eq_carrier_commitment(),
+            audits.ep_carrier_commitment(),
+        )),
     )?;
     let expected_eq = audit_cells(&builder, public_instance::EQ_AUDIT_LO)?;
     let expected_eq_commitment = audit_cells(&builder, public_instance::EQ_CARRIER_COMMITMENT_LO)?;
@@ -1012,7 +1022,7 @@ pub(crate) fn build_kagemusha_mint_authorization_ep_v1(
         &expected_eq,
         eq_lagrange_bases,
         eq_parameters.get_blind_base(),
-        audits.eq_carrier_commitment,
+        audits.eq_carrier_commitment(),
         &expected_eq_commitment,
         &output.bound_values,
         &mut dense_jobs,

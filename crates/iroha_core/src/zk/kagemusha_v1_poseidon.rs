@@ -12,9 +12,9 @@ use halo2_base::{
     utils::{BigPrimeField, ScalarField},
 };
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
-use iroha_data_model::kagemusha::{
-    KagemushaPastaStateCommitmentV1, kagemusha_pasta_state_commitment_v1,
-};
+use iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1;
+#[cfg(test)]
+use iroha_data_model::kagemusha::kagemusha_pasta_state_commitment_v1;
 use snark_verifier::{loader::native::LOADER, util::hash::Poseidon};
 
 /// Width of the fixed Kagemusha V1 native Poseidon permutation.
@@ -246,6 +246,7 @@ pub(crate) fn decode<F: PrimeField>(bytes: [u8; 32]) -> Option<F> {
 }
 
 /// Build the paired components and their sole public 32-byte wire head.
+#[cfg(test)]
 pub(crate) fn paired_commitment(eq: Fp, ep: Fq) -> (KagemushaPastaStateCommitmentV1, [u8; 32]) {
     let components = KagemushaPastaStateCommitmentV1 {
         eq: encode(eq),

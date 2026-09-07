@@ -74,6 +74,10 @@ impl Kura {
     }
     /// Revalidate the exact predecessor of an autonomous proposal against a merge
     /// receipt and its authenticated merge-log carrier.
+    #[expect(
+        dead_code,
+        reason = "retained by the autonomous recovery capacity formal source bindings"
+    )]
     pub(crate) fn autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,

@@ -642,8 +642,22 @@ pub struct KagemushaGeneratedRecursiveStateArtifactsV1 {
     /// Ep compiled private recursive-carrier identity.
     pub inner_ep_protocol_digest: [u8; 32],
     /// Measured Eq outer-decider row and cell inventory.
+    #[cfg_attr(
+        not(any(test, feature = "kagemusha-real-proof-harness")),
+        expect(
+            dead_code,
+            reason = "Measured capacity is retained for the guarded proof qualification harness"
+        )
+    )]
     pub(super) eq_transport_capacity: KagemushaTransportDeciderCapacityProfileV1,
     /// Measured Ep outer-decider row and cell inventory.
+    #[cfg_attr(
+        not(any(test, feature = "kagemusha-real-proof-harness")),
+        expect(
+            dead_code,
+            reason = "Measured capacity is retained for the guarded proof qualification harness"
+        )
+    )]
     pub(super) ep_transport_capacity: KagemushaTransportDeciderCapacityProfileV1,
 }
 
@@ -2219,6 +2233,10 @@ pub struct KagemushaLoadedEqMintHashArtifactsV1 {
     /// Authenticated one-block shard proving key.
     pub(super) shard_proving_key: ProvingKey<EqAffine>,
     /// Authenticated one-block shard verifying key.
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
     pub(super) shard_verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated one-block shard circuit layout.
     pub(super) shard_circuit_params: BaseCircuitParams,
@@ -2229,6 +2247,10 @@ pub struct KagemushaLoadedEqMintHashArtifactsV1 {
     /// Authenticated ordered-claim proving key.
     pub(super) claim_proving_key: ProvingKey<EqAffine>,
     /// Authenticated ordered-claim verifying key.
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
     pub(super) claim_verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated ordered-claim circuit layout.
     pub(super) claim_circuit_params: BaseCircuitParams,
@@ -2279,6 +2301,10 @@ pub struct KagemushaLoadedEpMintHashArtifactsV1 {
     /// Authenticated one-block shard proving key.
     pub(super) shard_proving_key: ProvingKey<EpAffine>,
     /// Authenticated one-block shard verifying key.
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
     pub(super) shard_verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated one-block shard circuit layout.
     pub(super) shard_circuit_params: BaseCircuitParams,
@@ -2289,6 +2315,10 @@ pub struct KagemushaLoadedEpMintHashArtifactsV1 {
     /// Authenticated ordered-claim proving key.
     pub(super) claim_proving_key: ProvingKey<EpAffine>,
     /// Authenticated ordered-claim verifying key.
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
     pub(super) claim_verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated ordered-claim circuit layout.
     pub(super) claim_circuit_params: BaseCircuitParams,

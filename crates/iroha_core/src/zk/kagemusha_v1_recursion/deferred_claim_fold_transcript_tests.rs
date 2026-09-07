@@ -11,7 +11,7 @@ use halo2_proofs::{
     circuit::{Layouter, V1},
     dev::MockProver,
     halo2curves::{
-        group::{Curve as _, prime::PrimeCurveAffine as _},
+        group::Curve as _,
         pasta::{EpAffine, EqAffine},
     },
     plonk::{Circuit, ConstraintSystem, Error as Halo2Error},
@@ -86,7 +86,7 @@ where
     marker: std::marker::PhantomData<&'chip C>,
 }
 
-impl<'chip, C, T> RecordingTranscript<'chip, C, T>
+impl<C, T> RecordingTranscript<'_, C, T>
 where
     C: CurveAffineExt,
     C::Base: BigPrimeField,

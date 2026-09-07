@@ -91,11 +91,8 @@ mod proof_bytes;
 pub(super) use proof_bytes::canonical_loaded_proof_bytes_v1;
 pub(super) use proof_bytes::verify_hybrid_ordinary_proof_and_stream_v1;
 use proof_bytes::verify_ordinary_proof_and_stream_v1;
+pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::verify_ordinary_proof_with_canonical_bytes_v1;
 pub(super) use proof_bytes::verify_two_carrier_hybrid_ordinary_proof_and_stream_v1;
-pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::{
-    verify_ordinary_proof_with_canonical_bytes_v1,
-    verify_ordinary_proof_with_transcript_binding_at_k_v1,
-};
 
 #[cfg(test)]
 #[path = "deferred_parent_proof_bytes_tests.rs"]
@@ -854,6 +851,10 @@ where
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
     pub(super) batch: DeferredBatchedEquationWitnessV1<C>,
+    #[expect(
+        dead_code,
+        reason = "Constrained challenge is retained with the batch for transcript qualification"
+    )]
     pub(super) challenge: AssignedValue<C::ScalarExt>,
     pub(super) challenge_limbs: [AssignedValue<C::ScalarExt>; 2],
     pub(super) source_commitments: Vec<[AssignedValue<C::ScalarExt>; 2]>,
@@ -910,6 +911,10 @@ where
 /// The fixed 544-byte successor history is appended to the parity proof's public instance column
 /// as 34 injective `u128` limbs. The compiled-protocol identity and deferred-equation audit are
 /// equality-bound to the common positions already assigned by the state relation.
+#[expect(
+    dead_code,
+    reason = "Retained authenticated scalar-pass composition entry point; shipping composites bind each phase separately"
+)]
 pub(super) fn constrain_authenticated_scalar_parent_pass_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -1314,6 +1319,10 @@ where
 ///
 /// The assigned selectors are constrained circuit values. The parallel booleans are their exact
 /// witnesses and are replayed by the reciprocal parity when it enforces the curve equations.
+#[expect(
+    dead_code,
+    reason = "Retained unbound audit adapter for reciprocal relation qualification"
+)]
 pub(super) fn finalize_deferred_audit_plan_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     loader: DeferredLoader<'_, C>,
@@ -1413,6 +1422,10 @@ where
 /// intentionally stops before cross-parity authentication; callers must bind
 /// every returned field before using the compact host witness in a reciprocal
 /// circuit.
+#[expect(
+    dead_code,
+    reason = "Retained standalone tagged-batch adapter for reciprocal relation qualification"
+)]
 pub(super) fn finalize_tagged_native_deferred_batch_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     loader: DeferredLoader<'_, C>,
@@ -1702,6 +1715,10 @@ const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_EQUATIONS_TAG_V1: u64 = u64::from_le_bytes
 /// emitted source and coefficient, recomputes the identical field-native Poseidon audit, binds its
 /// canonical two-`u128` limbs to the shared public instance, and evaluates the complete batched
 /// curve equation through the dedicated dense MSM machine.
+#[expect(
+    dead_code,
+    reason = "Retained complete parent-audit composition entry point alongside bound production audits"
+)]
 pub(super) fn constrain_reciprocal_parent_audit_v1<C>(
     builder: &mut BaseCircuitBuilder<C::Base>,
     witness: &DeferredEquationWitness<C>,
@@ -1725,6 +1742,10 @@ where
 }
 
 /// Constrain one tagged scalar-verifier audit in the reciprocal Pasta parity.
+#[expect(
+    dead_code,
+    reason = "Retained tagged-audit adapter alongside bound production audits"
+)]
 pub(super) fn constrain_reciprocal_tagged_audit_v1<C>(
     builder: &mut BaseCircuitBuilder<C::Base>,
     witness: &DeferredEquationWitness<C>,
@@ -2180,6 +2201,10 @@ where
 ///
 /// Every proof contributes equations to the same loader. The caller must subsequently invoke
 /// [`finalize_deferred_audit_v1`] exactly once so the reciprocal parity constrains the union.
+#[expect(
+    dead_code,
+    reason = "Retained batch ordinary-proof adapter for private recursive circuit composition"
+)]
 pub(super) fn verify_ordinary_proofs_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,

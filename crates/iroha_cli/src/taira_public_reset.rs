@@ -7169,7 +7169,7 @@ mod executor_model {
                 fail: Some("convergence".to_owned()),
                 ..MockTransport::default()
             };
-            execute_plan(&inventory, &mut transport, &mut journal)
+            let _ = execute_plan(&inventory, &mut transport, &mut journal)
                 .expect_err("failed first public check");
             let rollback = transport
                 .events
@@ -7212,7 +7212,7 @@ mod executor_model {
                 fail: Some("convergence".to_owned()),
                 ..MockTransport::default()
             };
-            execute_plan(&inventory, &mut transport, &mut journal)
+            let _ = execute_plan(&inventory, &mut transport, &mut journal)
                 .expect_err("resumed first public check");
             assert_eq!(
                 transport.events.first().map(String::as_str),

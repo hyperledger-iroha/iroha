@@ -333,18 +333,6 @@ impl PreparedNftReleaseV1 {
             .insert(self.record.custody.clone(), self.record);
     }
 }
-/// Exact purpose-bound convenience release for native game outcome custody.
-pub(in crate::smartcontracts::isi) fn release_nft_v1(
-    st: &mut StateTransaction<'_, '_>,
-    reservation_id: Hash,
-    purpose: NftCustodyPurposeV1,
-    nft_id: &NftId,
-    destination: &AccountId,
-) -> Result<(), Error> {
-    prepare_nft_release_v1(st, reservation_id, purpose, nft_id, destination)?.apply(st);
-    Ok(())
-}
-
 /// Prepared atomic release set, with cumulative account/domain reference accounting.
 pub(in crate::smartcontracts::isi) struct PreparedNftReleasesV1(Vec<PreparedNftReleaseV1>);
 /// Validate every NFT before an accompanying payout changes state. Repeated NFTs are rejected.

@@ -6,13 +6,14 @@
 //! key checks remain authoritative and defend against backend-format drift.
 
 use ff::{FromUniformBytes, PrimeField as _};
+#[cfg(test)]
+use halo2_proofs::plonk::keygen_vk_custom;
 use halo2_proofs::{
     halo2curves::CurveAffine,
     plonk::{
         Circuit, ConstraintSystem, KeygenCircuitResourceProfile, KeygenSelectorProfiles,
         KeygenWithExtractorError, ProvingKey, VerifyingKey,
         keygen_pk2_consuming_with_selector_choice, keygen_vk_consuming_with_selector_choice,
-        keygen_vk_custom,
     },
     poly::{commitment::Params as _, ipa::commitment::ParamsIPA},
 };
@@ -128,6 +129,7 @@ fn checked_count(value: usize) -> Result<u64, ResourcePredictionErrorV1> {
         .map_err(|_| ResourcePredictionErrorV1::ColumnCountDoesNotFitU32)
 }
 
+#[cfg(test)]
 fn predict_processed_key_resources_v1(
     k: usize,
     advice_columns: usize,
@@ -231,6 +233,7 @@ fn predict_processed_key_resources_with_selectors_v1(
     })
 }
 
+#[cfg(test)]
 fn configured_compressed_key_resources_v1<C, ConcreteCircuit>(
     k: usize,
     circuit: &ConcreteCircuit,
@@ -384,6 +387,7 @@ fn enforce_helper_key_limits_v1(
 /// This borrowed-circuit guard cannot observe synthesized selector overlap. Production helper
 /// generation uses the consuming guards below, which replace this bound with an exact
 /// post-synthesis check before key expansion.
+#[cfg(test)]
 pub(super) fn preflight_helper_key_resources_v1<C, ConcreteCircuit>(
     params: &ParamsIPA<C>,
     circuit: &ConcreteCircuit,
@@ -529,6 +533,7 @@ where
 /// consuming wrappers below. Returning only after the conservative upper
 /// bound passes makes it executable-testable that an obviously over-limit layout never reaches
 /// Halo2 synthesis or key allocation.
+#[cfg(test)]
 pub(super) fn keygen_vk_with_helper_resource_preflight_v1<C, ConcreteCircuit>(
     params: &ParamsIPA<C>,
     circuit: &ConcreteCircuit,

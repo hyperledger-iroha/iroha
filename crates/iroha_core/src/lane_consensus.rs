@@ -2837,6 +2837,7 @@ impl LaneBlockSessionCache {
         }
     }
     /// Number of cached sessions.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.sessions.len()
     }
@@ -2989,6 +2990,7 @@ impl LaneBlockSessionCache {
     }
     /// Return whether the proposal's consensus identity is cached, ignoring its
     /// advisory global-block recovery hint.
+    #[cfg(test)]
     pub(crate) fn contains_proposal_identity(&self, proposal: &LaneBlockProposalV1) -> bool {
         let key = LaneBlockSessionKey::from_proposal(proposal);
         self.sessions

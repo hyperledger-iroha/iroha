@@ -3744,7 +3744,7 @@ fn require_vacant_host_precondition(admitted: &HostAdmission) -> Result<()> {
     require_vacant_unit(admitted, false)
 }
 
-fn require_absent_or_exact_edge_candidate(admitted: &HostAdmission, edge: &EdgeV1) -> Result<()> {
+fn require_absent_or_exact_edge_candidate(edge: &EdgeV1) -> Result<()> {
     let path = Path::new(&edge.nginx_config);
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -3844,7 +3844,7 @@ fn publish_first_edge_config(
 ) -> Result<()> {
     let config = artifact(&edge.artifacts, "edge_config")?;
     let route = Path::new(&edge.nginx_config);
-    require_absent_or_exact_edge_candidate(admitted, edge)?;
+    require_absent_or_exact_edge_candidate(edge)?;
     if fs::symlink_metadata(route).is_ok() {
         return sync_existing_file_publication(route, &config.sha256, rollback, sync_directory);
     }
@@ -3965,7 +3965,7 @@ fn rollback_vacant_edge(admitted: &HostAdmission, edge: &EdgeV1, rollback: &Path
     let route = Path::new(&edge.nginx_config);
     let quarantine = rollback.join("first-edge-config.after");
     if fs::symlink_metadata(route).is_ok() {
-        require_absent_or_exact_edge_candidate(admitted, edge)?;
+        require_absent_or_exact_edge_candidate(edge)?;
         require_path_absent(&quarantine, "first edge route quarantine")?;
         rename_noreplace(route, &quarantine)?;
         sync_directory(route.parent().expect("edge route has parent"))?;
@@ -5592,7 +5592,7 @@ fn execute_host_action(
             if edge.is_vacant() && !first_edge_start_was_prepared(admitted, edge)? {
                 require_empty_root_directory(Path::new(&edge.state_root), "vacant edge state")?;
                 require_vacant_unit(admitted, false)?;
-                require_absent_or_exact_edge_candidate(admitted, edge)?;
+                require_absent_or_exact_edge_candidate(edge)?;
             }
             install_release(admitted)?;
             cutover_edge(admitted)?;
