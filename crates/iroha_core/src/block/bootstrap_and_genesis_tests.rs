@@ -88,14 +88,15 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             );
             state.install_lane_manifests(&registry);
         };
-        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        // This authorization regression uses the configured zero-fee unit-test schedule.
+        // Nonzero-fee onboarding additionally requires a funded signed sponsor intent.
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id.clone(),
             network_id,
-        )
-        .expect("test state must accept its explicit network id");
+        );
         install_lane_manifest(&state);
         let mut pipeline = state.pipeline.clone();
         pipeline.parallel_overlay = true;
@@ -226,11 +227,12 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .commit()
             .expect("commit block containing rejected bootstraps");
         let committed_rejected = valid_rejected.commit_unchecked().unpack(|_| {});
-        let mut replay_state = State::new_with_chain_for_testing(
+        let mut replay_state = State::new_with_chain_and_network_id_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id.clone(),
+            network_id,
         );
         install_lane_manifest(&replay_state);
         replay_state.set_pipeline(pipeline);

@@ -15,6 +15,7 @@
 
 use norito::{NoritoSerialize, codec::Encode};
 
+use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
     compact_public_transfer::encode_context,
@@ -29,8 +30,7 @@ use crate::{
     proof::PublicIO,
 };
 
-const IDENTITY: &str =
-    "fastpq:prototype:ordinary-transfer-bundle-segment:v1:342cols:923slots:65536rows";
+const IDENTITY: &str = <u64 as CompactTransferValue>::BATCH_IDENTITY;
 
 /// Explicit context-only ceilings, independent of proof and decoder budgets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +75,7 @@ struct BoundSegmentContext {
 /// witness, FFT/LDE or prepared fixed AIR cache. A verifier can use the exact
 /// aggregate statement length before decoding or hashing any child proof.
 pub(super) struct PublicTransferBatch {
+    identity: &'static str,
     public_io: PublicIO,
     context: Vec<u8>,
     statements: Vec<PublicStatement>,
@@ -90,8 +91,8 @@ impl PublicTransferBatch {
     /// order; endpoints always come from the independently expected PublicIO.
     /// All counts/known bytes are bounded before cloning, serialization or AIR
     /// construction. Exact canonical payload counts precede encoded allocation.
-    pub(super) fn new(
-        prepared: &PreparedPublicTransfers<'_>,
+    pub(super) fn new<V: CompactTransferValue>(
+        prepared: &PreparedPublicTransfers<'_, V>,
         expected: &PublicIO,
         intermediate_roots: &[[u8; 32]],
         limits: BatchContextLimits,
@@ -122,6 +123,7 @@ impl PublicTransferBatch {
         check_total(checked_product(count, bytes)?, limits)?;
         let context = bound.encode();
         let mut batch = Self {
+            identity: V::BATCH_IDENTITY,
             public_io: *expected,
             context,
             statements,
@@ -182,6 +184,7 @@ impl PublicTransferBatch {
         let statement = self.statement(ordinal)?;
         let context = self.segment_context(ordinal)?;
         Ok(PublicTransferSegmentAir {
+            identity: self.identity,
             inner: CompactTransferAir::new(statement, Some(&context))?,
         })
     }
@@ -211,13 +214,14 @@ impl PublicTransferBatch {
 
 /// Fixed ordinary bundle relation; callers cannot replace its semantic profile.
 pub(super) struct PublicTransferSegmentAir {
+    identity: &'static str,
     inner: CompactTransferAir,
 }
 
 impl FixedAir for PublicTransferSegmentAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
-            identity: IDENTITY,
+            identity: self.identity,
             ..self.inner.schema()
         }
     }
@@ -236,8 +240,8 @@ impl FixedAir for PublicTransferSegmentAir {
 ///
 /// This helper performs only resource checks; it selects no semantic profile and
 /// cannot construct an AIR, trusted context or successful verification result.
-pub(super) fn preflight_prepared(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn preflight_prepared<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     root_count: usize,
     limits: BatchContextLimits,
 ) -> Result<usize> {

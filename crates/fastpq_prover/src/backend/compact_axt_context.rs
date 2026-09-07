@@ -20,6 +20,7 @@
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 use norito::{NoritoSerialize, codec::Encode};
 
+use super::compact_value_domain::CompactTransferValue;
 use super::{compact_protocol::FixedAir, compact_public_transfer::PublicTransferAir};
 use crate::{
     Error, Result, VerifyLimits,
@@ -48,8 +49,8 @@ struct BoundContext {
 /// source root or spend. The prepared table must select AXT transfer semantics
 /// and contain exactly one delta; its original public claims and all seven
 /// PublicIO fields are bound by `PublicTransferAir` before this wrapper is built.
-pub(super) fn encode_context(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn encode_context<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     binding: &AxtFastpqBinding,
     metadata: AxtPublicMetadataBytes<'_>,
@@ -79,8 +80,8 @@ pub(super) fn encode_context(
 ///
 /// This is only the shared resource preflight. Each typed constructor still
 /// validates the complete prepared public facts and exact outer mirrors itself.
-pub(super) fn preflight_context(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn preflight_context<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     binding: &AxtFastpqBinding,
     metadata: AxtPublicMetadataBytes<'_>,
     remote_spend_claims: Option<&[AxtRemoteSpendClaimV1]>,

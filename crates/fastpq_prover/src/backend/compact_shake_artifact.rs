@@ -11,9 +11,9 @@ use iroha_data_model::fastpq::{
     FastpqArtifactIdentityDescriptionV1, FastpqAxtCompactArtifactV1, FastpqCommitmentDescriptionV1,
     FastpqCompactArtifactDecodeError, FastpqCompactArtifactDecodeLimits, FastpqCompactProfileIdV1,
     FastpqOrderedCompactAirCommitmentsV1, FastpqOrdinaryCompactArtifactV1, FastpqProofKindV1,
-    FastpqPublicTransferStatementV1,
+    FastpqPublicTransferStatementV1, FastpqQuantityUnits,
 };
-use norito::core::DecodeLimits;
+use norito::{NoritoSerialize, codec::Encode, core::DecodeLimits};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
@@ -25,6 +25,7 @@ use crate::{
         },
         compact_public_api::AxtVerificationContext,
         compact_shake_candidate,
+        compact_value_domain::CompactTransferValue,
     },
     gadgets::public_transfer_statement::PublicTransferLimits,
     proof::PublicIO,
@@ -101,7 +102,7 @@ fn statement_digest(
     Ok(Hash::new(&encoded).into())
 }
 
-fn finish_artifact(
+fn finish_artifact<V: CompactTransferValue>(
     kind: FastpqProofKindV1,
     statement_digest: [u8; 32],
     wrapper: &[u8],
@@ -116,7 +117,7 @@ fn finish_artifact(
         .map_err(|_| Error::Encode(norito::Error::LengthMismatch))?;
     let identity = FastpqArtifactIdentityDescriptionV1 {
         proof_kind: kind,
-        profile_id: diagnostic_profile_id(),
+        profile_id: profile_id_for::<V>(),
         public_statement_digest: statement_digest,
         artifact_digest: Hash::new(wrapper).into(),
         inner_bundle_digest: Hash::new(inner).into(),
@@ -133,7 +134,45 @@ fn finish_artifact(
 
 /// Offline candidate identity only; the production qualification registry stays empty.
 pub(in crate::backend) fn diagnostic_profile_id() -> FastpqCompactProfileIdV1 {
-    FastpqCompactProfileIdV1(Sha256::digest(compact_shake_candidate::IDENTITY).into())
+    profile_id_for::<u64>()
+}
+
+/// Fixed nominal description of the full-domain artifact's complete value relation.
+#[derive(NoritoSerialize)]
+#[norito(schema_name = "fastpq_prover::compact_candidate::QuantityArtifactProfileV1")]
+struct QuantityArtifactProfile {
+    version: u16,
+    protocol_identity: Vec<u8>,
+    quantity_value_schema: &'static str,
+    quantity_context_schema: &'static str,
+    value_hash_domain: Vec<u8>,
+    relation_identities: [&'static str; 4],
+}
+
+/// Full-domain offline identity only; it confers no production qualification.
+pub(in crate::backend) fn quantity_diagnostic_profile_id() -> FastpqCompactProfileIdV1 {
+    profile_id_for::<FastpqQuantityUnits>()
+}
+
+fn profile_id_for<V: CompactTransferValue>() -> FastpqCompactProfileIdV1 {
+    if !V::QUANTITY_CONTEXT {
+        return FastpqCompactProfileIdV1(Sha256::digest(compact_shake_candidate::IDENTITY).into());
+    }
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let description = QuantityArtifactProfile {
+        version: 1,
+        protocol_identity: compact_shake_candidate::IDENTITY.to_vec(),
+        quantity_value_schema: "fastpq_prover::public_transfer::QuantityValueV1",
+        quantity_context_schema: "fastpq_prover::compact_prototype::QuantityTransferContextV1",
+        value_hash_domain: b"fastpq:quantity:v1:smt:value|".to_vec(),
+        relation_identities: [
+            V::TRANSFER_IDENTITY,
+            V::AXT_IDENTITY,
+            V::BATCH_IDENTITY,
+            V::AXT_BATCH_IDENTITY,
+        ],
+    };
+    FastpqCompactProfileIdV1(Sha256::digest(description.encode()).into())
 }
 
 /// Verify ordinary model bytes under the fixed candidate and caller-expected inputs.
@@ -143,13 +182,31 @@ pub(in crate::backend) fn verify_ordinary_artifact(
     expected: &PublicIO,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
+    verify_ordinary_artifact_for::<u64>(bytes, expected, limits)
+}
+
+/// Verify a complete ordinary QuantityValueV1 artifact under its fixed profile.
+/// The caller supplies expected inputs; advertised metadata cannot select a format.
+pub(in crate::backend) fn verify_quantity_ordinary_artifact(
+    bytes: &[u8],
+    expected: &PublicIO,
+    limits: ArtifactLimits,
+) -> Result<VerifiedArtifact, ArtifactError> {
+    verify_ordinary_artifact_for::<FastpqQuantityUnits>(bytes, expected, limits)
+}
+
+fn verify_ordinary_artifact_for<V: CompactTransferValue>(
+    bytes: &[u8],
+    expected: &PublicIO,
+    limits: ArtifactLimits,
+) -> Result<VerifiedArtifact, ArtifactError> {
     norito::core::with_decode_limits_scope(limits.total_decode, || {
         let artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
             bytes,
-            diagnostic_profile_id(),
+            profile_id_for::<V>(),
             limits.transport,
         )?;
-        let (bundle, digest) = super::with_prepared_statement(
+        let (bundle, digest) = super::with_prepared_statement_as::<V, _>(
             &artifact.statement,
             expected,
             ProofSemantics::StateTransition,
@@ -169,7 +226,7 @@ pub(in crate::backend) fn verify_ordinary_artifact(
                 Ok((bundle, digest))
             },
         )?;
-        finish_artifact(
+        finish_artifact::<V>(
             FastpqProofKindV1::OrdinaryCompact,
             digest,
             bytes,
@@ -188,14 +245,34 @@ pub(in crate::backend) fn verify_axt_artifact(
     context: AxtVerificationContext<'_>,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
+    verify_axt_artifact_for::<u64>(bytes, expected, context, limits)
+}
+
+/// Verify a complete AXT QuantityValueV1 artifact with independent caller context.
+/// All binding, mirrors and remote preimages remain mandatory under this route.
+pub(in crate::backend) fn verify_quantity_axt_artifact(
+    bytes: &[u8],
+    expected: &PublicIO,
+    context: AxtVerificationContext<'_>,
+    limits: ArtifactLimits,
+) -> Result<VerifiedArtifact, ArtifactError> {
+    verify_axt_artifact_for::<FastpqQuantityUnits>(bytes, expected, context, limits)
+}
+
+fn verify_axt_artifact_for<V: CompactTransferValue>(
+    bytes: &[u8],
+    expected: &PublicIO,
+    context: AxtVerificationContext<'_>,
+    limits: ArtifactLimits,
+) -> Result<VerifiedArtifact, ArtifactError> {
     norito::core::with_decode_limits_scope(limits.total_decode, || {
         let artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
             bytes,
-            diagnostic_profile_id(),
+            profile_id_for::<V>(),
             limits.transport,
         )?;
         validate_axt_advertisement(&artifact, context)?;
-        let (bundle, digest) = super::with_prepared_statement(
+        let (bundle, digest) = super::with_prepared_statement_as::<V, _>(
             &artifact.statement,
             expected,
             ProofSemantics::AxtTransferClaim,
@@ -216,7 +293,7 @@ pub(in crate::backend) fn verify_axt_artifact(
                 Ok((bundle, digest))
             },
         )?;
-        finish_artifact(
+        finish_artifact::<V>(
             FastpqProofKindV1::AxtCompact,
             digest,
             bytes,
@@ -298,3 +375,7 @@ fn validate_axt_advertisement(
 #[cfg(test)]
 #[path = "compact_shake_artifact_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compact_quantity_artifact_tests.rs"]
+mod quantity_tests;

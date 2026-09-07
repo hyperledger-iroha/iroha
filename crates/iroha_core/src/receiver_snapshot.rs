@@ -14,6 +14,333 @@ use iroha_data_model::validation_fee::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Caller-supplied bounds for constructing one local FASTPQ source opening or archive.
+#[derive(Debug, Clone, Copy)]
+pub struct FastpqSourceOpeningBuildLimits {
+    /// Maximum ordinary writes inspected before cloning any witness key or value.
+    pub max_ordinary_writes: usize,
+    /// Maximum aggregate raw key/value bytes across those ordinary writes.
+    pub max_ordinary_write_bytes: usize,
+    /// Maximum complete executed-entry count.
+    pub max_executed_entries: u32,
+    /// Maximum recorded transfer-operation statements across all entries.
+    pub max_statements: u32,
+    /// Manifest decoding budget, preserving any stricter enclosing Norito scope.
+    pub manifest_decode: norito::DecodeLimits,
+}
+
+/// Complete local source archive with one shared ordinary-write path.
+///
+/// The leaves remain borrowed from the caller's exact archive. Neither this local
+/// result nor its computed root authenticates execution ownership or finality.
+pub(crate) struct FastpqOrdinarySourceArchive<'leaves> {
+    /// Canonical manifest matching every supplied leaf and the fixed witness write.
+    pub(crate) manifest: iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1,
+    /// Complete validated leaf sequence, without an additional owned copy.
+    pub(crate) leaves: &'leaves [iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1],
+    /// Exactly 256 siblings for the one fixed D7 ordinary-write key.
+    pub(crate) manifest_siblings: Vec<Hash>,
+    /// Computed ordinary-write root, requiring independent finality authentication.
+    pub(crate) ordinary_root: Hash,
+}
+
+/// Bounded manifest and complete-leaf validation before ordinary tree allocation.
+///
+/// Separating preparation from [`Self::build`] lets a leaf-opening caller reject
+/// absent positions before cloning ordinary writes, preserving its existing order.
+pub(crate) struct PreparedFastpqOrdinarySourceArchive<'witness, 'leaves> {
+    witness: &'witness ExecWitness,
+    target: &'witness iroha_data_model::block::consensus::ExecKv,
+    manifest: iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1,
+    leaves: &'leaves [iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1],
+    limits: FastpqSourceOpeningBuildLimits,
+}
+
+/// Validate the exact fixed manifest and complete borrowed source leaf archive.
+///
+/// The caller must supply the independently obtained complete execution-entry inventory,
+/// including entries without transfers. It is never reconstructed from the leaves or the
+/// advertised manifest count. Preparation binds every entry and every leaf to that inventory.
+/// This accepts a canonical empty manifest without inventing a leaf opening.
+/// Counts and raw ordinary-write bytes are bounded before cloning any key/value.
+/// The returned preparation does not establish execution ownership or finality.
+///
+/// # Errors
+/// Rejects exceeded bounds, malformed or duplicate reserved keys, noncanonical
+/// manifests, and inconsistent source context, complete leaf order or counts.
+pub(crate) fn prepare_fastpq_ordinary_source_archive_v1<'witness, 'leaves>(
+    witness: &'witness ExecWitness,
+    source: iroha_data_model::fastpq::FastpqSourceStatementContextV1,
+    expected_entries: &[iroha_data_model::fastpq::FastpqSourceExecutionEntryV1],
+    leaves: &'leaves [iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1],
+    limits: FastpqSourceOpeningBuildLimits,
+) -> Result<PreparedFastpqOrdinarySourceArchive<'witness, 'leaves>, String> {
+    use iroha_data_model::{
+        execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
+        fastpq::{
+            FASTPQ_SOURCE_STATEMENT_MANIFEST_MAX_BYTES_V1, FastpqOrdinarySourceStatementManifestV1,
+            build_fastpq_ordinary_source_statement_manifest_v1,
+        },
+    };
+    if !u32::try_from(expected_entries.len())
+        .is_ok_and(|count| count <= limits.max_executed_entries)
+        || witness.writes.len() > limits.max_ordinary_writes
+        || !u32::try_from(leaves.len()).is_ok_and(|count| count <= limits.max_statements)
+    {
+        return Err("FASTPQ source opening exceeds its write or entry count cap".to_owned());
+    }
+    let mut total_bytes = 0_usize;
+    let mut manifest_write = None;
+    for write in &witness.writes {
+        total_bytes = total_bytes
+            .checked_add(write.key.len())
+            .and_then(|total| total.checked_add(write.value.len()))
+            .filter(|total| *total <= limits.max_ordinary_write_bytes)
+            .ok_or_else(|| {
+                "FASTPQ source opening exceeds its ordinary-write byte cap".to_owned()
+            })?;
+        if write.key.first() == FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1.first() {
+            if write.key != FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1
+                || manifest_write.is_some()
+            {
+                return Err(
+                    "FASTPQ source witness contains a malformed or duplicate reserved key"
+                        .to_owned(),
+                );
+            }
+            manifest_write = Some(write);
+        }
+    }
+    let target =
+        manifest_write.ok_or_else(|| "FASTPQ source manifest write is absent".to_owned())?;
+    if target.value.len() > FASTPQ_SOURCE_STATEMENT_MANIFEST_MAX_BYTES_V1 {
+        return Err("FASTPQ source manifest exceeds its canonical frame cap".to_owned());
+    }
+    let manifest: FastpqOrdinarySourceStatementManifestV1 =
+        norito::decode_canonical_with_limits(&target.value, limits.manifest_decode).map_err(
+            |error| format!("FASTPQ source manifest is not bounded canonical Norito: {error}"),
+        )?;
+    let rebuilt = build_fastpq_ordinary_source_statement_manifest_v1(
+        source,
+        expected_entries,
+        leaves,
+        limits.max_executed_entries,
+        limits.max_statements,
+    )
+    .ok_or_else(|| "FASTPQ source leaf archive has invalid context, order or count".to_owned())?;
+    if manifest != rebuilt {
+        return Err("FASTPQ source manifest differs from its complete leaf archive".to_owned());
+    }
+    Ok(PreparedFastpqOrdinarySourceArchive {
+        witness,
+        target,
+        manifest,
+        leaves,
+        limits,
+    })
+}
+
+impl<'leaves> PreparedFastpqOrdinarySourceArchive<'_, 'leaves> {
+    /// Construct the one shared ordinary-write path from the bounded witness.
+    ///
+    /// Other keys retain the ordinary tree's existing last-write-wins projection.
+    /// Empty source archives still prove the actual manifest write. The returned
+    /// leaves borrow only the original archive, so the witness can be released.
+    ///
+    /// # Errors
+    /// Rejects a sparse-tree construction failure or a path that does not
+    /// reconstruct the manifest under the computed ordinary-write root.
+    pub(crate) fn build(self) -> Result<FastpqOrdinarySourceArchive<'leaves>, String> {
+        use iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_manifest_write_v1;
+
+        let canonical = self
+            .witness
+            .writes
+            .iter()
+            .map(|write| (write.key.clone(), write.value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let ordinary = canonical
+            .into_iter()
+            .map(|(key, value)| KvPair::new(key, value))
+            .collect::<Vec<_>>();
+        let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+        let target = KvPair::new(self.target.key.clone(), self.target.value.clone());
+        let manifest_siblings = sparse_smt_siblings(&ordinary, &target)?;
+        if !verify_fastpq_ordinary_source_statement_manifest_write_v1(
+            &self.manifest,
+            self.manifest.source,
+            &manifest_siblings,
+            ordinary_root,
+            self.limits.max_executed_entries,
+            self.limits.max_statements,
+        ) {
+            return Err(
+                "constructed FASTPQ source opening does not reconstruct the ordinary-write root"
+                    .to_owned(),
+            );
+        }
+        Ok(FastpqOrdinarySourceArchive {
+            manifest: self.manifest,
+            leaves: self.leaves,
+            manifest_siblings,
+            ordinary_root,
+        })
+    }
+}
+
+/// Construct a bounded complete transport archive with one shared manifest path.
+///
+/// The existing preparation validates raw write/count/byte limits, the canonical
+/// D7 manifest and every supplied leaf before ordinary witness keys/values are
+/// copied. One shared archive build derives and checks its ordinary-write path;
+/// it is not repeated for individual leaves. The caller's already-owned leaf
+/// allocation is moved into the payload without a second copy, including when
+/// the leaf sequence is empty. The witness is only borrowed and is not retained.
+///
+/// The caller supplies the complete independently obtained execution-entry inventory,
+/// including entries with no transfer leaves. It is checked against the manifest's
+/// source-entry commitment and every leaf before the witness tree is allocated.
+/// The payload and returned computed ordinary-write root establish consistency
+/// with the supplied witness/source/entries only. They do not authenticate finality,
+/// validator-owned execution completeness, durable retention or spend authority.
+/// These construction limits do not select a production profile or bound encoded
+/// transport bytes; callers must separately bound canonical encoding/decoding.
+/// TODO: integrate the durable source owner and independently authenticated
+/// finality admission after the D7 policy and execution-accounting gates are met.
+///
+/// # Errors
+/// Rejects every preparation/build error unchanged, or a manifest path whose
+/// depth cannot be represented by the transport's exact 256-sibling array.
+pub fn fastpq_ordinary_source_statement_archive_v1(
+    witness: &ExecWitness,
+    source: iroha_data_model::fastpq::FastpqSourceStatementContextV1,
+    expected_entries: &[iroha_data_model::fastpq::FastpqSourceExecutionEntryV1],
+    leaves: Vec<iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1>,
+    limits: FastpqSourceOpeningBuildLimits,
+) -> Result<
+    (
+        iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1,
+        Hash,
+    ),
+    String,
+> {
+    use iroha_data_model::fastpq::{
+        FASTPQ_ORDINARY_SOURCE_STATEMENT_ARCHIVE_VERSION_V1, FastpqOrdinarySourceStatementArchiveV1,
+    };
+
+    let (manifest, manifest_siblings, ordinary_root) = {
+        let archive = prepare_fastpq_ordinary_source_archive_v1(
+            witness,
+            source,
+            expected_entries,
+            &leaves,
+            limits,
+        )?
+        .build()?;
+        (
+            archive.manifest,
+            archive.manifest_siblings,
+            archive.ordinary_root,
+        )
+    };
+    let manifest_siblings = manifest_siblings.try_into().map_err(|_| {
+        "FASTPQ source archive manifest path does not have exactly 256 siblings".to_owned()
+    })?;
+    Ok((
+        FastpqOrdinarySourceStatementArchiveV1 {
+            version: FASTPQ_ORDINARY_SOURCE_STATEMENT_ARCHIVE_VERSION_V1,
+            manifest,
+            leaves,
+            manifest_siblings,
+        },
+        ordinary_root,
+    ))
+}
+
+/// Construct one bounded opening from an exact local witness and complete leaf archive.
+///
+/// The reserved FASTPQ key family must contain exactly one canonical fixed-key
+/// manifest. Its source-entry commitment must match the caller's independently obtained
+/// complete inventory, including entries without transfers, and its root/count must match
+/// every supplied ordered leaf before an opening is returned. Other ordinary writes use
+/// the existing consensus last-write-wins projection and sparse-tree proof constructor.
+///
+/// Both the returned opening and computed root remain untrusted. This function
+/// neither authenticates the witness nor attests that its manifest was derived by
+/// validator execution. A consumer still needs independently authenticated finality.
+///
+/// # Errors
+/// Rejects exceeded bounds, malformed/duplicate reserved keys, noncanonical
+/// manifests, inconsistent source/leaf archives, absent positions and proof errors.
+pub fn fastpq_ordinary_source_statement_opening_v1(
+    witness: &ExecWitness,
+    source: iroha_data_model::fastpq::FastpqSourceStatementContextV1,
+    expected_entries: &[iroha_data_model::fastpq::FastpqSourceExecutionEntryV1],
+    leaves: &[iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1],
+    statement_index: u32,
+    limits: FastpqSourceOpeningBuildLimits,
+) -> Result<
+    (
+        iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1,
+        Hash,
+    ),
+    String,
+> {
+    use iroha_crypto::MerkleTree;
+    use iroha_data_model::fastpq::{
+        FastpqOrdinarySourceStatementOpeningV1, fastpq_ordinary_source_statement_leaf_hash_v1,
+        verify_fastpq_ordinary_source_statement_membership_v1,
+    };
+    let prepared = prepare_fastpq_ordinary_source_archive_v1(
+        witness,
+        source,
+        expected_entries,
+        leaves,
+        limits,
+    )?;
+    let leaf_index = usize::try_from(statement_index)
+        .map_err(|_| "FASTPQ source statement index is not representable".to_owned())?;
+    prepared
+        .leaves
+        .get(leaf_index)
+        .ok_or_else(|| "FASTPQ source statement index is absent".to_owned())?;
+    let hashes = leaves
+        .iter()
+        .map(|leaf| {
+            fastpq_ordinary_source_statement_leaf_hash_v1(leaf)
+                .ok_or_else(|| "FASTPQ source leaf exceeds its canonical encoding bound".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let tree: MerkleTree<_> = hashes.into_iter().collect();
+    let membership = tree
+        .get_proof(statement_index)
+        .ok_or_else(|| "FASTPQ source statement membership is absent".to_owned())?;
+    let archive = prepared.build()?;
+    let leaf = archive.leaves[leaf_index];
+    let opening = FastpqOrdinarySourceStatementOpeningV1 {
+        manifest: archive.manifest,
+        leaf,
+        membership,
+        manifest_siblings: archive.manifest_siblings,
+    };
+    // The common archive builder already verified the manifest's ordinary-write
+    // inclusion. Keep the per-leaf membership check without hashing that path twice.
+    if !verify_fastpq_ordinary_source_statement_membership_v1(
+        &opening.leaf,
+        &leaf,
+        &opening.manifest,
+        &opening.membership,
+        limits.max_executed_entries,
+        limits.max_statements,
+    ) {
+        return Err(
+            "constructed FASTPQ source opening does not reconstruct the ordinary-write root"
+                .to_owned(),
+        );
+    }
+    Ok((opening, archive.ordinary_root))
+}
+
 /// Construct every Kagemusha V1 reserve-receipt proof in one execution witness.
 ///
 /// The returned entries are sorted by operation id and are derived from the same
@@ -276,6 +603,14 @@ fn mask_tail_bits(bytes: &mut [u8], len_bits: u16) {
     }
 }
 #[cfg(test)]
+#[path = "receiver_snapshot/fastpq_source_archive_tests.rs"]
+mod fastpq_source_archive_tests;
+
+#[cfg(test)]
+#[path = "receiver_snapshot/fastpq_source_archive_bridge_tests.rs"]
+mod fastpq_source_archive_bridge_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use iroha_data_model::block::consensus::ExecKv;
@@ -466,7 +801,10 @@ mod tests {
                         .expect("record canonical receipt");
                 }
             }
-            state_block.capture_exec_witness();
+            state_block
+                .finalize_fastpq_source_inventory(&[], &[], &[])
+                .unwrap();
+            state_block.capture_exec_witness().unwrap();
             let witness = state_block
                 .take_exec_witness()
                 .expect("actual captured witness");

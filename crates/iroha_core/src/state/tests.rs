@@ -33052,7 +33052,8 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
     let_row! { asset_def_id = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "rose".parse().unwrap(), ) };
     let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
     crate::sumeragi::witness::record_write_asset(&asset_id, &Quantity::from(42_u32));
-    state_block.capture_exec_witness();
+    state_block.finalize_fastpq_source_inventory(&[], &[], &[]).unwrap();
+    state_block.capture_exec_witness().unwrap();
     let witness = state_block.take_exec_witness().expect("witness captured");
     assert_eq!(witness.writes.len(), 3);
     assert!(witness.writes.iter().any(|write| {
@@ -33111,7 +33112,7 @@ state_test! { result time_trigger_failure_populates_entrypoint_instructions
     }
     let time_event = state_block.create_time_event(&header);
     let_row! { action = { state_block .world .triggers() .time_triggers() .get(&trigger_id) .expect("time trigger registered") .clone() } };
-    let_row! { (entrypoint, result) = state_block.execute_time_trigger(&trigger_id, &action, &time_event, 0) };
+    let_row! { (entrypoint, _execution_hash, result) = state_block.execute_time_trigger(&trigger_id, &action, &time_event, 0) };
     assert!(result.is_err(), "expected trigger execution to fail");
     let expected_step = ExecutionStep(ConstVec::from(vec![failing_instruction]));
     assert_eq!(entrypoint.instructions, expected_step);
@@ -33162,7 +33163,7 @@ state_test! { result time_trigger_cannot_synthesize_governance_ballot
         .get(&trigger_id)
         .expect("time trigger registered")
         .clone();
-    let (_entrypoint, result) =
+    let (_entrypoint, _execution_hash, result) =
         state_block.execute_time_trigger(&trigger_id, &action, &time_event, 0);
     let error = result.expect_err("trigger-carried governance ballot must fail closed");
     assert!(
@@ -33175,7 +33176,7 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
-    let_row! { block1 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(1).unwrap()); h.creation_time_ms = 0; }) };
+    let_row! { block1 = result_bearing_time_trigger_block(&state, |h| { h.set_height(NonZeroU64::new(1).unwrap()); h.creation_time_ms = 0; }) };
     let mut state_block = state.block(block1.as_ref().header());
     let trigger_id: TriggerId = "self_reschedule".parse()?;
     {
@@ -33197,7 +33198,7 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
     let mut state_block = state.block(block2.as_ref().header());
     let time_event = state_block.create_time_event(&block2.as_ref().header());
     let_row! { original_action = state_block .world .triggers() .time_triggers() .get(&trigger_id) .expect("original trigger should be registered") .clone() };
-    let_row! { (_entrypoint, result) = state_block.execute_time_trigger(&trigger_id, &original_action, &time_event, 0) };
+    let_row! { (_entrypoint, _execution_hash, result) = state_block.execute_time_trigger(&trigger_id, &original_action, &time_event, 0) };
     assert!(
         result.is_ok(),
         "self-rescheduling trigger should execute successfully: {:?}",
@@ -33274,16 +33275,25 @@ state_test! { sync repeated_time_trigger_invocations_have_distinct_deterministic
 
     let identity_for = |block: &mut StateBlock<'_>, invocation_index| {
         let mut transaction = block.transaction();
-        transaction.seed_time_trigger_invocation_call_hash(
+        let returned = transaction.seed_time_trigger_invocation_call_hash(
             &trigger_id,
             &ALICE_ID,
             &event,
             invocation_index,
         );
-        transaction
+        let recorded = transaction
             .next_lifecycle_transition_seed()
             .expect("time-trigger execution identity")
-            .0
+            .0;
+        assert_eq!(returned, recorded);
+        assert_eq!(
+            transaction.seed_time_trigger_invocation_call_hash(
+                &trigger_id, &ALICE_ID, &event, invocation_index + 1,
+            ),
+            recorded,
+            "re-seeding an active execution must preserve its existing identity",
+        );
+        returned
     };
     let first = identity_for(&mut block, 0);
     let second = identity_for(&mut block, 1);

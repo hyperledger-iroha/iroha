@@ -75,6 +75,12 @@ mod compact_public_batch;
 #[path = "backend/compact_public_transfer.rs"]
 mod compact_public_transfer;
 #[cfg(test)]
+#[path = "backend/compact_quantity_diagnostic.rs"]
+mod compact_quantity_diagnostic;
+#[cfg(test)]
+#[path = "backend/compact_quantity_tests.rs"]
+mod compact_quantity_tests;
+#[cfg(test)]
 #[path = "backend/compact_shake_candidate.rs"]
 mod compact_shake_candidate;
 #[cfg(test)]
@@ -83,6 +89,9 @@ mod compact_smt_quotient;
 #[cfg(test)]
 #[path = "backend/compact_transfer_air.rs"]
 mod compact_transfer_air;
+#[cfg(test)]
+#[path = "backend/compact_value_domain.rs"]
+mod compact_value_domain;
 #[cfg(test)]
 #[path = "backend/extension_trace.rs"]
 mod extension_trace;

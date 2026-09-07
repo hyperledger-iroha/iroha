@@ -2,15 +2,18 @@
 
 mod balance_key;
 mod public_artifact;
+mod quantity_units;
+mod source_archive;
+mod source_statement;
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
 pub use balance_key::{FastpqBalanceKeyV1, transfer_balance_key};
 use iroha_crypto::Hash;
-use iroha_primitives::{
-    bigint::BigInt,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 pub use public_artifact::*;
+pub use quantity_units::*;
+pub use source_archive::*;
+pub use source_statement::*;
 use std::collections::{BTreeMap, BTreeSet};
 /// Metadata key storing Norito-encoded [`TransferTranscript`] collections for FASTPQ gadgets.
 pub const TRANSFER_TRANSCRIPTS_METADATA_KEY: &str = "transfer_transcripts";
@@ -34,7 +37,8 @@ pub const FASTPQ_TRANSITION_BATCH_SCHEMA_NAME: &str =
 )]
 #[norito_schema(name = "iroha_data_model::fastpq::TransferTranscript")]
 pub struct TransferTranscript {
-    /// Hash of the transaction entrypoint (`hash_as_entrypoint`) that emitted this transcript.
+    /// Execution-call or typed native protocol-purpose hash that emitted this transcript.
+    /// Sealed calls retain their inner identity; time invocations use distinct call hashes.
     pub batch_hash: Hash,
     /// Grouped transfer deltas covered by the transcript.
     pub deltas: Vec<TransferDeltaTranscript>,
@@ -203,17 +207,15 @@ fn trimmed_scale(value: &Quantity) -> u32 {
 /// Normalize an exact decimal into deterministic integer witness units for FASTPQ.
 ///
 /// The caller chooses the target decimal scale. Values are scaled up by powers of ten until they
-/// share that target scale, then converted into a non-negative `u64`.
+/// share that target scale, then converted into a non-negative `u64`. Target scales above the
+/// ledger maximum are rejected before any scale-dependent work.
 #[must_use]
 pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u64> {
-    let value = value.clone().trim_trailing_zeros();
-    if value.mantissa().is_negative() || value.scale() > target_scale {
+    if target_scale > iroha_primitives::numeric::MAX_DECIMAL_SCALE {
         return None;
     }
-    let scale_delta = target_scale - value.scale();
-    let factor = BigInt::pow10(scale_delta)?;
-    let scaled = value.mantissa().checked_mul(&factor).ok()?;
-    scaled.to_string().parse::<u64>().ok()
+    let quantity = Quantity::from_canonical_numeric(value.clone()).ok()?;
+    FastpqQuantityUnits::from_quantity(&quantity, target_scale)?.try_to_u64()
 }
 /// Canonical FASTPQ transition batch recorded in execution witnesses.
 #[derive(
@@ -388,7 +390,7 @@ pub struct TransferTranscriptBundle {
 mod tests {
     use super::*;
     use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId, name::Name};
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::{bigint::BigInt, numeric::Numeric};
     use norito::codec::{Decode, Encode};
     use std::str::FromStr;
     const SIGNATORY: &str =

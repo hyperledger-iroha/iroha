@@ -5,6 +5,31 @@ completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
 
+## Current optimizations integration
+
+Work is restricted to `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`.
+The scoped integration candidate remains under ignored
+`target/fastpq-optimizations-integration/port-candidate` during the coordinated
+source freeze. It has not been applied to the branch or compiled there. The
+retained implementation and validation records below identify their own source
+snapshots; they do not qualify this integration candidate.
+
+The port preserves the branch's ordered canonical transaction-wire commitment in
+`PublicIO.tx_set_hash`. It independently binds every ordered execution source,
+including entries without transfer statements, through the manifest's
+`source_entries_digest`. Missing or zero wire commitments reject before source
+digest finalization; no execution-identity-list fallback is allowed. Source archive
+validation receives the complete expected entry projection separately and retains
+its bounded leaf decoder. Artifact persistence preserves the current Kura lock
+order and checks pending canonical and reserved lifecycle/recovery capacity before
+publishing new bytes. These reconciliations have unrun regression tests.
+
+The imported reference completed 544 selected tests and two complete ordinary/AXT
+artifact cases on a different source snapshot. Those receipts establish reference
+behavior only. Current-branch compilation, exact test inventory, fresh complete
+proof runs and immutable source capture are required after integration. Production
+continues to use replay; the compact admission registry remains unqualified.
+
 ## Completion goals
 
 | Goal | Required evidence | Current state |

@@ -15,6 +15,7 @@ use iroha_data_model::{account::AccountId, asset::id::AssetDefinitionId};
 use iroha_primitives::numeric::Quantity;
 use norito::{NoritoSerialize, codec::Encode};
 
+use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
     compact_transfer_air::CompactTransferAir,
@@ -26,8 +27,6 @@ use crate::{
     },
     proof::PublicIO,
 };
-
-const IDENTITY: &str = "fastpq:prototype:public-transfer:v1:342cols:923slots:65536rows";
 
 #[derive(NoritoSerialize)]
 #[norito(schema_name = "fastpq_prover::compact_prototype::PublicDeltaV1")]
@@ -74,8 +73,18 @@ struct BoundContext {
     transcripts: Vec<BoundTranscript>,
 }
 
+/// Nominal full-domain envelope; its identity requires QuantityValueV1 rows.
+#[derive(NoritoSerialize)]
+#[norito(schema_name = "fastpq_prover::compact_prototype::QuantityTransferContextV1")]
+struct BoundQuantityContext {
+    version: u16,
+    quantity_value_format: u16,
+    public_transfer_context: BoundContext,
+}
+
 /// Complete public arithmetic/identity/occurrence binding plus the private SMT AIR.
 pub(super) struct PublicTransferAir {
+    identity: &'static str,
     inner: CompactTransferAir,
 }
 
@@ -86,7 +95,10 @@ impl PublicTransferAir {
     /// never copied from a proof. All seven fields must equal the prepared table's
     /// original inputs and independently computed ordering hash. No caller-supplied
     /// raw SMT ports or opaque context are accepted by this boundary.
-    pub(super) fn new(prepared: &PreparedPublicTransfers<'_>, expected: &PublicIO) -> Result<Self> {
+    pub(super) fn new<V: CompactTransferValue>(
+        prepared: &PreparedPublicTransfers<'_, V>,
+        expected: &PublicIO,
+    ) -> Result<Self> {
         if prepared.pairs().len() != 1 || prepared.transitions().len() != 2 {
             return Err(invariant(
                 "compact public transfer requires exactly one complete delta",
@@ -100,19 +112,21 @@ impl PublicTransferAir {
             ));
         };
         Ok(Self {
+            identity: V::TRANSFER_IDENTITY,
             inner: CompactTransferAir::new(statement, Some(&context))?,
         })
     }
 }
 
-/// Serialize the complete immutable public table with the original V1 envelope.
+/// Serialize the complete immutable public table in its type-selected envelope.
 ///
-/// This shared helper retains the existing one-delta schema and field ordering.
+/// Narrow tables retain the existing schema and field ordering. Full-domain tables
+/// require a distinct nominal envelope for QuantityValueV1; metadata cannot select it.
 /// Capacity and ordinary/AXT route selection remain the enclosing relation's
 /// responsibility; the fixed public bounds and all seven caller inputs are
 /// checked before cloning the original public fields.
-pub(super) fn encode_context(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn encode_context<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
 ) -> Result<Vec<u8>> {
     let limits = PublicTransferLimits::default();
@@ -172,19 +186,32 @@ pub(super) fn encode_context(
     // Count the complete fixed-layout envelope before allocating its encoded
     // bytes. The public-only clone above was bounded before construction.
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let bytes = norito::core::encoded_frame_len(&context)?;
-    check_limit(
-        "max_compact_statement_bytes",
-        bytes,
-        VerifyLimits::default().max_batch_bytes,
-    )?;
-    Ok(context.encode())
+    if V::QUANTITY_CONTEXT {
+        let context = BoundQuantityContext {
+            version: 1,
+            quantity_value_format: 1,
+            public_transfer_context: context,
+        };
+        check_limit(
+            "max_compact_statement_bytes",
+            norito::core::encoded_frame_len(&context)?,
+            VerifyLimits::default().max_batch_bytes,
+        )?;
+        Ok(context.encode())
+    } else {
+        check_limit(
+            "max_compact_statement_bytes",
+            norito::core::encoded_frame_len(&context)?,
+            VerifyLimits::default().max_batch_bytes,
+        )?;
+        Ok(context.encode())
+    }
 }
 
 impl FixedAir for PublicTransferAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
-            identity: IDENTITY,
+            identity: self.identity,
             ..self.inner.schema()
         }
     }

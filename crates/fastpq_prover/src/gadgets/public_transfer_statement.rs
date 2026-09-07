@@ -23,7 +23,9 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    fastpq::{TransferDeltaTranscript, TransferTranscript, normalized_numeric_to_u64},
+    fastpq::{
+        FastpqQuantityUnits, TransferDeltaTranscript, TransferTranscript, normalized_numeric_to_u64,
+    },
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon::PoseidonByteHasher;
@@ -36,6 +38,57 @@ use super::{
 use crate::{
     Error, OperationKind, ProofSemantics, PublicInputs, Result, StateTransition, VerifyLimits,
 };
+
+mod materialize;
+mod quantity;
+
+pub use materialize::{
+    DerivedTransferSmtWitnesses, QuantityTransferMaterialization, TransferSmtBuildLimits,
+    TransferSmtBuildWork, materialize_quantity_public_transfers,
+    quantity_rows_for_public_preparation,
+};
+
+pub use quantity::{
+    QUANTITY_VALUE_MAX_BYTES_V1, decode_quantity_units_v1, encode_quantity_units_v1,
+};
+
+#[cfg(test)]
+mod quantity_tests;
+
+// Only the two repository-owned value types implement this preparation policy.
+// Generic public tables preserve their value type, so a wide table cannot be
+// passed to the existing compact facade's narrow-table argument by accident.
+trait TransferValue: Copy + Eq {
+    type Key: Eq + std::hash::Hash;
+    fn row_key(self) -> Self::Key;
+    fn normalize(quantity: &Quantity, scale: u32) -> Option<Self>;
+    fn decode(bytes: &[u8]) -> Result<Self>;
+    fn add(self, rhs: Self) -> Option<Self>;
+    fn sub(self, rhs: Self) -> Option<Self>;
+    fn leaf(key_hash: &[u8; 32], value: Self) -> Result<[u8; 32]>;
+}
+
+impl TransferValue for u64 {
+    type Key = Self;
+    fn row_key(self) -> Self::Key {
+        self
+    }
+    fn normalize(quantity: &Quantity, scale: u32) -> Option<Self> {
+        normalized_numeric_to_u64(quantity.as_numeric(), scale)
+    }
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        decode_balance(bytes)
+    }
+    fn add(self, rhs: Self) -> Option<Self> {
+        self.checked_add(rhs)
+    }
+    fn sub(self, rhs: Self) -> Option<Self> {
+        self.checked_sub(rhs)
+    }
+    fn leaf(key_hash: &[u8; 32], value: Self) -> Result<[u8; 32]> {
+        Ok(public_leaf(key_hash, value))
+    }
+}
 
 const KEY_DOMAIN: &[u8] = b"fastpq:v1:smt:key|";
 const VALUE_DOMAIN: &[u8] = b"fastpq:v1:smt:value|";
@@ -97,7 +150,7 @@ pub struct PublicKeyAllocation {
 
 /// Normalized occurrence associated with one exact canonical execution row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PublicTransferRow {
+pub struct PublicTransferRow<V = u64> {
     /// Original transcript/delta/pair ordinal.
     pub occurrence: TransferRowOccurrence,
     /// Declared sender or receiver role, including zero-amount updates.
@@ -107,11 +160,11 @@ pub struct PublicTransferRow {
     /// Asset normalization scale selected from the original public claims.
     pub asset_scale: u32,
     /// Exact unsigned pre-balance.
-    pub before: u64,
+    pub before: V,
     /// Exact unsigned post-balance.
-    pub after: u64,
+    pub after: V,
     /// Exact declared unsigned amount, not inferred from equal balances.
-    pub amount: u64,
+    pub amount: V,
     /// Full public leaf hashes and allocated path for this update.
     pub update: PublicUpdate,
 }
@@ -147,19 +200,19 @@ pub struct PublicPreparationWork {
 /// Private fields prevent replacing a validated table without rerunning preparation.
 /// This type establishes internal consistency only, not external authentication.
 #[derive(Debug)]
-pub struct PreparedPublicTransfers<'a> {
+pub struct PreparedPublicTransfers<'a, V = u64> {
     claims: &'a [PublicTransferTranscript],
     transitions: &'a [StateTransition],
     public_inputs: PublicInputs,
     semantics: ProofSemantics,
-    rows: Vec<PublicTransferRow>,
+    rows: Vec<PublicTransferRow<V>>,
     pairs: Vec<PublicTransferPair>,
     keys: Vec<PublicKeyAllocation>,
     ordering_hash: Hash,
     work: PublicPreparationWork,
 }
 
-impl<'a> PreparedPublicTransfers<'a> {
+impl<'a, V> PreparedPublicTransfers<'a, V> {
     /// Original exact public typed quantities and transcript identities.
     #[must_use]
     pub const fn claims(&self) -> &'a [PublicTransferTranscript] {
@@ -182,7 +235,7 @@ impl<'a> PreparedPublicTransfers<'a> {
     }
     /// One occurrence binding per canonical execution row, in the same order.
     #[must_use]
-    pub fn rows(&self) -> &[PublicTransferRow] {
+    pub fn rows(&self) -> &[PublicTransferRow<V>] {
         &self.rows
     }
     /// Original chronological deltas, each containing debit then credit ports.
@@ -317,7 +370,6 @@ pub fn public_claims_from_transcripts(
 /// # Errors
 /// Returns an error for limits, noncanonical order, unsupported profile/operations,
 /// digest policy, normalization/arithmetic, incomplete row coverage or allocation.
-#[allow(clippy::too_many_lines)]
 pub fn prepare_public_transfers<'a>(
     transitions: &'a [StateTransition],
     claims: &'a [PublicTransferTranscript],
@@ -325,6 +377,39 @@ pub fn prepare_public_transfers<'a>(
     semantics: ProofSemantics,
     limits: PublicTransferLimits,
 ) -> Result<PreparedPublicTransfers<'a>> {
+    prepare_values::<u64>(transitions, claims, public_inputs, semantics, limits)
+}
+
+/// Prepare complete ledger quantities using canonical V1 Norito value frames.
+///
+/// The exact common asset scale and all normalized limbs are checked against the
+/// original quantities. Public key allocation, occurrence coverage, chronology,
+/// arithmetic, digest policy and byte limits are shared with narrow preparation.
+/// Value hashes use a distinct domain and include the complete nominal frame.
+/// No private paths or traces are read. The returned table's value type differs
+/// from the existing narrow compact facade and does not enable proof admission.
+///
+/// # Errors
+/// Rejects noncanonical frames, scale mismatches, invalid arithmetic, row/archive
+/// disagreement and the same explicit public-work bounds as narrow preparation.
+pub fn prepare_quantity_public_transfers<'a>(
+    transitions: &'a [StateTransition],
+    claims: &'a [PublicTransferTranscript],
+    public_inputs: PublicInputs,
+    semantics: ProofSemantics,
+    limits: PublicTransferLimits,
+) -> Result<PreparedPublicTransfers<'a, FastpqQuantityUnits>> {
+    prepare_values::<FastpqQuantityUnits>(transitions, claims, public_inputs, semantics, limits)
+}
+
+#[allow(clippy::too_many_lines)]
+fn prepare_values<'a, V: TransferValue>(
+    transitions: &'a [StateTransition],
+    claims: &'a [PublicTransferTranscript],
+    public_inputs: PublicInputs,
+    semantics: ProofSemantics,
+    limits: PublicTransferLimits,
+) -> Result<PreparedPublicTransfers<'a, V>> {
     check_limit(
         "max_public_transfer_rows",
         transitions.len(),
@@ -389,14 +474,14 @@ pub fn prepare_public_transfers<'a>(
         ));
     }
     let scales = asset_scales(claims);
-    let mut pending: HashMap<RowKey, VecDeque<PendingRow>> = HashMap::new();
-    let mut last_values: HashMap<Vec<u8>, u64> = HashMap::new();
+    let mut pending: HashMap<RowKey<V::Key>, VecDeque<PendingRow<V>>> = HashMap::new();
+    let mut last_values: HashMap<Vec<u8>, V> = HashMap::new();
     let mut ordinal = 0_u32;
     for (transcript_index, claim) in claims.iter().enumerate() {
         check_digest_policy(claim)?;
         for (delta_index, delta) in claim.deltas.iter().enumerate() {
             let scale = scales[&delta.asset_definition];
-            let values = normalized_values(delta, scale)?;
+            let values = normalized_values_for::<V>(delta, scale)?;
             let occurrence = TransferRowOccurrence {
                 transcript_ordinal: checked_u32(transcript_index)?,
                 delta_ordinal: checked_u32(delta_index)?,
@@ -418,7 +503,11 @@ pub fn prepare_public_transfers<'a>(
                 }
                 last_values.insert(key.clone(), after);
                 pending
-                    .entry(RowKey { key, before, after })
+                    .entry(RowKey {
+                        key,
+                        before: before.row_key(),
+                        after: after.row_key(),
+                    })
                     .or_default()
                     .push_back(PendingRow {
                         occurrence,
@@ -433,12 +522,12 @@ pub fn prepare_public_transfers<'a>(
     let mut keys: Vec<PublicKeyAllocation> = Vec::new();
     let mut ordered = Vec::with_capacity(transitions.len());
     for transition in transitions {
-        let before = decode_balance(&transition.pre_value)?;
-        let after = decode_balance(&transition.post_value)?;
+        let before = V::decode(&transition.pre_value)?;
+        let after = V::decode(&transition.post_value)?;
         let key = RowKey {
             key: transition.key.clone(),
-            before,
-            after,
+            before: before.row_key(),
+            after: after.row_key(),
         };
         let occurrence = pending
             .get_mut(&key)
@@ -486,8 +575,8 @@ pub fn prepare_public_transfers<'a>(
     for (index, (pending, key_index, before, after)) in ordered.into_iter().enumerate() {
         let key = &keys[key_index];
         let update = PublicUpdate {
-            old_leaf: digest_limbs(public_leaf(&key.key_hash, before)),
-            new_leaf: digest_limbs(public_leaf(&key.key_hash, after)),
+            old_leaf: digest_limbs(V::leaf(&key.key_hash, before)?),
+            new_leaf: digest_limbs(V::leaf(&key.key_hash, after)?),
             path: key.path,
         };
         rows.push(PublicTransferRow {
@@ -553,16 +642,16 @@ pub fn prepare_public_transfers<'a>(
 }
 
 #[derive(Hash, PartialEq, Eq)]
-struct RowKey {
+struct RowKey<V> {
     key: Vec<u8>,
-    before: u64,
-    after: u64,
+    before: V,
+    after: V,
 }
-struct PendingRow {
+struct PendingRow<V> {
     occurrence: TransferRowOccurrence,
     leg: usize,
     scale: u32,
-    amount: u64,
+    amount: V,
 }
 
 fn validate_profile(
@@ -629,26 +718,31 @@ fn asset_scales(claims: &[PublicTransferTranscript]) -> BTreeMap<AssetDefinition
     scales
 }
 
+#[cfg(test)]
 fn normalized_values(delta: &PublicTransferDelta, scale: u32) -> Result<[u64; 5]> {
-    let mut values = [0; 5];
-    for (index, (field, quantity)) in [
+    normalized_values_for::<u64>(delta, scale)
+}
+
+fn normalized_values_for<V: TransferValue>(
+    delta: &PublicTransferDelta,
+    scale: u32,
+) -> Result<[V; 5]> {
+    let [amount, from_before, from_after, to_before, to_after] = [
         ("amount", &delta.amount),
         ("from_balance_before", &delta.from_balance_before),
         ("from_balance_after", &delta.from_balance_after),
         ("to_balance_before", &delta.to_balance_before),
         ("to_balance_after", &delta.to_balance_after),
     ]
-    .into_iter()
-    .enumerate()
-    {
-        values[index] = normalized_numeric_to_u64(quantity.as_numeric(), scale)
-            .ok_or(Error::TransferNumericBounds { field })?;
-    }
+    .map(|(field, quantity)| {
+        V::normalize(quantity, scale).ok_or(Error::TransferNumericBounds { field })
+    });
+    let values = [amount?, from_before?, from_after?, to_before?, to_after?];
     let [amount, from_before, from_after, to_before, to_after] = values;
-    if from_before.checked_sub(amount) != Some(from_after) {
+    if from_before.sub(amount) != Some(from_after) {
         return Err(invariant("public sender arithmetic mismatch or underflow"));
     }
-    if to_before.checked_add(amount) != Some(to_after) {
+    if to_before.add(amount) != Some(to_after) {
         return Err(invariant("public receiver arithmetic mismatch or overflow"));
     }
     if delta.from_account == delta.to_account

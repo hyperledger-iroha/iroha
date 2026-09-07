@@ -15,9 +15,9 @@ use sha2::{Digest as _, Sha256};
 pub const KAGEMUSHA_HALO2_K_V1: u32 = 16;
 /// Exact serialized transparent IPA parameters for either Pasta parity.
 pub const KAGEMUSHA_PARAMS_BYTES_V1: u64 = 4_194_372;
-/// Maximum processed state proving-key bytes for either parity.
+/// Maximum compact-v1 state proving-key bytes for either parity.
 pub const KAGEMUSHA_STATE_PROVING_KEY_MAX_BYTES_V1: u64 = 48_234_934;
-/// Maximum processed helper proving-key bytes for either parity.
+/// Maximum compact-v1 helper proving-key bytes for either parity.
 pub const KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 /// Maximum processed verifying-key bytes for one role and parity.
 pub const KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1: u64 = 64 * 1024;

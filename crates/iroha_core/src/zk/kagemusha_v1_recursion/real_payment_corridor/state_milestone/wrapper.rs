@@ -216,13 +216,15 @@ fn diagnostic_wrapper_keys(
             .expect("decode exact generated wrapper VK");
             assert_eq!(usize::try_from(vk_cursor.position()).unwrap(), $vk.len());
             let mut pk_cursor = Cursor::new($pk.as_ref());
-            let proving_key = ProvingKey::<$curve>::read::<_, $circuit>(
+            let proving_key = ProvingKey::<$curve>::read_compact_v1_checked::<_, $circuit>(
                 &mut pk_cursor,
-                SerdeFormat::Processed,
+                KAGEMUSHA_RECURSION_IPA_K_V1,
+                u64::try_from($pk.len()).expect("generated PK length fits u64"),
                 $layout.clone(),
             )
             .expect("decode exact generated wrapper PK");
             assert_eq!(usize::try_from(pk_cursor.position()).unwrap(), $pk.len());
+            assert_generated_compact_proving_key_bytes_v1(&proving_key, $pk.as_ref());
             assert_eq!(
                 proving_key
                     .get_vk()

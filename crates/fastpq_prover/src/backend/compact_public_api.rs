@@ -17,6 +17,7 @@
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 
+use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_axt_air::AxtTransferAir,
     compact_protocol::{
@@ -140,8 +141,8 @@ impl VerifiedPublicTransfer {
 /// A prepared AXT or opaque profile is rejected even when its transfer rows
 /// otherwise have the same shape. AXT context cannot be omitted via this route.
 /// `limits` is an explicit test policy and never production qualification.
-pub(super) fn verify_transfer(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_transfer<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     proof_bytes: &[u8],
     limits: VerifyLimits,
@@ -155,8 +156,8 @@ pub(super) fn verify_transfer(
     )
 }
 
-fn verify_transfer_with(
-    prepared: &PreparedPublicTransfers<'_>,
+fn verify_transfer_with<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     proof_bytes: &[u8],
     limits: VerifyLimits,
@@ -177,8 +178,8 @@ fn verify_transfer_with(
 /// The shared AXT constructor performs all canonical binding, public-fact and
 /// mirror checks. The returned result cannot authorize handles or source roots;
 /// the surrounding caller retains those obligations and post-proof ABI checks.
-pub(super) fn verify_axt_transfer(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     proof_bytes: &[u8],
@@ -194,8 +195,8 @@ pub(super) fn verify_axt_transfer(
     )
 }
 
-fn verify_axt_transfer_with(
-    prepared: &PreparedPublicTransfers<'_>,
+fn verify_axt_transfer_with<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     proof_bytes: &[u8],
@@ -221,8 +222,8 @@ fn verify_axt_transfer_with(
 
 /// Verify candidate ordinary bytes under exact expected public inputs and caller limits.
 /// The prepared semantics cannot select AXT or omit its context through this path.
-pub(super) fn verify_shake_transfer(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_shake_transfer<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     proof_bytes: &[u8],
     limits: VerifyLimits,
@@ -241,8 +242,8 @@ pub(super) fn verify_shake_transfer(
 
 /// Verify candidate AXT bytes with every original binding, mirror and remote preimage.
 /// Successful mathematical verification grants no source-state authority or finality.
-pub(super) fn verify_shake_axt_transfer(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_shake_axt_transfer<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     proof_bytes: &[u8],
@@ -261,8 +262,8 @@ pub(super) fn verify_shake_axt_transfer(
     )
 }
 
-fn preflight_inputs(
-    prepared: &PreparedPublicTransfers<'_>,
+fn preflight_inputs<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     bytes: &[u8],
     limits: VerifyLimits,
 ) -> Result<()> {

@@ -885,6 +885,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::new(),
+                source_inventory: None,
             },
         };
         assert!(try_submit(job));
@@ -1155,6 +1156,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces,
+                source_inventory: None,
             },
         };
         let batches = batches_for_job(&job).expect("context builds batches");
@@ -1194,6 +1196,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
+                source_inventory: None,
             },
         };
 
@@ -1511,6 +1514,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some([0; 32]),
                 entry_dataspaces: BTreeMap::new(),
+                source_inventory: None,
             },
         };
         let kura = Kura::blank_kura_for_testing();

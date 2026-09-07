@@ -13,6 +13,7 @@ use fastpq_isi::FASTPQ_FINAL_V1;
 use iroha_data_model::privacy::GoldilocksDigest384V1;
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
 
+use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_axt_batch::AxtTransferBatch,
     compact_protocol::shared_openings::SharedVerificationWork,
@@ -159,8 +160,8 @@ impl VerifiedBundle {
 }
 
 /// Verify the complete ordered ordinary bundle using only caller public facts.
-pub(super) fn verify_transfer_bundle(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_transfer_bundle<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     bytes: &[u8],
     limits: BundleLimits,
@@ -168,8 +169,8 @@ pub(super) fn verify_transfer_bundle(
     verify_transfer_bundle_with(prepared, expected, bytes, limits, SharedVerifier::Prototype)
 }
 
-fn verify_transfer_bundle_with(
-    prepared: &PreparedPublicTransfers<'_>,
+fn verify_transfer_bundle_with<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     bytes: &[u8],
     limits: BundleLimits,
@@ -251,8 +252,8 @@ fn verify_transfer_bundle_with(
 /// The outer carrier never supplies execution authority, AXT binding/mirrors or
 /// source endpoints. Every segment statement binds the original whole AXT facts
 /// and remote occurrence list; a successful prefix is never returned.
-pub(super) fn verify_axt_transfer_bundle(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_axt_transfer_bundle<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     bytes: &[u8],
@@ -268,8 +269,8 @@ pub(super) fn verify_axt_transfer_bundle(
     )
 }
 
-fn verify_axt_transfer_bundle_with(
-    prepared: &PreparedPublicTransfers<'_>,
+fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     bytes: &[u8],
@@ -350,8 +351,8 @@ fn verify_axt_transfer_bundle_with(
 
 /// Verify an ordered candidate ordinary bundle with separate child and cumulative
 /// decode charges. Every child must pass before returning a verified result.
-pub(super) fn verify_shake_transfer_bundle(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_shake_transfer_bundle<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     bytes: &[u8],
     limits: BundleLimits,
@@ -370,8 +371,8 @@ pub(super) fn verify_shake_transfer_bundle(
 
 /// Verify an ordered candidate AXT bundle with complete caller AXT context.
 /// Neither carrier nor successful proof prefixes grant authority or finality.
-pub(super) fn verify_shake_axt_transfer_bundle(
-    prepared: &PreparedPublicTransfers<'_>,
+pub(super) fn verify_shake_axt_transfer_bundle<V: CompactTransferValue>(
+    prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     bytes: &[u8],

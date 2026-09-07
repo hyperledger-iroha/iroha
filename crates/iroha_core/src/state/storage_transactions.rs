@@ -242,6 +242,8 @@ mod block {
         AutoscaleLaneLifecycle,
         /// Certified merge admission changed before the block could commit
         MergeAdmission,
+        /// Finalized FASTPQ source ownership is invalid at block commit
+        FastpqSourceInventory,
         /// Permanent AXT handle counter could not finalize its block transition
         AxtCounterRatchet,
         /// Live asset-definition incarnations are inconsistent with the registry

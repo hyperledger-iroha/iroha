@@ -2,6 +2,7 @@
 //! logic.  [`Kura`] is the main entity which should be used to store
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
+mod fastpq_artifact_store;
 mod kagemusha_finality_decode;
 mod lane_geometry;
 use crate::lane_consensus::{
@@ -74,6 +75,9 @@ use crate::{
     },
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+pub use fastpq_artifact_store::{
+    FastpqArtifactStorageLimits, FastpqDurableArtifactReceipt, FastpqStoredArtifactReference,
+};
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
@@ -18428,6 +18432,9 @@ impl Kura {
         )?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
             &self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR),
+        )?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(fastpq_artifact_store::DIRECTORY),
         )?);
         for journal_name in [
             crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,

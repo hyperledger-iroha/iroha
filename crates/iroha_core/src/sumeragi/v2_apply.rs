@@ -5535,10 +5535,34 @@ mod fastpq_submission_tests {
         let tx_set_hash = [0x55; 32];
         let entry_hash = Hash::prehashed([0x66; Hash::LENGTH]);
         let entry_dsid = [0x77; 16];
+        let state = crate::state::State::new(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut state_block = state.block(BlockHeader::new(
+            std::num::NonZeroU64::new(height).unwrap(),
+            None,
+            None,
+            None,
+            23,
+            view,
+        ));
+        state_block
+            .finalize_fastpq_source_inventory(&[], &[], &[])
+            .unwrap();
+        let inventory = Arc::new(
+            state_block
+                .fastpq_source_inventory()
+                .unwrap()
+                .unwrap()
+                .clone(),
+        );
         let context = FastpqWitnessContext {
             public_inputs: Some(public_inputs),
             tx_set_hash: Some(tx_set_hash),
             entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
+            source_inventory: Some(Arc::clone(&inventory)),
         };
         let captured = RefCell::new(None);
 
@@ -5562,6 +5586,10 @@ mod fastpq_submission_tests {
         assert_eq!(actual_public_inputs.new_root, public_inputs.new_root);
         assert_eq!(actual_public_inputs.perm_root, public_inputs.perm_root);
         assert_eq!(job.context.tx_set_hash, Some(tx_set_hash));
+        assert!(Arc::ptr_eq(
+            job.context.source_inventory.as_ref().unwrap(),
+            &inventory
+        ));
         assert_eq!(
             job.context.entry_dataspaces.get(&entry_hash),
             Some(&entry_dsid)

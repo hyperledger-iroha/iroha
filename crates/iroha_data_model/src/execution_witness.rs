@@ -35,6 +35,8 @@ pub enum ExecutionWitnessKeyTagV1 {
     ParliamentTimedOvnCasting = 0xD5,
     /// Kagemusha reserve receipt by its 32-byte operation identifier.
     KagemushaReserveReceipt = 0xD6,
+    /// Fixed ordinary FASTPQ source-statement manifest, derived by validator execution.
+    FastpqOrdinarySourceStatements = 0xD7,
 }
 
 const fn tagged_fixed_key<const N: usize>(
@@ -55,6 +57,15 @@ pub const VALIDATION_FEE_POLICY_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
 pub const PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
     ExecutionWitnessKeyTagV1::ParliamentTimedOvnCasting,
     *b"\0iroha:parliament:timed-ovn:casting-contexts:v1",
+);
+
+/// Protected fixed key for the canonical ordinary FASTPQ source-statement manifest.
+///
+/// Reserving this namespace does not enable compact proof admission. Only the
+/// validator-derived complete projection may be inserted under this key.
+pub const FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
+    ExecutionWitnessKeyTagV1::FastpqOrdinarySourceStatements,
+    *b"\0iroha:fastpq:ordinary-source-statements:v1",
 );
 
 /// Reserved ordinary-write key tag for a finalized Kagemusha operation.
@@ -99,6 +110,7 @@ mod tests {
             ValidationFeePolicy,
             ParliamentTimedOvnCasting,
             KagemushaReserveReceipt,
+            FastpqOrdinarySourceStatements,
         ];
         let distinct = tags
             .into_iter()
@@ -113,6 +125,10 @@ mod tests {
             PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
             b"\xd5iroha:parliament:timed-ovn:casting-contexts:v1"
         );
+        assert_eq!(
+            FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
+            b"\xd7iroha:fastpq:ordinary-source-statements:v1"
+        );
         for operation_id in [[0; 32], [0xD4; 32], [0xD5; 32], [0xFF; 32]] {
             let key = kagemusha_reserve_receipt_witness_key_v1(operation_id);
             assert_eq!(key[0], 0xD6);
@@ -120,6 +136,7 @@ mod tests {
             for fixed in [
                 VALIDATION_FEE_POLICY_WITNESS_KEY_V1,
                 PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
+                FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
             ] {
                 assert_ne!(key[0], fixed[0], "prefix selectors must be disjoint");
             }

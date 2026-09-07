@@ -3298,6 +3298,7 @@ mod tests {
         for wrong_tag in [
             crate::execution_witness::VALIDATION_FEE_POLICY_WITNESS_KEY_V1[0],
             crate::execution_witness::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1[0],
+            crate::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1[0],
         ] {
             let mut wrong_key = witness.clone();
             wrong_key.key[0] = wrong_tag;

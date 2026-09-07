@@ -489,6 +489,30 @@ pub mod isi {
             .deposit_numeric_asset(&source_id, &intervening_credit)?;
         plan.apply(state_transaction).map(|_| ())
     }
+    /// Exercise the consumed movement boundary after a controlled prepare/apply interleave.
+    #[cfg(test)]
+    pub(super) fn apply_prepared_numeric_movement_for_test(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+        before_apply: impl FnOnce(&mut StateTransaction<'_, '_>),
+        record_observability: bool,
+    ) -> Result<(), Error> {
+        let movement = PreparedNumericAssetMovement::prepare(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::SocialSend(vec![0x71]),
+            ),
+        )?;
+        before_apply(state_transaction);
+        movement.apply_with_observability(state_transaction, record_observability)
+    }
     /// Resolve the typed social-send transcript identity through the private authorization type.
     #[cfg(test)]
     pub(super) fn resolve_social_send_movement_identity_for_test(
@@ -2331,14 +2355,19 @@ pub mod isi {
             let transcript_identity = self
                 .authorization
                 .resolve_transcript_identity(state_transaction, &bindings)?;
-            let applied = self.plan.apply(state_transaction)?;
-            if record_observability {
-                state_transaction.record_transfer_transcripts_with_batch_hash(
+            let applied = if record_observability {
+                // The precheck owns the exact full-quantity delta. Finish transcript and
+                // source-context preparation before the main movement writes balances;
+                // stage that same occurrence only when the existing plan succeeds.
+                state_transaction.apply_with_prepared_transfer_transcripts(
                     &self.authorization.transcript_authority,
                     transcript_identity,
-                    vec![applied.delta],
-                );
-            }
+                    vec![self.plan.prechecked_delta.clone()],
+                    |state_transaction| self.plan.apply(state_transaction),
+                )?
+            } else {
+                self.plan.apply(state_transaction)?
+            };
             #[allow(clippy::float_arithmetic)]
             #[cfg(feature = "telemetry")]
             if record_observability {
@@ -4385,6 +4414,8 @@ pub mod isi {
         source_id: AssetId,
         destination_id: AssetId,
         amount: Quantity,
+        // Retain the applied value for exact prepared/applied parity assertions.
+        #[cfg(test)]
         delta: TransferDeltaTranscript,
     }
     impl PreparedNumericTransferPlan {
@@ -4601,6 +4632,7 @@ pub mod isi {
                 source_id: self.event_source_id,
                 destination_id: self.event_destination_id,
                 amount: self.amount,
+                #[cfg(test)]
                 delta: self.prechecked_delta,
             })
         }
@@ -4632,6 +4664,7 @@ pub mod isi {
                 source_id: self.event_source_id,
                 destination_id: self.event_destination_id,
                 amount: self.amount,
+                #[cfg(test)]
                 delta: self.prechecked_delta,
             })
         }
@@ -4915,29 +4948,59 @@ pub mod isi {
                     ));
                 }
             }
-            let mut applied = Vec::with_capacity(self.plans.len());
-            for plan in self.plans {
-                applied.push(plan.apply_after_batch_preflight(state_transaction)?);
-            }
-            for (account, _, _, after) in self.control_updates {
-                if let Some(record) = after {
-                    update_control_record(state_transaction, &account, record)?;
-                }
-            }
-            state_transaction.record_transfer_transcripts_with_batch_hash(
+            // Aggregation has replaced every delta with its exact ordered virtual balance
+            // transition. Prepare one whole occurrence before applying the first batch leg.
+            let deltas = self
+                .plans
+                .iter()
+                .map(|plan| plan.prechecked_delta.clone())
+                .collect();
+            state_transaction.apply_with_prepared_transfer_transcripts(
                 &self.authorization.transcript_authority,
                 transcript_identity,
-                applied
-                    .iter()
-                    .map(|movement| movement.delta.clone())
-                    .collect(),
-            );
-            Ok(applied)
+                deltas,
+                |state_transaction| {
+                    let mut applied = Vec::with_capacity(self.plans.len());
+                    for plan in self.plans {
+                        applied.push(plan.apply_after_batch_preflight(state_transaction)?);
+                    }
+                    for (account, _, _, after) in self.control_updates {
+                        if let Some(record) = after {
+                            update_control_record(state_transaction, &account, record)?;
+                        }
+                    }
+                    Ok(applied)
+                },
+            )
         }
     }
     struct PreparedNumericTransferPair {
         source: PreparedNumericTransferPlan,
         destination: PreparedNumericTransferPlan,
+    }
+    impl PreparedNumericTransferPair {
+        /// Apply the ordered native FX pair and stage one occurrence after both legs succeed.
+        fn apply_with_transcript(
+            self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            transcript_identity: Hash,
+        ) -> Result<(AppliedNumericTransfer, AppliedNumericTransfer), Error> {
+            let deltas = vec![
+                self.source.prechecked_delta.clone(),
+                self.destination.prechecked_delta.clone(),
+            ];
+            state_transaction.apply_with_prepared_transfer_transcripts(
+                authority,
+                transcript_identity,
+                deltas,
+                |state_transaction| {
+                    let source = self.source.apply(state_transaction)?;
+                    let destination = self.destination.apply(state_transaction)?;
+                    Ok((source, destination))
+                },
+            )
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn prepare_authorized_numeric_asset_pair(
@@ -5215,7 +5278,8 @@ pub mod isi {
         destination_amount: Quantity,
         policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
     ) -> Result<(), Error> {
-        state_transaction.require_transfer_transcript_identity("native FX transfer")?;
+        let transcript_identity =
+            state_transaction.require_transfer_transcript_identity("native FX transfer")?;
         let prepared = prepare_native_fx_numeric_asset_pair(
             state_transaction,
             submitting_authority,
@@ -5229,11 +5293,10 @@ pub mod isi {
         )?;
         // The policies require distinct asset definitions, so applying the first prechecked
         // delta cannot invalidate the second delta prepared from the same state snapshot.
-        let source = prepared.source.apply(state_transaction)?;
-        let destination = prepared.destination.apply(state_transaction)?;
-        state_transaction.record_transfer_transcripts(
+        let (source, destination) = prepared.apply_with_transcript(
+            state_transaction,
             submitting_authority,
-            vec![source.delta, destination.delta],
+            transcript_identity,
         )?;
         let source_amount = source.amount;
         let destination_amount = destination.amount;
@@ -6449,52 +6512,65 @@ pub mod isi {
             )
             .into());
         }
-        state_transaction
-            .world
-            .apply_prechecked_numeric_asset_transfer_delta_exact(
-                &prepared.source_id,
-                &prepared.destination_id,
-                &prepared.delta,
+        let transcript_identity = state_transaction
+            .require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
+        // Source proof verification already succeeded before this apply entry. Capture the
+        // exact release occurrence before its balance/liability/control writes, not before
+        // that earlier proof work.
+        let (source_id, destination_id, amount) = state_transaction
+            .apply_with_prepared_transfer_transcripts(
+                submitting_authority,
+                transcript_identity,
+                vec![prepared.delta.clone()],
+                |state_transaction| {
+                    state_transaction
+                        .world
+                        .apply_prechecked_numeric_asset_transfer_delta_exact(
+                            &prepared.source_id,
+                            &prepared.destination_id,
+                            &prepared.delta,
+                        )?;
+                    let PreparedSccpInboundNumericAssetRelease {
+                        route_key,
+                        source_id,
+                        destination_id,
+                        amount,
+                        liability_before: _,
+                        liability_after,
+                        expected_escrow_balance_after,
+                        control_update,
+                        delta: _,
+                    } = prepared;
+                    match liability_after {
+                        Some(record) => {
+                            state_transaction
+                                .world
+                                .sccp_route_liabilities
+                                .insert(route_key, record);
+                        }
+                        None => {
+                            state_transaction
+                                .world
+                                .sccp_route_liabilities
+                                .remove(route_key);
+                        }
+                    }
+                    let actual_after = sccp_escrow_balance(state_transaction, &source_id);
+                    if actual_after != expected_escrow_balance_after {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "SCCP route escrow is not fully backed after inbound release: balance={actual_after}, liability={expected_escrow_balance_after}"
+                            )
+                            .into(),
+                        )
+                        .into());
+                    }
+                    if let Some(record) = control_update {
+                        update_control_record(state_transaction, source_id.account(), record)?;
+                    }
+                    Ok((source_id, destination_id, amount))
+                },
             )?;
-        let PreparedSccpInboundNumericAssetRelease {
-            route_key,
-            source_id,
-            destination_id,
-            amount,
-            liability_before: _,
-            liability_after,
-            expected_escrow_balance_after,
-            control_update,
-            delta,
-        } = prepared;
-        match liability_after {
-            Some(record) => {
-                state_transaction
-                    .world
-                    .sccp_route_liabilities
-                    .insert(route_key, record);
-            }
-            None => {
-                state_transaction
-                    .world
-                    .sccp_route_liabilities
-                    .remove(route_key);
-            }
-        }
-        let actual_after = sccp_escrow_balance(state_transaction, &source_id);
-        if actual_after != expected_escrow_balance_after {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "SCCP route escrow is not fully backed after inbound release: balance={actual_after}, liability={expected_escrow_balance_after}"
-                )
-                .into(),
-            )
-            .into());
-        }
-        if let Some(record) = control_update {
-            update_control_record(state_transaction, source_id.account(), record)?;
-        }
-        state_transaction.record_transfer_transcript(submitting_authority, delta)?;
         emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
         Ok(())
     }
@@ -6522,8 +6598,14 @@ pub mod isi {
         if plan.control_update.is_some() {
             return Ok(false);
         }
-        let applied = plan.apply(state_transaction)?;
-        state_transaction.record_transfer_transcript(authority, applied.delta)?;
+        let transcript_identity = state_transaction
+            .require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
+        let applied = state_transaction.apply_with_prepared_transfer_transcripts(
+            authority,
+            transcript_identity,
+            vec![plan.prechecked_delta.clone()],
+            |state_transaction| plan.apply(state_transaction),
+        )?;
         #[allow(clippy::float_arithmetic)]
         #[cfg(feature = "telemetry")]
         state_transaction
@@ -6793,41 +6875,81 @@ pub mod isi {
                 }
                 return Ok(());
             }
-            state_transaction
+            let batch_hash = state_transaction
                 .require_transfer_transcript_identity("independent asset transfer batch")?;
-            let mut deltas = Vec::with_capacity(self.entries().len());
-            for (index, entry) in self.entries().iter().enumerate() {
-                let source_id =
-                    AssetId::new(entry.asset_definition().clone(), entry.from().clone());
-                let destination_id =
-                    AssetId::new(entry.asset_definition().clone(), entry.to().clone());
-                let amount = entry.amount().clone();
-                let plan = (|| -> Result<PreparedNumericTransferPlan, Error> {
-                    if self.mode() == &BatchMode::Independent {
-                        // Independent settlement captures participant and asset
-                        // admission as a leg-local outcome. Requiring both
-                        // accounts up front also ensures a failed leg cannot
-                        // stage implicit-account creation or its fee before the
-                        // failure is isolated.
-                        state_transaction.world.account(entry.from())?;
-                        state_transaction.world.account(entry.to())?;
+            state_transaction.apply_with_incremental_transfer_transcripts(
+                authority,
+                batch_hash,
+                self.entries().len(),
+                |state_transaction, prepare_delta| {
+                    for (index, entry) in self.entries().iter().enumerate() {
+                        let source_id =
+                            AssetId::new(entry.asset_definition().clone(), entry.from().clone());
+                        let destination_id =
+                            AssetId::new(entry.asset_definition().clone(), entry.to().clone());
+                        let amount = entry.amount().clone();
+                        let plan = (|| -> Result<PreparedNumericTransferPlan, Error> {
+                            if self.mode() == &BatchMode::Independent {
+                                // Independent settlement captures participant and asset
+                                // admission as a leg-local outcome. Requiring both
+                                // accounts up front also ensures a failed leg cannot
+                                // stage implicit-account creation or its fee before the
+                                // failure is isolated.
+                                state_transaction.world.account(entry.from())?;
+                                state_transaction.world.account(entry.to())?;
+                                state_transaction
+                                    .world
+                                    .asset_definition(entry.asset_definition())?;
+                            }
+                            PreparedNumericTransferPlan::prepare_user(
+                                state_transaction,
+                                authority,
+                                source_id.clone(),
+                                destination_id,
+                                amount.clone(),
+                            )
+                        })();
+                        let plan = match plan {
+                            Ok(plan) => plan,
+                            Err(error) if self.mode() == &BatchMode::Independent => {
+                                let message = error.to_string();
+                                let code = batch_transfer_rejection_code(&error);
+                                let outcome = AssetBatchTransferOutcome {
+                                    leg_index: u32::try_from(index).map_err(|_| {
+                                        InstructionExecutionError::InvariantViolation(
+                                            "transfer asset batch contains too many legs".into(),
+                                        )
+                                    })?,
+                                    leg_id: entry.leg_id().clone(),
+                                    asset: source_id,
+                                    destination: entry.to().clone(),
+                                    amount,
+                                    status: AssetBatchTransferLegStatus::Rejected(
+                                        AssetBatchTransferRejection { code, message },
+                                    ),
+                                };
+                                state_transaction.record_batch_transfer_outcome(outcome.clone());
+                                state_transaction
+                                    .world
+                                    .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        };
+                        prepare_delta(plan.prechecked_delta.clone());
+                        let applied = plan.apply(state_transaction)?;
+                        #[allow(clippy::float_arithmetic)]
+                        #[cfg(feature = "telemetry")]
                         state_transaction
-                            .world
-                            .asset_definition(entry.asset_definition())?;
-                    }
-                    PreparedNumericTransferPlan::prepare_user(
-                        state_transaction,
-                        authority,
-                        source_id.clone(),
-                        destination_id,
-                        amount.clone(),
-                    )
-                })();
-                let plan = match plan {
-                    Ok(plan) => plan,
-                    Err(error) if self.mode() == &BatchMode::Independent => {
-                        let message = error.to_string();
-                        let code = batch_transfer_rejection_code(&error);
+                            .telemetry
+                            .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
+                        let amount = applied.amount;
+                        emit_numeric_asset_transfer_events(
+                            state_transaction,
+                            applied.source_id,
+                            applied.destination_id,
+                            amount,
+                        );
                         let outcome = AssetBatchTransferOutcome {
                             leg_index: u32::try_from(index).map_err(|_| {
                                 InstructionExecutionError::InvariantViolation(
@@ -6837,52 +6959,17 @@ pub mod isi {
                             leg_id: entry.leg_id().clone(),
                             asset: source_id,
                             destination: entry.to().clone(),
-                            amount,
-                            status: AssetBatchTransferLegStatus::Rejected(
-                                AssetBatchTransferRejection { code, message },
-                            ),
+                            amount: entry.amount().clone(),
+                            status: AssetBatchTransferLegStatus::Applied,
                         };
                         state_transaction.record_batch_transfer_outcome(outcome.clone());
                         state_transaction
                             .world
                             .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
-                        continue;
                     }
-                    Err(error) => return Err(error),
-                };
-                let applied = plan.apply(state_transaction)?;
-                deltas.push(applied.delta);
-                #[allow(clippy::float_arithmetic)]
-                #[cfg(feature = "telemetry")]
-                state_transaction
-                    .telemetry
-                    .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
-                let amount = applied.amount;
-                emit_numeric_asset_transfer_events(
-                    state_transaction,
-                    applied.source_id,
-                    applied.destination_id,
-                    amount,
-                );
-                let outcome = AssetBatchTransferOutcome {
-                    leg_index: u32::try_from(index).map_err(|_| {
-                        InstructionExecutionError::InvariantViolation(
-                            "transfer asset batch contains too many legs".into(),
-                        )
-                    })?,
-                    leg_id: entry.leg_id().clone(),
-                    asset: source_id,
-                    destination: entry.to().clone(),
-                    amount: entry.amount().clone(),
-                    status: AssetBatchTransferLegStatus::Applied,
-                };
-                state_transaction.record_batch_transfer_outcome(outcome.clone());
-                state_transaction
-                    .world
-                    .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
-            }
-            state_transaction.record_transfer_transcripts(authority, deltas)?;
-            Ok(())
+                    Ok(())
+                },
+            )
         }
     }
     fn batch_transfer_rejection_code(
@@ -6990,6 +7077,11 @@ pub mod isi {
                 Ok(flipped)
             }
         }
+    }
+    #[cfg(test)]
+    mod prepared_source_additional_owner_tests {
+        use super::*;
+        include!("asset/prepared_source_additional_owner_tests.rs");
     }
 }
 /// Asset-related query implementations.
@@ -8137,6 +8229,9 @@ pub mod query {
             }
         }
         include!("asset/core_numeric_mutation_tests.rs");
+        mod prepared_independent_occurrence_tests {
+            include!("asset/prepared_independent_occurrence_tests.rs");
+        }
         include!("asset/global_scope_rejection_tests.rs");
         #[test]
         fn transfer_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {

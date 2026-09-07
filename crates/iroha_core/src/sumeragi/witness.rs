@@ -26,11 +26,16 @@ use std::{
     collections::BTreeMap,
     marker::PhantomData,
     rc::Rc,
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
+/// One local capture identity; its strong references prevent reuse while an old overlay exists.
+/// This token never enters witness bytes, hashes, logs or protocol identifiers.
+struct RecorderGeneration;
+
 #[derive(Default)]
 struct BlockWitness {
     active: bool,
+    generation: Option<Arc<RecorderGeneration>>,
     reads: BTreeMap<Vec<u8>, Vec<u8>>,  // key -> value (pre)
     writes: BTreeMap<Vec<u8>, Vec<u8>>, // key -> value (post; empty for delete)
     fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
@@ -81,6 +86,9 @@ impl ExecWitnessOverlay {
         }
         self.finished = true;
         let commit = commit && !witness_recording_suppressed();
+        // Commit follows the same SLOT -> TLS order as recording and overlay creation.
+        // Rollback only pops TLS and cannot publish into any capture generation.
+        let mut witness = commit.then(lock_slot);
         let frame_for_block = EXEC_WITNESS_OVERLAYS.with(|overlays| {
             let mut overlays = overlays.borrow_mut();
             assert_eq!(
@@ -91,7 +99,10 @@ impl ExecWitnessOverlay {
             let frame = overlays
                 .pop()
                 .expect("execution-witness overlay stack must contain the active guard");
-            if !commit {
+            let Some(witness) = witness.as_deref() else {
+                return None;
+            };
+            if !witness.active || !same_recorder_generation(witness, &frame.witness) {
                 return None;
             }
             if let Some(parent) = overlays.last_mut() {
@@ -102,10 +113,12 @@ impl ExecWitnessOverlay {
             }
         });
         if let Some(frame) = frame_for_block {
-            let mut witness = lock_slot();
-            if witness.active {
-                merge_overlay_into_witness(&mut witness, frame);
-            }
+            merge_overlay_into_witness(
+                witness
+                    .as_deref_mut()
+                    .expect("committing overlay must hold SLOT"),
+                frame,
+            );
         }
     }
 }
@@ -136,11 +149,22 @@ impl Drop for WitnessRecordingSuppressionGuard {
 fn witness_recording_suppressed() -> bool {
     WITNESS_RECORDING_SUPPRESSION_DEPTH.with(|depth| depth.get() != 0)
 }
+/// Absent identities never match, including two overlays opened outside a capture.
+fn same_recorder_generation(left: &BlockWitness, right: &BlockWitness) -> bool {
+    match (&left.generation, &right.generation) {
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+
 fn merge_witness_records(
     target: &mut BlockWitness,
     source: BlockWitness,
     replaces_fastpq_transcripts: bool,
-) {
+) -> bool {
+    if !same_recorder_generation(target, &source) {
+        return false;
+    }
     for (key, value) in source.reads {
         target.reads.entry(key).or_insert(value);
     }
@@ -156,27 +180,47 @@ fn merge_witness_records(
                 .append(&mut transcripts);
         }
     }
+    true
 }
 fn merge_overlay_frame(target: &mut WitnessOverlayFrame, source: WitnessOverlayFrame) {
     let replaces_fastpq_transcripts = source.replaces_fastpq_transcripts;
-    merge_witness_records(
+    if merge_witness_records(
         &mut target.witness,
         source.witness,
         replaces_fastpq_transcripts,
-    );
-    target.replaces_fastpq_transcripts |= replaces_fastpq_transcripts;
+    ) {
+        target.replaces_fastpq_transcripts |= replaces_fastpq_transcripts;
+    }
 }
 fn merge_overlay_into_witness(target: &mut BlockWitness, source: WitnessOverlayFrame) {
-    merge_witness_records(target, source.witness, source.replaces_fastpq_transcripts);
+    if target.active {
+        merge_witness_records(target, source.witness, source.replaces_fastpq_transcripts);
+    }
 }
 /// Begin a transaction-local execution-witness overlay on the current thread.
 ///
 /// Records are merged into the active block witness only after
 /// [`ExecWitnessOverlay::commit`]. Dropping the returned guard rolls them back.
+/// An overlay keeps the capture identity present at creation. Nested overlays inherit
+/// their parent's identity even when it is absent or stale; they never bind to a later block.
 pub(crate) fn begin_exec_witness_overlay() -> ExecWitnessOverlay {
+    let witness = lock_slot();
     let depth = EXEC_WITNESS_OVERLAYS.with(|overlays| {
         let mut overlays = overlays.borrow_mut();
-        overlays.push(WitnessOverlayFrame::default());
+        let generation = if let Some(parent) = overlays.last() {
+            parent.witness.generation.clone()
+        } else if witness.active {
+            witness.generation.clone()
+        } else {
+            None
+        };
+        overlays.push(WitnessOverlayFrame {
+            witness: BlockWitness {
+                generation,
+                ..BlockWitness::default()
+            },
+            replaces_fastpq_transcripts: false,
+        });
         overlays.len()
     });
     ExecWitnessOverlay {
@@ -245,8 +289,13 @@ fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
         let Some(overlay) = overlays.last_mut() else {
             return false;
         };
-        f.take()
-            .expect("witness recorder closure must be available")(&mut overlay.witness);
+        if same_recorder_generation(&g, &overlay.witness) {
+            f.take()
+                .expect("witness recorder closure must be available")(
+                &mut overlay.witness
+            );
+        }
+        // A stale overlay consumes this operation. It must never fall through to the global slot.
         true
     });
     if !recorded_in_overlay {
@@ -256,11 +305,16 @@ fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
 fn clear_block() {
     let mut g = lock_slot();
     g.active = false;
+    g.generation = None;
     g.reads.clear();
     g.writes.clear();
     g.fastpq_transcripts.clear();
 }
 /// Hold exclusive access to the global witness recorder for the duration of a block execution.
+///
+/// Join every execution worker before draining, clearing or starting another capture. Generation
+/// checks reject stale scoped overlays; direct writes from workers without overlays still rely
+/// on this caller-owned completion rule and are not authenticated by a worker-local token.
 pub fn exec_witness_guard() -> ExecWitnessGuard {
     ExecWitnessGuard {
         _guard: lock_exec_witness_lock(),
@@ -270,6 +324,7 @@ pub fn exec_witness_guard() -> ExecWitnessGuard {
 pub fn start_block() {
     let mut g = lock_slot();
     g.active = true;
+    g.generation = Some(Arc::new(RecorderGeneration));
     g.reads.clear();
     g.writes.clear();
     g.fastpq_transcripts.clear();
@@ -294,6 +349,7 @@ pub fn drain_exec_witness() -> ExecWitness {
     g.reads.clear();
     g.writes.clear();
     g.active = false;
+    g.generation = None;
     let mut fastpq_map = std::mem::take(&mut g.fastpq_transcripts);
     crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut fastpq_map);
     let fastpq_transcripts = map_to_bundles(fastpq_map);
@@ -304,6 +360,103 @@ pub fn drain_exec_witness() -> ExecWitness {
         fastpq_batches: Vec::new(),
     }
 }
+/// Reset a checked capture while SLOT is still held, including validator unwinding.
+struct CheckedCaptureReset<'a> {
+    witness: &'a mut BlockWitness,
+}
+impl Drop for CheckedCaptureReset<'_> {
+    fn drop(&mut self) {
+        *self.witness = BlockWitness::default();
+    }
+}
+
+/// Drain only the exact ordinary witness content accepted by its execution owner.
+///
+/// This is a first-capture operation and requires an active global recorder.
+/// Call while holding [`ExecWitnessGuard`] after execution workers and their
+/// overlays have completed. The validator borrows the raw transcript map under
+/// the recorder lock before any digest repair or read/write copying. It must not
+/// call recorder APIs, which acquire that same lock. Accepted digest options,
+/// transcript grouping/order and private paths are preserved without repair.
+///
+/// Any current-thread overlay is rejected, including an empty one. Rejection
+/// clears and deactivates the global recorder directly while holding its lock.
+/// Unwinding from the validator also resets the recorder before unlocking, even if
+/// an outer caller catches the panic while retaining its exclusive execution guard.
+/// Overlay guards remain intact so their normal last-in, first-out cleanup works.
+/// Finish or drop every outstanding overlay before starting another capture.
+/// Other threads' overlay lifetimes remain the execution owner's responsibility.
+///
+/// # Errors
+/// Returns the validator's error unchanged, or rejects an inactive recorder or
+/// pending current-thread overlay before invoking the validator. Rejected records
+/// cannot be drained or extended until a new block capture is started.
+pub(crate) fn drain_exec_witness_checked(
+    validate: impl FnOnce(&BTreeMap<Hash, Vec<TransferTranscript>>) -> Result<(), String>,
+) -> Result<ExecWitness, String> {
+    let mut g = lock_slot();
+    let record = {
+        // This borrow drops before the mutex guard. It also clears a capture when the
+        // validator unwinds and an outer caller catches that panic without dropping its
+        // exclusive execution guard. A stale overlay keeps only its invalidated token.
+        let reset = CheckedCaptureReset { witness: &mut g };
+        if EXEC_WITNESS_OVERLAYS.with(|overlays| !overlays.borrow().is_empty()) {
+            return Err("ordinary witness capture has a pending current-thread overlay".to_owned());
+        }
+        if !reset.witness.active {
+            return Err("ordinary witness capture has no active global recorder".to_owned());
+        }
+        validate(&reset.witness.fastpq_transcripts)?;
+        std::mem::take(&mut *reset.witness)
+    };
+    let reads = record
+        .reads
+        .into_iter()
+        .map(|(key, value)| ExecKv { key, value })
+        .collect();
+    let writes = record
+        .writes
+        .into_iter()
+        .map(|(key, value)| ExecKv { key, value })
+        .collect();
+    let fastpq_transcripts = map_to_bundles(record.fastpq_transcripts);
+    Ok(ExecWitness {
+        reads,
+        writes,
+        fastpq_transcripts,
+        fastpq_batches: Vec::new(),
+    })
+}
+
+/// Confirm that an already-captured witness has no later recorder activity.
+///
+/// Call after independently checking the retained witness content and ownership.
+/// An intact cached capture has an inactive recorder with no reads, writes,
+/// FASTPQ transcripts or current-thread overlays. Any other state is discarded
+/// and deactivated directly under the same recorder lock. This does not perform
+/// another first capture or repair any transcript digest.
+///
+/// # Errors
+/// Rejects an active recorder, unexpected records or a pending current-thread
+/// overlay. Overlay guards must finish before the caller starts another capture.
+pub(crate) fn finish_cached_exec_witness_capture() -> Result<(), String> {
+    let mut g = lock_slot();
+    let error = if EXEC_WITNESS_OVERLAYS.with(|overlays| !overlays.borrow().is_empty()) {
+        Some("cached witness capture has a pending current-thread overlay")
+    } else if g.active {
+        Some("cached witness capture has an unexpected active global recorder")
+    } else if !g.reads.is_empty() || !g.writes.is_empty() || !g.fastpq_transcripts.is_empty() {
+        Some("cached witness capture has unexpected recorder contents")
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        *g = BlockWitness::default();
+        return Err(error.to_owned());
+    }
+    Ok(())
+}
+
 fn map_to_bundles(map: BTreeMap<Hash, Vec<TransferTranscript>>) -> Vec<TransferTranscriptBundle> {
     map.into_iter()
         .map(|(entry_hash, transcripts)| TransferTranscriptBundle {
@@ -556,8 +709,11 @@ pub(crate) fn synchronize_fastpq_transcripts(finalized: &BTreeMap<Hash, Vec<Tran
         let Some(overlay) = overlays.last_mut() else {
             return false;
         };
-        overlay.witness.fastpq_transcripts.clone_from(finalized);
-        overlay.replaces_fastpq_transcripts = true;
+        if same_recorder_generation(&witness, &overlay.witness) {
+            overlay.witness.fastpq_transcripts.clone_from(finalized);
+            overlay.replaces_fastpq_transcripts = true;
+        }
+        // Discard stale replacement, including an empty map, without a global fallback.
         true
     });
     if !synchronized_overlay {
@@ -797,6 +953,10 @@ pub fn snapshot_exec_witness() -> ExecWitness {
         fastpq_batches: Vec::new(),
     }
 }
+#[cfg(test)]
+mod checked_tests;
+#[cfg(test)]
+mod generation_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

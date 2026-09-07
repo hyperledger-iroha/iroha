@@ -28,13 +28,13 @@ fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
         let source = std::fs::read_to_string(&path).expect("read Rust source");
         if path != asset_source_path {
             for raw_call in [
-                ".withdraw_numeric_asset(",
-                ".deposit_numeric_asset(",
-                ".deposit_numeric_asset_exact(",
-                ".apply_prechecked_numeric_asset_transfer_delta_exact(",
+                [".withdraw_numeric_asset", "("].concat(),
+                [".deposit_numeric_asset", "("].concat(),
+                [".deposit_numeric_asset_exact", "("].concat(),
+                [".apply_prechecked_numeric_asset_transfer_delta_exact", "("].concat(),
             ] {
                 assert!(
-                    !source.contains(raw_call),
+                    !source.contains(&raw_call),
                     "{} reaches raw balance mutation through {raw_call}",
                     path.display()
                 );
@@ -42,7 +42,7 @@ fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
         }
         if path != asset_source_path && path != state_source_path {
             assert!(
-                !source.contains("record_transfer_transcripts_with_batch_hash("),
+                !source.contains(&["record_transfer_transcripts_with_", "batch_hash("].concat()),
                 "{} bypasses the typed movement transcript boundary",
                 path.display()
             );
@@ -2741,4 +2741,189 @@ fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn prepared_movement_records_exact_delta_under_current_apply_context() {
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition.clone(), BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let hash = iroha_crypto::Hash::new(b"identity at movement apply");
+    {
+        let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0x70);
+        super::super::isi::apply_prepared_numeric_movement_for_test(
+            &mut tx,
+            &ALICE_ID,
+            source.clone(),
+            destination.clone(),
+            Quantity::from(3_u32),
+            |tx| {
+                tx.tx_call_hash = Some(hash);
+                tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
+                tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::new(7));
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(7_u32));
+        assert_eq!(
+            asset_balance_or_zero(&tx, &destination),
+            Quantity::from(3_u32)
+        );
+        tx.apply();
+    }
+    let transcripts = block.drain_transfer_transcripts();
+    assert_eq!(transcripts.len(), 1);
+    let transcript = &transcripts[&hash][0];
+    let expected = iroha_data_model::fastpq::TransferDeltaTranscript {
+        from_account: ALICE_ID.clone(),
+        to_account: BOB_ID.clone(),
+        asset_definition: definition,
+        amount: Quantity::from(3_u32),
+        from_balance_before: Quantity::from(10_u32),
+        from_balance_after: Quantity::from(7_u32),
+        to_balance_before: Quantity::zero(),
+        to_balance_after: Quantity::from(3_u32),
+        from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+    };
+    assert_eq!(transcript.deltas, vec![expected.clone()]);
+    assert_eq!(
+        transcript.authority_digest,
+        crate::fastpq::authority_digest(&ALICE_ID)
+    );
+    assert_eq!(
+        transcript.poseidon_preimage_digest,
+        Some(crate::fastpq::poseidon_preimage_digest(&expected, &hash))
+    );
+    let capture = block.captured_fastpq_transcript_sources().unwrap()[&hash];
+    assert_eq!(
+        capture.dataspace_id(),
+        iroha_data_model::nexus::DataSpaceId::new(7)
+    );
+    assert!(!capture.is_protocol_purpose());
+}
+
+#[test]
+fn prepared_movement_preserves_direct_typed_purpose_identity() {
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition, BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let hash;
+    {
+        let mut tx = block.transaction();
+        assert!(tx.tx_call_hash.is_none());
+        hash = super::super::isi::resolve_social_send_movement_identity_for_test(
+            &tx,
+            &ALICE_ID,
+            &[(source.clone(), destination.clone(), Quantity::from(3_u32))],
+            vec![0x71],
+        )
+        .unwrap();
+        super::super::isi::apply_prepared_numeric_movement_for_test(
+            &mut tx,
+            &ALICE_ID,
+            source,
+            destination,
+            Quantity::from(3_u32),
+            |_| {},
+            true,
+        )
+        .unwrap();
+        tx.apply();
+    }
+    let transcripts = block.drain_transfer_transcripts();
+    assert_eq!(transcripts.len(), 1);
+    assert_eq!(transcripts[&hash].len(), 1);
+    assert_eq!(transcripts[&hash][0].batch_hash, hash);
+    assert!(block.captured_fastpq_transcript_sources().unwrap()[&hash].is_protocol_purpose());
+}
+
+#[test]
+fn stale_prepared_movement_discards_its_prepared_occurrence() {
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    crate::sumeragi::witness::start_block();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition, BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    seed_test_call_hash(&mut tx, 0x72);
+    let error = super::super::isi::apply_prepared_numeric_movement_for_test(
+        &mut tx,
+        &ALICE_ID,
+        source.clone(),
+        destination.clone(),
+        Quantity::from(3_u32),
+        |tx| **tx.world.assets.get_mut(&source).unwrap() = Quantity::from(11_u32),
+        true,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("source balance changed"));
+    assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(11_u32));
+    assert_eq!(asset_balance_or_zero(&tx, &destination), Quantity::zero());
+    assert_eq!(tx.pending_transfer_transcript_count_for_testing(), 0);
+    tx.apply();
+    assert!(block.drain_transfer_transcripts().is_empty());
+    assert!(
+        block
+            .captured_fastpq_transcript_sources()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::sumeragi::witness::drain_exec_witness()
+            .fastpq_transcripts
+            .is_empty()
+    );
+}
+
+#[test]
+fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    crate::sumeragi::witness::start_block();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition, BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    super::super::isi::apply_prepared_numeric_movement_for_test(
+        &mut tx,
+        &ALICE_ID,
+        source.clone(),
+        destination.clone(),
+        Quantity::from(3_u32),
+        |_| {},
+        false,
+    )
+    .unwrap();
+    assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(7_u32));
+    assert_eq!(
+        asset_balance_or_zero(&tx, &destination),
+        Quantity::from(3_u32)
+    );
+    assert!(tx.world.internal_event_buf.iter().any(|event| matches!(event.as_ref(),
+        DataEvent::Domain(DomainEvent::Asset(ScopedAsset { event: AssetEvent::Transferred(transfer), .. }))
+            if transfer.source() == &source && transfer.destination() == &destination
+                && transfer.amount() == &Quantity::from(3_u32)
+    )));
+    assert_eq!(tx.pending_transfer_transcript_count_for_testing(), 0);
+    tx.apply();
+    assert!(block.drain_transfer_transcripts().is_empty());
+    assert!(
+        block
+            .captured_fastpq_transcript_sources()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::sumeragi::witness::drain_exec_witness()
+            .fastpq_transcripts
+            .is_empty()
+    );
 }

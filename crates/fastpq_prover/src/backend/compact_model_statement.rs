@@ -7,13 +7,14 @@
 //! The candidate artifact adapter remains test-only and requires independent caller inputs.
 //! TODO: Connect this bridge to a qualified artifact route and authenticated caller.
 
-use iroha_data_model::fastpq::{FastpqOperationKind, FastpqPublicTransferStatementV1};
+use iroha_data_model::fastpq::{
+    FastpqOperationKind, FastpqPublicTransferStatementV1, FastpqQuantityUnits,
+};
 
+use super::compact_value_domain::CompactTransferValue;
 use crate::{
     Error, OperationKind, ProofSemantics, PublicInputs, Result, StateTransition,
-    gadgets::public_transfer_statement::{
-        PreparedPublicTransfers, PublicTransferLimits, prepare_public_transfers,
-    },
+    gadgets::public_transfer_statement::{PreparedPublicTransfers, PublicTransferLimits},
     proof::PublicIO,
 };
 
@@ -29,6 +30,36 @@ pub(super) fn with_prepared_statement<T>(
     semantics: ProofSemantics,
     limits: PublicTransferLimits,
     use_prepared: impl FnOnce(&PreparedPublicTransfers<'_>) -> Result<T>,
+) -> Result<T> {
+    with_prepared_statement_as::<u64, T>(statement, expected, semantics, limits, use_prepared)
+}
+
+/// Prepare QuantityValueV1 rows through the fixed full-domain public constructor.
+///
+/// This typed route never infers a value format from statement bytes or metadata.
+/// It grants no authority and leaves the legacy narrow bridge's decoder unchanged.
+pub(super) fn with_prepared_quantity_statement<T>(
+    statement: &FastpqPublicTransferStatementV1,
+    expected: &PublicIO,
+    semantics: ProofSemantics,
+    limits: PublicTransferLimits,
+    use_prepared: impl FnOnce(&PreparedPublicTransfers<'_, FastpqQuantityUnits>) -> Result<T>,
+) -> Result<T> {
+    with_prepared_statement_as::<FastpqQuantityUnits, T>(
+        statement,
+        expected,
+        semantics,
+        limits,
+        use_prepared,
+    )
+}
+
+fn with_prepared_statement_as<V: CompactTransferValue, T>(
+    statement: &FastpqPublicTransferStatementV1,
+    expected: &PublicIO,
+    semantics: ProofSemantics,
+    limits: PublicTransferLimits,
+    use_prepared: impl FnOnce(&PreparedPublicTransfers<'_, V>) -> Result<T>,
 ) -> Result<T> {
     let inputs = &statement.public_inputs;
     let advertised = PublicIO {
@@ -116,8 +147,7 @@ pub(super) fn with_prepared_statement<T>(
         perm_root: inputs.perm_root,
         tx_set_hash: inputs.tx_set_hash,
     };
-    let prepared =
-        prepare_public_transfers(&rows, &statement.transcripts, inputs, semantics, limits)?;
+    let prepared = V::prepare(&rows, &statement.transcripts, inputs, semantics, limits)?;
     let ordering: [u8; 32] = prepared.ordering_hash().into();
     if ordering != statement.ordering_hash {
         return Err(Error::OrderingHashMismatch);

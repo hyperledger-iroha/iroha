@@ -1400,7 +1400,14 @@ fn canonical_remote_account(value: &str, field: &str) -> Result<AccountId> {
     let parsed = AccountId::parse_encoded(value).map_err(|error| Error::InvalidAxtBinding {
         details: format!("remote-spend {field} account is not canonical I105: {error}"),
     })?;
-    if parsed.to_string() != value {
+    // Rendering an account can exhaust an inherited codec budget. Do not use
+    // `to_string`, which panics when this formatter legitimately returns an error.
+    let canonical = parsed
+        .canonical_i105()
+        .map_err(|_| Error::InvalidAxtBinding {
+            details: format!("remote-spend {field} account canonicalization failed"),
+        })?;
+    if canonical != value {
         return Err(Error::InvalidAxtBinding {
             details: format!("remote-spend {field} account must use canonical I105 text"),
         });
@@ -1450,10 +1457,10 @@ pub(crate) struct AxtProofContextMirrors {
 /// The caller must first apply its public resource bounds. This validates the
 /// public relation, not source finality, permissions, or handle signatures.
 #[cfg(test)]
-pub(crate) fn validate_axt_public_transfer_facts(
+pub(crate) fn validate_axt_public_transfer_facts<V>(
     binding: &AxtFastpqBinding,
     metadata: AxtPublicMetadataBytes<'_>,
-    prepared: &crate::gadgets::public_transfer_statement::PreparedPublicTransfers<'_>,
+    prepared: &crate::gadgets::public_transfer_statement::PreparedPublicTransfers<'_, V>,
     claims: Option<&[AxtRemoteSpendClaimV1]>,
 ) -> Result<()> {
     validate_axt_transfer_claim_binding(binding)?;
@@ -3667,6 +3674,37 @@ mod tests {
             Error::InvalidAxtBinding { details } if details.contains("canonical I105")
         ));
     }
+    #[test]
+    fn canonical_remote_account_returns_error_when_rendering_exceeds_inherited_budget() {
+        let literal = iroha_test_samples::ALICE_ID.canonical_i105().unwrap();
+        let unrestricted =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+        let (parsed, usage) = norito::core::with_decode_limits_measured(unrestricted, || {
+            AccountId::parse_encoded(&literal)
+        });
+        assert!(parsed.is_ok());
+        let exact_parse = norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usage.total_allocated_bytes(),
+            32,
+        );
+        assert!(
+            norito::core::with_decode_limits_scope(exact_parse, || AccountId::parse_encoded(
+                &literal
+            ))
+            .is_ok()
+        );
+        let result = norito::core::with_decode_limits_scope(exact_parse, || {
+            canonical_remote_account(&literal, "from")
+        });
+        assert!(
+            matches!(result, Err(Error::InvalidAxtBinding { details }) if details == "remote-spend from account canonicalization failed")
+        );
+        assert!(canonical_remote_account(&literal, "from").is_ok());
+    }
+
     #[test]
     fn canonical_remote_account_rejects_padded_i105() {
         let binding = remote_transfer_binding();

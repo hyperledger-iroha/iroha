@@ -379,6 +379,9 @@ mod committed_hash_journal;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod committed_transaction_context;
 mod da_hydration;
+mod fastpq_source_inventory;
+mod prepared_transfer_transcript;
+pub use fastpq_source_inventory::FastpqSourceInventoryV1;
 mod lane_authority;
 mod tiered;
 use canonical_history::committed_block_from_kura;
@@ -12693,6 +12696,12 @@ pub struct StateBlock<'state> {
     fastpq_tx_set_hash: Option<[u8; 32]>,
     /// Dataspace assignments for FASTPQ entry hashes in this block.
     fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,
+    /// Source-height lane incarnations frozen before any block effects.
+    fastpq_source_context: Option<Arc<crate::fastpq::FastpqBlockStartSourceContext>>,
+    /// Execution source contexts merged only with applied transfer transcripts.
+    fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator,
+    /// Sealed validator-owned inventory or its latched construction error.
+    fastpq_source_inventory: Option<Result<Arc<FastpqSourceInventoryV1>, String>>,
     /// Local-only context for background FASTPQ batch construction.
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
@@ -12870,6 +12879,50 @@ impl<'state> StateBlock<'state> {
             routing_plan,
             execution_height,
         )
+    }
+    fn freeze_fastpq_source_context(&mut self) {
+        assert!(
+            self.fastpq_source_context.is_none(),
+            "FASTPQ source-height context must be captured exactly once"
+        );
+        let height = self._curr_block.height().get();
+        let lane_incarnations = self
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                (
+                    lane.id,
+                    StateReadOnly::lane_incarnation_at_height(self, lane.id, height),
+                )
+            })
+            .collect();
+        self.fastpq_source_context = Some(Arc::new(crate::fastpq::FastpqBlockStartSourceContext {
+            source: iroha_data_model::fastpq::FastpqSourceStatementContextV1 {
+                network_id: self.network_id,
+                height,
+            },
+            lane_incarnations,
+        }));
+    }
+    /// Read execution contexts captured alongside this block's applied transcripts.
+    ///
+    /// These local records preserve full source-height incarnations and distinguish
+    /// typed protocol purposes from transaction/trigger calls. They do not establish
+    /// a complete block-entry inventory, a committed manifest, or source finality.
+    /// No partial map is returned when any applied capture was inconsistent.
+    ///
+    /// # Errors
+    /// Returns the first applied source-context failure; rolled-back transactions
+    /// leave neither source records nor capture errors in this block.
+    pub fn captured_fastpq_transcript_sources(
+        &self,
+    ) -> Result<
+        &BTreeMap<Hash, crate::fastpq::FastpqCapturedTranscriptSource>,
+        &crate::fastpq::FastpqSourceCaptureError,
+    > {
+        self.fastpq_source_captures.sources()
     }
     fn freeze_axt_block_start(&mut self) {
         assert!(
@@ -14052,6 +14105,12 @@ pub struct StateTransaction<'block, 'state> {
         &'block mut BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
     /// Transfer transcripts staged during the current transaction execution.
     pending_transfer_transcripts: Vec<iroha_data_model::fastpq::TransferTranscript>,
+    /// Immutable source-height context shared with the parent block.
+    fastpq_source_context: Arc<crate::fastpq::FastpqBlockStartSourceContext>,
+    /// Parent accumulator changed only by this transaction's apply boundary.
+    block_fastpq_source_captures: &'block mut crate::fastpq::FastpqSourceCaptureAccumulator,
+    /// Captures and failures discarded together with a rolled-back transaction.
+    pending_fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator,
     /// Block-level accumulator for AXT envelope records.
     block_axt_envelopes: &'block mut Vec<AxtEnvelopeRecord>,
     /// Pending AXT envelopes captured during this transaction execution.
@@ -29597,6 +29656,9 @@ impl State {
             fastpq_transcripts: BTreeMap::new(),
             fastpq_tx_set_hash: None,
             fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_source_context: None,
+            fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator::default(),
+            fastpq_source_inventory: None,
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
             axt_block_start_snapshot: None,
@@ -29649,6 +29711,7 @@ impl State {
             authenticated_replay_commit: false,
             replay_prevalidation: false,
         };
+        sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
         stage(&mut sb)?;
         let pinned_sortition_anchors =
@@ -30290,6 +30353,9 @@ impl State {
             fastpq_transcripts: BTreeMap::new(),
             fastpq_tx_set_hash: None,
             fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_source_context: None,
+            fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator::default(),
+            fastpq_source_inventory: None,
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
             axt_block_start_snapshot: None,
@@ -30340,6 +30406,7 @@ impl State {
             authenticated_replay_commit: false,
             replay_prevalidation: false,
         };
+        state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
         state_block
     }
@@ -30425,6 +30492,9 @@ impl State {
             fastpq_transcripts: BTreeMap::new(),
             fastpq_tx_set_hash: None,
             fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_source_context: None,
+            fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator::default(),
+            fastpq_source_inventory: None,
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
             axt_block_start_snapshot: None,
@@ -30477,6 +30547,7 @@ impl State {
             authenticated_replay_commit: false,
             replay_prevalidation: false,
         };
+        state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
         stage(&mut state_block)?;
         let pinned_sortition_anchors =
@@ -51247,14 +51318,38 @@ impl<'state> StateBlock<'state> {
     pub(crate) fn set_fastpq_entry_dataspaces(&mut self, entries: BTreeMap<Hash, DataSpaceId>) {
         self.fastpq_entry_dataspaces = entries;
     }
-    /// Capture the execution witness accumulated during this block's execution.
-    pub fn capture_exec_witness(&mut self) {
+    /// Capture the execution witness only while its execution-owned source seal remains valid.
+    /// Authenticated replay retains its separate path and creates no local source inventory.
+    /// Call while holding the exclusive execution-witness guard, after all execution workers
+    /// and their transaction overlays have finished. The first ordinary capture requires an
+    /// active recorder; repeated capture requires the already-drained recorder to stay empty
+    /// and inactive. Output getters and commit do not require this global recorder guard.
+    ///
+    /// # Errors
+    /// Rejects absent, failed, stale or mutated source ownership before ordinary witness
+    /// work, or mismatched ordinary transcript contents and unexpected prepared batches.
+    /// Content failures remain latched and invalidate every cached witness-derived output.
+    pub fn capture_exec_witness(&mut self) -> Result<(), String> {
         if self.authenticated_replay_commit {
+            self.clear_cached_exec_witness();
             let _ = crate::sumeragi::witness::drain_exec_witness();
-            return;
+            return Ok(());
         }
+        let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                self.clear_cached_exec_witness();
+                return Err(error);
+            }
+        };
         if self.exec_witness.is_none() {
-            let mut witness = crate::sumeragi::witness::drain_exec_witness();
+            let mut witness =
+                match crate::sumeragi::witness::drain_exec_witness_checked(|transcripts| {
+                    source_inventory.verify_finalized_transcript_map(transcripts)
+                }) {
+                    Ok(witness) => witness,
+                    Err(error) => return Err(self.reject_fastpq_witness_content(error)),
+                };
             let receiver_height = self._curr_block.height().get();
             // Commit the complete protected validation-fee registry selection
             // at every height. A finality proof for this fixed synthetic write
@@ -51314,24 +51409,15 @@ impl<'state> StateBlock<'state> {
                 .iter()
                 .map(|(hash, dsid)| (*hash, crate::fastpq::dataspace_id_bytes(*dsid)))
                 .collect();
-            let has_fastpq =
-                !witness.fastpq_transcripts.is_empty() || !witness.fastpq_batches.is_empty();
-            // Only block execution owns the complete ordered canonical wires.
-            // Transcript identities cannot reconstruct that commitment; leave
-            // missing authority absent so the prover job rejects it.
-            let tx_set_hash = if has_fastpq {
-                self.fastpq_tx_set_hash
-            } else {
-                None
-            };
+            // Checked ordinary capture owns transcript bundles only. Prepared batches
+            // are derived later by the background prover lane from this retained context.
+            let has_fastpq = !witness.fastpq_transcripts.is_empty();
+            // The inventory seals the block execution owner's canonical wire commitment;
+            // verified_fastpq_source_inventory_for_capture checked the cache still matches.
+            // Transcript identities cannot reconstruct this commitment.
+            let tx_set_hash = has_fastpq.then(|| source_inventory.tx_set_hash());
             let perm_root =
-                if witness.fastpq_transcripts.is_empty() && witness.fastpq_batches.is_empty() {
-                    None
-                } else {
-                    Some(crate::fastpq::permission_table_root(
-                        self.world.roles.iter(),
-                    ))
-                };
+                has_fastpq.then(|| crate::fastpq::permission_table_root(self.world.roles.iter()));
             let public_inputs = perm_root.map(|perm_root| {
                 crate::fastpq::public_inputs_template_from_block(
                     &self._curr_block,
@@ -51339,43 +51425,85 @@ impl<'state> StateBlock<'state> {
                     perm_root,
                 )
             });
-            if !entry_dsid_bytes.is_empty()
-                && !witness.fastpq_batches.is_empty()
-                && !witness.fastpq_transcripts.is_empty()
-            {
-                for (bundle, batch) in witness
-                    .fastpq_transcripts
-                    .iter()
-                    .zip(witness.fastpq_batches.iter_mut())
-                {
-                    if let Some(dsid) = entry_dsid_bytes.get(&bundle.entry_hash) {
-                        batch.public_inputs.dsid = *dsid;
-                    }
-                }
-            }
-            if let Some(tx_set_hash) = tx_set_hash {
-                for batch in &mut witness.fastpq_batches {
-                    batch.public_inputs.tx_set_hash = tx_set_hash;
-                }
-            }
-            if let Some(perm_root) = perm_root {
-                for batch in &mut witness.fastpq_batches {
-                    batch.public_inputs.perm_root = perm_root;
-                }
-            }
             self.fastpq_witness_context =
                 has_fastpq.then_some(crate::fastpq::FastpqWitnessContext {
                     public_inputs,
                     tx_set_hash,
                     entry_dataspaces: entry_dsid_bytes,
+                    source_inventory: Some(source_inventory),
                 });
             self.exec_witness = Some(witness);
         } else {
-            let _ = crate::sumeragi::witness::drain_exec_witness();
+            if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
+                // This capture call still owns the exclusive block recorder guard. Clear any
+                // rejected recorder state, preserving the earlier cached-content failure.
+                let _ = crate::sumeragi::witness::finish_cached_exec_witness_capture();
+                return Err(self.reject_fastpq_witness_content(error));
+            }
+            if let Err(error) = crate::sumeragi::witness::finish_cached_exec_witness_capture() {
+                return Err(self.reject_fastpq_witness_content(error));
+            }
         }
+        Ok(())
     }
-    /// Take the captured execution witness, if any, transferring ownership to the caller.
+    /// Check the exact ordinary recorder surface retained with the owned source inventory.
+    ///
+    /// Ordinary recorders emit transcript bundles and no prepared batches. The background
+    /// prover lane derives batches later; accepting a cached batch here would grant authority
+    /// to content outside the sealed source archive. Generic offline batch conversion has its
+    /// own contract and is unaffected by this local ordinary-capture invariant.
+    fn verify_cached_ordinary_witness_content(
+        &self,
+        inventory: &FastpqSourceInventoryV1,
+    ) -> Result<(), String> {
+        if let Some(witness) = &self.exec_witness {
+            if !witness.fastpq_batches.is_empty() {
+                return Err("ordinary captured witness contains prebuilt FASTPQ batches".into());
+            }
+            inventory.verify_ordinary_witness_bundles(&witness.fastpq_transcripts)?;
+        }
+        Ok(())
+    }
+    /// Latch the first content failure so recorder resynchronization cannot repair ownership.
+    fn reject_fastpq_witness_content(&mut self, error: String) -> String {
+        let error = match &self.fastpq_source_inventory {
+            Some(Err(previous)) => previous.clone(),
+            _ => error,
+        };
+        self.fastpq_source_inventory = Some(Err(error.clone()));
+        self.clear_cached_exec_witness();
+        error
+    }
+    /// Discard every cached output derived from one captured execution witness.
+    fn clear_cached_exec_witness(&mut self) {
+        self.exec_witness = None;
+        self.fastpq_witness_context = None;
+        self.parliament_timed_ovn_casting_bindings = None;
+    }
+    /// Reject stale output extraction even when capture has not been called again.
+    fn guard_captured_exec_witness(&mut self) -> bool {
+        if self.authenticated_replay_commit {
+            self.clear_cached_exec_witness();
+            return false;
+        }
+        let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
+            Ok(inventory) => inventory,
+            Err(_) => {
+                self.clear_cached_exec_witness();
+                return false;
+            }
+        };
+        if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
+            self.reject_fastpq_witness_content(error);
+            return false;
+        }
+        true
+    }
+    /// Take a captured witness only while its retained source ownership remains valid.
     pub(crate) fn take_exec_witness(&mut self) -> Option<ExecWitness> {
+        if !self.guard_captured_exec_witness() {
+            return None;
+        }
         self.exec_witness.take()
     }
     /// Take the local compact casting leaves aligned with the captured synthetic snapshot.
@@ -51383,12 +51511,18 @@ impl<'state> StateBlock<'state> {
         &mut self,
     ) -> Option<Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>>
     {
+        if !self.guard_captured_exec_witness() {
+            return None;
+        }
         self.parliament_timed_ovn_casting_bindings.take()
     }
     /// Take the local-only FASTPQ witness context, if one was captured.
     pub(crate) fn take_fastpq_witness_context(
         &mut self,
     ) -> Option<crate::fastpq::FastpqWitnessContext> {
+        if !self.guard_captured_exec_witness() {
+            return None;
+        }
         self.fastpq_witness_context.take()
     }
     fn stage_da_pin_intent_bundle(
@@ -51556,6 +51690,14 @@ impl<'state> StateBlock<'state> {
             executor_fuel_remaining,
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
+            fastpq_source_context: Arc::clone(
+                self.fastpq_source_context
+                    .as_ref()
+                    .expect("StateBlock constructors must freeze FASTPQ source context before use"),
+            ),
+            block_fastpq_source_captures: &mut self.fastpq_source_captures,
+            pending_fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator::default(
+            ),
             block_axt_envelopes: &mut self.axt_envelopes,
             pending_axt_envelopes: Vec::new(),
             axt_block_start_snapshot,
@@ -53012,7 +53154,8 @@ impl<'state> StateBlock<'state> {
     /// Commit changes aggregated during application of block.
     ///
     /// # Errors
-    /// Returns [`TransactionsBlockError`] when flushing the transaction batch fails.
+    /// Returns [`TransactionsBlockError`] when finalized FASTPQ source ownership is
+    /// invalid or flushing the transaction batch fails.
     pub fn commit(self) -> Result<(), TransactionsBlockError> {
         self.commit_inner(None, None)
     }
@@ -53129,6 +53272,24 @@ impl<'state> StateBlock<'state> {
         >,
     ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
+        // Extracting the witness does not end the overlay's lifetime. Retain the
+        // applied-source seal through publication so a later transaction cannot
+        // commit effects omitted from the already-extracted witness. Untouched
+        // setup overlays do not acquire a finalized inventory and remain valid.
+        if self.fastpq_source_inventory.is_some() {
+            let source_check = self
+                .verified_fastpq_source_inventory_for_capture()
+                .and_then(|inventory| self.verify_cached_ordinary_witness_content(&inventory));
+            if let Err(error) = source_check {
+                error!(
+                    block_height = self._curr_block.height().get(),
+                    block = %self._curr_block.hash(),
+                    ?error,
+                    "finalized FASTPQ source ownership is invalid before state commit"
+                );
+                return Err(TransactionsBlockError::FastpqSourceInventory);
+            }
+        }
         if let Err(error) = self.validate_merge_carrier_entrypoint_binding() {
             error!(
                 block_height = self._curr_block.height().get(),
@@ -55733,9 +55894,9 @@ impl<'state> StateBlock<'state> {
     }
     /// Execute time-triggered transactions for the given block, applying their state changes on success.
     ///
-    /// Returns a triplet of vectors: the first contains the time-triggered entrypoints,
-    /// the second contains their corresponding hashes,
-    /// and the third contains their corresponding results.
+    /// Returns entrypoints, display entrypoint hashes, results, and execution-call hashes
+    /// in invocation order. Execution-call hashes distinguish repeated invocations and
+    /// are the identities used by transfer transcripts and lifecycle effects.
     pub(crate) fn execute_time_triggers(
         &mut self,
         block_header: &BlockHeader,
@@ -55743,6 +55904,7 @@ impl<'state> StateBlock<'state> {
         Vec<TimeTriggerEntrypoint>,
         Vec<HashOf<TransactionEntrypoint>>,
         Vec<TransactionResultInner>,
+        Vec<Hash>,
     ) {
         let time_event = self.create_time_event(block_header);
         self.world.external_event_buf.push(time_event.into());
@@ -55807,7 +55969,7 @@ impl<'state> StateBlock<'state> {
         }
         let mut suppress_remaining = std::collections::BTreeSet::new();
         matched.iter().enumerate().fold(
-            (Vec::new(), Vec::new(), Vec::new()),
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             |mut acc, (invocation_index, trg_id)| {
                 if suppress_remaining.contains(trg_id) {
                     return acc;
@@ -55828,7 +55990,7 @@ impl<'state> StateBlock<'state> {
                     suppress_remaining.insert(trg_id.clone());
                     return acc;
                 }
-                let (entrypoint, result) =
+                let (entrypoint, execution_hash, result) =
                     self.execute_time_trigger(trg_id, &action, &time_event, invocation_index);
                 let entrypoint_hash = entrypoint.hash_as_entrypoint();
                 match &result {
@@ -55875,6 +56037,7 @@ impl<'state> StateBlock<'state> {
                 acc.0.push(entrypoint);
                 acc.1.push(entrypoint_hash);
                 acc.2.push(result);
+                acc.3.push(execution_hash);
                 acc
             },
         )
@@ -56018,20 +56181,20 @@ impl<'state> StateBlock<'state> {
     }
     /// Execute a scheduled trigger, applying its state changes on success, or leaving the state unchanged on failure.
     ///
-    /// Returns the hash and the result of this "transaction" --
-    /// the trigger sequence including this entrypoint on success, or the rejection reason on failure.
+    /// Returns the entrypoint, actual execution-call identity, and result, including
+    /// the identity of failed invocations whose state changes were rolled back.
     fn execute_time_trigger(
         &mut self,
         trg_id: &TriggerId,
         action: &LoadedAction<TimeEventFilter>,
         time_event: &TimeEvent,
         invocation_index: usize,
-    ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
+    ) -> (TimeTriggerEntrypoint, Hash, TransactionResultInner) {
         let nft_seq_base =
             Self::time_trigger_nft_seq_base(self._curr_block.height().get(), invocation_index);
         let mut transaction = self.transaction();
         let action_generation = transaction.world.triggers.registration_generation(trg_id);
-        transaction.seed_time_trigger_invocation_call_hash(
+        let execution_hash = transaction.seed_time_trigger_invocation_call_hash(
             trg_id,
             action.authority(),
             time_event,
@@ -56056,13 +56219,13 @@ impl<'state> StateBlock<'state> {
             Err(reason) => {
                 entrypoint.instructions =
                     StateTransaction::execution_step_from_executable(action.executable());
-                return (entrypoint, Err(reason));
+                return (entrypoint, execution_hash, Err(reason));
             }
         }
         let trigger_sequence =
             match transaction.execute_data_triggers_dfs_from(action.authority(), 1) {
                 Ok(sequence) => sequence,
-                err => return (entrypoint, err),
+                err => return (entrypoint, execution_hash, err),
             };
         let _ = transaction
             .world
@@ -56075,7 +56238,7 @@ impl<'state> StateBlock<'state> {
             transaction.decrease_trigger_repeats_and_cleanup(trg_id);
         }
         transaction.apply();
-        (entrypoint, Ok(trigger_sequence))
+        (entrypoint, execution_hash, Ok(trigger_sequence))
     }
     fn handle_failed_time_trigger(
         &mut self,
@@ -59867,6 +60030,12 @@ mod transfer_transcript_tests {
     include!("state/transfer_transcript_tests.rs");
 }
 #[cfg(test)]
+mod fastpq_quantity_domain_tests;
+#[cfg(test)]
+mod fastpq_source_context_tests;
+#[cfg(test)]
+mod fastpq_time_identity_tests;
+#[cfg(test)]
 mod fastpq_tx_set_hash_tests {
     use super::*;
     use crate::{
@@ -59944,6 +60113,18 @@ mod fastpq_tx_set_hash_tests {
                 .expect("canonical ordered transaction set")
                 .into();
         assert_eq!(state_block.fastpq_tx_set_hash, Some(expected));
+        let inventory = state_block.fastpq_source_inventory().unwrap().unwrap();
+        assert_eq!(inventory.entries().len(), 2);
+        assert!(inventory.transcript_entry_hashes().is_empty());
+        assert_eq!(inventory.tx_set_hash(), expected);
+        assert_eq!(
+            inventory.entries()[0].entry_hash,
+            Hash::from(entrypoints[0].hash())
+        );
+        assert_eq!(
+            inventory.entries()[1].entry_hash,
+            Hash::from(entrypoints[1].hash())
+        );
     }
     #[test]
     fn capture_exec_witness_uses_cached_tx_set_hash() {
@@ -59954,7 +60135,12 @@ mod fastpq_tx_set_hash_tests {
         let mut state_block = state.block(header);
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
-        let tx_set_hash = [0xEE; 32];
+        // These fixtures contain only an internal execution call and no external wires.
+        let entrypoints: [TransactionEntrypoint; 0] = [];
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
+                .expect("canonical empty external transaction set")
+                .into();
         state_block.set_fastpq_tx_set_hash(tx_set_hash);
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
@@ -59981,8 +60167,18 @@ mod fastpq_tx_set_hash_tests {
                 &batch_hash,
             )),
         };
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
-        state_block.capture_exec_witness();
+        {
+            let mut tx = state_block.transaction();
+            tx.tx_call_hash = Some(batch_hash);
+            tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
+            tx.apply();
+        }
+        state_block
+            .finalize_fastpq_source_inventory(&[], &[], &[])
+            .unwrap();
+        let transcripts = state_block.drain_transfer_transcripts();
+        assert_eq!(transcripts[&batch_hash], vec![transcript.clone()]);
+        state_block.capture_exec_witness().unwrap();
         let witness = state_block.take_exec_witness().expect("exec witness");
         let casting_writes = witness
             .writes
@@ -60015,11 +60211,15 @@ mod fastpq_tx_set_hash_tests {
         state_block.fastpq_tx_set_hash = None;
         crate::sumeragi::witness::start_block();
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
-        state_block.capture_exec_witness();
-        let missing = state_block
-            .take_fastpq_witness_context()
-            .expect("FASTPQ context");
-        assert_eq!(missing.tx_set_hash, None);
+        assert!(state_block.capture_exec_witness().is_err());
+        assert!(state_block.take_exec_witness().is_none());
+        assert!(state_block.take_fastpq_witness_context().is_none());
+        assert!(
+            state_block
+                .take_parliament_timed_ovn_casting_bindings()
+                .is_none()
+        );
+        let _ = crate::sumeragi::witness::drain_exec_witness();
     }
     #[test]
     fn capture_exec_witness_skips_replay_blocks_and_clears_active_capture() {
@@ -60057,7 +60257,7 @@ mod fastpq_tx_set_hash_tests {
             )),
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
-        state_block.capture_exec_witness();
+        state_block.capture_exec_witness().unwrap();
         assert!(state_block.take_exec_witness().is_none());
         assert!(state_block.take_fastpq_witness_context().is_none());
         let witness = crate::sumeragi::witness::drain_exec_witness();
@@ -60074,6 +60274,13 @@ mod fastpq_tx_set_hash_tests {
         let mut state_block = state.block(header);
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
+        // These fixtures contain only an internal execution call and no external wires.
+        let entrypoints: [TransactionEntrypoint; 0] = [];
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
+                .expect("canonical empty external transaction set")
+                .into();
+        state_block.set_fastpq_tx_set_hash(tx_set_hash);
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -60099,12 +60306,20 @@ mod fastpq_tx_set_hash_tests {
                 &batch_hash,
             )),
         };
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        {
+            let mut tx = state_block.transaction();
+            tx.tx_call_hash = Some(batch_hash);
+            tx.current_dataspace_id = Some(DataSpaceId::new(7));
+            tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
+            tx.apply();
+        }
+        state_block
+            .finalize_fastpq_source_inventory(&[], &[], &[])
+            .unwrap();
+        let transcripts = state_block.drain_transfer_transcripts();
+        assert_eq!(transcripts[&batch_hash], vec![transcript]);
         let dsid = DataSpaceId::new(7);
-        let mut entries = BTreeMap::new();
-        entries.insert(batch_hash, dsid);
-        state_block.set_fastpq_entry_dataspaces(entries);
-        state_block.capture_exec_witness();
+        state_block.capture_exec_witness().unwrap();
         let witness = state_block.take_exec_witness().expect("exec witness");
         let context = state_block
             .take_fastpq_witness_context()
@@ -60138,6 +60353,13 @@ mod fastpq_tx_set_hash_tests {
         let mut state_block = state.block(header);
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
+        // These fixtures contain only an internal execution call and no external wires.
+        let entrypoints: [TransactionEntrypoint; 0] = [];
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
+                .expect("canonical empty external transaction set")
+                .into();
+        state_block.set_fastpq_tx_set_hash(tx_set_hash);
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -60163,8 +60385,18 @@ mod fastpq_tx_set_hash_tests {
                 &batch_hash,
             )),
         };
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
-        state_block.capture_exec_witness();
+        {
+            let mut tx = state_block.transaction();
+            tx.tx_call_hash = Some(batch_hash);
+            tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
+            tx.apply();
+        }
+        state_block
+            .finalize_fastpq_source_inventory(&[], &[], &[])
+            .unwrap();
+        let transcripts = state_block.drain_transfer_transcripts();
+        assert_eq!(transcripts[&batch_hash], vec![transcript]);
+        state_block.capture_exec_witness().unwrap();
         let witness = state_block.take_exec_witness().expect("exec witness");
         let context = state_block
             .take_fastpq_witness_context()
@@ -62828,24 +63060,20 @@ impl StateTransaction<'_, '_> {
         &mut self,
         authority: &AccountId,
         batch_hash: iroha_crypto::Hash,
-        mut deltas: Vec<TransferDeltaTranscript>,
+        deltas: Vec<TransferDeltaTranscript>,
     ) {
-        if deltas.is_empty() {
-            return;
-        }
-        let authority_digest = crate::fastpq::authority_digest(authority);
-        let poseidon_preimage_digest = match deltas.as_slice() {
-            [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
-            _ => None,
-        };
-        let transcript = TransferTranscript {
-            batch_hash,
-            deltas: core::mem::take(&mut deltas),
-            authority_digest,
-            poseidon_preimage_digest,
-        };
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
-        self.pending_transfer_transcripts.push(transcript);
+        self.stage_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas);
+    }
+    /// Exercise native transcript capture in state tests without exposing a
+    /// second production route around typed numeric movement authorization.
+    #[cfg(test)]
+    fn record_test_transfer_transcripts(
+        &mut self,
+        authority: &AccountId,
+        batch_hash: iroha_crypto::Hash,
+        deltas: Vec<TransferDeltaTranscript>,
+    ) {
+        self.record_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas);
     }
     /// Generate the next canonical RWA identifier for this transaction scope.
     ///
@@ -63208,6 +63436,8 @@ impl StateTransaction<'_, '_> {
             pending_block_fee_amount,
             fastpq_transcripts,
             mut pending_transfer_transcripts,
+            block_fastpq_source_captures,
+            mut pending_fastpq_source_captures,
             block_axt_envelopes,
             mut pending_axt_envelopes,
             block_axt_next_handle_counters,
@@ -63293,6 +63523,16 @@ impl StateTransaction<'_, '_> {
             }
         }
         if !pending_transfer_transcripts.is_empty() {
+            if tx_call_hash.is_some_and(|hash| {
+                pending_transfer_transcripts
+                    .iter()
+                    .any(|transcript| transcript.batch_hash != hash)
+            }) {
+                pending_fastpq_source_captures.record(Err(
+                    crate::fastpq::FastpqSourceCaptureError::ExecutionIdentityMismatch,
+                ));
+            }
+            block_fastpq_source_captures.merge(pending_fastpq_source_captures);
             if let Some(hash) = tx_call_hash {
                 fastpq_transcripts
                     .entry(hash)
@@ -65029,11 +65269,11 @@ impl StateTransaction<'_, '_> {
         authority: &AccountId,
         event: &TimeEvent,
         invocation_index: usize,
-    ) {
+    ) -> Hash {
         use norito::codec::Encode as _;
 
-        if self.tx_call_hash.is_some() {
-            return;
+        if let Some(hash) = self.tx_call_hash {
+            return hash;
         }
         let invocation_index = u64::try_from(invocation_index)
             .expect("time-trigger invocation count is bounded by u32");
@@ -65043,7 +65283,9 @@ impl StateTransaction<'_, '_> {
         buf.extend_from_slice(&id.encode());
         buf.extend_from_slice(&authority.encode());
         buf.extend_from_slice(&event.encode());
-        self.tx_call_hash = Some(iroha_crypto::Hash::new(buf));
+        let hash = iroha_crypto::Hash::new(buf);
+        self.tx_call_hash = Some(hash);
+        hash
     }
     fn seed_time_trigger_call_hash(
         &mut self,

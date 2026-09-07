@@ -1635,7 +1635,7 @@ where
     let fft_time = start_timer!(|| "Calculate advice polys (fft)");
 
     // Calculate the advice polys
-    let advice: Vec<AdviceSingle<Scheme::Curve, Coeff>> = advice
+    let mut advice: Vec<AdviceSingle<Scheme::Curve, Coeff>> = advice
         .into_iter()
         .map(
             |AdviceSingle {
@@ -1658,12 +1658,12 @@ where
     #[cfg(feature = "profile")]
     let phase4_time = start_timer!(|| "Phase 4: Evaluate h(X)");
     // Evaluate the h(X) polynomial
-    let h_poly = pk.ev.evaluate_h(
+    let (h_poly, restored_advice) = pk.ev.evaluate_h_consuming_advice(
         &pk,
-        &advice
-            .iter()
-            .map(|a| a.advice_polys.as_slice())
-            .collect::<Vec<_>>(),
+        advice
+            .iter_mut()
+            .map(|a| std::mem::take(&mut a.advice_polys))
+            .collect(),
         &instance
             .iter()
             .map(|i| i.instance_polys.as_slice())
@@ -1677,6 +1677,10 @@ where
         &permutations,
         true,
     );
+    assert_eq!(restored_advice.len(), advice.len());
+    for (single, restored) in advice.iter_mut().zip(restored_advice) {
+        single.advice_polys = restored;
+    }
     // The quotient is the final user of this proving-only preprocessing. Keep
     // the verifier key, queried fixed/sigma polynomials, and committed witness
     // polynomials intact for evaluation and multi-open, but release the three

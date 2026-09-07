@@ -7152,7 +7152,12 @@ pub(crate) mod valid {
             {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            state_block.capture_exec_witness();
+            if let Err(error) = state_block
+                .capture_exec_witness()
+                .map_err(Self::execution_context_error)
+            {
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
@@ -7227,7 +7232,17 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            state_block.capture_exec_witness();
+            if let Err(error) = state_block
+                .capture_exec_witness()
+                .map_err(Self::execution_context_error)
+            {
+                let ev = PipelineEventBox::from(BlockEvent {
+                    header: block.header(),
+                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                });
+                send_events(ev);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
@@ -8031,7 +8046,15 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            state_block.capture_exec_witness();
+            if let Err(error) = state_block
+                .capture_exec_witness()
+                .map_err(Self::execution_context_error)
+            {
+                drop(state_block);
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             drop(exec_witness_guard);
             if block.is_empty() && !allow_empty_block {
                 let error = BlockValidationError::EmptyBlock;
@@ -11784,7 +11807,7 @@ pub(crate) mod valid {
                 &ordered_results,
                 &routing_decisions,
             )?;
-            let (time_trgs, mut time_hashes, mut time_results) =
+            let (time_trgs, mut time_hashes, mut time_results, time_execution_hashes) =
                 state_block.execute_time_triggers(&block.header());
             #[cfg(test)]
             execute_soracloud_mailbox_runtime(state_block);
@@ -11797,20 +11820,6 @@ pub(crate) mod valid {
                 );
             }
             let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
-            let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
-            for (idx, entrypoint) in entrypoints.iter().enumerate() {
-                let execution_hash = entrypoint.execution_call_hash();
-                fastpq_entry_dataspaces.insert(
-                    iroha_crypto::Hash::from(execution_hash),
-                    routing_decisions[idx].dataspace_id,
-                );
-            }
-            for entry_hash in &time_hashes {
-                fastpq_entry_dataspaces.insert(
-                    iroha_crypto::Hash::from(*entry_hash),
-                    DataSpaceId::UNIVERSAL,
-                );
-            }
             ordered_hashes.append(&mut time_hashes);
             ordered_results.append(&mut time_results);
             let time_entrypoints = time_trgs
@@ -11828,9 +11837,15 @@ pub(crate) mod valid {
             })?
             .into();
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
-            state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
-            let fastpq_transcripts =
-                state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
+            state_block
+                .finalize_fastpq_source_inventory_with_pending(
+                    &entrypoints,
+                    &routing_decisions,
+                    &time_execution_hashes,
+                    fastpq_digest_batch,
+                )
+                .map_err(Self::execution_context_error)?;
+            let fastpq_transcripts = state_block.drain_transfer_transcripts_with_pending(None);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
             let committed_fragment_count = Self::validated_committed_fragment_count(
@@ -15649,7 +15664,7 @@ pub(crate) mod valid {
                 &routing_decisions,
             )?;
             let time_triggers_start = timings.as_ref().map(|_| Instant::now());
-            let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
+            let (time_trgs, mut time_trg_hashes, mut time_trg_results, time_execution_hashes) =
                 state_block.execute_time_triggers(&block.header());
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
                 timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
@@ -15670,37 +15685,8 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), digest_submit_start) {
                 timings.execution_tx_finalize_digest_submit_ms = to_ms(start.elapsed());
             }
-            let dataspaces_start = timings.as_ref().map(|_| Instant::now());
-            let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
-            let fastpq_execution_hashes = block
-                .external_entrypoints_slice()
-                .iter()
-                .map(TransactionEntrypoint::execution_call_hash)
-                .collect::<Vec<_>>();
-            if fastpq_execution_hashes.len() != routing_decisions.len() {
-                return Err(Self::execution_context_error(format!(
-                    "FASTPQ execution-call identities do not align with routing decisions: {} identities, {} routes",
-                    fastpq_execution_hashes.len(),
-                    routing_decisions.len(),
-                )));
-            }
-            for (idx, entry_hash) in fastpq_execution_hashes.iter().enumerate() {
-                fastpq_entry_dataspaces.insert(
-                    iroha_crypto::Hash::from(*entry_hash),
-                    routing_decisions[idx].dataspace_id,
-                );
-            }
-            for entry_hash in &time_trg_hashes {
-                fastpq_entry_dataspaces.insert(
-                    iroha_crypto::Hash::from(*entry_hash),
-                    DataSpaceId::UNIVERSAL,
-                );
-            }
             hashes.append(&mut time_trg_hashes);
             ordered_results.append(&mut time_trg_results);
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), dataspaces_start) {
-                timings.execution_tx_finalize_dataspaces_ms = to_ms(start.elapsed());
-            }
             let tx_set_start = timings.as_ref().map(|_| Instant::now());
             let time_entrypoints = time_trgs
                 .iter()
@@ -15720,13 +15706,23 @@ pub(crate) mod valid {
             })?
             .into();
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
-            state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), tx_set_start) {
                 timings.execution_tx_finalize_tx_set_ms = to_ms(start.elapsed());
             }
+            let source_inventory_start = timings.as_ref().map(|_| Instant::now());
+            state_block
+                .finalize_fastpq_source_inventory_with_pending(
+                    block.external_entrypoints_slice(),
+                    &routing_decisions,
+                    &time_execution_hashes,
+                    fastpq_digest_batch,
+                )
+                .map_err(Self::execution_context_error)?;
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), source_inventory_start) {
+                timings.execution_tx_finalize_dataspaces_ms = to_ms(start.elapsed());
+            }
             let transcripts_start = timings.as_ref().map(|_| Instant::now());
-            let fastpq_transcripts =
-                state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
+            let fastpq_transcripts = state_block.drain_transfer_transcripts_with_pending(None);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), transcripts_start) {
                 timings.execution_tx_finalize_transcripts_ms = to_ms(start.elapsed());
             }
@@ -15902,7 +15898,9 @@ pub(crate) mod valid {
             Self::validate_staged_merge_execution_authorization(&block, state_block).expect(
                 "unchecked certified merge execution requires exact post-effect authorization",
             );
-            state_block.capture_exec_witness();
+            state_block
+                .capture_exec_witness()
+                .expect("unchecked block requires intact finalized FASTPQ source ownership");
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
         }
@@ -30598,6 +30596,23 @@ pub(crate) mod tests {
                 Json::new("revealed"),
             )])
             .sign(keypair.private_key());
+        sealed_entrypoints_from_signed(
+            network_id,
+            authority,
+            keypair,
+            reveal_after_height,
+            reveal_deadline_height,
+            signed,
+        )
+    }
+    fn sealed_entrypoints_from_signed(
+        network_id: NetworkId,
+        authority: &AccountId,
+        keypair: &KeyPair,
+        reveal_after_height: u64,
+        reveal_deadline_height: u64,
+        signed: SignedTransaction,
+    ) -> (TransactionEntrypoint, TransactionEntrypoint) {
         let salt = [0x5A; 32];
         let commitment = compute_sealed_transaction_commitment(
             &network_id,
@@ -30914,6 +30929,24 @@ seiyaku DynamicAccessCounter {
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
+        let contract_subject = contract_address.subject_id();
+        world.accounts.insert(
+            contract_subject.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.contract_subject_bindings.insert(
+            contract_address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract_address,
+                alice.clone(),
+            )
+            .with_active_code_hash(code_hash),
+        );
+        world
+            .contract_subject_addresses
+            .insert(contract_subject, contract_address.clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
@@ -31081,6 +31114,24 @@ seiyaku DynamicTarget {
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
+        let contract_subject = contract_address.subject_id();
+        world.accounts.insert(
+            contract_subject.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.contract_subject_bindings.insert(
+            contract_address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract_address,
+                alice.clone(),
+            )
+            .with_active_code_hash(code_hash),
+        );
+        world
+            .contract_subject_addresses
+            .insert(contract_subject, contract_address.clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
@@ -31243,7 +31294,8 @@ seiyaku DynamicTarget {
     fn block_validation_non_external_entrypoint_uses_sequential_fallback() {
         use crate::state::TransactionsReadOnly;
         use iroha_data_model::{
-            events::time::{ExecutionTime, TimeEventFilter},
+            events::time::{ExecutionTime, TimeEvent, TimeEventFilter, TimeInterval},
+            fastpq::{FastpqSourceExecutionKindV1, FastpqSourceRouteV1},
             trigger::{
                 Trigger,
                 action::{Action, Repeats},
@@ -31253,9 +31305,10 @@ seiyaku DynamicTarget {
         let chain_id = ChainId::from("non-external-sequential-fallback");
         let (authority, keypair) = gen_account_in("wonderland");
         let state = state_with_transaction_policy(&chain_id, &authority, false, false);
-        let time_trigger_id = "non_external_sequential_heartbeat"
-            .parse()
-            .expect("trigger id");
+        let time_trigger_id: iroha_data_model::trigger::TriggerId =
+            "non_external_sequential_heartbeat"
+                .parse()
+                .expect("trigger id");
         let mut trigger_metadata = Metadata::default();
         trigger_metadata.insert(
             "__registered_block_height"
@@ -31268,7 +31321,7 @@ seiyaku DynamicTarget {
             Json::new(0_u64),
         );
         let time_trigger = Trigger::new(
-            time_trigger_id,
+            time_trigger_id.clone(),
             Action::new(
                 vec![InstructionBox::from(Log::new(
                     Level::INFO,
@@ -31294,12 +31347,23 @@ seiyaku DynamicTarget {
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 2, 4, metadata_key);
         let commitment_entrypoint_hash = commitment_entrypoint.hash();
+        let commitment_call_hash = Hash::from(commitment_entrypoint.execution_call_hash());
         let accepted =
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
         let block = BlockBuilder::new(vec![accepted])
             .chain(0, state.view().latest_block().as_deref())
             .sign(keypair.private_key())
             .unpack(|_| {});
+        let time_event = TimeEvent {
+            interval: TimeInterval::new(block.header().creation_time(), Duration::ZERO),
+        };
+        let mut invocation_preimage = Vec::from(&b"iroha:time-trigger:execution:v1\0"[..]);
+        invocation_preimage.extend_from_slice(block.header().hash().as_ref());
+        invocation_preimage.extend_from_slice(&0_u64.to_be_bytes());
+        invocation_preimage.extend_from_slice(&time_trigger_id.encode());
+        invocation_preimage.extend_from_slice(&authority.encode());
+        invocation_preimage.extend_from_slice(&time_event.encode());
+        let expected_time_call_hash = Hash::new(invocation_preimage);
         let mut state_block = state.block(block.header());
         let valid_block = block
             .validate_and_record_transactions(&mut state_block)
@@ -31324,9 +31388,38 @@ seiyaku DynamicTarget {
         );
         assert_eq!(
             state_block.transactions.get(&time_trigger_hash),
-            Some(nonzero!(1_usize)),
-            "the staged membership set must include deterministic time-trigger entrypoints"
+            None,
+            "the time-trigger display hash is not a signed canonical replay carrier"
         );
+        let source_inventory = state_block
+            .fastpq_source_inventory()
+            .expect("valid finalized source inventory")
+            .expect("execution retains its complete source inventory");
+        let canonical_entrypoints = valid_block
+            .as_ref()
+            .entrypoints_cloned()
+            .collect::<Vec<_>>();
+        let expected_tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                canonical_entrypoints.iter(),
+            )
+            .expect("canonical sequential transaction set")
+            .into();
+        assert_eq!(source_inventory.tx_set_hash(), expected_tx_set_hash);
+        assert_eq!(source_inventory.entries().len(), 2);
+        assert_eq!(
+            source_inventory.entries()[0].entry_hash,
+            commitment_call_hash
+        );
+        let time_source = &source_inventory.entries()[1];
+        assert_eq!(time_source.entry_hash, expected_time_call_hash);
+        assert_ne!(time_source.entry_hash, Hash::from(time_trigger_hash));
+        assert_eq!(
+            time_source.execution_kind,
+            FastpqSourceExecutionKindV1::ExecutionCall
+        );
+        assert_eq!(time_source.route, FastpqSourceRouteV1::Unrouted);
+        assert_eq!(time_source.dataspace_id, DataSpaceId::UNIVERSAL);
     }
     #[test]
     fn block_validation_sequential_entrypoints_execute_pipeline_triggers() {
@@ -31372,7 +31465,7 @@ seiyaku DynamicTarget {
         );
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
             world,
             kura,
             query_handle,
@@ -31381,6 +31474,32 @@ seiyaku DynamicTarget {
         )
         .expect("test state must accept its explicit network id");
         install_test_lane_manifests(&state);
+        // Settlement finality binds the exact dataspace proof policy as well as lane status.
+        let manifest = iroha_data_model::nexus::AssetPermissionManifest {
+            version: iroha_data_model::nexus::ManifestVersion::default(),
+            uaid: iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+                b"sequential-pipeline-trigger-manifest-owner",
+            )),
+            dataspace: DataSpaceId::UNIVERSAL,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let manifest_record =
+            crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        let mut manifest_root = [0_u8; 32];
+        manifest_root.copy_from_slice(manifest_record.manifest_hash.as_ref());
+        state.set_axt_policy(
+            DataSpaceId::UNIVERSAL,
+            iroha_data_model::nexus::AxtPolicyEntry {
+                manifest_root,
+                target_lane: LaneId::SINGLE,
+                active_handle_era: 1,
+                next_handle_counter: 1,
+                current_slot: 0,
+            },
+        );
         let metadata_key = Name::from_str("sequential_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 2, 4, metadata_key);
@@ -31494,6 +31613,7 @@ seiyaku DynamicTarget {
         let statements = valid_block.as_ref().lane_finality_statements();
         assert_eq!(statements.len(), 1);
         let statement = &statements[0];
+        assert_eq!(statement.manifest_root, manifest_root);
         assert_eq!(
             statement.block_header_hash,
             valid_block.as_ref().hash(),
@@ -31643,16 +31763,58 @@ seiyaku DynamicTarget {
     fn block_pipeline_executes_sealed_reveal_and_records_entrypoint_hash() {
         let chain_id = ChainId::from("sealed-block-pipeline");
         let (authority, keypair) = gen_account_in("wonderland");
-        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
-        let metadata_key = Name::from_str("sealed_reveal_executed").expect("metadata key");
-        let (commitment_entrypoint, reveal_entrypoint) = sealed_set_key_entrypoints(
-            state.network_id,
-            &authority,
-            &keypair,
-            2,
-            4,
-            metadata_key.clone(),
+        let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let (fee_sink, _) = gen_account_in("wonderland");
+        let fee_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "sealed_fee".parse().unwrap(),
         );
+        {
+            let mut genesis =
+                state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut transaction = genesis.transaction();
+            Register::account(Account::new(fee_sink.clone()))
+                .execute(&authority, &mut transaction)
+                .unwrap();
+            Register::asset_definition(AssetDefinition::numeric(
+                fee_asset.clone(),
+                "sealed fee",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&authority, &mut transaction)
+            .unwrap();
+            Mint::asset_quantity(1_u32, AssetId::new(fee_asset.clone(), authority.clone()))
+                .execute(&authority, &mut transaction)
+                .unwrap();
+            transaction.apply();
+            genesis.commit_world_overlay_for_testing().unwrap();
+        }
+        state.nexus.get_mut().fees.fee_asset_id = fee_asset.to_string();
+        state.nexus.get_mut().fees.fee_sink_account_id = fee_sink.to_string();
+        let metadata_key = Name::from_str("sealed_reveal_executed").expect("metadata key");
+        let mut builder = TransactionBuilder::new(
+            state.network_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                    iroha_data_model::transaction::FeeChargeKind::Nexus,
+                    fee_asset,
+                    Quantity::from(1_u32),
+                )],
+                None,
+            ),
+        );
+        builder.set_creation_time(Duration::ZERO);
+        let signed = builder
+            .with_instructions([SetKeyValue::account(
+                authority.clone(),
+                metadata_key.clone(),
+                Json::new("revealed"),
+            )])
+            .sign(keypair.private_key());
+        let (commitment_entrypoint, reveal_entrypoint) =
+            sealed_entrypoints_from_signed(state.network_id, &authority, &keypair, 2, 4, signed);
         let commitment_entrypoint_hash = commitment_entrypoint.hash();
         let reveal_entrypoint_hash = reveal_entrypoint.hash();
         let accepted_commitment =
@@ -32007,6 +32169,14 @@ seiyaku DynamicTarget {
             .expect("canonical sealed-reveal transaction set")
             .into();
         assert_eq!(fastpq_context.tx_set_hash, Some(expected_tx_set_hash));
+        assert_eq!(
+            reveal_state_block
+                .fastpq_source_inventory()
+                .expect("valid finalized reveal inventory")
+                .expect("reveal execution retains source ownership")
+                .tx_set_hash(),
+            expected_tx_set_hash,
+        );
         assert_eq!(
             reveal_state_block
                 .world

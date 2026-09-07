@@ -1101,81 +1101,98 @@ where
             // multi-million-entry map beside the dense trace.
             Some(copy_manager.lock().map_err(|_| Error::Synthesis)?)
         };
-        let mut lane_rows = (0..configured_lanes)
-            .map(|_| Vec::<RawRow<Base<C>>>::new())
-            .collect::<Vec<_>>();
-        let mut rings = Vec::<Vec<LaneEndpoint>>::with_capacity(self.jobs.len());
-        for (job_index, job) in self.jobs.iter().enumerate() {
-            let lane_count = job.source_count_tags.len();
-            let mut offset = choose_offset::<C>(&job.sources).map_err(|_| Error::Synthesis)?;
-            let mut endpoints = Vec::with_capacity(lane_count);
-            for (logical_lane, physical_lane) in job.physical_lanes.iter().copied().enumerate() {
-                let (source_start, source_end) =
-                    dense_shard_bounds(job.sources.len(), lane_count, logical_lane);
-                let rows_for_lane = &mut lane_rows[physical_lane];
-                let row_start = rows_for_lane.len();
-                let (mut rows, terminal) = build_job_lane_rows::<C>(
-                    job,
-                    job_index,
-                    logical_lane,
-                    source_start,
-                    source_end,
-                    offset,
-                )?;
-                endpoints.push(LaneEndpoint {
-                    lane: physical_lane,
-                    offset_x_row: row_start + OFFSET_X_BRIDGE_ROW,
-                    offset_y_row: row_start + OFFSET_Y_BRIDGE_ROW,
-                    terminal_x_row: row_start + rows.len() - 2,
-                    terminal_y_row: row_start + rows.len() - 1,
-                });
-                rows_for_lane.append(&mut rows);
-                offset = terminal;
-            }
-            rings.push(endpoints);
-        }
+        let plan = plan_dense_rows(&self.jobs, configured_lanes, usable_rows)?;
         layouter.assign_region(
             || "Paired Pasta dense normalized-GLV MSM",
             |mut region| {
-                let mut buses = (0..configured_lanes)
-                    .map(|_| Vec::<Cell>::new())
-                    .collect::<Vec<_>>();
-                let schedule_rows = lane_rows.iter().map(Vec::len).max().unwrap_or(0);
-                for row_index in 0..schedule_rows {
-                    region.assign_fixed(
-                        config.packed_schedule,
-                        row_index,
-                        packed_enable_tag_at(&lane_rows, row_index)?,
-                    );
+                // Keep fixed values and their assignment order identical. The checked geometry
+                // determines tags without generating affine witnesses or retaining raw rows.
+                for (row_index, packed) in plan.packed_schedule.iter().copied().enumerate() {
+                    region.assign_fixed(config.packed_schedule, row_index, Base::<C>::from(packed));
                 }
-                for (lane, rows) in lane_rows.iter().enumerate() {
-                    let lane_config = &config.lanes[lane];
-                    buses[lane].reserve(rows.len());
-                    for (row_index, row) in rows.iter().enumerate() {
-                        for column in 0..DENSE_COLUMNS {
-                            let value = if self.use_unknown {
-                                Value::unknown()
-                            } else {
-                                Value::known(row.values[column])
-                            };
-                            let cell = region.assign_advice_discarding_value(
-                                lane_config.columns[column],
-                                row_index,
-                                value,
-                            );
-                            if column == BUS {
-                                buses[lane].push(cell);
-                            }
+                // Copy-edge insertion order can affect permutation cycles. Retain only bound
+                // BUS metadata, then emit lane-major virtual edges and job-major rings exactly
+                // as the former vector implementation did. All other row data dies at emission.
+                let mut bindings = plan
+                    .bound_bus_counts
+                    .iter()
+                    .map(|count| Vec::<(Cell, BusBinding)>::with_capacity(*count))
+                    .collect::<Vec<_>>();
+                let mut rings = Vec::<Vec<[Cell; 4]>>::with_capacity(self.jobs.len());
+                for (job_index, (job, shards)) in self.jobs.iter().zip(&plan.jobs).enumerate() {
+                    let mut offset =
+                        choose_offset::<C>(&job.sources).map_err(|_| Error::Synthesis)?;
+                    let mut endpoints = Vec::with_capacity(shards.len());
+                    for shard in shards {
+                        let columns = &config.lanes[shard.physical_lane].columns;
+                        let mut cells = [None; 4];
+                        let (row_count, terminal) = emit_job_lane_rows::<C>(
+                            job,
+                            job_index,
+                            shard.logical_lane,
+                            shard.source_start,
+                            shard.source_end,
+                            offset,
+                            |local_row, row| {
+                                if local_row >= shard.row_count
+                                    || row.enable_tag
+                                        != dense_row_enable_tag(local_row, shard.row_count)?
+                                {
+                                    return Err(Error::Synthesis);
+                                }
+                                let row_index = shard.row_start + local_row;
+                                for (column, column_id) in columns.iter().copied().enumerate() {
+                                    let value = if self.use_unknown {
+                                        Value::unknown()
+                                    } else {
+                                        Value::known(row.values[column])
+                                    };
+                                    let cell = region.assign_advice_discarding_value(
+                                        column_id, row_index, value,
+                                    );
+                                    if column == BUS {
+                                        if let Some(binding) = row.binding {
+                                            bindings[shard.physical_lane].push((cell, binding));
+                                        }
+                                        for (endpoint, endpoint_row) in [
+                                            OFFSET_X_BRIDGE_ROW,
+                                            OFFSET_Y_BRIDGE_ROW,
+                                            shard.row_count - 2,
+                                            shard.row_count - 1,
+                                        ]
+                                        .into_iter()
+                                        .enumerate()
+                                        {
+                                            if local_row == endpoint_row {
+                                                cells[endpoint] = Some(cell);
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(())
+                            },
+                        )?;
+                        if row_count != shard.row_count {
+                            return Err(Error::Synthesis);
                         }
+                        let [
+                            Some(offset_x),
+                            Some(offset_y),
+                            Some(terminal_x),
+                            Some(terminal_y),
+                        ] = cells
+                        else {
+                            return Err(Error::Synthesis);
+                        };
+                        endpoints.push([offset_x, offset_y, terminal_x, terminal_y]);
+                        offset = terminal;
                     }
+                    rings.push(endpoints);
                 }
                 if let Some(physical_cells) = &physical_cells {
-                    for (lane, rows) in lane_rows.iter().enumerate() {
-                        for (row_index, row) in rows.iter().enumerate() {
-                            let Some(binding) = row.binding else {
-                                continue;
-                            };
-                            let virtual_value = match binding {
+                    for lane_bindings in &bindings {
+                        for (raw, binding) in lane_bindings {
+                            let virtual_value = match *binding {
                                 BusBinding::Start { job } => self.jobs[job].start_tag,
                                 BusBinding::SourceCount { job, lane } => {
                                     self.jobs[job].source_count_tags[lane]
@@ -1194,7 +1211,7 @@ where
                             };
                             bind_virtual(
                                 &mut region,
-                                buses[lane][row_index],
+                                *raw,
                                 virtual_value,
                                 &physical_cells.assigned_advices,
                             )?;
@@ -1204,14 +1221,8 @@ where
                 for endpoints in &rings {
                     for (index, endpoint) in endpoints.iter().enumerate() {
                         let next = endpoints[(index + 1) % endpoints.len()];
-                        region.constrain_equal(
-                            buses[endpoint.lane][endpoint.terminal_x_row],
-                            buses[next.lane][next.offset_x_row],
-                        );
-                        region.constrain_equal(
-                            buses[endpoint.lane][endpoint.terminal_y_row],
-                            buses[next.lane][next.offset_y_row],
-                        );
+                        region.constrain_equal(endpoint[2], next[0]);
+                        region.constrain_equal(endpoint[3], next[1]);
                     }
                 }
                 Ok(())
@@ -1219,6 +1230,109 @@ where
         )
     }
 }
+// Small geometry-only descriptors replace the complete scalar trace. There is one shard
+// descriptor per logical lane, at most n u64 schedule entries, and 2 + 21*source_count
+// retained BUS bindings per shard. Each emitted RawRow is consumed before the next row.
+#[derive(Clone, Debug)]
+struct DenseShardRows {
+    physical_lane: usize,
+    logical_lane: usize,
+    source_start: usize,
+    source_end: usize,
+    row_start: usize,
+    row_count: usize,
+}
+#[derive(Clone, Debug)]
+struct DenseStreamingPlan {
+    jobs: Vec<Vec<DenseShardRows>>,
+    packed_schedule: Vec<u64>,
+    bound_bus_counts: Vec<usize>,
+}
+fn dense_row_enable_tag(row: usize, row_count: usize) -> Result<u64, Error> {
+    if row_count < ROWS_PER_SOURCE + ROWS_PER_JOB || row >= row_count {
+        return Err(Error::Synthesis);
+    }
+    Ok(if row == 0 {
+        1
+    } else if row + 1 == row_count {
+        0
+    } else {
+        2
+    })
+}
+fn plan_dense_rows<C>(
+    jobs: &[DenseMsmJob<C>],
+    configured_lanes: usize,
+    usable_rows: usize,
+) -> Result<DenseStreamingPlan, Error>
+where
+    C: CurveAffineExt,
+    Base<C>: BigPrimeField,
+{
+    if !(1..=DENSE_LANES).contains(&configured_lanes) {
+        return Err(Error::Synthesis);
+    }
+    let mut lane_rows = vec![0_usize; configured_lanes];
+    let mut bound_bus_counts = vec![0_usize; configured_lanes];
+    let mut packed_schedule = Vec::<u64>::new();
+    let mut planned_jobs = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let lane_count = job.source_count_tags.len();
+        if lane_count == 0
+            || lane_count > job.sources.len()
+            || job.physical_lanes.len() != lane_count
+        {
+            return Err(Error::Synthesis);
+        }
+        let mut used = vec![false; configured_lanes];
+        let mut shards = Vec::with_capacity(lane_count);
+        for (logical_lane, physical_lane) in job.physical_lanes.iter().copied().enumerate() {
+            if physical_lane >= configured_lanes || used[physical_lane] {
+                return Err(Error::Synthesis);
+            }
+            used[physical_lane] = true;
+            let (source_start, source_end) =
+                dense_shard_bounds(job.sources.len(), lane_count, logical_lane);
+            let row_count = dense_shard_rows(job.sources.len(), lane_count, logical_lane)
+                .map_err(|_| Error::Synthesis)?;
+            let row_start = lane_rows[physical_lane];
+            let row_end = row_start.checked_add(row_count).ok_or(Error::Synthesis)?;
+            if row_end > usable_rows {
+                return Err(Error::Synthesis);
+            }
+            if packed_schedule.len() < row_end {
+                packed_schedule.resize(row_end, 0);
+            }
+            let radix = PACKED_TAG_RADIX.pow(physical_lane as u32);
+            for (row, packed) in packed_schedule[row_start..row_end].iter_mut().enumerate() {
+                *packed += dense_row_enable_tag(row, row_count)? * radix;
+            }
+            let bound_count = (source_end - source_start)
+                .checked_mul(2 + SEGMENTS_PER_SCALAR)
+                .and_then(|count| count.checked_add(2))
+                .ok_or(Error::Synthesis)?;
+            bound_bus_counts[physical_lane] = bound_bus_counts[physical_lane]
+                .checked_add(bound_count)
+                .ok_or(Error::Synthesis)?;
+            shards.push(DenseShardRows {
+                physical_lane,
+                logical_lane,
+                source_start,
+                source_end,
+                row_start,
+                row_count,
+            });
+            lane_rows[physical_lane] = row_end;
+        }
+        planned_jobs.push(shards);
+    }
+    Ok(DenseStreamingPlan {
+        jobs: planned_jobs,
+        packed_schedule,
+        bound_bus_counts,
+    })
+}
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct LaneEndpoint {
     lane: usize,
@@ -1227,7 +1341,7 @@ struct LaneEndpoint {
     terminal_x_row: usize,
     terminal_y_row: usize,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BusBinding {
     Start {
         job: usize,
@@ -1256,6 +1370,7 @@ struct RawRow<F: PrimeField> {
     binding: Option<BusBinding>,
     enable_tag: u64,
 }
+#[cfg(test)]
 fn packed_enable_tag_at<F: PrimeField>(
     lane_rows: &[Vec<RawRow<F>>],
     row_index: usize,
@@ -1798,14 +1913,15 @@ where
         value | (u64::from(source.bits[scalar][bit_start + bit]) << bit)
     })
 }
-fn build_job_lane_rows<C>(
+fn emit_job_lane_rows<C>(
     job: &DenseMsmJob<C>,
     job_index: usize,
     lane: usize,
     source_start: usize,
     source_end: usize,
     offset: C::Curve,
-) -> Result<(Vec<RawRow<Base<C>>>, C::Curve), Error>
+    mut emit: impl FnMut(usize, RawRow<Base<C>>) -> Result<(), Error>,
+) -> Result<(usize, C::Curve), Error>
 where
     C: CurveAffineExt,
     Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
@@ -1813,7 +1929,12 @@ where
 {
     debug_assert!(source_start < source_end && source_end <= job.sources.len());
     let (offset_x, offset_y) = affine_coordinates::<C>(&offset).map_err(|_| Error::Synthesis)?;
-    let mut rows = Vec::new();
+    let mut row_count = 0_usize;
+    let mut emit_row = |row| {
+        emit(row_count, row)?;
+        row_count = row_count.checked_add(1).ok_or(Error::Synthesis)?;
+        Ok::<_, Error>(())
+    };
     let mut state = MachineWitness::<Base<C>>::default();
     let mut start = raw_row(
         state,
@@ -1824,13 +1945,13 @@ where
     start.values[START] = Base::<C>::ONE;
     start.values[ADD_INVERSE] =
         Option::<Base<C>>::from(offset_y.invert()).ok_or(Error::Synthesis)?;
-    rows.push(start);
+    emit_row(start)?;
     state.acc_x = offset_x;
     state.acc_y = offset_y;
     state.offset_x = offset_x;
     state.offset_y = offset_y;
     let source_count = u64::try_from(source_end - source_start).map_err(|_| Error::Synthesis)?;
-    rows.push(raw_row(
+    emit_row(raw_row(
         state,
         Base::<C>::from(source_count),
         Some(MODE_COUNT),
@@ -1838,14 +1959,14 @@ where
             job: job_index,
             lane,
         }),
-    ));
+    ))?;
     state.remaining_sources = Base::<C>::from(source_count);
     state.remaining_segments = Base::<C>::from(SEGMENTS_PER_SCALAR as u64);
     let mut accumulator = offset;
     for (source_offset, source) in job.sources[source_start..source_end].iter().enumerate() {
         let source_index = source_start + source_offset;
         let (r_x, r_y) = source.r.into_coordinates();
-        rows.push(raw_row(
+        emit_row(raw_row(
             state,
             r_x,
             Some(MODE_LOAD_X),
@@ -1853,7 +1974,7 @@ where
                 job: job_index,
                 source: source_index,
             }),
-        ));
+        ))?;
         state.source_x = r_x;
         state.source_y = Base::<C>::ZERO;
         state.remaining_segments = Base::<C>::from(SEGMENTS_PER_SCALAR as u64);
@@ -1868,7 +1989,7 @@ where
         );
         load_y.values[ADD_INVERSE] =
             Option::<Base<C>>::from(r_y.invert()).ok_or(Error::Synthesis)?;
-        rows.push(load_y);
+        emit_row(load_y)?;
         state.source_y = r_y;
         let mut running_source = source.r.to_curve();
         for segment in 0..SEGMENTS_PER_SCALAR {
@@ -1961,7 +2082,7 @@ where
                 } else {
                     offset_x
                 };
-                rows.push(operation);
+                emit_row(operation)?;
                 state.acc_x = next_acc_x;
                 state.acc_y = next_acc_y;
                 state.part_1 = Base::<C>::from(part_1 >> (local_bit + 1));
@@ -1978,13 +2099,43 @@ where
     }
     // The final operation constrains this otherwise inactive bus cell to the
     // terminal accumulator's y coordinate.
-    rows.push(raw_row(state, state.acc_y, None, None));
+    emit_row(raw_row(state, state.acc_y, None, None))?;
     debug_assert_eq!(
-        rows.len(),
+        row_count,
         (source_end - source_start) * ROWS_PER_SOURCE + ROWS_PER_JOB
     );
-    Ok((rows, accumulator))
+    Ok((row_count, accumulator))
 }
+#[cfg(test)]
+fn build_job_lane_rows<C>(
+    job: &DenseMsmJob<C>,
+    job_index: usize,
+    lane: usize,
+    source_start: usize,
+    source_end: usize,
+    offset: C::Curve,
+) -> Result<(Vec<RawRow<Base<C>>>, C::Curve), Error>
+where
+    C: CurveAffineExt,
+    Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    Scalar<C>: BigPrimeField,
+{
+    let mut rows = Vec::new();
+    let (_, terminal) = emit_job_lane_rows::<C>(
+        job,
+        job_index,
+        lane,
+        source_start,
+        source_end,
+        offset,
+        |_, row| {
+            rows.push(row);
+            Ok(())
+        },
+    )?;
+    Ok((rows, terminal))
+}
+
 #[cfg(test)]
 fn build_job_rows<C>(job: &DenseMsmJob<C>, job_index: usize) -> Result<Vec<RawRow<Base<C>>>, Error>
 where
@@ -3171,4 +3322,5 @@ mod tests {
         .expect("mock prover runs");
         assert!(prover.verify().is_err());
     }
+    include!("pasta_dense_msm_streaming_tests.rs");
 }

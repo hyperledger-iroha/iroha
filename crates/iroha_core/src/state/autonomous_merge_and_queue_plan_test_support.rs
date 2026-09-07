@@ -877,11 +877,12 @@ fn staged_autonomous_merge_commit_block<'state>(
         "successful re-execution must mint canonical WSV commit authorization"
     );
     stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, carrier);
-    let (time_entrypoints, time_hashes, time_results) =
+    let (time_entrypoints, time_hashes, time_results, time_execution_hashes) =
         state_block.execute_time_triggers(&carrier.header());
     assert!(time_entrypoints.is_empty());
     assert!(time_hashes.is_empty());
     assert!(time_results.is_empty());
+    assert!(time_execution_hashes.is_empty());
     state_block
         .validate_staged_merge_execution_authorization()
         .expect("pre-vote authorization must bind deterministic carrier events");

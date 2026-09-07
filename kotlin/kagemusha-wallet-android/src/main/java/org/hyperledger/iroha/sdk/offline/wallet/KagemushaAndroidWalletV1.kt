@@ -5,6 +5,7 @@ package org.hyperledger.iroha.sdk.offline.wallet
 
 import org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
 import org.hyperledger.iroha.sdk.offline.KagemushaHardwareProviderV1
+import org.hyperledger.iroha.sdk.offline.KagemushaHardwareQualificationV1
 import org.hyperledger.iroha.sdk.offline.KagemushaWalletV1
 import org.hyperledger.iroha.sdk.offline.KagemushaOperationIntentStoreV1
 
@@ -61,15 +62,27 @@ object KagemushaAndroidWalletV1 {
             )
         val provider = factory.open(bridge, intentStore, authorizeBootstrap)
         val qualification = provider.qualification()
+        requireNativeQualificationBinding(
+            qualification,
+            bridgeCapabilities.hardwarePolicyId(),
+            bridgeCapabilities.qualificationReportDigest(),
+        )
+        return KagemushaWalletV1.open(provider, authorizeBootstrap)
+    }
+
+    /** Check correlation after native qualification; matching public fields grants no authority. */
+    internal fun requireNativeQualificationBinding(
+        qualification: KagemushaHardwareQualificationV1,
+        hardwarePolicyId: ByteArray,
+        qualificationReportDigest: ByteArray,
+    ) {
         qualification.requireProductionReady()
+        // The capability frame binds the aggregate policy digest, which is distinct from a profile ID.
         require(
-            qualification.profile.hardwareProfileId()
-                .contentEquals(bridgeCapabilities.hardwarePolicyId()),
+            qualification.hardwarePolicyDigest().contentEquals(hardwarePolicyId),
         ) { "OEM provider hardware policy does not match the native device service" }
         require(
-            qualification.profile.qualificationReportDigest()
-                .contentEquals(bridgeCapabilities.qualificationReportDigest()),
+            qualification.profile.qualificationReportDigest().contentEquals(qualificationReportDigest),
         ) { "OEM provider attestation does not match the native device service" }
-        return KagemushaWalletV1.open(provider, authorizeBootstrap)
     }
 }

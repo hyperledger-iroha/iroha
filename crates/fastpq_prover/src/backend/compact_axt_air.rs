@@ -17,6 +17,7 @@
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 
+use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_axt_context::encode_context,
     compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
@@ -29,10 +30,11 @@ use crate::{
     proof::PublicIO,
 };
 
-const IDENTITY: &str = "fastpq:prototype:axt-public-transfer:v1:342cols:923slots:65536rows";
+const IDENTITY: &str = <u64 as CompactTransferValue>::AXT_IDENTITY;
 
 /// Fixed one-delta transfer AIR with the complete validated public AXT context.
 pub(super) struct AxtTransferAir {
+    identity: &'static str,
     inner: PublicTransferAir,
     statement_bytes: Vec<u8>,
 }
@@ -44,8 +46,8 @@ impl AxtTransferAir {
     /// No legacy batch, private witness or proof can supply these public inputs.
     /// `expected` and the outer binding/mirrors must come from the surrounding
     /// authenticated caller; copying their values from a proof is insufficient.
-    pub(super) fn new(
-        prepared: &PreparedPublicTransfers<'_>,
+    pub(super) fn new<V: CompactTransferValue>(
+        prepared: &PreparedPublicTransfers<'_, V>,
         expected: &PublicIO,
         binding: &AxtFastpqBinding,
         metadata: AxtPublicMetadataBytes<'_>,
@@ -61,6 +63,7 @@ impl AxtTransferAir {
             remote_spend_claims,
         )?;
         Ok(Self {
+            identity: V::AXT_IDENTITY,
             inner: PublicTransferAir::new(prepared, expected)?,
             statement_bytes,
         })
@@ -70,7 +73,7 @@ impl AxtTransferAir {
 impl FixedAir for AxtTransferAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
-            identity: IDENTITY,
+            identity: self.identity,
             ..self.inner.schema()
         }
     }

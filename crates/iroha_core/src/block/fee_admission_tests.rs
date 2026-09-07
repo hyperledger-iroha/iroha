@@ -73,6 +73,29 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    // Both definitions predate this height-two candidate. Seed the registration
+    // identities belonging to its retained synthetic parent fixture.
+    {
+        let registration_header_hash = latest_signed.header().hash();
+        let execution_identity = Hash::new(b"fee-detached-parent-asset-registration");
+        let mut incarnations = state.world.axt_asset_incarnations.block();
+        for (ordinal, asset_definition_id) in
+            [&transfer_asset_definition_id, &fee_asset_definition_id]
+                .into_iter()
+                .enumerate()
+        {
+            assert!(incarnations.get(asset_definition_id).is_none());
+            let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+                &state.network_id,
+                asset_definition_id,
+                &registration_header_hash,
+                &execution_identity,
+                u64::try_from(ordinal).expect("fixture registration ordinal"),
+            );
+            incarnations.insert(asset_definition_id.clone(), incarnation);
+        }
+        incarnations.commit();
+    }
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -774,9 +797,7 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
         let trigger_id: TriggerId = format!("prepared_nested_gas_{reject_nested_action}")
             .parse()
             .expect("trigger id");
-        let marker: Name = "prepared_nested_gas_marker"
-            .parse()
-            .expect("metadata key");
+        let marker: Name = "prepared_nested_gas_marker".parse().expect("metadata key");
         let marker_instruction = InstructionBox::from(SetKeyValue::account(
             authority.clone(),
             marker.clone(),

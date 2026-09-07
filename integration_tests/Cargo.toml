@@ -64,7 +64,6 @@ default = ["telemetry"]
 dev-tools = []
 fault_injection = []
 telemetry = ["iroha_core/telemetry"]
-norito_streaming_fec = ["reed-solomon-erasure"]
 quic = ["iroha_core/quic", "iroha_p2p/quic"]
 js_host_parity = []
 zk-stark = [
@@ -89,7 +88,6 @@ parliament-test-signers = ["iroha_core/test-network-parliament-signers"]
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time"] }
 eyre = { workspace = true }
 iroha_test_network = { workspace = true }
-reed-solomon-erasure = { version = "6", default-features = false, features = ["std"], optional = true }
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_torii = { workspace = true, default-features = false, features = ["node-api", "ws_integration_tests"] }

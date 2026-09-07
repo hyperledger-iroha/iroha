@@ -14,6 +14,7 @@
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 use norito::{NoritoSerialize, codec::Encode};
 
+use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_axt_context::preflight_context,
     compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
@@ -33,7 +34,7 @@ use crate::{
     proof::PublicIO,
 };
 
-const IDENTITY: &str = "fastpq:prototype:axt-transfer-bundle-segment:v1:342cols:923slots:65536rows";
+const IDENTITY: &str = <u64 as CompactTransferValue>::AXT_BATCH_IDENTITY;
 
 #[derive(NoritoSerialize)]
 #[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferBatchContextV1")]
@@ -62,6 +63,7 @@ struct BoundAxtSegmentContext {
 /// dropping the AXT facts through the ordinary path. No successful proof or
 /// source authority is implied by constructing this public statement object.
 pub(super) struct AxtTransferBatch {
+    identity: &'static str,
     public_io: PublicIO,
     context: Vec<u8>,
     statements: Vec<PublicStatement>,
@@ -76,8 +78,8 @@ impl AxtTransferBatch {
     /// before cloning/commitment hashing. All remote occurrences are validated
     /// against the whole batch; no individual delta is re-prepared or validated
     /// as if it were the complete AXT source transaction.
-    pub(super) fn new(
-        prepared: &PreparedPublicTransfers<'_>,
+    pub(super) fn new<V: CompactTransferValue>(
+        prepared: &PreparedPublicTransfers<'_, V>,
         expected: &PublicIO,
         intermediate_roots: &[[u8; 32]],
         axt: AxtVerificationContext<'_>,
@@ -125,6 +127,7 @@ impl AxtTransferBatch {
         check_statement_bytes(bytes)?;
         check_total(checked_product(count, bytes)?, limits)?;
         let mut batch = Self {
+            identity: V::AXT_BATCH_IDENTITY,
             public_io: *expected,
             context: bound.encode(),
             statements,
@@ -176,6 +179,7 @@ impl AxtTransferBatch {
         let statement = self.statement(ordinal)?;
         let context = self.segment_context(ordinal)?;
         Ok(AxtTransferSegmentAir {
+            identity: self.identity,
             inner: CompactTransferAir::new(statement, Some(&context))?,
         })
     }
@@ -205,13 +209,14 @@ impl AxtTransferBatch {
 
 /// Fixed AXT bundle relation with a distinct identity and complete caller context.
 pub(super) struct AxtTransferSegmentAir {
+    identity: &'static str,
     inner: CompactTransferAir,
 }
 
 impl FixedAir for AxtTransferSegmentAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
-            identity: IDENTITY,
+            identity: self.identity,
             ..self.inner.schema()
         }
     }

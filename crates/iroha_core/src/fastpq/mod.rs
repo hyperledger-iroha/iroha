@@ -1,5 +1,28 @@
 //! FASTPQ-specific transcript helpers shared across the host.
 pub mod lane;
+mod quantity_statement;
+mod source_capture;
+pub(crate) use source_capture::preflight_fastpq_source_transcripts;
+mod source_context;
+pub use quantity_statement::{
+    FastpqQuantityStatement, quantity_statement_from_finalized_transcripts,
+};
+pub use source_capture::{
+    FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits,
+    derive_fastpq_ordinary_source_manifest_v1,
+};
+pub(crate) use source_context::{FastpqBlockStartSourceContext, FastpqSourceCaptureAccumulator};
+pub use source_context::{
+    FastpqCapturedSourceRoute, FastpqCapturedTranscriptSource, FastpqSourceCaptureError,
+};
+#[cfg(test)]
+mod digest_backend_tests;
+#[cfg(test)]
+mod source_statement_tests;
+pub use crate::receiver_snapshot::{
+    FastpqSourceOpeningBuildLimits, fastpq_ordinary_source_statement_archive_v1,
+    fastpq_ordinary_source_statement_opening_v1,
+};
 use fastpq_prover::{
     Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PublicInputs,
     StateTransition, TransitionBatch, gadgets::transfer::attach_transfer_smt_witnesses,
@@ -69,10 +92,13 @@ pub struct FastpqPublicInputsTemplate {
 pub(crate) struct FastpqWitnessContext {
     /// Public-input fields shared by every FASTPQ batch in the witness.
     pub(crate) public_inputs: Option<FastpqPublicInputsTemplate>,
-    /// Hash of signed execution-call identities in the committed block.
+    /// Authoritative ordered canonical transaction-wire commitment from block execution.
     pub(crate) tx_set_hash: Option<[u8; 32]>,
-    /// Per-call dataspace ids keyed by signed execution-call hash.
+    /// Per-source dataspaces keyed by execution-call or typed native-purpose identity.
     pub(crate) entry_dataspaces: BTreeMap<Hash, [u8; 16]>,
+    /// Validator-owned local inventory retained across background queue submission.
+    /// This is not source finality or compact admission authority.
+    pub(crate) source_inventory: Option<std::sync::Arc<crate::state::FastpqSourceInventoryV1>>,
 }
 impl FastpqPublicInputsTemplate {
     /// Build full public inputs using a precomputed transaction set hash.
@@ -290,7 +316,7 @@ fn append_transfer_digest_words(
     packer.update(batch_hash.as_ref());
     packer.finish();
 }
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct PoseidonDigestBatch {
     words: Vec<u64>,
     slices: Vec<Bn254PoseidonBatchSlice>,
@@ -318,13 +344,41 @@ impl PoseidonDigestBatch {
         {
             return None;
         }
-        match try_hash_bn254_poseidon_word_batches(&self.words, &self.slices) {
-            Some(digests) => Some(digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>()),
-            None => {
+        self.accept_gpu_digests(try_hash_bn254_poseidon_word_batches(
+            &self.words,
+            &self.slices,
+        ))
+    }
+    // Never install a prefix or ignore trailing accelerator output. A cardinality
+    // failure quarantines acceleration; the caller recomputes the entire batch.
+    fn accept_gpu_digests(&self, digests: Option<Vec<[u8; 32]>>) -> Option<Vec<Hash>> {
+        match digests {
+            Some(digests) if digests.len() == self.slices.len() => {
+                Some(digests.into_iter().map(Hash::prehashed).collect())
+            }
+            _ => {
                 set_poseidon_digest_acceleration_enabled(false);
                 None
             }
         }
+    }
+    fn resolve_pending_or_cpu(
+        &self,
+        current: &Self,
+        wait: impl FnOnce() -> Option<Vec<[u8; 32]>>,
+    ) -> Vec<Hash> {
+        // Count equality alone does not bind a pending result to its current
+        // preimages. Compare all packed words and ordered slice boundaries.
+        if self != current {
+            // Drop the unused pending handle before CPU work. Metal's owned handle
+            // waits for completion before releasing staged buffers, without reading
+            // stale digest bytes; this is safe cleanup, not asynchronous cancellation.
+            drop(wait);
+            return current.hash_cpu();
+        }
+        current
+            .accept_gpu_digests(wait())
+            .unwrap_or_else(|| current.hash_cpu())
     }
     fn hash_cpu_or_gpu(&self) -> Vec<Hash> {
         self.try_hash_gpu().unwrap_or_else(|| self.hash_cpu())
@@ -372,20 +426,13 @@ impl PoseidonDigestBatch {
 }
 /// Pending FASTPQ transfer transcript digest batch.
 pub(crate) struct PendingTransferTranscriptDigests {
-    digest_count: usize,
     batch: PoseidonDigestBatch,
     pending: PendingBn254PoseidonWordBatch,
 }
 impl PendingTransferTranscriptDigests {
-    fn into_digests(self) -> Vec<Hash> {
-        let Self { batch, pending, .. } = self;
-        match pending.wait() {
-            Some(digests) => digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>(),
-            None => {
-                set_poseidon_digest_acceleration_enabled(false);
-                batch.hash_cpu()
-            }
-        }
+    fn into_digests(self, current: &PoseidonDigestBatch) -> Vec<Hash> {
+        let Self { batch, pending } = self;
+        batch.resolve_pending_or_cpu(current, || pending.wait())
     }
 }
 /// Fill missing single-delta transcript digests before block or witness data is exposed.
@@ -412,22 +459,14 @@ pub(crate) fn finalize_transfer_transcript_digests_in_map_with_pending(
         return;
     }
     if let Some(pending) = pending {
-        if pending.digest_count == digest_count {
-            let digests = pending.into_digests();
-            let mut digests = digests.into_iter();
-            for entries in transcripts.values_mut() {
-                apply_transfer_transcript_digests(entries, &mut digests);
-            }
-            debug_assert!(
-                digests.next().is_none(),
-                "FASTPQ transcript digest batch output count must match inputs",
-            );
+        let mut current = PoseidonDigestBatch::with_capacity(digest_count);
+        for entries in transcripts.values() {
+            collect_transfer_transcript_digests(entries, &mut current);
+        }
+        let digests = pending.into_digests(&current);
+        if apply_transfer_transcript_digests_in_map(transcripts, digests) {
             return;
         }
-        debug_assert_eq!(
-            pending.digest_count, digest_count,
-            "pending FASTPQ transcript digest batch must match current transcript map",
-        );
     }
     if digest_count >= DIGEST_FINALIZE_PARALLEL_THRESHOLD
         && try_finalize_transfer_transcript_digests_in_map_batched(transcripts, digest_count)
@@ -466,11 +505,7 @@ pub(crate) fn try_submit_transfer_transcript_digests_in_map(
         collect_transfer_transcript_digests(entries, &mut batch);
     }
     let pending = batch.try_submit_gpu()?;
-    Some(PendingTransferTranscriptDigests {
-        digest_count,
-        batch,
-        pending,
-    })
+    Some(PendingTransferTranscriptDigests { batch, pending })
 }
 /// Fill missing single-delta transcript digests in witness bundles.
 #[cfg(any(test, feature = "telemetry"))]
@@ -514,15 +549,7 @@ fn try_finalize_transfer_transcript_digests_in_map_batched(
         collect_transfer_transcript_digests(entries, &mut batch);
     }
     let digests = batch.hash_cpu_or_gpu();
-    let mut digests = digests.into_iter();
-    for entries in transcripts.values_mut() {
-        apply_transfer_transcript_digests(entries, &mut digests);
-    }
-    debug_assert!(
-        digests.next().is_none(),
-        "FASTPQ transcript digest batch output count must match inputs",
-    );
-    true
+    apply_transfer_transcript_digests_in_map(transcripts, digests)
 }
 #[cfg(any(test, feature = "telemetry"))]
 fn try_finalize_transfer_transcript_bundle_digests_batched(
@@ -535,15 +562,7 @@ fn try_finalize_transfer_transcript_bundle_digests_batched(
         collect_transfer_transcript_digests(&bundle.transcripts, &mut batch);
     }
     let digests = batch.hash_cpu_or_gpu();
-    let mut digests = digests.into_iter();
-    for bundle in bundles {
-        apply_transfer_transcript_digests(&mut bundle.transcripts, &mut digests);
-    }
-    debug_assert!(
-        digests.next().is_none(),
-        "FASTPQ transcript digest batch output count must match inputs",
-    );
-    true
+    apply_transfer_transcript_bundle_digests(bundles, digests)
 }
 fn missing_single_delta_transcript_count(transcripts: &[TransferTranscript]) -> usize {
     transcripts
@@ -571,18 +590,61 @@ fn collect_transfer_transcript_digests(
         batch.push(delta, &transcript.batch_hash);
     }
 }
+fn apply_transfer_transcript_digests_in_map(
+    transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
+    digests: Vec<Hash>,
+) -> bool {
+    let expected = transcripts.values().try_fold(0usize, |count, entries| {
+        count.checked_add(missing_single_delta_transcript_count(entries))
+    });
+    if expected != Some(digests.len()) {
+        return false;
+    }
+    let mut digests = digests.into_iter();
+    for entries in transcripts.values_mut() {
+        if !apply_transfer_transcript_digests(entries, &mut digests) {
+            return false;
+        }
+    }
+    digests.len() == 0
+}
+#[cfg(any(test, feature = "telemetry"))]
+fn apply_transfer_transcript_bundle_digests(
+    bundles: &mut [TransferTranscriptBundle],
+    digests: Vec<Hash>,
+) -> bool {
+    let expected = bundles.iter().try_fold(0usize, |count, bundle| {
+        count.checked_add(missing_single_delta_transcript_count(&bundle.transcripts))
+    });
+    if expected != Some(digests.len()) {
+        return false;
+    }
+    let mut digests = digests.into_iter();
+    for bundle in bundles {
+        if !apply_transfer_transcript_digests(&mut bundle.transcripts, &mut digests) {
+            return false;
+        }
+    }
+    digests.len() == 0
+}
 fn apply_transfer_transcript_digests(
     transcripts: &mut [TransferTranscript],
-    digests: &mut impl Iterator<Item = Hash>,
-) {
+    digests: &mut std::vec::IntoIter<Hash>,
+) -> bool {
+    // The concrete Vec iterator has an exact remaining length. Check it before
+    // any mutation, even when this helper is used independently of a whole batch.
+    if digests.len() < missing_single_delta_transcript_count(transcripts) {
+        return false;
+    }
     for transcript in transcripts {
         if needs_transfer_transcript_digest(transcript) {
-            let digest = digests
-                .next()
-                .expect("FASTPQ transcript digest batch output missing digest");
+            let Some(digest) = digests.next() else {
+                return false;
+            };
             set_transfer_transcript_digest(transcript, digest);
         }
     }
+    true
 }
 fn finalize_transfer_transcripts_serial(transcripts: &mut [TransferTranscript]) {
     let mut scratch = PoseidonDigestScratch::default();
@@ -640,6 +702,36 @@ fn debug_assert_precomputed_transfer_transcript_digests(transcripts: &[TransferT
             "precomputed FASTPQ transfer transcript digest must match canonical digest",
         );
     }
+}
+/// Validate supplied single-delta digests before sealing owned source transcripts.
+///
+/// This check never repairs or mutates a supplied digest. Missing digests retain
+/// the existing finalizer path; the strict producer owns multi-delta digest policy.
+/// Canonical CPU hashing is intentional here, independently of acceleration mode.
+///
+/// # Errors
+/// Rejects a supplied single-delta digest that differs from its canonical preimage.
+pub(crate) fn validate_precomputed_transfer_transcript_digests_in_map(
+    transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
+) -> Result<(), String> {
+    let mut scratch = PoseidonDigestScratch::default();
+    for transcript in transcripts.values().flatten() {
+        let Some(existing) = transcript.poseidon_preimage_digest else {
+            continue;
+        };
+        let [delta] = transcript.deltas.as_slice() else {
+            continue;
+        };
+        if existing
+            != poseidon_preimage_digest_with_scratch(delta, &transcript.batch_hash, &mut scratch)
+        {
+            return Err(
+                "FASTPQ precomputed transfer transcript digest differs from its canonical preimage"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
 }
 /// Build a FASTPQ public input template for the supplied block witness.
 #[must_use]
@@ -801,6 +893,89 @@ where
     };
     Ok((batch, statement))
 }
+/// Failure to produce an exact public projection of finalized transfer facts.
+#[derive(Debug, Error)]
+pub enum FinalizedPublicStatementError {
+    /// The existing private batch/public statement construction failed.
+    #[error(transparent)]
+    Batch(#[from] TranscriptBatchError),
+    /// SMT chaining or digest finalization changed an original public occurrence.
+    #[error("finalized FASTPQ public transcript changed at occurrence {transcript_index}")]
+    ProjectionMismatch {
+        /// First differing occurrence, or the first missing/extra occurrence.
+        transcript_index: usize,
+    },
+}
+
+/// Produce a private batch and an exact public projection of finalized transcripts.
+///
+/// Unlike the repair-capable producer, this entry point rejects any change to original
+/// quantities, account/asset identities, occurrence order, authority digests or optional
+/// preimage digests. Callers must finalize single-delta digests before invoking it. Private
+/// SMT paths may be rebuilt; old/new public roots still describe the touched-balance tree,
+/// and all other caller public inputs retain the existing producer semantics.
+///
+/// This is a local construction check, not authentication of ledger balances, caller
+/// authority or source finality. It neither qualifies a compact profile nor installs
+/// production proof admission. Empty input retains the existing empty-batch behavior;
+/// the caller must represent empty source manifests separately from admitted proofs.
+///
+/// # Errors
+/// Returns the underlying batch error, or the first original public occurrence changed
+/// by construction. No batch or public statement is returned on a mismatch.
+pub fn batch_and_public_statement_from_finalized_transcripts<'a, I>(
+    parameter_set: impl Into<String>,
+    public_inputs: FastpqPublicInputs,
+    transcripts: I,
+) -> Result<(TransitionBatch, FastpqPublicTransferStatementV1), FinalizedPublicStatementError>
+where
+    I: IntoIterator<Item = &'a TransferTranscript>,
+{
+    let originals = transcripts.into_iter().collect::<Vec<_>>();
+    let (batch, statement) = batch_and_public_statement_from_transcripts(
+        parameter_set,
+        public_inputs,
+        originals.iter().copied(),
+    )?;
+    validate_finalized_public_transcript_projection(&originals, &statement.transcripts)?;
+    Ok((batch, statement))
+}
+
+fn validate_finalized_public_transcript_projection(
+    originals: &[&TransferTranscript],
+    projected: &[FastpqPublicTransferTranscriptV1],
+) -> Result<(), FinalizedPublicStatementError> {
+    for (transcript_index, (original, produced)) in originals.iter().zip(projected).enumerate() {
+        let same_header = original.batch_hash == produced.batch_hash
+            && original.authority_digest == produced.authority_digest
+            && original.poseidon_preimage_digest == produced.poseidon_preimage_digest;
+        let same_deltas = original.deltas.len() == produced.deltas.len()
+            && original
+                .deltas
+                .iter()
+                .zip(&produced.deltas)
+                .all(|(left, right)| {
+                    left.from_account == right.from_account
+                        && left.to_account == right.to_account
+                        && left.asset_definition == right.asset_definition
+                        && left.amount == right.amount
+                        && left.from_balance_before == right.from_balance_before
+                        && left.from_balance_after == right.from_balance_after
+                        && left.to_balance_before == right.to_balance_before
+                        && left.to_balance_after == right.to_balance_after
+                });
+        if !same_header || !same_deltas {
+            return Err(FinalizedPublicStatementError::ProjectionMismatch { transcript_index });
+        }
+    }
+    if originals.len() != projected.len() {
+        return Err(FinalizedPublicStatementError::ProjectionMismatch {
+            transcript_index: originals.len().min(projected.len()),
+        });
+    }
+    Ok(())
+}
+
 /// Share the exact construction sequence without copying public data for legacy callers.
 fn build_transfer_batch_with_projection<'a, I, P>(
     parameter_set: impl Into<String>,
@@ -1556,6 +1731,251 @@ mod tests {
         assert_eq!(inputs.new_root, template.new_root);
         assert_eq!(inputs.perm_root, template.perm_root);
     }
+    fn exact_finalized_transcript_pair() -> [TransferTranscript; 2] {
+        let mut first = sample_transcript();
+        first.poseidon_preimage_digest = Some(poseidon_preimage_digest(
+            &first.deltas[0],
+            &first.batch_hash,
+        ));
+        let mut second = sample_transcript();
+        let delta = &mut second.deltas[0];
+        delta.amount = "0.5".parse().unwrap();
+        delta.from_balance_before = Quantity::from(158_u32);
+        delta.from_balance_after = "157.5".parse().unwrap();
+        delta.to_balance_before = Quantity::from(43_u32);
+        delta.to_balance_after = "43.5".parse().unwrap();
+        second.poseidon_preimage_digest = Some(poseidon_preimage_digest(
+            &second.deltas[0],
+            &second.batch_hash,
+        ));
+        [first, second]
+    }
+
+    #[test]
+    fn finalized_public_producer_preserves_exact_mixed_scale_duplicate_occurrences() {
+        let captured = exact_finalized_transcript_pair();
+        let before = norito::encode_canonical(&captured).unwrap();
+        let inputs = sample_public_inputs();
+        let (batch, statement) = batch_and_public_statement_from_finalized_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            inputs,
+            &captured,
+        )
+        .expect("already chained finalized facts");
+        assert_eq!(
+            statement.transcripts,
+            captured
+                .iter()
+                .map(FastpqPublicTransferTranscriptV1::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            statement.transcripts.len(),
+            2,
+            "equal batch hashes preserve occurrences"
+        );
+        assert_eq!(
+            statement.public_inputs,
+            public_inputs_to_dto(&batch.public_inputs)
+        );
+        assert_eq!(statement.public_inputs.tx_set_hash, inputs.tx_set_hash);
+        assert_eq!(statement.public_inputs.dsid, inputs.dsid);
+        assert_eq!(statement.public_inputs.perm_root, inputs.perm_root);
+        assert_eq!(statement.public_inputs.slot, inputs.slot);
+        assert_eq!(norito::encode_canonical(&captured).unwrap(), before);
+    }
+
+    #[test]
+    fn finalized_public_producer_rejects_stale_balances_and_missing_final_digest() {
+        let original = exact_finalized_transcript_pair();
+        let mut stale = original.clone();
+        stale[1] = original[0].clone();
+        let mut precision_stale = original.clone();
+        let delta = &mut precision_stale[1].deltas[0];
+        delta.from_balance_before = "158.001".parse().unwrap();
+        delta.from_balance_after = "157.501".parse().unwrap();
+        delta.to_balance_before = "43.001".parse().unwrap();
+        delta.to_balance_after = "43.501".parse().unwrap();
+        for captured in [stale, precision_stale] {
+            let before = norito::encode_canonical(&captured).unwrap();
+            assert!(matches!(
+                batch_and_public_statement_from_finalized_transcripts(
+                    FASTPQ_CANONICAL_PARAMETER_SET,
+                    sample_public_inputs(),
+                    &captured
+                ),
+                Err(FinalizedPublicStatementError::ProjectionMismatch {
+                    transcript_index: 1
+                })
+            ));
+            assert_eq!(norito::encode_canonical(&captured).unwrap(), before);
+        }
+        let missing = sample_transcript();
+        assert!(matches!(
+            batch_and_public_statement_from_finalized_transcripts(
+                FASTPQ_CANONICAL_PARAMETER_SET,
+                sample_public_inputs(),
+                [&missing]
+            ),
+            Err(FinalizedPublicStatementError::ProjectionMismatch {
+                transcript_index: 0
+            })
+        ));
+    }
+
+    #[test]
+    fn finalized_public_producer_keeps_multi_delta_zero_and_empty_semantics() {
+        let pair = exact_finalized_transcript_pair();
+        let mut multi = pair[0].clone();
+        multi.deltas.push(pair[1].deltas[0].clone());
+        multi.poseidon_preimage_digest = None;
+        let mut zero = sample_transcript();
+        zero.deltas[0].amount = Quantity::zero();
+        zero.deltas[0].from_balance_after = zero.deltas[0].from_balance_before.clone();
+        zero.deltas[0].to_balance_after = zero.deltas[0].to_balance_before.clone();
+        zero.poseidon_preimage_digest =
+            Some(poseidon_preimage_digest(&zero.deltas[0], &zero.batch_hash));
+        for captured in [vec![multi], vec![zero], Vec::new()] {
+            let (_, statement) = batch_and_public_statement_from_finalized_transcripts(
+                FASTPQ_CANONICAL_PARAMETER_SET,
+                sample_public_inputs(),
+                &captured,
+            )
+            .expect("exact supported construction");
+            assert_eq!(
+                statement.transcripts,
+                captured
+                    .iter()
+                    .map(FastpqPublicTransferTranscriptV1::from)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn finalized_public_projection_rejects_every_public_field_and_occurrence_substitution() {
+        let captured = exact_finalized_transcript_pair();
+        let originals = captured.iter().collect::<Vec<_>>();
+        let public = captured
+            .iter()
+            .map(FastpqPublicTransferTranscriptV1::from)
+            .collect::<Vec<_>>();
+        validate_finalized_public_transcript_projection(&originals, &public).unwrap();
+        for field in 0..11 {
+            let mut changed = public.clone();
+            let item = &mut changed[0];
+            match field {
+                0 => item.batch_hash = Hash::prehashed([0x91; 32]),
+                1 => item.authority_digest = Hash::prehashed([0x92; 32]),
+                2 => item.poseidon_preimage_digest = None,
+                3 => item.deltas[0].from_account = (*BOB_ID).clone(),
+                4 => item.deltas[0].to_account = (*ALICE_ID).clone(),
+                5 => {
+                    item.deltas[0].asset_definition = AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
+                        "different".parse().unwrap(),
+                    )
+                }
+                6 => item.deltas[0].amount = Quantity::from(1_u32),
+                7 => item.deltas[0].from_balance_before = Quantity::from(1_u32),
+                8 => item.deltas[0].from_balance_after = Quantity::from(1_u32),
+                9 => item.deltas[0].to_balance_before = Quantity::from(2_u32),
+                10 => item.deltas[0].to_balance_after = Quantity::from(1_u32),
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    validate_finalized_public_transcript_projection(&originals, &changed),
+                    Err(FinalizedPublicStatementError::ProjectionMismatch {
+                        transcript_index: 0
+                    })
+                ),
+                "field {field}"
+            );
+        }
+        let mut reversed = public.clone();
+        reversed.reverse();
+        assert!(validate_finalized_public_transcript_projection(&originals, &reversed).is_err());
+        assert!(matches!(
+            validate_finalized_public_transcript_projection(&originals, &public[..1]),
+            Err(FinalizedPublicStatementError::ProjectionMismatch {
+                transcript_index: 1
+            })
+        ));
+        assert!(matches!(
+            validate_finalized_public_transcript_projection(&originals[..1], &public),
+            Err(FinalizedPublicStatementError::ProjectionMismatch {
+                transcript_index: 1
+            })
+        ));
+        let mut missing_delta = public.clone();
+        missing_delta[0].deltas.clear();
+        assert!(
+            validate_finalized_public_transcript_projection(&originals, &missing_delta).is_err()
+        );
+    }
+
+    #[test]
+    fn finalized_public_producer_self_transfer_keeps_intermediate_balances_and_roots() {
+        let mut captured = sample_transcript();
+        let delta = &mut captured.deltas[0];
+        delta.to_account = delta.from_account.clone();
+        delta.to_balance_before = Quantity::from(158_u32);
+        delta.to_balance_after = Quantity::from(200_u32);
+        captured.poseidon_preimage_digest = Some(poseidon_preimage_digest(
+            &captured.deltas[0],
+            &captured.batch_hash,
+        ));
+        let before = norito::encode_canonical(&captured).unwrap();
+        let (_, statement) = batch_and_public_statement_from_finalized_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&captured],
+        )
+        .expect("exact finalized self-transfer");
+        assert_eq!(
+            statement.transcripts,
+            vec![FastpqPublicTransferTranscriptV1::from(&captured)]
+        );
+        assert_eq!(
+            statement.public_inputs.old_root,
+            statement.public_inputs.new_root
+        );
+        assert_eq!(statement.transitions.len(), 2);
+        assert_eq!(norito::encode_canonical(&captured).unwrap(), before);
+        let mut stale = captured;
+        stale.deltas[0].to_balance_before = Quantity::from(200_u32);
+        stale.deltas[0].to_balance_after = Quantity::from(242_u32);
+        assert!(matches!(
+            batch_and_public_statement_from_finalized_transcripts(
+                FASTPQ_CANONICAL_PARAMETER_SET,
+                sample_public_inputs(),
+                [&stale]
+            ),
+            Err(FinalizedPublicStatementError::Batch(
+                TranscriptBatchError::TransferWitness {
+                    source: fastpq_prover::Error::TransferInvariant { .. }
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn finalized_public_producer_preserves_original_construction_errors() {
+        let mut empty = sample_transcript();
+        empty.deltas.clear();
+        assert!(matches!(
+            batch_and_public_statement_from_finalized_transcripts(
+                FASTPQ_CANONICAL_PARAMETER_SET,
+                sample_public_inputs(),
+                [&empty]
+            ),
+            Err(FinalizedPublicStatementError::Batch(
+                TranscriptBatchError::TransferWitness { .. }
+            ))
+        ));
+    }
+
     #[test]
     fn public_producer_preserves_finalized_duplicate_occurrences() {
         let captured = vec![sample_transcript(), sample_transcript()];
