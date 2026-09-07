@@ -238,6 +238,8 @@ pub struct ComputeSponsorPolicy {
     pub max_daily_cu: NonZeroU64,
 }
 /// Risk classes applied to price families for governance-bound deltas.
+///
+/// JSON object keys use the exact variant names: `Low`, `Balanced`, and `High`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "class", content = "value"))]
@@ -250,6 +252,32 @@ pub enum ComputePriceRiskClass {
     Balanced,
     /// High-risk price families with relaxed bounds.
     High,
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for ComputePriceRiskClass {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(match self {
+            Self::Low => "Low",
+            Self::Balanced => "Balanced",
+            Self::High => "High",
+        })
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for ComputePriceRiskClass {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        match key {
+            "Low" => Ok(Self::Low),
+            "Balanced" => Ok(Self::Balanced),
+            "High" => Ok(Self::High),
+            _ => Err(norito::json::Error::Message(
+                "compute price risk class key must be Low, Balanced, or High".to_owned(),
+            )),
+        }
+    }
 }
 /// Delta bounds (basis points) used to constrain governance price updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1431,6 +1459,31 @@ mod tests {
         let pricing = sample_pricing();
         let metering = sample_metering();
         assert_eq!(10, pricing.charge_units(&metering));
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn price_risk_class_json_keys_round_trip() {
+        let classes = BTreeMap::from([
+            (ComputePriceRiskClass::Low, 1_u8),
+            (ComputePriceRiskClass::Balanced, 2),
+            (ComputePriceRiskClass::High, 3),
+        ]);
+        let encoded = json::to_json(&classes).expect("risk class object keys serialize");
+        assert_eq!(encoded, r#"{"Low":1,"Balanced":2,"High":3}"#);
+        let decoded: BTreeMap<ComputePriceRiskClass, u8> =
+            json::from_str(&encoded).expect("risk class object keys deserialize");
+        assert_eq!(decoded, classes);
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn price_risk_class_json_keys_reject_unknown_labels() {
+        for key in ["", "low", "balanced", "HIGH", "Unknown"] {
+            let encoded = format!(r#"{{"{key}":1}}"#);
+            assert!(
+                json::from_str::<BTreeMap<ComputePriceRiskClass, u8>>(&encoded).is_err(),
+                "unexpectedly accepted risk class key {key:?}"
+            );
+        }
     }
     #[test]
     fn fixtures_round_trip() {
