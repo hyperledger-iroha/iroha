@@ -2,7 +2,7 @@
 use super::*;
 use crate::smartcontracts::isi::nft_custody::{
     PreparedNftReleasesV1, PreparedNftReservationsV1, prepare_nft_releases_v1,
-    prepare_nft_reservations_v1, reserve_nft_v1,
+    prepare_nft_reservations_v1,
 };
 use crate::state::World;
 use iroha_data_model::nft_market::NftCustodyPurposeV1;
@@ -296,6 +296,7 @@ pub(crate) fn validate_restored_items(
 mod tests {
     use super::super::tests::{fund_payout_fixture, header, key, payout_state};
     use super::*;
+    use crate::smartcontracts::isi::nft_custody::reserve_nft_v1;
     use iroha_data_model::{
         Registrable,
         isi::Register,

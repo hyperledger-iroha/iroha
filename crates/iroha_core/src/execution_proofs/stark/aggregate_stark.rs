@@ -30,8 +30,6 @@ use super::transparent_stark::{
     sample_trace_mask_v1,
 };
 use fastpq_isi::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
-#[cfg(test)]
-use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use rand::TryRngCore;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};

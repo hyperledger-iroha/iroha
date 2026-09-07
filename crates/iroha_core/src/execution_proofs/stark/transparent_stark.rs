@@ -24,8 +24,6 @@ use rand::TryRngCore;
 use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
 use thiserror::Error;
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;

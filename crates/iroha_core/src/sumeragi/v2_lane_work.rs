@@ -142,9 +142,8 @@ use iroha_data_model::{
         consensus::{
             CertPhase, LaneBlockCertificateV1, LaneBlockDescriptorV1,
             LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
-            LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
+            LanePayloadAvailabilityQcV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
+            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus_v2 as wire, decode_versioned_signed_block,
     },
@@ -164,7 +163,7 @@ use iroha_p2p::network::{
     NetworkReplyRouteError, NetworkReplyRouteTestFixture,
 };
 use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRoutes};
-use iroha_primitives::{numeric::Quantity, time::TimeSource};
+use iroha_primitives::time::TimeSource;
 use norito::codec::Encode as _;
 #[cfg(test)]
 use std::sync::{Barrier, mpsc};
@@ -6594,11 +6593,11 @@ impl V2LaneWorkAdapter {
                         global_view,
                         Instant::now(),
                     ) {
-                        if (match self.missing_autonomous_artifact_became_terminal(proposal, &error)
+                        if match self.missing_autonomous_artifact_became_terminal(proposal, &error)
                         {
                             Ok(value) => value,
                             Err(_) => return V2LaneIngressOutcome::Rejected,
-                        }) {
+                        } {
                             self.discard_volatile_autonomous_payload(key);
                             continue;
                         }
@@ -6610,10 +6609,10 @@ impl V2LaneWorkAdapter {
                         );
                         return V2LaneIngressOutcome::Rejected;
                     }
-                    if (match self.lane_application_receipt_available(proposal) {
+                    if match self.lane_application_receipt_available(proposal) {
                         Ok(value) => value,
                         Err(_) => return V2LaneIngressOutcome::Rejected,
-                    }) {
+                    } {
                         self.discard_volatile_autonomous_payload(key);
                         continue;
                     }
@@ -6623,10 +6622,10 @@ impl V2LaneWorkAdapter {
                     continue;
                 }
                 Ok(AutonomousPayloadDurabilityOutcome::DeferredUntilCarrierProtection) => {
-                    if (match self.lane_application_receipt_available(proposal) {
+                    if match self.lane_application_receipt_available(proposal) {
                         Ok(value) => value,
                         Err(_) => return V2LaneIngressOutcome::Rejected,
-                    }) {
+                    } {
                         self.discard_volatile_autonomous_payload(key);
                         continue;
                     }
@@ -6638,10 +6637,10 @@ impl V2LaneWorkAdapter {
                     return V2LaneIngressOutcome::Rejected;
                 }
                 Err(error) => {
-                    if (match self.missing_autonomous_artifact_became_terminal(proposal, &error) {
+                    if match self.missing_autonomous_artifact_became_terminal(proposal, &error) {
                         Ok(value) => value,
                         Err(_) => return V2LaneIngressOutcome::Rejected,
-                    }) {
+                    } {
                         self.discard_volatile_autonomous_payload(key);
                         continue;
                     }
@@ -9693,10 +9692,10 @@ impl V2LaneWorkAdapter {
         // Application receipts outlive autonomous payload sidecars. A valid
         // replay for the exact applied proposal is terminal before historical
         // source authorization, which may legitimately have been compacted.
-        if (match self.lane_application_receipt_available(&payload.origin_proposal) {
+        if match self.lane_application_receipt_available(&payload.origin_proposal) {
             Ok(value) => value,
             Err(_) => return V2LaneIngressOutcome::Rejected,
-        }) {
+        } {
             return V2LaneIngressOutcome::Duplicate;
         }
         if proposal_height != self.context.height
@@ -9798,10 +9797,10 @@ impl V2LaneWorkAdapter {
             self.persist_and_authorize_autonomous_payload(&payload, &payload.origin_proposal);
         match durable {
             Ok(AutonomousPayloadDurabilityOutcome::DeferredUntilCarrierProtection) => {
-                if (match self.lane_application_receipt_available(&payload.origin_proposal) {
+                if match self.lane_application_receipt_available(&payload.origin_proposal) {
                     Ok(value) => value,
                     Err(_) => return V2LaneIngressOutcome::Rejected,
-                }) {
+                } {
                     self.discard_volatile_autonomous_payload(key);
                     V2LaneIngressOutcome::Duplicate
                 } else {
@@ -9816,13 +9815,13 @@ impl V2LaneWorkAdapter {
                 if let Err(error) =
                     self.restore_autonomous_new_view_state(&payload, active_view, Instant::now())
                 {
-                    if (match self.missing_autonomous_artifact_became_terminal(
+                    if match self.missing_autonomous_artifact_became_terminal(
                         &payload.origin_proposal,
                         &error,
                     ) {
                         Ok(value) => value,
                         Err(_) => return V2LaneIngressOutcome::Rejected,
-                    }) {
+                    } {
                         self.discard_volatile_autonomous_payload(key);
                         return V2LaneIngressOutcome::Duplicate;
                     }
@@ -9835,10 +9834,10 @@ impl V2LaneWorkAdapter {
                     self.output_guard.close_admission_for_restart();
                     return V2LaneIngressOutcome::Rejected;
                 }
-                if (match self.lane_application_receipt_available(&payload.origin_proposal) {
+                if match self.lane_application_receipt_available(&payload.origin_proposal) {
                     Ok(value) => value,
                     Err(_) => return V2LaneIngressOutcome::Rejected,
-                }) {
+                } {
                     self.discard_volatile_autonomous_payload(key);
                     V2LaneIngressOutcome::Duplicate
                 } else {
@@ -9846,12 +9845,12 @@ impl V2LaneWorkAdapter {
                 }
             }
             Err(error) => {
-                if (match self
+                if match self
                     .missing_autonomous_artifact_became_terminal(&payload.origin_proposal, &error)
                 {
                     Ok(value) => value,
                     Err(_) => return V2LaneIngressOutcome::Rejected,
-                }) {
+                } {
                     self.discard_volatile_autonomous_payload(key);
                     return V2LaneIngressOutcome::Duplicate;
                 }
@@ -11001,10 +11000,10 @@ impl V2LaneWorkAdapter {
                     Some(process_generation) => process_generation,
                     None => return V2LaneIngressOutcome::Rejected,
                 };
-                if (match self.lane_application_receipt_available(proposal) {
+                if match self.lane_application_receipt_available(proposal) {
                     Ok(value) => value,
                     Err(_) => return V2LaneIngressOutcome::Rejected,
-                }) {
+                } {
                     Ok(())
                 } else {
                     match persist_nonqueue_autonomous_payload_with_custody(
@@ -11050,11 +11049,10 @@ impl V2LaneWorkAdapter {
                                         Ok(())
                                     }
                                     Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted) => {
-                                        if (match self.lane_application_receipt_available(proposal)
-                                        {
+                                        if match self.lane_application_receipt_available(proposal) {
                                             Ok(value) => value,
                                             Err(_) => return V2LaneIngressOutcome::Rejected,
-                                        }) {
+                                        } {
                                             Ok(())
                                         } else {
                                             self.kura
@@ -20342,14 +20340,14 @@ pub(super) mod tests {
             SignedBlock,
             builder::BlockBuilder,
             consensus::{
-                LaneBlockCommitment, LanePayloadAvailabilityBodyV1, NativeAmxAttestationBodyV2,
-                NativeAmxPhase, SumeragiLanePayloadOwnership,
+                LaneBlockCommitment, LanePayloadAvailabilityBodyV1, LaneSettlementReceipt,
+                NativeAmxAttestationBodyV2, NativeAmxPhase, SumeragiLanePayloadOwnership,
             },
             consensus_v2 as wire,
         },
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         domain::{Domain, DomainId},
-        isi::{InstructionBox, Log, Register},
+        isi::{InstructionBox, Log},
         nexus::{
             DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig,
             LaneFastpqProofMaterial, LaneId, LaneStorageProfile, LaneVisibility,
@@ -20358,6 +20356,7 @@ pub(super) mod tests {
         transaction::{TransactionBuilder, TransactionEntrypoint, signed::TransactionResultInner},
         trigger::DataTriggerSequence,
     };
+    use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly as _;
     use std::{
         borrow::Cow,
@@ -25588,7 +25587,7 @@ pub(super) mod tests {
     }
     #[test]
     fn adapter_hydrates_unapplied_canonical_frontier_from_prior_global_height() {
-        let (adapter, keys, canonical, successor_context) =
+        let (adapter, _keys, canonical, successor_context) =
             fixture_with_canonical_ordinary_lane_at_height(1);
         let descriptor = &canonical.descriptor;
         let session_key = crate::lane_consensus::LaneBlockSessionKey {
@@ -25612,7 +25611,7 @@ pub(super) mod tests {
     }
     #[test]
     fn production_adapter_stays_carrier_silent_until_exact_queue_activation() {
-        let (adapter, keys, canonical, successor_context) =
+        let (adapter, _keys, canonical, successor_context) =
             fixture_with_canonical_ordinary_lane_at_height(1);
         let descriptor = &canonical.descriptor;
         let session_key = crate::lane_consensus::LaneBlockSessionKey {

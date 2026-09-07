@@ -1624,7 +1624,7 @@ fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
 }
 #[test]
 fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
-    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let (mut adapter, _keys) = fixture_with_durable_relay_parent();
     let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     let signer = adapter
         .local_validator_index()
@@ -1677,7 +1677,7 @@ fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
 }
 #[test]
 fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
-    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let (mut adapter, _keys) = fixture_with_durable_relay_parent();
     let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     let signer = adapter
         .local_validator_index()
@@ -1748,7 +1748,7 @@ fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
 }
 #[test]
 fn locked_later_view_directive_purges_queued_merge_shares_and_disables_retry() {
-    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let (mut adapter, _keys) = fixture_with_durable_relay_parent();
     let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     adapter
         .retain_merge_sidecars_for_global_view(0, None, None)

@@ -21,8 +21,6 @@ use super::{
         transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
-#[cfg(test)]
-use iroha_data_model::privacy::{PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1};
 
 use rand::TryRngCore;
 use rayon::prelude::*;

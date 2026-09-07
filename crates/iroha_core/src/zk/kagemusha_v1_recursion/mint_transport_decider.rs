@@ -322,6 +322,7 @@ macro_rules! impl_mint_authorization_transport_circuit {
     ($circuit:ty, $field:ty, $label:literal) => {
         impl $circuit {
             /// Inventory the configured Base graph without claiming whole-prover feasibility.
+            #[cfg(test)]
             pub(super) fn capacity_profile(
                 &self,
             ) -> Result<KagemushaMintTransportDeciderCapacityProfileV1, String> {

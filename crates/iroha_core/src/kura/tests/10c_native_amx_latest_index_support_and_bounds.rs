@@ -210,6 +210,11 @@ fn install_native_amx_evidence_fixture_at_block(
     >,
 ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
     let application_block_height = block.header().height().get();
+    let (lane_incarnation, _) = {
+        let _geometry = kura.lane_geometry_lock.lock();
+        kura.active_lane_incarnation_marker(entry)
+            .expect("read Native AMX fixture active lane incarnation")
+    };
     let executed_block_wire = block
         .encode_wire()
         .expect("encode exact result-bearing application block wire");

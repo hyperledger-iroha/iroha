@@ -382,7 +382,7 @@ fn native_amx_receipts_for_apply_fixture(
         source_ids[0],
         entrypoint_hashes[0],
         NativeAmxPhase::Prepare,
-        HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
+        Hash::prehashed([0; Hash::LENGTH]),
     );
     let participant_settlement = settlement_template
         .computed_grouped_participant_settlement(None, &source_ids)

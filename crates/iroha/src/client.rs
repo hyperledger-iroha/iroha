@@ -14813,9 +14813,13 @@ mod evidence_http_tests {
             0xcd, 0x2f,
         ])
         .unwrap();
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-            client.get_offline_asset_registration_json(&asset)
-        });
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_offline_asset_registration_json(&asset)
+            });
         result.expect("bounded JSON projection");
         assert_eq!(
             snapshot.url.path(),
@@ -14839,17 +14843,25 @@ mod evidence_http_tests {
             0xcd, 0x2f,
         ])
         .unwrap();
-        let (result, _) =
-            capture_request(json_response(StatusCode::SERVICE_UNAVAILABLE, "{}"), || {
+        let (result, _) = capture_request(
+            json_response(StatusCode::SERVICE_UNAVAILABLE, "{}"),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
                 client.get_offline_asset_registration_json(&asset)
-            });
+            },
+        );
         assert!(result.is_err());
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/plain")
             .body(b"{}".to_vec())
             .unwrap();
-        let (result, _) = capture_request(response, || {
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
             client.get_offline_asset_registration_json(&asset)
         });
         assert!(result.is_err());
@@ -30161,7 +30173,10 @@ mod tests {
             let code_b64 = base64::engine::general_purpose::STANDARD.encode(returned_artifact);
             let response =
                 json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
-            let error = with_mock_http(respond_with(&store, response), || {
+            let error = with_mock_http(respond_with(&store, response), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
                 client
                     .get_contract_code_bytes(&requested_hash)
                     .expect_err("generic hashing or header substitution must fail")
