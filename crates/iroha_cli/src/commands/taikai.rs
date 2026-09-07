@@ -3319,6 +3319,18 @@ mod tests {
     use iroha::data_model::taikai::TaikaiTrackKind;
     use rand::RngCore as _;
     use std::{fs, path::Path};
+
+    fn policy_output_tempdir() -> tempfile::TempDir {
+        // The writer rejects indirect ancestors; macOS aliases /var to /private/var.
+        // Normalize only the fixture root, never an operator-supplied output path.
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("direct temporary fixture root");
+        tempfile::Builder::new()
+            .prefix("taikai-policy-")
+            .tempdir_in(root)
+            .expect("direct policy output fixture")
+    }
     #[derive(Debug)]
     struct FailingTryRngError;
     impl std::fmt::Display for FailingTryRngError {
@@ -3495,7 +3507,7 @@ mod tests {
     }
     #[test]
     fn policy_artifact_writer_preflights_every_target_before_publishing() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         let invalid_json = tmp.path().join("receipt.json");
         fs::create_dir(&invalid_json).expect("create invalid JSON target directory");
@@ -3520,7 +3532,7 @@ mod tests {
     }
     #[test]
     fn policy_artifact_writer_rejects_oversized_existing_snapshot() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         File::create(&primary)
             .expect("create existing output")
@@ -3558,7 +3570,7 @@ mod tests {
         const ORIGINAL: &[u8] = b"existing-output";
         const MUTATED: &[u8] = b"EXISTING-OUTPUT";
         assert_eq!(ORIGINAL.len(), MUTATED.len());
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         fs::write(&primary, ORIGINAL).expect("write existing output");
         let mut replacement =
@@ -3586,7 +3598,7 @@ mod tests {
         const ORIGINAL: &[u8] = b"existing-output";
         const MUTATED: &[u8] = b"EXISTING-OUTPUT";
         assert_eq!(ORIGINAL.len(), MUTATED.len());
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         fs::write(&primary, ORIGINAL).expect("write existing output");
         let artifacts = [PolicyArtifactBytes {
@@ -3623,7 +3635,7 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn policy_artifact_rollback_preserves_concurrent_replacement() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         let json = tmp.path().join("receipt.json");
         let foreign = tmp.path().join("foreign-output");
@@ -3668,7 +3680,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn policy_output_snapshot_rejects_regular_to_fifo_swap_without_blocking() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         fs::write(&primary, b"existing-output").expect("write existing output");
         let mut replacement =
@@ -3715,7 +3727,7 @@ mod tests {
     fn policy_artifact_writer_preserves_existing_mode_on_replacement() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         fs::write(&primary, b"existing-output").expect("write existing output");
         fs::set_permissions(&primary, fs::Permissions::from_mode(0o640))
@@ -3741,7 +3753,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn policy_artifact_writer_replaces_existing_output_on_windows() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         fs::write(&primary, b"existing-output").expect("write existing output");
         let artifacts = [PolicyArtifactBytes {
@@ -3762,7 +3774,7 @@ mod tests {
     fn policy_artifact_writer_rejects_windows_reparse_target() {
         use std::os::windows::fs::symlink_file;
 
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let victim = tmp.path().join("victim");
         let primary = tmp.path().join("receipt.to");
         fs::write(&victim, b"victim-bytes").expect("write victim");
@@ -3788,7 +3800,7 @@ mod tests {
     fn policy_artifact_writer_rejects_symlink_target_without_following_it() {
         use std::os::unix::fs::symlink;
 
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let victim = tmp.path().join("victim");
         let primary = tmp.path().join("receipt.to");
         let json = tmp.path().join("receipt.json");
@@ -3819,7 +3831,7 @@ mod tests {
     fn policy_artifact_writer_rechecks_late_second_target_before_publishing() {
         use std::os::unix::fs::symlink;
 
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = policy_output_tempdir();
         let primary = tmp.path().join("receipt.to");
         let json = tmp.path().join("receipt.json");
         let victim = tmp.path().join("victim");
@@ -3838,13 +3850,22 @@ mod tests {
             },
         ];
 
+        let injected = std::cell::Cell::new(false);
         let error = publish_policy_artifacts_with_hook(&artifacts, || {
             symlink(&victim, &json).wrap_err("create late JSON output symlink")?;
+            injected.set(true);
             Ok(())
         })
         .expect_err("late second-output substitution must fail before publication");
 
-        assert!(error.to_string().contains("must not be a symlink"));
+        assert!(
+            injected.get(),
+            "preflight must reach the late-target hook: {error:#}"
+        );
+        assert!(
+            error.to_string().contains("must not be a symlink"),
+            "{error:#}"
+        );
         assert_eq!(
             fs::read(&primary).expect("read original primary"),
             b"old-primary"
@@ -3859,6 +3880,47 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(".taikai-policy-")),
             "failed publication must clean every staging file"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn policy_artifact_writer_rejects_symlink_parent_before_staging_or_hooks() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = policy_output_tempdir();
+        let real = tmp.path().join("real");
+        let alias = tmp.path().join("alias");
+        fs::create_dir(&real).expect("direct output parent");
+        validate_policy_output_target(&real.join("receipt.to"), "RPT")
+            .expect("direct fixture must pass parent admission");
+        symlink(&real, &alias).expect("indirect output parent");
+        let target = alias.join("receipt.to");
+        let artifacts = [PolicyArtifactBytes {
+            target: &target,
+            label: "RPT",
+            bytes: b"replacement",
+        }];
+        let hook_reached = std::cell::Cell::new(false);
+        let error = publish_policy_artifacts_with_hook(&artifacts, || {
+            hook_reached.set(true);
+            Ok(())
+        })
+        .expect_err("an indirect output parent must fail before staging");
+
+        assert!(
+            error.to_string().contains("parent")
+                && error
+                    .to_string()
+                    .contains("must not be a symlink or reparse point"),
+            "{error:#}",
+        );
+        assert!(!hook_reached.get());
+        assert!(
+            fs::read_dir(&real)
+                .expect("unchanged real parent")
+                .next()
+                .is_none(),
+            "parent rejection must not stage or publish any output",
         );
     }
     #[test]

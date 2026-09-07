@@ -20865,7 +20865,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn retained_edge_route_retry_requires_both_rename_parents_durable() {
-        let directory = tempfile::tempdir().expect("edge route retry fixture");
+        let directory = super::super::private_custody_test_dir("taira-edge-route-retry-");
         let root = directory
             .path()
             .canonicalize()
@@ -21154,7 +21154,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn admitted_edge_rollback_matching_prior_retry_requires_route_namespace_durable() {
-        let directory = tempfile::tempdir().expect("admitted edge rollback fixture");
+        let directory = super::super::private_custody_test_dir("taira-edge-rollback-");
         let root = directory
             .path()
             .canonicalize()

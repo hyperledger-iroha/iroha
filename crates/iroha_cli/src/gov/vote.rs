@@ -335,8 +335,8 @@ impl Run for VoteZkArgs {
             json_value(&client.account.to_string())?,
         );
         public_obj.insert(
-            "chain_id".to_owned(),
-            json_value(&client.chain.to_string())?,
+            "network_id".to_owned(),
+            json_value(&client.network_id)?,
         );
         public_obj.insert("election_id".to_owned(), json_value(&self.election_id)?);
         public_obj.insert("backend".to_owned(), json_value(&self.backend)?);
@@ -387,6 +387,8 @@ impl Run for VotePlainArgs {
         let client: Client = context.client_from_config();
         let owner = canonicalize_account_literal(&self.owner, "--owner")?;
         let body = json_object(vec![
+            ("authority", json_value(&client.account.to_string())?),
+            ("network_id", json_value(&client.network_id)?),
             ("referendum_id", json_value(&self.referendum_id)?),
             ("owner", json_value(&owner)?),
             ("amount", json_value(&self.amount)?),

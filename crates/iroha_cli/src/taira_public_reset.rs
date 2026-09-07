@@ -485,6 +485,28 @@ fn sample_inventory_fixture() -> InventoryV1 {
     executor_model::tests::sample_inventory()
 }
 
+/// Create a disposable fixture with the same ancestor custody as operator inputs.
+#[cfg(test)]
+fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
+    // A private leaf below a shared temporary directory does not satisfy the
+    // public-reset custody policy. Keep fixtures beneath the owned workspace.
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    fs::create_dir_all(&target).expect("workspace target directory");
+    let target = target.canonicalize().expect("canonical workspace target");
+    let directory = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(target)
+        .expect("private workspace fixture");
+    #[cfg(unix)]
+    {
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private workspace fixture permissions");
+        validate_owner_private_dir(directory.path(), "test fixture")
+            .expect("fixture ancestors must meet operator custody policy");
+    }
+    directory
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct InventoryV1 {
@@ -1260,15 +1282,26 @@ fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
         .and_then(|value| value.checked_add(timeouts.cleanup_secs.checked_mul(5)?))
         .and_then(|value| value.checked_add(timeouts.rollback_secs.checked_mul(5)?))
         .ok_or_else(|| eyre!("bounded execution timeout sum overflow"))?;
-    seconds
+    let lifetime_ms = seconds
         .checked_mul(1_000)
         // A fresh authorization may be admitted at any point in its complete
         // fifteen-minute admission window, so the execution lease must cover
         // that delay in addition to the bounded action ledger.
         .and_then(|value| value.checked_add(MAX_AUTHORIZATION_LIFETIME_MS))
         .and_then(|value| value.checked_add(EXECUTION_SAFETY_MARGIN_MS))
-        .filter(|value| *value <= MAX_EXECUTION_LIFETIME_MS)
-        .ok_or_else(|| eyre!("bounded execution plan exceeds four hours"))
+        .ok_or_else(|| eyre!("bounded execution lifetime overflow"))?;
+    if lifetime_ms > MAX_EXECUTION_LIFETIME_MS {
+        return Err(eyre!(
+            "bounded execution plan requires {} seconds (actions: {} seconds, admission: {} seconds, safety: {} seconds), exceeding the {}-second limit by {} seconds",
+            lifetime_ms / 1_000,
+            seconds,
+            MAX_AUTHORIZATION_LIFETIME_MS / 1_000,
+            EXECUTION_SAFETY_MARGIN_MS / 1_000,
+            MAX_EXECUTION_LIFETIME_MS / 1_000,
+            (lifetime_ms - MAX_EXECUTION_LIFETIME_MS) / 1_000,
+        ));
+    }
+    Ok(lifetime_ms)
 }
 
 fn authorization_message(claims: &AuthorizationClaimsV1) -> Result<Vec<u8>> {
@@ -1327,7 +1360,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     }
     validate_nonce(&inventory.authorization_nonce)?;
     validate_revision(&inventory.revision)?;
-    validate_timeouts(&inventory.timeouts)?;
+    validate_timeout_policy(inventory)?;
     validate_inrou(&inventory.inrou_canary)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
     validate_faucet_policy(&inventory.faucet_policy)?;
@@ -2527,6 +2560,12 @@ fn validate_genesis_hash_files(inventory: &InventoryV1, pinned: &[PinnedArtifact
         }
     }
     Ok(())
+}
+
+/// Validate individual action bounds and their complete signed execution lease without IO.
+fn validate_timeout_policy(inventory: &InventoryV1) -> Result<()> {
+    validate_timeouts(&inventory.timeouts)?;
+    execution_lifetime_ms(inventory).map(|_| ())
 }
 
 fn validate_timeouts(timeouts: &TimeoutsV1) -> Result<()> {
@@ -5479,28 +5518,34 @@ mod executor_model {
         }
 
         fn private_tempdir() -> tempfile::TempDir {
-            let directory = tempfile::tempdir().expect("tempdir");
-            #[cfg(unix)]
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-                .expect("private tempdir mode");
-            directory
+            private_custody_test_dir("taira-reset-journal-")
         }
 
         #[cfg(unix)]
-        fn private_custody_tempdir() -> tempfile::TempDir {
-            let current = std::env::current_dir().expect("current directory");
-            let directory = tempfile::Builder::new()
-                .prefix(".taira-artifact-test-")
-                .tempdir_in(current)
-                .expect("workspace tempdir");
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-                .expect("private workspace tempdir mode");
-            directory
+        #[test]
+        fn private_fixture_rejects_writable_ancestor_custody() {
+            let directory = private_tempdir();
+            let ancestor = directory.path().join("replaceable");
+            fs::create_dir(&ancestor).expect("fixture ancestor");
+            let private = ancestor.join("private");
+            fs::create_dir(&private).expect("private fixture leaf");
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700))
+                .expect("safe ancestor mode");
+            fs::set_permissions(&private, fs::Permissions::from_mode(0o700))
+                .expect("private leaf mode");
+            validate_owner_private_dir(&private, "fixture").expect("safe fixture custody");
+            for mode in [0o770, 0o777, 0o1777] {
+                fs::set_permissions(&ancestor, fs::Permissions::from_mode(mode))
+                    .expect("replaceable ancestor mode");
+                let error = validate_owner_private_dir(&private, "fixture")
+                    .expect_err("a private leaf cannot repair writable ancestor custody");
+                assert!(error.to_string().contains("unsafe custody"), "{error:#}");
+            }
         }
 
         #[cfg(unix)]
         fn materialize_artifact_sources(inventory: &mut InventoryV1) -> tempfile::TempDir {
-            let directory = private_custody_tempdir();
+            let directory = private_custody_test_dir("taira-reset-artifacts-");
             let root = directory.path().canonicalize().expect("artifact root");
             let mut materialized = BTreeSet::new();
             let mut materialize = |slug: &str, artifact: &mut ArtifactV1| {
@@ -6168,9 +6213,7 @@ mod executor_model {
 
         #[test]
         fn completed_receipt_rejects_replay() {
-            let directory = tempfile::tempdir().expect("tempdir");
-            #[cfg(unix)]
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect("mode");
+            let directory = private_tempdir();
             let admitted = admitted(sample_inventory());
             let completed = directory.path().join("completed");
             fs::create_dir(&completed).expect("completed");

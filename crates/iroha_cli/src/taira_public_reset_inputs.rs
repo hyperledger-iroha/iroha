@@ -134,6 +134,8 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
             "inventory draft must use the existing executor inventory V1 schema"
         ));
     }
+    // Reject an impossible signed execution plan before source/artifact scans or custody reads.
+    validate_timeout_policy(inventory)?;
     let (source, source_bytes) = read_json::<SourceManifestV1>(
         Path::new(&inventory.revision.source_manifest_path),
         "source manifest",

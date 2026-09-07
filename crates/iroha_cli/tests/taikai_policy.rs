@@ -12,7 +12,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
 }
@@ -42,7 +41,11 @@ fn status_with_timeout(mut command: Command) -> io::Result<ExitStatus> {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn taikai_cli_emits_cek_receipt_and_rpt() {
-    let dir = tempdir().expect("tempdir");
+    // Policy output admission rejects symlink ancestors, including macOS /var.
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .expect("direct temporary fixture root");
+    let dir = tempfile::tempdir_in(root).expect("direct policy output fixture");
     let gar_path = dir.path().join("gar.json");
     fs::write(&gar_path, br#"{"gar":"demo"}"#).expect("write gar");
     let bundle_path = dir.path().join("bundle.bin");

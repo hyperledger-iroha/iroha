@@ -638,6 +638,8 @@ class _MockState:
                 "referendum": referendum_payload,
                 "ballot_plain": entry.get("ballot_plain_response"),
                 "ballot_zk_v1": entry.get("ballot_zk_response"),
+                "ballot_plain_request": entry.get("ballot_plain_request"),
+                "ballot_zk_request": entry.get("ballot_zk_request"),
             }
         self.gov_referenda = new_state
 
@@ -805,6 +807,7 @@ class _MockState:
             if ("contract_address" in payload) == ("contract_alias" in payload):
                 raise ValueError("propose-deploy payload must include exactly one of contract_address or contract_alias")
             allowed_fields = {
+                "proposal_operator",
                 "contract_address",
                 "contract_alias",
                 "abi_version",
@@ -817,6 +820,11 @@ class _MockState:
                 raise ValueError(
                     f"propose-deploy payload contains unknown field '{unknown_fields[0]}'"
                 )
+            if payload.get("proposal_operator") is None:
+                raise ValueError("propose-deploy proposal_operator is required")
+            _ensure_governance_owner_canonical(
+                payload["proposal_operator"], context="propose-deploy proposal_operator"
+            )
             if payload.get("abi_version") != 1 or isinstance(payload.get("abi_version"), bool):
                 raise ValueError("propose-deploy abi_version must be the integer 1")
             for key in ("code_hash", "abi_hash"):
@@ -930,6 +938,9 @@ class _MockState:
         entry = self.gov_referenda.get(referendum_id)
         if entry is None or entry.get("ballot_plain") is None:
             raise KeyError("governance plain ballot not configured")
+        expected = entry.get("ballot_plain_request")
+        if expected is not None and payload != expected:
+            raise ValueError("plain ballot differs from the exact configured request")
         return _json_response(HTTPStatus.OK, entry["ballot_plain"])
 
     def _gov_ballot_zk_v1(self, body: bytes) -> _Response:
@@ -941,7 +952,7 @@ class _MockState:
             raise ValueError("zk-v1 ballot payload must be an object")
         supported_fields = {
             "authority",
-            "chain_id",
+            "network_id",
             "election_id",
             "backend",
             "envelope_b64",
@@ -955,7 +966,7 @@ class _MockState:
         unknown = sorted(set(payload).difference(supported_fields))
         if unknown:
             raise ValueError(f"zk-v1 ballot payload contains unknown field {unknown[0]!r}")
-        for field_name in ("authority", "chain_id", "election_id", "backend"):
+        for field_name in ("authority", "network_id", "election_id", "backend"):
             value = payload.get(field_name)
             if (
                 not isinstance(value, str)
@@ -994,6 +1005,9 @@ class _MockState:
         entry = self.gov_referenda.get(election_id)
         if entry is None or entry.get("ballot_zk_v1") is None:
             raise KeyError("governance zk-v1 ballot not configured")
+        expected = entry.get("ballot_zk_request")
+        if expected is not None and payload != expected:
+            raise ValueError("zk-v1 ballot differs from the exact configured request")
         return _json_response(HTTPStatus.OK, entry["ballot_zk_v1"])
 
     def _gov_contract_get(self, contract_address: str) -> _Response:

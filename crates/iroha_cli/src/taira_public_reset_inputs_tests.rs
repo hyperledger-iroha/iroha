@@ -256,3 +256,144 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
         "assembly requires exactly four ordered validator inputs"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_custody_reads() {
+    let directory = private_custody_test_dir("taira-timeout-inputs-");
+    let root = directory.path().canonicalize().expect("direct test root");
+    let absent = root.join("absent");
+    let mut inventory = sample_inventory_fixture();
+    inventory.timeouts = TimeoutsV1 {
+        stop_secs: 600,
+        install_secs: 600,
+        reset_secs: 600,
+        start_secs: 600,
+        convergence_secs: 600,
+        canary_secs: 600,
+        restart_secs: 600,
+        edge_secs: 600,
+        cleanup_secs: 600,
+        rollback_secs: 600,
+    };
+    validate_timeouts(&inventory.timeouts).expect("every individual timeout is legal");
+    inventory.revision.source_root = absent.join("source").display().to_string();
+    inventory.revision.source_manifest_path = absent.join("source.json").display().to_string();
+    for artifact in inventory
+        .validators
+        .iter_mut()
+        .flat_map(|validator| validator.artifacts.iter_mut())
+        .chain(inventory.edge.artifacts.iter_mut())
+    {
+        artifact.local_path = absent.join(&artifact.role).display().to_string();
+    }
+    let local = || LocalInputs {
+        runtime_client_config: absent.join("runtime-client.toml"),
+        validator_client_config: VALIDATOR_SLUGS
+            .iter()
+            .map(|slug| absent.join(format!("{slug}.toml")))
+            .collect(),
+        onboarding_token: absent.join("onboarding-token"),
+        inrou_stage_dir: absent.join("stage"),
+        validator_unit: VALIDATOR_SLUGS
+            .iter()
+            .map(|slug| absent.join(format!("{slug}.service")))
+            .collect(),
+        edge_unit: absent.join("edge.service"),
+        known_hosts: absent.join("known-hosts"),
+    };
+    let expected = "bounded execution plan requires 72000 seconds (actions: 70800 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 14400-second limit by 57600 seconds";
+    assert_eq!(
+        derive_inventory(&mut inventory, &local())
+            .expect_err("budget must fail before opening the absent source manifest")
+            .to_string(),
+        expected,
+    );
+    assert_eq!(
+        validate_inventory(&inventory)
+            .expect_err("signed inventory admission must reject the same budget")
+            .to_string(),
+        expected,
+    );
+
+    let draft = root.join("draft.json");
+    write_new_private(
+        &draft,
+        &canonical_inventory_bytes(&inventory).expect("typed draft"),
+    )
+    .expect("private retained draft");
+    let output = root.join("inventory.json");
+    assert_eq!(
+        assemble(&Assemble {
+            inventory_draft: draft.clone(),
+            local: local(),
+            output: output.clone(),
+        })
+        .expect_err("assembly must reject before reading absent runtime inputs")
+        .to_string(),
+        expected,
+    );
+    let authorization = root.join("authorization.json");
+    assert_eq!(
+        authorize(&Authorize {
+            inventory: draft,
+            local: local(),
+            trusted_public_key: absent.join("owner-public-key.json"),
+            signing_key_fd: 0,
+            output: authorization.clone(),
+        })
+        .expect_err("authorization must reject before reading absent custody or invalid signer FD")
+        .to_string(),
+        expected,
+    );
+    assert!(!absent.exists());
+    assert!(!output.exists());
+    assert!(!authorization.exists());
+}
+
+#[test]
+fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual_bounds() {
+    let mut inventory = sample_inventory_fixture();
+    inventory.timeouts = TimeoutsV1 {
+        stop_secs: 60,
+        install_secs: 90,
+        reset_secs: 60,
+        start_secs: 120,
+        convergence_secs: 180,
+        canary_secs: 120,
+        restart_secs: 120,
+        edge_secs: 60,
+        cleanup_secs: 60,
+        rollback_secs: 120,
+    };
+    validate_timeout_policy(&inventory).expect("complete deployment timeout policy");
+    validate_inventory(&inventory).expect("deployment defaults pass structural admission");
+    assert_eq!(
+        execution_lifetime_ms(&inventory).expect("bounded deployment lease"),
+        13_140_000,
+    );
+    let (key, trusted) = owner();
+    let bytes = canonical_inventory_bytes(&inventory).expect("inventory");
+    let issued_at = 1_000_000;
+    let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, issued_at)
+        .expect("admitted defaults are signable under the same budget");
+    assert_eq!(
+        envelope.claims.execution_expires_at_unix_ms - issued_at,
+        13_140_000,
+    );
+
+    inventory.timeouts.stop_secs = 0;
+    assert_eq!(
+        validate_timeout_policy(&inventory)
+            .expect_err("aggregate admission must retain the individual lower bound")
+            .to_string(),
+        "stop timeout must be within 1..=600 seconds",
+    );
+    inventory.timeouts.stop_secs = 601;
+    assert_eq!(
+        validate_timeout_policy(&inventory)
+            .expect_err("aggregate admission must retain the individual upper bound")
+            .to_string(),
+        "stop timeout must be within 1..=600 seconds",
+    );
+}
