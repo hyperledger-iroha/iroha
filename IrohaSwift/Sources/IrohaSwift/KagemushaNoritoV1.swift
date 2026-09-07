@@ -69,6 +69,108 @@ public enum KagemushaNoritoV1 {
   private static let topUpInstructionSchema =
     "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1"
   private static let redemptionRequestSchema = "iroha.torii.v1.kagemusha.redeem.request"
+  private static let enrolledOpenSelectorSchema = "iroha.kagemusha.v1.enrolled-open-selector"
+  private static let retailEnrollmentOwnerSchema = "iroha.kagemusha.v1.retail-enrollment-owner"
+  private static let retailEnrollmentIdentityDomain = Data(
+    "iroha:kagemusha:v1:retail-enrollment-identity".utf8)
+
+  /// Encode an untrusted owner selector; matching these bytes grants no enrollment authority.
+  public static func encodeEnrolledOpenSelectorShape(
+    _ value: KagemushaEnrolledOpenSelectorV1
+  ) throws -> Data {
+    guard value.version == 1,
+      try value.enrollmentID == retailEnrollmentIdentityShape(value.owner)
+    else { throw kagemushaInvalid("enrolledSelector.binding") }
+    return try bounded(
+      frameExact(enrolledOpenSelectorSchema, fields([
+        u16(value.version), retailEnrollmentOwner(value.owner), value.enrollmentID,
+      ]), 8), KagemushaEnrolledOpenSelectorV1.maximumCanonicalBytes)
+  }
+
+  /// Decode the sole bounded canonical selector schema with byte-for-byte re-encoding equality.
+  public static func decodeEnrolledOpenSelectorShapeExact(_ bytes: Data) throws
+    -> KagemushaEnrolledOpenSelectorV1
+  {
+    try decodeExactSchema(
+      bytes, KagemushaEnrolledOpenSelectorV1.maximumCanonicalBytes,
+      enrolledOpenSelectorSchema, 8, decodeEnrolledOpenSelector,
+      encodeEnrolledOpenSelectorShape)
+  }
+
+  /// SHA-256(domain, zero, LE-u64 length, canonical full owner), for correlation only.
+  public static func retailEnrollmentIdentityShape(
+    _ owner: KagemushaRetailEnrollmentOwnerProjectionV1
+  ) throws -> Data {
+    let canonical = try bounded(
+      frameExact(retailEnrollmentOwnerSchema, retailEnrollmentOwner(owner), 8),
+      KagemushaEnrolledOpenSelectorV1.maximumCanonicalBytes)
+    return digestEncoded(retailEnrollmentIdentityDomain, canonical)
+  }
+
+  private static func retailEnrollmentRuntime(
+    _ value: KagemushaRetailEnrollmentRuntimeProjectionV1
+  ) -> Data {
+    fields([
+      CompactNorito.encodeString(value.fiID), fields([u64(value.ledgerDataspaceID)]),
+      CompactNorito.encodeString(value.authenticationNamespace), value.networkID,
+      value.asset.canonicalPayload, assetIncarnation(value.assetIncarnation), u32(value.scale),
+    ])
+  }
+
+  static func retailEnrollmentOwner(
+    _ value: KagemushaRetailEnrollmentOwnerProjectionV1
+  ) -> Data {
+    fields([value.accountID.canonicalPayload, retailEnrollmentRuntime(value.runtime), value.laneID])
+  }
+
+  private static func decodeEnrolledOpenSelector(_ payload: Data) throws
+    -> KagemushaEnrolledOpenSelectorV1
+  {
+    var reader = OCReader(payload)
+    let value = try KagemushaEnrolledOpenSelectorV1(
+      version: reader.u16Field(), owner: decodeRetailEnrollmentOwner(reader.field()),
+      enrollmentID: reader.exactField(32))
+    try reader.finish()
+    return value
+  }
+
+  static func decodeRetailEnrollmentOwner(_ payload: Data) throws
+    -> KagemushaRetailEnrollmentOwnerProjectionV1
+  {
+    var reader = OCReader(payload)
+    let value = try KagemushaRetailEnrollmentOwnerProjectionV1(
+      accountID: KagemushaAccountIDV1(canonicalPayload: reader.field()),
+      runtime: decodeRetailEnrollmentRuntime(reader.field()), laneID: reader.exactField(32))
+    try reader.finish()
+    return value
+  }
+
+  private static func decodeRetailEnrollmentRuntime(_ payload: Data) throws
+    -> KagemushaRetailEnrollmentRuntimeProjectionV1
+  {
+    var reader = OCReader(payload)
+    let fiID = try decodeEnrollmentName(reader.field())
+    var dataspace = OCReader(try reader.field())
+    let ledgerDataspaceID = try dataspace.u64Field()
+    try dataspace.finish()
+    let value = try KagemushaRetailEnrollmentRuntimeProjectionV1(
+      fiID: fiID, ledgerDataspaceID: ledgerDataspaceID,
+      authenticationNamespace: decodeEnrollmentName(reader.field()), networkID: reader.exactField(32),
+      asset: KagemushaAssetDefinitionIDV1(canonicalPayload: reader.field()),
+      assetIncarnation: decodeAssetIncarnation(reader.field()), scale: reader.u32Field())
+    try reader.finish()
+    return value
+  }
+
+  private static func decodeEnrollmentName(_ payload: Data) throws -> String {
+    var reader = OCReader(payload)
+    let bytes = try reader.field()
+    try reader.finish()
+    guard bytes.count <= 255, let value = String(data: bytes, encoding: .utf8) else {
+      throw kagemushaInvalid("enrolledSelector.name")
+    }
+    return value
+  }
 
   /// Maximum canonical top-up request archive accepted by KAGEMUSHA V1.
   public static let maximumTopUpRequestBytes = 16 * 1024

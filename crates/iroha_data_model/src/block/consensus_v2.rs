@@ -903,6 +903,9 @@ pub struct NativeAmxApplicationManifestLeafV1 {
     pub proposal_hash: Hash,
     /// Hash of the exact zero-effect participant control settlement.
     pub settlement_hash: HashOf<NativeAmxParticipantSettlement>,
+    /// Previous Native settlement in this lane incarnation, absent for the first Native control.
+    #[norito(required)]
+    pub previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>,
     /// Ordered source, entrypoint, and result membership in canonical block order.
     pub members: Vec<NativeAmxApplicationManifestMemberV1>,
     /// Height of the canonical global application block.
@@ -925,6 +928,7 @@ impl NativeAmxApplicationManifestLeafV1 {
         }
         if self.participant_height == 0
             || self.application_block_height == 0
+            || (self.participant_height == 1 && self.previous_native_settlement_hash.is_some())
             || self.predecessor_height.checked_add(1) != Some(self.participant_height)
             || (self.predecessor_height == 0) != self.predecessor_descriptor_hash.is_none()
         {
@@ -959,6 +963,9 @@ impl NativeAmxApplicationManifestLeafV1 {
             bytes[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0) && bytes[Hash::LENGTH - 1] <= 1
         };
         if identities.iter().any(is_zero_like)
+            || self
+                .previous_native_settlement_hash
+                .is_some_and(|hash| is_zero_like(&Hash::from(hash)))
             || self
                 .predecessor_descriptor_hash
                 .is_some_and(|hash| is_zero_like(&hash))

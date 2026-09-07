@@ -2041,14 +2041,39 @@ impl<F: Field> ConstraintSystem<F> {
         )
     }
 
-    /// Returns the smallest number of fixed columns selector compression can possibly produce for
-    /// this configured constraint system.
+    /// Returns a configure-only lower bound on the number of fixed columns produced by selector
+    /// compression.
     ///
-    /// The exact count additionally depends on synthesized activation overlap. Treating every
-    /// selector as inactive removes all overlap while preserving the configured degree limits and
-    /// complex-selector behavior, so this is a sound configure-only lower bound.
+    /// Degree-zero selectors (complex or unused selectors) each occupy an independent column. For
+    /// each positive degree threshold `d`, any group containing a selector of degree at least `d`
+    /// can contain at most `D - d + 1` selectors, where `D` is the constraint-system degree. Thus
+    /// the number of positive-degree groups is at least the number of selectors at or above `d`,
+    /// divided by that capacity and rounded up. The maximum over these thresholds, plus the
+    /// independent degree-zero columns, is a lower bound for every activation schedule.
+    ///
+    /// This need not be attainable. In particular, running the greedy compression planner with
+    /// inactive selectors is not a lower bound: introducing overlaps can change the greedy order
+    /// and reduce the resulting column count. Exact sizing still requires synthesized activations.
     pub fn minimum_compressed_selector_columns(&self) -> usize {
-        self.compressed_selector_columns(&vec![vec![false]; self.num_selectors])
+        let mut degrees = self.selector_degrees();
+        degrees.sort_unstable();
+        let independent_columns = degrees.iter().take_while(|&&degree| degree == 0).count();
+        let max_degree = self.degree();
+        let mut positive_group_bound = 0;
+        for index in independent_columns..degrees.len() {
+            let degree = degrees[index];
+            if index > independent_columns && degree == degrees[index - 1] {
+                continue;
+            }
+            // Every positive selector degree is bounded by the constraint-system degree, so the
+            // capacity is positive. Since degree >= 1, adding one cannot overflow either.
+            let capacity = max_degree - degree + 1;
+            positive_group_bound = max(
+                positive_group_bound,
+                (degrees.len() - index).div_ceil(capacity),
+            );
+        }
+        independent_columns + positive_group_bound
     }
 
     /// This will compress selectors together depending on their provided

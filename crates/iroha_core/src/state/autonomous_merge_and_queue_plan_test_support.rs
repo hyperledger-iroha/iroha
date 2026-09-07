@@ -842,6 +842,9 @@ fn autonomous_merge_commit_authorization_fixture_inner(
             QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 2,
         };
         carrier.set_committed_fragment_count(committed_fragments);
+    } else if wrap_in_sealed_reveal {
+        // One applied sealed reveal commits its inner instruction fragment.
+        carrier.set_committed_fragment_count(1);
     }
     state
         .kura

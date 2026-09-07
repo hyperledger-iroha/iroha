@@ -30,8 +30,7 @@ use iroha_data_model::{
         consensus::{
             CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
             LaneBlockProposalV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
-            NativeAmxLegRecordV2, NativeAmxParticipantSettlement, NativeAmxPhase, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership, compute_native_amx_participant_settlement_hash,
+            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,

@@ -23,8 +23,9 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue},
 };
 use sorafs_manifest::{
-    ManifestV1, STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1,
-    STREAM_TOKEN_MAX_WIRE_BYTES_V1, StreamTokenV1, decode_manifest_v1_canonical,
+    BLAKE3_256_MULTIHASH_CODE, MAX_MANIFEST_ROOT_CID_BYTES, ManifestV1,
+    STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+    StreamTokenV1, decode_manifest_v1_canonical, validate_manifest_root_cid,
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -40,6 +41,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+mod source;
+pub use source::{GatewaySourceErrorV1, GatewaySourceLimitsV1, GatewayVerifiedPayloadV1};
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
 const HEADER_SORA_CHUNKER: &str = "x-sorafs-chunker";
 const HEADER_SORA_STREAM_TOKEN: &str = "x-sorafs-stream-token";
@@ -65,7 +68,6 @@ const MAX_CACHE_VERSION_BYTES: usize = 128;
 const MAX_GATEWAY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_GATEWAY_ERROR_BODY_BYTES: usize = 4 * 1024;
 const MAX_STREAM_TOKEN_ID_BYTES: usize = 128;
-const MAX_MANIFEST_CID_BYTES: usize = 128;
 const STREAM_TOKEN_CLOCK_SKEW_SECS: u64 = 60;
 const GATEWAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GATEWAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -194,8 +196,8 @@ pub struct GatewayFetchConfig {
     pub manifest_envelope_b64: Option<String>,
     /// Optional client label for rate limiting / audit purposes.
     pub client_id: Option<String>,
-    /// Optional manifest CID expectation (hex). When present the stream token
-    /// must authorise the same CID.
+    /// Optional exact manifest root CID: lowercase hex of the canonical 36-byte
+    /// CIDv1 dag-cbor/BLAKE3-256 value. The stream token must authorise this CID.
     pub expected_manifest_cid_hex: Option<String>,
     /// Optional canonical blinded CID (base64url, no padding) passed via `Sora-Req-Blinded-CID`.
     pub blinded_cid_b64: Option<String>,
@@ -257,12 +259,58 @@ impl GatewayFetchContext {
         connect_timeout: Duration,
         request_timeout: Duration,
     ) -> Result<Self, GatewayBuildError> {
+        Self::build_with_tls_roots(config, providers, connect_timeout, request_timeout, None)
+    }
+    /// Construct a provider source with an explicit, independently authenticated TLS root set.
+    ///
+    /// The supplied DER roots replace platform roots; no implicit trust fallback is used.
+    /// At most four roots of at most 16 KiB each are accepted. Endpoint DNS names and pinned
+    /// public-address resolution are still verified by the ordinary gateway transport.
+    pub fn new_with_pinned_tls_roots(
+        config: GatewayFetchConfig,
+        providers: impl IntoIterator<Item = GatewayProviderInput>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+        tls_roots_der: &[Vec<u8>],
+    ) -> Result<Self, GatewayBuildError> {
+        Self::build_with_tls_roots(
+            config,
+            providers,
+            connect_timeout,
+            request_timeout,
+            Some(tls_roots_der),
+        )
+    }
+    fn build_with_tls_roots(
+        config: GatewayFetchConfig,
+        providers: impl IntoIterator<Item = GatewayProviderInput>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+        tls_roots_der: Option<&[Vec<u8>]>,
+    ) -> Result<Self, GatewayBuildError> {
         if connect_timeout.is_zero()
             || request_timeout.is_zero()
             || connect_timeout > request_timeout
         {
             return Err(GatewayBuildError::InvalidTimeouts);
         }
+        let tls_roots = tls_roots_der
+            .map(|roots| {
+                if roots.is_empty() || roots.len() > 4 {
+                    return Err(GatewayBuildError::InvalidPinnedTlsRoots);
+                }
+                roots
+                    .iter()
+                    .map(|der| {
+                        if der.is_empty() || der.len() > 16 * 1024 {
+                            return Err(GatewayBuildError::InvalidPinnedTlsRoots);
+                        }
+                        reqwest::Certificate::from_der(der)
+                            .map_err(|_| GatewayBuildError::InvalidPinnedTlsRoots)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
         let mut inputs = Vec::new();
         for input in providers {
             if inputs.len() >= MAX_GATEWAY_PROVIDERS {
@@ -304,6 +352,12 @@ impl GatewayFetchContext {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(connect_timeout)
             .timeout(request_timeout);
+        if let Some(roots) = tls_roots {
+            client_builder = client_builder.tls_built_in_root_certs(false);
+            for root in roots {
+                client_builder = client_builder.add_root_certificate(root);
+            }
+        }
         for (host, addresses) in &resolved_hosts {
             client_builder = client_builder.resolve_to_addrs(host, addresses);
         }
@@ -876,14 +930,22 @@ impl NormalisedConfig {
         };
         let expected_manifest_cid_hex = match expected_manifest_cid_hex {
             Some(cid) => {
-                let normalised = cid.trim().to_ascii_lowercase();
-                if cid != normalised
-                    || normalised.len() != 64
-                    || !normalised.bytes().all(|byte| byte.is_ascii_hexdigit())
+                if cid.len() != MAX_MANIFEST_ROOT_CID_BYTES * 2
+                    || !cid
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 {
                     return Err(GatewayBuildError::InvalidExpectedManifestCid);
                 }
-                Some(normalised)
+                let bytes =
+                    hex::decode(&cid).map_err(|_| GatewayBuildError::InvalidExpectedManifestCid)?;
+                validate_manifest_root_cid(
+                    &bytes,
+                    sorafs_manifest::chunker_registry::MANIFEST_DAG_CODEC,
+                    BLAKE3_256_MULTIHASH_CODE,
+                )
+                .map_err(|_| GatewayBuildError::InvalidExpectedManifestCid)?;
+                Some(cid)
             }
             None => None,
         };
@@ -1052,8 +1114,12 @@ impl ProviderDescriptor {
                 provider_id: provider_id_hex.clone(),
             });
         }
-        if token.body.manifest_cid.is_empty()
-            || token.body.manifest_cid.len() > MAX_MANIFEST_CID_BYTES
+        if validate_manifest_root_cid(
+            &token.body.manifest_cid,
+            sorafs_manifest::chunker_registry::MANIFEST_DAG_CODEC,
+            BLAKE3_256_MULTIHASH_CODE,
+        )
+        .is_err()
         {
             return Err(GatewayBuildError::InvalidStreamTokenManifestCid {
                 provider_id: provider_id_hex.clone(),
@@ -1369,6 +1435,9 @@ pub enum GatewayBuildError {
     ClientBuild(reqwest::Error),
     #[error("gateway timeouts must be nonzero and connect must not exceed request")]
     InvalidTimeouts,
+    /// Explicit source trust roots were empty, excessive or invalid DER.
+    #[error("gateway pinned TLS roots are invalid")]
+    InvalidPinnedTlsRoots,
     #[error("failed to obtain secure random bytes for gateway nonces: {message}")]
     RandomBytes { message: String },
     #[error("gateway DNS resolution returned no exclusively public addresses")]
@@ -1383,7 +1452,7 @@ pub enum GatewayBuildError {
     InvalidManifestId { manifest_id: String },
     #[error("chunker handle must not be empty")]
     EmptyChunkerHandle,
-    #[error("expected manifest CID must be canonical 32-byte hex")]
+    #[error("expected manifest CID must be canonical lowercase hex of CIDv1 dag-cbor/BLAKE3-256")]
     InvalidExpectedManifestCid,
     #[error("invalid {header} header: {reason}")]
     InvalidHeader {
@@ -1895,6 +1964,17 @@ mod tests {
     fn manifest_id_from_payload(payload: &[u8]) -> String {
         hex::encode(blake3::hash(payload).as_bytes())
     }
+    fn sample_manifest_cid_hex() -> String {
+        hex::encode(sorafs_manifest::canonical_manifest_root_cid([0x11; 32]))
+    }
+    fn manifest_root_cid_for_payload(payload: &[u8]) -> String {
+        let plan = plan_for_payload(payload);
+        let stats = crate::CarWriter::new(&plan, payload)
+            .expect("native CAR writer")
+            .write_to(std::io::sink())
+            .expect("native CAR root");
+        hex::encode(&stats.root_cids[0])
+    }
     fn provider_id_hex() -> String {
         "ab".repeat(32)
     }
@@ -2070,10 +2150,11 @@ mod tests {
     fn provider_id_mismatch_is_rejected() {
         let payload = sample_payload(1024);
         let manifest_id_hex = manifest_id_from_payload(&payload);
+        let manifest_cid_hex = manifest_root_cid_for_payload(&payload);
         let provider_id = provider_id_hex();
         let token_provider_id = "cd".repeat(32);
         let chunker = chunker_handle();
-        let token = sample_stream_token(&manifest_id_hex, &token_provider_id, &chunker, 2);
+        let token = sample_stream_token(&manifest_cid_hex, &token_provider_id, &chunker, 2);
         let token_b64 = encode_token_b64(&token);
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
@@ -2167,7 +2248,8 @@ mod tests {
     fn provider_configuration_rejects_duplicate_canonical_provider_ids() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
-        let token = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let token =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         let first = gateway_provider_input(&token);
         let mut second = first.clone();
         second.name = "beta".to_owned();
@@ -2180,7 +2262,8 @@ mod tests {
     fn provider_configuration_rejects_invalid_signature_and_key() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
-        let mut token = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let mut token =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         token.body.max_streams = 3;
         assert!(matches!(
             build_test_context(
@@ -2189,7 +2272,8 @@ mod tests {
             ),
             Err(GatewayBuildError::InvalidStreamTokenSignature { .. })
         ));
-        let token = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let token =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         let mut wrong_key = gateway_provider_input(&token);
         wrong_key.gateway_public_key_hex = hex::encode(
             SigningKey::from_bytes(&[0x43; 32])
@@ -2211,7 +2295,8 @@ mod tests {
     fn provider_nonces_are_process_unique_and_fail_closed_on_counter_exhaustion() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
-        let token = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let token =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         let context = build_test_context(
             gateway_config(&manifest_id, &profile),
             [gateway_provider_input(&token)],
@@ -2236,7 +2321,8 @@ mod tests {
     fn provider_configuration_rejects_invalid_token_lifetimes() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
-        let sample = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let sample =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
@@ -2274,7 +2360,9 @@ mod tests {
             Err(GatewayBuildError::ExpiredStreamToken { .. })
         ));
         let mut future_body = sample.body.clone();
-        future_body.issued_at = now.saturating_add(STREAM_TOKEN_CLOCK_SKEW_SECS + 1);
+        // Keep the rejection outside the allowed skew even if the wall clock crosses a
+        // second boundary while the real signature/context checks execute.
+        future_body.issued_at = now.saturating_add(STREAM_TOKEN_CLOCK_SKEW_SECS + 60);
         future_body.ttl_epoch = future_body.issued_at.saturating_add(60);
         let future = StreamTokenV1::sign(future_body, &gateway_signing_key()).expect("sign");
         assert!(matches!(
@@ -2295,7 +2383,8 @@ mod tests {
             ),
             Err(GatewayBuildError::InvalidStreamTokenLifetime { .. })
         ));
-        let sample = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let sample =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         let mut oversized_lifetime_body = sample.body;
         oversized_lifetime_body.issued_at = now;
         oversized_lifetime_body.ttl_epoch = now + STREAM_TOKEN_MAX_TTL_SECS_V1 + 1;
@@ -2313,7 +2402,8 @@ mod tests {
     fn provider_configuration_rejects_unbounded_or_noncanonical_token_fields() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
-        let sample = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let sample =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         let mut empty_id_body = sample.body.clone();
         empty_id_body.token_id.clear();
         let empty_id = StreamTokenV1::sign(empty_id_body, &gateway_signing_key()).expect("sign");
@@ -2325,7 +2415,7 @@ mod tests {
             Err(GatewayBuildError::InvalidStreamTokenId { .. })
         ));
         let mut oversized_cid_body = sample.body.clone();
-        oversized_cid_body.manifest_cid = vec![0x42; MAX_MANIFEST_CID_BYTES + 1];
+        oversized_cid_body.manifest_cid = vec![0x42; MAX_MANIFEST_ROOT_CID_BYTES + 1];
         let oversized_cid =
             StreamTokenV1::sign(oversized_cid_body, &gateway_signing_key()).expect("sign");
         assert!(matches!(
@@ -2402,7 +2492,12 @@ mod tests {
     }
     #[test]
     fn token_and_header_inputs_are_bounded_and_canonical() {
-        let token = sample_stream_token(&"11".repeat(32), &provider_id_hex(), &chunker_handle(), 2);
+        let token = sample_stream_token(
+            &sample_manifest_cid_hex(),
+            &provider_id_hex(),
+            &chunker_handle(),
+            2,
+        );
         let encoded = encode_token_b64(&token);
         assert!(matches!(
             decode_stream_token(&format!(" {encoded}")),
@@ -2445,14 +2540,89 @@ mod tests {
             })
         ));
     }
+    #[test]
+    fn expected_manifest_cid_accepts_actual_native_root_and_fixture() {
+        let fixture = decode_manifest_v1_canonical(include_bytes!(
+            "../../../fixtures/sorafs_manifest/ci_sample/manifest.to"
+        ))
+        .expect("canonical native fixture");
+        for cid in [
+            hex::encode(&fixture.root_cid),
+            manifest_root_cid_for_payload(&sample_payload(8192)),
+        ] {
+            assert_eq!(cid.len(), MAX_MANIFEST_ROOT_CID_BYTES * 2);
+            let mut config = gateway_config(&"11".repeat(32), &chunker_handle());
+            config.expected_manifest_cid_hex = Some(cid.clone());
+            let token = sample_stream_token(&cid, &provider_id_hex(), &chunker_handle(), 2);
+            build_test_context(config.clone(), [gateway_provider_input(&token)])
+                .expect("native root and matching signed token");
+            let different_token = sample_stream_token(
+                &hex::encode(sorafs_manifest::canonical_manifest_root_cid([0x99; 32])),
+                &provider_id_hex(),
+                &chunker_handle(),
+                2,
+            );
+            assert!(matches!(
+                build_test_context(config, [gateway_provider_input(&different_token)]),
+                Err(GatewayBuildError::ManifestCidMismatch { .. })
+            ));
+        }
+    }
+    #[test]
+    fn expected_manifest_cid_rejects_hashes_noncanonical_and_other_cid_formats() {
+        let root = sorafs_manifest::canonical_manifest_root_cid([0xab; 32]);
+        let mut invalid_cids = vec![
+            "ab".repeat(32),
+            hex::encode(&root).to_ascii_uppercase(),
+            format!(" {}", hex::encode(&root)),
+            format!("{}00", hex::encode(&root)),
+            hex::encode(&root[..root.len() - 1]),
+            hex::encode(sorafs_manifest::canonical_manifest_root_cid([0; 32])),
+        ];
+        for (offset, value) in [(0, 0), (1, 0x55), (2, 0x12), (3, 31)] {
+            let mut malformed = root.clone();
+            malformed[offset] = value;
+            invalid_cids.push(hex::encode(malformed));
+        }
+        let mut nonminimal = vec![0x81, 0x00];
+        nonminimal.extend_from_slice(&root[1..]);
+        invalid_cids.push(hex::encode(nonminimal));
+        for cid in invalid_cids {
+            let mut config = gateway_config(&"11".repeat(32), &chunker_handle());
+            config.expected_manifest_cid_hex = Some(cid);
+            assert!(matches!(
+                NormalisedConfig::from_config(config),
+                Err(GatewayBuildError::InvalidExpectedManifestCid)
+            ));
+        }
+    }
+    #[test]
+    fn signed_stream_token_requires_canonical_cid_without_optional_expectation() {
+        let root = sorafs_manifest::canonical_manifest_root_cid([0xab; 32]);
+        for cid in [vec![0xab; 32], vec![0; 36], {
+            let mut different_codec = root;
+            different_codec[1] = 0x55;
+            different_codec
+        }] {
+            let token =
+                sample_stream_token(&hex::encode(cid), &provider_id_hex(), &chunker_handle(), 2);
+            assert!(matches!(
+                build_test_context(
+                    gateway_config(&"11".repeat(32), &chunker_handle()),
+                    [gateway_provider_input(&token)],
+                ),
+                Err(GatewayBuildError::InvalidStreamTokenManifestCid { .. })
+            ));
+        }
+    }
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_serves_chunk_successfully() {
         let payload = sample_payload(8 * 1024);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
+        let manifest_cid_hex = manifest_root_cid_for_payload(&payload);
         let provider_id = provider_id_hex();
         let chunker_handle = chunker_handle();
-        let manifest_cid_hex = manifest_id_hex.clone();
         let token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 4);
         let token_b64 = encode_token_b64(&token);
         let path = format!(
@@ -2555,7 +2725,8 @@ mod tests {
         let plan = plan_for_payload(&payload);
         let manifest_id = manifest_id_from_payload(&payload);
         let profile = chunker_handle();
-        let token = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
+        let token =
+            sample_stream_token(&sample_manifest_cid_hex(), &provider_id_hex(), &profile, 2);
         let mut context = build_test_context(
             gateway_config(&manifest_id, &profile),
             [gateway_provider_input(&token)],
@@ -2583,9 +2754,10 @@ mod tests {
         let payload = sample_payload(2048);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
+        let manifest_cid_hex = manifest_root_cid_for_payload(&payload);
         let provider_id = provider_id_hex();
         let chunker_handle = chunker_handle();
-        let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
+        let token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 2);
         let token_b64 = encode_token_b64(&token);
         let blinded_b64 = URL_SAFE_NO_PAD.encode([0u8; 32]);
         let salt_epoch = 42u32;
@@ -2615,7 +2787,7 @@ mod tests {
             chunker_handle: chunker_handle.clone(),
             manifest_envelope_b64: None,
             client_id: None,
-            expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
+            expected_manifest_cid_hex: Some(manifest_cid_hex.clone()),
             blinded_cid_b64: Some(blinded_b64.clone()),
             salt_epoch: Some(salt_epoch),
             expected_cache_version: None,
@@ -2669,9 +2841,10 @@ mod tests {
         let payload = sample_payload(1024);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
+        let manifest_cid_hex = manifest_root_cid_for_payload(&payload);
         let provider_id = provider_id_hex();
         let chunker_handle = chunker_handle();
-        let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
+        let token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 2);
         let token_b64 = encode_token_b64(&token);
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -2697,7 +2870,7 @@ mod tests {
             chunker_handle: chunker_handle.clone(),
             manifest_envelope_b64: None,
             client_id: None,
-            expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
+            expected_manifest_cid_hex: Some(manifest_cid_hex.clone()),
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
@@ -2743,9 +2916,10 @@ mod tests {
         let payload = sample_payload(2048);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
+        let manifest_cid_hex = manifest_root_cid_for_payload(&payload);
         let provider_id = provider_id_hex();
         let chunker_handle = chunker_handle();
-        let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
+        let token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 2);
         let token_b64 = encode_token_b64(&token);
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -2774,7 +2948,7 @@ mod tests {
             chunker_handle: chunker_handle.clone(),
             manifest_envelope_b64: None,
             client_id: None,
-            expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
+            expected_manifest_cid_hex: Some(manifest_cid_hex.clone()),
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
@@ -2818,9 +2992,10 @@ mod tests {
         let payload = sample_payload(512);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
+        let manifest_cid_hex = manifest_root_cid_for_payload(&payload);
         let provider_id = provider_id_hex();
         let chunker_handle = chunker_handle();
-        let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 1);
+        let token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 1);
         let token_b64 = encode_token_b64(&token);
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -2853,7 +3028,7 @@ mod tests {
             chunker_handle: chunker_handle.clone(),
             manifest_envelope_b64: None,
             client_id: None,
-            expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
+            expected_manifest_cid_hex: Some(manifest_cid_hex.clone()),
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: Some("cache-v2".to_string()),
@@ -2903,9 +3078,10 @@ mod tests {
         let payload = sample_payload(1024);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
+        let manifest_cid_hex = manifest_root_cid_for_payload(&payload);
         let provider_id = provider_id_hex();
         let chunker_handle = chunker_handle();
-        let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 1);
+        let token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 1);
         let token_b64 = encode_token_b64(&token);
         let chunk_digest_hex = hex::encode(
             plan.try_chunk_fetch_specs().expect("valid CAR plan")[0]
@@ -2939,7 +3115,7 @@ mod tests {
             chunker_handle: chunker_handle.clone(),
             manifest_envelope_b64: None,
             client_id: None,
-            expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
+            expected_manifest_cid_hex: Some(manifest_cid_hex.clone()),
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: Some("expected-cache".to_string()),

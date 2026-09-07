@@ -4489,152 +4489,15 @@ pub mod json {
                 }
             }
         }
-        /// Read a JSON object key using the same hash as compile-time field dispatch.
+        /// Read a JSON object key using the same hash as compile-time and tape dispatch.
+        /// The existing string parser borrows unescaped keys and validates/unescapes
+        /// escaped keys. The colon remains unconsumed, as with the tape reader.
         pub fn read_key_hash(&mut self) -> Result<u64, Error> {
-            self.skip_ws();
-            self.expect(b'"')?;
-            let mut hash = key_hash::KeyHasher::new();
-            loop {
-                let b = self.bump().ok_or_else(|| {
-                    let (byte, line, col) = self.pos_meta(self.i);
-                    Error::UnterminatedString { byte, line, col }
-                })?;
-                match b {
-                    b'"' => break,
-                    b'\\' => {
-                        // Hash the escaped char logically (treat escape as the resulting byte where trivial)
-                        let esc = self.bump().ok_or_else(|| {
-                            let (byte, line, col) = self.pos_meta(self.i);
-                            Error::EofEscape { byte, line, col }
-                        })?;
-                        match esc {
-                            b'"' => {
-                                hash.update(b'"');
-                            }
-                            b'\\' => {
-                                hash.update(b'\\');
-                            }
-                            b'/' => {
-                                hash.update(b'/');
-                            }
-                            b'b' => {
-                                hash.update(0x08);
-                            }
-                            b'f' => {
-                                hash.update(0x0C);
-                            }
-                            b'n' => {
-                                hash.update(b'\n');
-                            }
-                            b'r' => {
-                                hash.update(b'\r');
-                            }
-                            b't' => {
-                                hash.update(b'\t');
-                            }
-                            b'u' => {
-                                // Consume 4 hex digits; combine surrogate pairs when present and hash UTF‑8 bytes
-                                let hex_to_u32 = |p: &mut Self| -> Result<u32, Error> {
-                                    let mut v: u32 = 0;
-                                    for _ in 0..4 {
-                                        let c = p.bump().ok_or_else(|| {
-                                            let (byte, line, col) = p.pos_meta(p.i);
-                                            Error::EofHex { byte, line, col }
-                                        })?;
-                                        v = (v << 4)
-                                            | match c {
-                                                b'0'..=b'9' => (c - b'0') as u32,
-                                                b'a'..=b'f' => (c - b'a' + 10) as u32,
-                                                b'A'..=b'F' => (c - b'A' + 10) as u32,
-                                                _ => {
-                                                    let (byte, line, col) =
-                                                        p.pos_meta(p.i.saturating_sub(1));
-                                                    return Err(Error::InvalidHex {
-                                                        byte,
-                                                        line,
-                                                        col,
-                                                    });
-                                                }
-                                            };
-                                    }
-                                    Ok(v)
-                                };
-                                let hi = hex_to_u32(self)?;
-                                let cp = if (0xD800..=0xDBFF).contains(&hi) {
-                                    if self.peek() != Some(b'\\') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    self.bump();
-                                    if self.bump() != Some(b'u') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected \\u for low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    let lo = hex_to_u32(self)?;
-                                    if !(0xDC00..=0xDFFF).contains(&lo) {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "invalid low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    0x10000 + (((hi - 0xD800) << 10) | (lo - 0xDC00))
-                                } else if (0xDC00..=0xDFFF).contains(&hi) {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "unexpected low surrogate",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                } else {
-                                    hi
-                                };
-                                if let Some(ch) = char::from_u32(cp) {
-                                    let mut buf = [0u8; 4];
-                                    let s = ch.encode_utf8(&mut buf);
-                                    for &bb in s.as_bytes() {
-                                        hash.update(bb);
-                                    }
-                                } else {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "invalid codepoint",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                }
-                            }
-                            _ => {
-                                let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
-                                return Err(Error::WithPos {
-                                    msg: "bad escape",
-                                    byte,
-                                    line,
-                                    col,
-                                });
-                            }
-                        }
-                    }
-                    _ => {
-                        hash.update(b);
-                    }
-                }
-            }
-            Ok(hash.finish())
+            let mut arena = Arena::new();
+            let key = self.parse_string_ref(&mut arena)?;
+            Ok(key_hash_const(match key {
+                StrRef::Borrowed(value) | StrRef::Owned(value) => value,
+            }))
         }
         /// Parse a JSON object key and return a borrowed `&str` when no escapes are present,
         /// or an owned `String` otherwise. This avoids allocating in the common fast path.
@@ -8996,6 +8859,18 @@ where
 {
     let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
     core::to_bytes(value)
+}
+/// Count the exact uncompressed V1 frame produced by [`encode_canonical`].
+///
+/// A real serialization pass counts bytes without allocating an output frame or trusting
+/// serializer length hints. Ambient layout guards are restored before returning.
+///
+/// # Errors
+///
+/// Returns the serialization error or [`Error::LengthMismatch`] on length overflow.
+pub fn canonical_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
+    let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+    core::encoded_frame_len(value)
 }
 const CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER: usize = 63;
 const CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;

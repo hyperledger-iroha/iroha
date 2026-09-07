@@ -107,9 +107,9 @@ contract TairaXorSccpBridge {
     }
 
     uint32 private constant DOMAIN_SORA = 0;
-    uint32 private constant DOMAIN_TRON = 3;
-    uint8 private constant CODEC_TEXT = 0;
-    uint8 private constant CODEC_TRON21 = 2;
+    uint32 private constant DOMAIN_TRON = 5;
+    uint8 private constant CODEC_TEXT = 1;
+    uint8 private constant CODEC_TRON21 = 5;
     uint32 private constant REPLAY_NETWORK_SORA = 0x40;
     uint8 private constant REPLAY_NETWORK_TRON = 0x43;
     uint8 private constant REPLAY_ACTOR_TRON = 2;
@@ -699,7 +699,7 @@ contract TairaXorSccpBridge {
         private view returns (address recipient, uint256 amount)
     {
         uint256 offset = 0;
-        require(_readU8(payload, offset++) == 0, "SC_TRANSFER");
+        require(_readU8(payload, offset++) == 2, "SC_TRANSFER");
         require(_readU8(payload, offset++) == 1, "SC_TRANSFER");
         require(_readU32Le(payload, offset) == DOMAIN_SORA, "SC_TRANSFER"); offset += 4;
         require(_readU32Le(payload, offset) == DOMAIN_TRON, "SC_TRANSFER"); offset += 4;

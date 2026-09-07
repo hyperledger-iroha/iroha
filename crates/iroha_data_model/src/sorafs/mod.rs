@@ -139,6 +139,7 @@ pub mod prelude {
             RepairLedgerStatusV1, RepairLedgerTaskPageV1, RepairLedgerTaskV1,
             RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1,
             sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
+            sorafs_moderation_pop_presentation_binding_v1,
             sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
             sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
             sorafs_repair_action_digest_v1, sorafs_repair_appeal_id_v1,

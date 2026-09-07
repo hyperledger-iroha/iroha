@@ -433,14 +433,7 @@ pub(super) mod tests {
         let receipt = receipt(&provider, 1, 1, 8, 0, 10);
         transact(&mut state, 1, NOW, |transaction| {
             activate_policy(transaction, &authority);
-            seed_settlement_channel(
-                transaction,
-                &buyer_id,
-                &provider_id,
-                &authority,
-                &receipt,
-                100,
-            );
+            seed_settlement_channel(transaction, &buyer_id, &provider_id, &authority, &receipt);
             Ok(())
         })
         .expect("commit bounded channel-query fixture");

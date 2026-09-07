@@ -33,6 +33,8 @@ def _canonical_production_tests(
                     "kura::",
                     "nexus::",
                     "peer::",
+                    "queue::tests::",
+                    "native_amx::participant_application_role_tests::",
                     "network::",
                     "consensus_message_control::tests::",
                     "network_relay_tests::",
@@ -2150,7 +2152,7 @@ def _sdk_validate_private_source_manifest(
         {
             "distribution_archive", "distribution_sha256",
             "distribution_url", "gradle_user_home",
-            "gradle_user_home_inventory", "java_wrapper_properties_sha256",
+            "gradle_user_home_inventory",
             "kotlin_wrapper_properties_sha256", "version", "wrapper_cache_key",
         },
         "SDK private Gradle source",
@@ -2191,10 +2193,6 @@ def _sdk_validate_private_source_manifest(
         or _require_digest(
             gradle["distribution_sha256"], "SDK private Gradle distribution"
         ) != expected_bindings["gradle"]["distribution_sha256"]
-        or _require_digest(
-            gradle["java_wrapper_properties_sha256"],
-            "SDK private Java Gradle wrapper",
-        ) != expected_bindings["gradle"]["wrapper_properties_sha256"]["java"]
         or _require_digest(
             gradle["kotlin_wrapper_properties_sha256"],
             "SDK private Kotlin Gradle wrapper",
@@ -2401,7 +2399,7 @@ def _sdk_binding_contract(
         "SDK Gradle binding",
     )
     wrappers = _require_exact_json_fields(
-        gradle["wrapper_properties_sha256"], {"java", "kotlin"},
+        gradle["wrapper_properties_sha256"], {"kotlin"},
         "SDK Gradle wrapper digests",
     )
     if (
@@ -2426,7 +2424,6 @@ def _sdk_binding_contract(
         ],
         "swiftpm/Package.resolved": swift["package_resolved_sha256"],
         "gradle/gradle-9.3.0-bin.zip": gradle["distribution_sha256"],
-        "gradle/java-gradle-wrapper.properties": wrappers["java"],
         "gradle/kotlin-gradle-wrapper.properties": wrappers["kotlin"],
     }
     for relative, digest in expected_files.items():
@@ -2528,23 +2525,22 @@ def _sdk_validate_control_files(
             raise ReceiptError("SDK archived SwiftPM checkout HEAD is malformed") from error
         if observed_revision != item["revision"]:
             raise ReceiptError("SDK archived SwiftPM checkout revision changed")
-    for kind in ("java", "kotlin"):
-        name = f"gradle/{kind}-gradle-wrapper.properties"
-        try:
-            lines = controls[name].decode("utf-8").splitlines()
-        except (KeyError, UnicodeDecodeError) as error:
-            raise ReceiptError(f"SDK archived {kind} Gradle wrapper is malformed") from error
-        values = dict(
-            line.split("=", 1) for line in lines
-            if line and not line.startswith("#") and "=" in line
-        )
-        if values.get("distributionUrl") != _SDK_GRADLE_DISTRIBUTION_URL.replace(
-            ":", r"\:", 1,
-        ):
-            raise ReceiptError(f"SDK archived {kind} Gradle wrapper is not 9.3.0")
-        pinned = values.get("distributionSha256Sum")
-        if pinned is not None and pinned != bindings["gradle"]["distribution_sha256"]:
-            raise ReceiptError(f"SDK archived {kind} Gradle checksum is inconsistent")
+    name = "gradle/kotlin-gradle-wrapper.properties"
+    try:
+        lines = controls[name].decode("utf-8").splitlines()
+    except (KeyError, UnicodeDecodeError) as error:
+        raise ReceiptError("SDK archived Kotlin Gradle wrapper is malformed") from error
+    values = dict(
+        line.split("=", 1) for line in lines
+        if line and not line.startswith("#") and "=" in line
+    )
+    if values.get("distributionUrl") != _SDK_GRADLE_DISTRIBUTION_URL.replace(
+        ":", r"\:", 1,
+    ):
+        raise ReceiptError("SDK archived Kotlin Gradle wrapper is not 9.3.0")
+    pinned = values.get("distributionSha256Sum")
+    if pinned is not None and pinned != bindings["gradle"]["distribution_sha256"]:
+        raise ReceiptError("SDK archived Kotlin Gradle checksum is inconsistent")
 
 
 def _sdk_validate_tar(
@@ -2565,7 +2561,6 @@ def _sdk_validate_tar(
         "openapi/package-lock.json",
         "openapi/node_modules/.package-lock.json",
         "swiftpm/Package.resolved",
-        "gradle/java-gradle-wrapper.properties",
         "gradle/kotlin-gradle-wrapper.properties",
     }
     control_names.update(

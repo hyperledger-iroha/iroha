@@ -39,6 +39,11 @@ This crate hosts cross-component tests for Iroha.
 
 The native SoraFS repair corridor runs with
 `IROHA_TEST_REQUIRE_NETWORK=1 cargo test --locked -p integration_tests --test core_api sorafs_repair_ledger:: -- --nocapture`.
+The SoraFS scenarios give genesis preexecution and Tokio workers explicit 32 MiB
+stacks and configure a 1 GiB storage ceiling per validator through the ordinary
+Nexus configuration. This bounds the local test allocation independently of the
+capacity of a shared host filesystem. No extra stack environment setting is
+required by the tests.
 It uses four NPoS voting validators with mandatory DA/RBC, submits duplicate
 reports and competing claims through different peers, revokes an active owner,
 rejects stale completion, and verifies one terminal result plus byte-identical
@@ -47,12 +52,21 @@ This is native-ledger qualification; provider storage execution, lease-expiry
 timing, slash/appeal orchestration and production evidence require their own
 tests and deployment runs.
 
+The orderbook and reserve corridors use the same harness with the filters
+`sorafs_orderbook_ledger::` and `sorafs_reserve_ledger::`. They bootstrap provider
+ownership through the production pre-genesis configuration, then submit signed
+native instructions for policy, funding and custody changes. Both check distinct
+transaction races, exact authority failures, balance conservation and matching
+finalized projections after a validator restart. Orderbook partial fills and
+expiry, elapsed rent collection, and hardware signing remain separate coverage.
+
 - IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
 - Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.
 
 ## Notes
+- `core_api::config::startup_configuration_is_read_only_on_four_validators` reads the explicit startup configuration through native operator authentication on four validators. It requires a signed POST to `/v1/configuration` to fail with HTTP 405 and `method_not_allowed`, and verifies that the complete effective configuration remains unchanged. Runtime HTTP configuration mutation is not supported.
 - Native BPNG alias bootstrap retained-Kura coverage lives in
   `tests/alias_registry_bootstrap_network.rs` in `network_functional`. It requires
   four real NPoS validators, native paid SNS quotes/leases, future-height routing
@@ -144,3 +158,38 @@ tests and deployment runs.
   and full or partial redemption are Core unit/qualification gates; this
   integration crate does not yet claim a complete paired-Pasta lifecycle run.
 - SoraNet web deploy + public DNS ALIAS/CNAME + NS/DS delegation placeholders coverage lives at `tests/soranet_web_deploy.rs`.
+- The generic game-session retained-input release gate lives in
+  `tests/native_game_sessions.rs` inside `core_api`. It starts four real
+  validators, retains an application checkpoint and jointly certified pending
+  controls through a fixed-height challenge, holds actual authenticated
+  cross-half votes in a bounded 2+2 consensus partition with all processes and
+  Torii endpoints alive, heals and drains the held votes, rejects conflicting evidence,
+  resolves a withheld reveal with three validators online, and requires the
+  restarted fourth validator to recover identical session bytes and dispute
+  commitments. It then proves the actual V2 technical-win transcript with the native
+  prover, rejects altered proof bytes, submits the complete proof inside a typed
+  `SettleGameSessionV1`, checks the exact proof receipt and settlement height on
+  all four peers, and rejects duplicate settlement. The compiled profile stays
+  unqualified; the test only widens its TxGossip topic to the bounded execution
+  transport budget and leaves default transaction and DA limits intact.
+  Every convergence check also queries the same finalized height
+  from each peer and verifies the BLS CommitQC for the witnessed execution post-state
+  root against the locally generated signed genesis committee. This authenticates
+  the committed witnessed writes. A test-only native Kura helper then reads each
+  peer's complete local WSV checkpoint and commit manifest, validates their exact
+  height/block/artifact binding and publication digest, and requires identical
+  full WSV hashes. This is local full-world convergence evidence; the QC does not
+  sign that complete WSV hash, and the public route is not a full-WSV verifier.
+  It uses zero stakes and never bypasses native proof admission. The harness
+  selects the separately built consensus-message-control daemon; ordinary
+  production consensus behavior remains unchanged.
+  The test reserves 32-MiB stacks for its entry and runtime workers, and sets an explicit 1-GiB Nexus storage budget per validator for the finite local workload.
+  The partition uses eight exact views so native BLS identities fit the 64-KiB
+  command limit. Every observation and the final pre-heal check reject a persisted
+  consensus round outside that inventory. Canonical armed/held/healed command and
+  acknowledgement bytes are retained under the network's `game-partition-evidence/`.
+  Run with `IROHA_TEST_REQUIRE_NETWORK=1 cargo iroha-fast -- test -p integration_tests --test core_api native_game_sessions::generic_game_pending_inputs_forfeit_and_restart_four_validators -- --exact --ignored --nocapture`.
+  A skipped sandbox is an error in this gate. Successful execution is still
+  required; source presence does not qualify the partition, authenticated
+  state-root convergence, or proof-backed payouts. The controlled partition
+  affects consensus votes; transaction and payload transport remain live.

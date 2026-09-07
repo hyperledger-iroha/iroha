@@ -58,11 +58,15 @@ impl std::fmt::Debug for BootstrapInputs {
     }
 }
 impl BootstrapInputs {
-    /// Render shell `export` lines for copy/paste-friendly local development.
+    /// Render public connection exports and a private runtime file reference.
     #[must_use]
-    pub fn render_shell_exports(&self) -> String {
+    pub fn render_shell_exports(&self, workspace_root: &Path) -> String {
         let mut lines = vec![
-            "# local dev only; rename variables to match your app".to_owned(),
+            "# local connection metadata; load IROHA_ENV_FILE inside your app".to_owned(),
+            format!(
+                "export IROHA_ENV_FILE={}",
+                shell_quote(&workspace_root.join(ENV_LOCAL_FILE).display().to_string())
+            ),
             format!(
                 "export IROHA_API_BASE={}",
                 shell_quote(&ensure_http_base(&self.api_base))
@@ -83,12 +87,6 @@ impl BootstrapInputs {
             lines.push(format!(
                 "export IROHA_ACCOUNT_ID={}",
                 shell_quote(account_id)
-            ));
-        }
-        if let Some(private_key) = self.private_key.as_deref() {
-            lines.push(format!(
-                "export IROHA_PRIVATE_KEY={}",
-                shell_quote(private_key)
             ));
         }
         lines.join("\n")
@@ -400,8 +398,15 @@ export const irohaLocalDefaults: IrohaLocalConfig = {{
   mcpUrl: process.env.IROHA_MCP_URL ?? {mcp_url},
   chainId: process.env.IROHA_CHAIN_ID ?? "{chain_id}",
   accountId: process.env.IROHA_ACCOUNT_ID ?? {account_id},
-  privateKey: process.env.IROHA_PRIVATE_KEY,
 }};
+
+// Keep signing access while excluding credentials from JSON and object inspection.
+const localPrivateKey = process.env.IROHA_PRIVATE_KEY;
+Object.defineProperty(irohaLocalDefaults, "privateKey", {{
+  get: () => localPrivateKey,
+  enumerable: false,
+  configurable: false,
+}});
 "#,
         api_base = ensure_http_base(&inputs.api_base),
         torii_url = ensure_http_base(&inputs.torii_url),
@@ -412,7 +417,7 @@ export const irohaLocalDefaults: IrohaLocalConfig = {{
 }
 fn render_rust_sample(inputs: &BootstrapInputs) -> String {
     format!(
-        r#"#[derive(Debug, Clone)]
+        r#"#[derive(Clone)]
 pub struct IrohaLocalConfig {{
     pub api_base: String,
     pub torii_url: String,
@@ -420,6 +425,20 @@ pub struct IrohaLocalConfig {{
     pub chain_id: String,
     pub account_id: Option<String>,
     pub private_key: Option<String>,
+}}
+
+impl std::fmt::Debug for IrohaLocalConfig {{
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+        formatter
+            .debug_struct("IrohaLocalConfig")
+            .field("api_base", &self.api_base)
+            .field("torii_url", &self.torii_url)
+            .field("mcp_url", &self.mcp_url)
+            .field("chain_id", &self.chain_id)
+            .field("account_id", &self.account_id)
+            .field("private_key", &self.private_key.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }}
 }}
 
 impl IrohaLocalConfig {{
@@ -453,7 +472,12 @@ fn render_kotlin_sample(inputs: &BootstrapInputs) -> String {
     val chainId: String,
     val accountId: String?,
     val privateKey: String?
-)
+) {{
+    override fun toString(): String =
+        "IrohaLocalConfig(apiBase=$apiBase, toriiUrl=$toriiUrl, mcpUrl=$mcpUrl, " +
+            "chainId=$chainId, accountId=$accountId, privateKey=" +
+            (if (privateKey == null) "null" else "[REDACTED]") + ")"
+}}
 
 fun irohaLocalConfig(env: Map<String, String> = System.getenv()): IrohaLocalConfig =
     IrohaLocalConfig(
@@ -531,6 +555,17 @@ mod tests {
         );
     }
     #[test]
+    fn shell_exports_keep_signer_in_private_runtime_file() {
+        let inputs = sample_inputs();
+        let exports = inputs.render_shell_exports(std::path::Path::new("/tmp/mochi app"));
+        assert!(exports.contains("export IROHA_ENV_FILE='/tmp/mochi app/.env.local'"));
+        assert!(exports.contains("export IROHA_CHAIN_ID=mochi-local"));
+        assert!(exports.contains("export IROHA_ACCOUNT_ID=alice@wonderland"));
+        assert!(!exports.contains("IROHA_PRIVATE_KEY"));
+        assert!(!exports.contains("private key value"));
+        assert!(inputs.render_env_local().contains("private key value"));
+    }
+    #[test]
     fn bootstrap_bundle_renders_expected_files() {
         let inputs = sample_inputs();
         let debug = format!("{inputs:?}");
@@ -563,7 +598,19 @@ mod tests {
                 .contains("IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp")
         );
         let typescript = &bundle.artifacts[1].contents;
-        assert!(typescript.contains("privateKey: process.env.IROHA_PRIVATE_KEY"));
+        assert!(typescript.contains("const localPrivateKey = process.env.IROHA_PRIVATE_KEY"));
+        assert!(typescript.contains("Object.defineProperty(irohaLocalDefaults, \"privateKey\""));
+        assert!(typescript.contains("enumerable: false"));
+        let rust = &bundle.artifacts[2].contents;
+        assert!(!rust.contains("#[derive(Debug"));
+        assert!(rust.contains("impl std::fmt::Debug for IrohaLocalConfig"));
+        assert!(rust.contains("[REDACTED]"));
+        let kotlin = &bundle.artifacts[3].contents;
+        assert!(kotlin.contains("override fun toString(): String"));
+        assert!(kotlin.contains("[REDACTED]"));
+        for artifact in &bundle.artifacts[1..] {
+            assert!(!artifact.contents.contains("private key value"));
+        }
         assert!(
             !typescript.contains("private key value"),
             "generated source must not embed signer secrets"

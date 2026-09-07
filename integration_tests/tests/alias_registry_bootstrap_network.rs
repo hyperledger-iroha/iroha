@@ -183,15 +183,23 @@ fn bounded_client(client: Client) -> Client {
 async fn read<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    timeout(READ_TIMEOUT, tokio::task::spawn_blocking(operation))
-        .await
-        .wrap_err("bounded fixture read timed out")?
-        .wrap_err("fixture read task failed")?
+    timeout(
+        READ_TIMEOUT,
+        iroha_test_network::read_on_dedicated_thread(operation),
+    )
+    .await
+    .wrap_err("bounded fixture read timed out")?
+    .wrap_err("fixture read task failed")
 }
 
 async fn height(client: &Client) -> Result<u64> {
     let client = client.clone();
     read(move || Ok(client.client().get_status()?.blocks)).await
+}
+
+async fn lane_lifecycle_status(client: &Client) -> Result<LaneLifecycleStatusV1> {
+    let client = client.clone();
+    read(move || client.client().get_lane_lifecycle_status()).await
 }
 
 async fn common_retained_prefix(clients: &[Client]) -> Result<u64> {
@@ -257,15 +265,15 @@ async fn observe_catalog_expansion(
 }
 
 async fn submit(client: &Client, transaction: SignedTransaction) -> Result<SignedTransaction> {
-    let submitter = client.clone();
-    let signed = transaction.clone();
     timeout(
         SUBMISSION_TASK_TIMEOUT,
-        tokio::task::spawn_blocking(move || submitter.submit_transaction_and_wait(&signed)),
+        client
+            .account_client()
+            .submit_transaction_and_wait(&transaction),
     )
     .await
     .wrap_err("native transaction did not reach terminal status in time")?
-    .wrap_err("native submission task failed")??;
+    .wrap_err("native submission failed")?;
     Ok(transaction)
 }
 
@@ -1150,7 +1158,7 @@ fn assert_bpng_ownership(
 ) -> Result<()> {
     ownership
         .validate_replay_material()
-        .map_err(|error| eyre!("invalid BPNG payload ownership replay material: {error:?}"))?;
+        .map_err(|error| eyre!("invalid BPNG lane ownership replay material: {error}"))?;
     let transaction_hash = Hash::from(transaction.hash());
     ensure!(
         ownership.lane_id == BPNG_FIXTURE_LANE
@@ -1257,15 +1265,19 @@ async fn wait_for_bpng_frontier(
     }
 }
 
-fn assert_bpng_metadata(
+async fn assert_bpng_metadata(
     client: &Client,
     predecessor_key: &Name,
     predecessor_value: &Json,
     successor: Option<(&Name, &Json)>,
 ) -> Result<()> {
-    let domain = client
-        .client()
-        .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))?;
+    let client = client.clone();
+    let domain = read(move || {
+        client
+            .client()
+            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))
+    })
+    .await?;
     ensure!(
         domain.metadata().get(predecessor_key) == Some(predecessor_value),
         "pre-restart BPNG state is absent"
@@ -1635,9 +1647,9 @@ fn inspect_certified_bpng_lane_evidence(
                     .find(|ownership| ownership_matches_descriptor(ownership, descriptor))
             })
             .ok_or_else(|| eyre!("retained Kura carrier omitted certified BPNG ownership"))?;
-        ownership
-            .validate_replay_material()
-            .map_err(|error| eyre!("invalid retained BPNG ownership replay material: {error:?}"))?;
+        ownership.validate_replay_material().map_err(|error| {
+            eyre!("invalid retained Kura BPNG ownership replay material: {error}")
+        })?;
         previous_height = descriptor.lane_block_height;
         previous_descriptor = Some(descriptor.descriptor_hash);
         indexed_end = end;
@@ -2036,7 +2048,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     npos.evidence_horizon_blocks = 16;
     npos.slashing_delay_blocks = 8;
     npos.validate()
-        .map_err(|error| eyre!("invalid BPNG fixture NPoS parameters: {error}"))?;
+        .map_err(|error| eyre!("invalid four-validator NPoS fixture parameters: {error}"))?;
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_base_seed(NETWORK_SEED)
@@ -2338,7 +2350,11 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .collect::<Vec<_>>();
     layers.push(Cow::Owned(dataspace_only_restart_layer(&grant)));
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
+        timeout(
+            NETWORK_TIMEOUT,
+            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
+        )
+        .await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;
@@ -2364,7 +2380,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         );
     }
 
-    let original_lifecycle = authority.client().get_lane_lifecycle_status()?;
+    let original_lifecycle = lane_lifecycle_status(authority).await?;
     ensure!(
         original_lifecycle.validate()? == LaneCatalog::default(),
         "dataspace-only restart must not create a lane"
@@ -2391,7 +2407,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     transactions.push(lifecycle);
     let lifecycle_deadline = Instant::now() + CONVERGENCE_TIMEOUT;
     let lifecycle_status = loop {
-        let status = authority.client().get_lane_lifecycle_status()?;
+        let status = lane_lifecycle_status(authority).await?;
         if let Ok(incarnation) = assert_bpng_lifecycle_status(&status, &original_lifecycle) {
             break (status, incarnation);
         }
@@ -2403,7 +2419,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     };
     let bpng_incarnation = lifecycle_status.1;
     for client in &clients {
-        let status = client.client().get_lane_lifecycle_status()?;
+        let status = lane_lifecycle_status(client).await?;
         ensure!(
             status == lifecycle_status.0
                 && assert_bpng_lifecycle_status(&status, &original_lifecycle)? == bpng_incarnation,
@@ -2487,10 +2503,16 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         "BPNG pending set or its exact boundary changed before the governed sweep"
     );
     let sweep_validator = AccountId::new(validator_keypairs[0].public_key().clone());
-    let sweep_permissions = validator_clients[0]
-        .client()
-        .query(FindPermissionsByAccountId::new(sweep_validator.clone()))
-        .execute_all()?;
+    let sweep_reader = validator_clients[0].clone();
+    let sweep_authority = sweep_validator.clone();
+    let sweep_permissions = read(move || {
+        sweep_reader
+            .client()
+            .query(FindPermissionsByAccountId::new(sweep_authority))
+            .execute_all()
+            .map_err(Into::into)
+    })
+    .await?;
     ensure!(
         sweep_permissions
             .iter()
@@ -2537,7 +2559,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     .await?;
     transactions.push(predecessor.clone());
     for client in &clients {
-        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None)?;
+        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None).await?;
     }
     let before_second_restart =
         wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
@@ -2599,7 +2621,11 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     // Restart two deliberately reuses the same dataspace-only operator layer.
     // Lane 8 must come exclusively from the signed lifecycle replay.
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
+        timeout(
+            NETWORK_TIMEOUT,
+            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
+        )
+        .await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;
@@ -2613,7 +2639,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             Some(&before_second_restart),
         )
         .await?;
-        let status = client.client().get_lane_lifecycle_status()?;
+        let status = lane_lifecycle_status(client).await?;
         ensure!(
             status == lifecycle_status.0
                 && assert_bpng_lifecycle_status(&status, &original_lifecycle)? == bpng_incarnation,
@@ -2623,7 +2649,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             height(client).await? >= u64::try_from(retained.retained.blocks.len())?,
             "strict restart did not recover the BPNG predecessor carrier"
         );
-        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None)?;
+        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None).await?;
     }
     wait_for_exact_bpng_validators(&clients, &expected_validator_bindings, &stake).await?;
     ensure!(
@@ -2676,7 +2702,8 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             &predecessor_key,
             &predecessor_value,
             Some((&successor_key, &successor_value)),
-        )?;
+        )
+        .await?;
     }
     let after_successor =
         wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;

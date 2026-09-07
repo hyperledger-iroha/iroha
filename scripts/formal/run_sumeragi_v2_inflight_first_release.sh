@@ -4,6 +4,9 @@ set -euo pipefail
 # Bounded TLC evidence for the in-flight first-release carrier kernel.  This is
 # a standalone safety corpus: it deliberately does not claim a Rust-to-TLA
 # refinement theorem or amend the source-bound multilane release matrix.
+# Requires the pinned TLA2TOOLS_JAR and working Java (optionally JAVA_BIN).
+# Retain every invocation under SUMERAGI_V2_FORMAL_EVIDENCE_DIR when supplied;
+# otherwise announce a retained private temp directory for standalone runs.
 
 if (($#)); then
   echo "usage: $0" >&2
@@ -14,9 +17,26 @@ readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly MODULE="SumeragiV2InFlightFirstRelease.tla"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+run_dir="$(python3 -I -S "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_artifacts.py" init \
+  --parent "${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:-${TMPDIR:-/tmp}}" \
+  --runner "${BASH_SOURCE[0]}" --expected-cases 23 \
+  --support "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh" \
+  --support "${REPO_ROOT}/scripts/formal/resolve_java.sh")"
+readonly run_dir
+readonly ARTIFACT_RECORDER="$run_dir/support/sumeragi_v2_tlc_artifacts.py"
+echo "[tlc] retained artifacts: $run_dir" >&2
+finish_artifacts() {
+  local status=$?
+  trap - EXIT
+  echo "[tlc] retained artifacts: $run_dir" >&2
+  python3 -I -S "$ARTIFACT_RECORDER" finish --run-dir "$run_dir" --status "$status" \
+    || exit 1
+  exit "$status"
+}
+trap finish_artifacts EXIT
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -46,34 +66,42 @@ else
 fi
 readonly JAVA_BIN
 
-run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-first-release.XXXXXX")"
-trap 'rm -rf -- "$run_dir"' EXIT
-common=("$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC -cleanup -workers 1)
+python3 -I -S "$ARTIFACT_RECORDER" tools --run-dir "$run_dir" \
+  --java "$JAVA_BIN" --jar "$TLA2TOOLS_JAR" --jar-sha256 "$TLA2TOOLS_SHA256"
+
+common=("$JAVA_BIN" -XX:+UseParallelGC -cp "$run_dir/tools/tla2tools.jar" tlc2.TLC -cleanup -workers 1)
 
 run_positive() {
-  local log="$run_dir/fixed.log"
+  local log="$run_dir/cases/fixed/stdout.log"
   local status
   set +e
-  (cd "$FORMAL_DIR" && "${common[@]}" -metadir "$run_dir/fixed" \
-    -config inflight_first_release_fixed.cfg "$MODULE") >"$log" 2>&1
+  python3 -I -S "$ARTIFACT_RECORDER" capture --run-dir "$run_dir" \
+    --name fixed --formal-dir "$FORMAL_DIR" --module "$MODULE" \
+    --config inflight_first_release_fixed.cfg --expectation fixed-success -- \
+    "${common[@]}" -metadir "$run_dir/cases/fixed/tlc" \
+    -config inflight_first_release_fixed.cfg "$MODULE"
   status=$?
   set -e
   cat "$log"
   sumeragi_v2_tlc_assert_fixed_success "first-release-fixed" "$log" "$status"
   grep -Fqx "Model checking completed. No error has been found." "$log" || {
     echo "first-release fixed model did not complete successfully" >&2; exit 1; }
+  python3 -I -S "$ARTIFACT_RECORDER" accept --run-dir "$run_dir" --name fixed
   echo "[tlc] first-release fixed: no bounded safety counterexample"
 }
 
 run_mutant() {
   local config="$1"
   local invariant="$2"
-  local log="$run_dir/${config}.log"
+  local log="$run_dir/cases/${config}/stdout.log"
   local invariant_marker="Error: Invariant ${invariant} is violated."
   local primary_diagnostic_count
   set +e
-  (cd "$FORMAL_DIR" && "${common[@]}" -metadir "$run_dir/${config}" \
-    -config "$config" "$MODULE") >"$log" 2>&1
+  python3 -I -S "$ARTIFACT_RECORDER" capture --run-dir "$run_dir" \
+    --name "$config" --formal-dir "$FORMAL_DIR" --module "$MODULE" \
+    --config "$config" --expectation "$invariant" -- \
+    "${common[@]}" -metadir "$run_dir/cases/${config}/tlc" \
+    -config "$config" "$MODULE"
   local status=$?
   set -e
   if [[ "$status" -ne 12 ]]; then
@@ -97,6 +125,7 @@ run_mutant() {
     exit 1
   }
   sumeragi_v2_tlc_assert_terminal "$config" "$log"
+  python3 -I -S "$ARTIFACT_RECORDER" accept --run-dir "$run_dir" --name "$config"
   echo "[tlc] first-release mutation ${config}: ${invariant}"
 }
 
@@ -123,5 +152,8 @@ run_mutant inflight_first_release_released_claims_before_prepare_bug.cfg MLRelea
 run_mutant inflight_first_release_release_complete_before_released_bug.cfg MLReleaseStageOrder
 run_mutant inflight_first_release_forget_release_before_fifo_bug.cfg MLReleaseStageOrder
 run_mutant inflight_first_release_oversize_selected_queue_plan_bug.cfg MLQueuePlanV1SelectedConjunctionBound4096
+run_mutant inflight_first_release_direct_release_with_active_kura_bug.cfg MLDirectReleaseRequiresAbsentKura
+run_mutant inflight_first_release_direct_release_commit_conflict_bug.cfg MLTerminalDispositionExclusive
+run_mutant inflight_first_release_kura_without_payload_binding_bug.cfg MLValidatorCarrierOwnership
 
 echo "[tlc] first-release corpus complete: bounded abstract evidence only; no production refinement claim"

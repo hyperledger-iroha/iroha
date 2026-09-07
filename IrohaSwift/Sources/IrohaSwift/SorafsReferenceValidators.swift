@@ -366,6 +366,8 @@ public enum SorafsReferenceValidators {
         return json
     }
 
+    /// Validates canonical PoP wire shape and metadata through the native validator.
+    /// Membership proof results do not verify Halo2, authorize a recipient, or consume nullifiers.
     public static func validatePopPayloadJSON(
         kind: SorafsPopPayloadKind,
         payload: Data,

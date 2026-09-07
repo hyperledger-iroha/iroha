@@ -968,28 +968,14 @@ struct PortableVmBackendPreflight {
     namespace_tools: inrou_namespace::InrouNamespaceTools,
 }
 #[cfg(any(target_os = "linux", test))]
-fn inrou_startup_probe_resources(
-    _config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
-) -> iroha_data_model::soracloud::SoraResourceLimitsV1 {
-    iroha_data_model::soracloud::SoraResourceLimitsV1 {
-        cpu_millis: std::num::NonZeroU32::new(
-            iroha_data_model::soracloud::SORA_INROU_MAX_CPU_MILLIS_V1,
-        )
-        .expect("fixed nonzero startup-probe CPU budget"),
-        memory_bytes: std::num::NonZeroU64::new(
-            iroha_data_model::soracloud::SORA_INROU_MIN_MEMORY_BYTES_V1,
-        )
-        .expect("fixed nonzero startup-probe memory budget"),
-        ephemeral_storage_bytes: std::num::NonZeroU64::new(
-            iroha_data_model::soracloud::SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
-        )
-        .expect("fixed nonzero startup-probe storage budget"),
-        max_open_files_per_process: std::num::NonZeroU32::new(
-            iroha_data_model::soracloud::SORA_INROU_MIN_OPEN_FILES_PER_PROCESS_V1,
-        )
-        .expect("fixed nonzero per-process probe fd budget"),
-        max_tasks: std::num::NonZeroU16::new(1).expect("fixed nonzero probe task budget"),
-    }
+fn inrou_startup_probe_shape(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1> {
+    iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1::from_host_envelope(
+        u64::from(config.max_cpu_millis.get()),
+        config.max_memory_bytes.get(),
+    )
+    .map_err(|message| eyre::eyre!(message))
 }
 #[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1102,18 +1088,26 @@ fn ensure_portable_vm_backend_available(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
 ) -> eyre::Result<()> {
     let preflight = portable_vm_backend_static_preflight(config)?;
-    inrou_cgroup::attest_inrou_worker_absence().wrap_err(
-        "require an empty root-custodied Inrou worker subtree before startup qualification",
+    let owner_slot = inrou_cgroup::InrouCgroupOwnerSlot::from_identity(
+        preflight.child_identity.uid,
+        preflight.child_identity.gid,
     )?;
-    run_inrou_portable_vm_startup_probe(config, preflight)
+    let slot_lock =
+        acquire_inrou_iptables_lock(inrou_firewall_identity_slot(&preflight.child_identity)?)?;
+    inrou_cgroup::attest_inrou_worker_absence(owner_slot).wrap_err(
+        "require no retained workers for this canonical Inrou owner under its exclusive slot lock",
+    )?;
+    run_inrou_portable_vm_startup_probe(config, preflight, slot_lock)
         .wrap_err("exercise the authenticated Inrou QEMU/KVM startup boundary")
 }
 #[cfg(target_os = "linux")]
 fn run_inrou_portable_vm_startup_probe(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
     preflight: PortableVmBackendPreflight,
+    slot_lock: InrouOwnerSlotLock,
 ) -> eyre::Result<()> {
     const PROBE_GUEST_PORT: u16 = 9;
+    let probe = inrou_startup_probe_shape(config)?;
     let PortableVmBackendPreflight {
         child_identity,
         qemu_img: _,
@@ -1136,13 +1130,17 @@ fn run_inrou_portable_vm_startup_probe(
     let slot = inrou_firewall_identity_slot(&child_identity)?;
     let mut worker_cgroup = inrou_cgroup::InrouWorkerCgroup::prepare(
         inrou_cgroup::InrouCgroupWorkerKey {
+            owner_slot: inrou_cgroup::InrouCgroupOwnerSlot::from_identity(
+                child_identity.uid,
+                child_identity.gid,
+            )?,
             service_name: "startup-probe",
             service_version: "v1",
             replica_slot: u16::try_from(slot).expect("canonical Inrou slot fits u16"),
             process_generation: 0,
             bundle_hash: "inrou-startup-probe-v1",
         },
-        &inrou_startup_probe_resources(config),
+        &probe.resources(),
         &io_backing_path_refs,
     )
     .wrap_err("prepare exact cgroup-v2 limits for the Inrou startup probe")?;
@@ -1157,7 +1155,7 @@ fn run_inrou_portable_vm_startup_probe(
     } = build_portable_vm_network_plan(PROBE_GUEST_PORT)
         .wrap_err("prepare the Inrou startup-probe user-mode network")?;
     let mut loopback_firewall = Some(
-        InrouLoopbackOwnerFirewall::install(&public_listener, &child_identity)
+        InrouLoopbackOwnerFirewall::install_with_lock(&public_listener, &child_identity, slot_lock)
             .wrap_err("exercise the canonical-slot Inrou loopback firewall")?,
     );
     ensure_portable_vm_identity_reserved(&child_identity)
@@ -1170,7 +1168,7 @@ fn run_inrou_portable_vm_startup_probe(
         &launch_barrier,
         worker_cgroup.attestation().expected_proc_path(),
     )?;
-    append_inrou_startup_probe_qemu_args(&mut command, guest_isa, &netdev);
+    append_inrou_startup_probe_qemu_args(&mut command, guest_isa, &netdev, probe);
     command.stderr(Stdio::null());
     let qmp_stream = configure_inrou_qmp_stdio(&mut command)
         .wrap_err("create the Inrou startup-probe QMP socketpair")?;
@@ -6743,6 +6741,10 @@ impl SoracloudRuntimeManager {
             .collect::<Vec<_>>();
         let mut worker_cgroup = inrou_cgroup::InrouWorkerCgroup::prepare(
             inrou_cgroup::InrouCgroupWorkerKey {
+                owner_slot: inrou_cgroup::InrouCgroupOwnerSlot::from_identity(
+                    child_identity.uid,
+                    child_identity.gid,
+                )?,
                 service_name: &cache_key.service_name,
                 service_version: &cache_key.service_version,
                 replica_slot: cache_key.replica_slot,
@@ -12985,9 +12987,23 @@ struct PortableVmLoopbackBridge {
     worker: Option<thread::JoinHandle<()>>,
 }
 #[cfg(target_os = "linux")]
+struct InrouOwnerSlotLock {
+    slot: usize,
+    _file: fs::File,
+}
+#[cfg(target_os = "linux")]
+impl InrouOwnerSlotLock {
+    fn require_identity(&self, identity: &PortableVmChildIdentity) -> eyre::Result<()> {
+        if self.slot != inrou_firewall_identity_slot(identity)? {
+            eyre::bail!("Inrou owner slot lock does not bind this exact child UID/GID");
+        }
+        Ok(())
+    }
+}
+#[cfg(target_os = "linux")]
 struct InrouLoopbackOwnerFirewall {
     iptables_binary: PathBuf,
-    _slot_lock: fs::File,
+    _slot_lock: InrouOwnerSlotLock,
     chain: InrouOwnedIptablesChain,
     owns_chain: bool,
 }
@@ -13077,37 +13093,135 @@ fn resolve_inrou_iptables_executable() -> Option<PathBuf> {
         Path::new("/bin/iptables"),
     ]
     .into_iter()
-    .find_map(|candidate| {
-        let canonical = fs::canonicalize(candidate).ok()?;
-        let command_metadata = fs::symlink_metadata(candidate).ok()?;
-        let command_entry_is_trusted = (command_metadata.is_file()
-            || command_metadata.file_type().is_symlink())
-            && command_metadata.uid() == 0
-            && candidate.ancestors().skip(1).all(|ancestor| {
-                fs::metadata(ancestor).ok().is_some_and(|metadata| {
-                    metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
-                })
-            });
-        // Preserve the absolute `iptables` entry path: common Linux systems
-        // use an argv[0]-dispatched xtables multi-call binary, so executing its
-        // canonical target directly changes semantics. Both the entry chain
-        // and canonical target remain under root-only custody.
-        (command_entry_is_trusted
-            && is_resolved_executable(&canonical)
-            && is_root_owned_executable_path(&canonical))
-        .then(|| candidate.to_path_buf())
-    })
+    .find_map(admit_inrou_root_custodied_executable_entry)
 }
 #[cfg(target_os = "linux")]
-fn is_root_owned_executable_path(candidate: &Path) -> bool {
-    candidate.ancestors().enumerate().all(|(index, path)| {
-        fs::metadata(path).ok().is_some_and(|metadata| {
-            ((index == 0 && metadata.is_file()) || (index != 0 && metadata.is_dir()))
-                && metadata.uid() == 0
-                && metadata.mode() & 0o022 == 0
-        })
-    })
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InrouExecutablePathMetadata {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    links: u64,
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
 }
+#[cfg(target_os = "linux")]
+fn admit_inrou_root_custodied_executable_entry(candidate: &Path) -> Option<PathBuf> {
+    admit_inrou_root_custodied_executable_entry_with(
+        candidate,
+        |path| {
+            let metadata = fs::symlink_metadata(path).ok()?;
+            Some(InrouExecutablePathMetadata {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+                links: metadata.nlink(),
+                size: metadata.size(),
+                modified: (metadata.mtime(), metadata.mtime_nsec()),
+                changed: (metadata.ctime(), metadata.ctime_nsec()),
+            })
+        },
+        |path| fs::read_link(path).ok(),
+    )
+}
+#[cfg(target_os = "linux")]
+fn admit_inrou_root_custodied_executable_entry_with(
+    candidate: &Path,
+    mut metadata: impl FnMut(&Path) -> Option<InrouExecutablePathMetadata>,
+    mut read_link: impl FnMut(&Path) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let text = candidate.to_str()?;
+    let safe_text = |value: &str| {
+        !value.is_empty()
+            && !value.contains("//")
+            && !value.contains('\\')
+            && !value.ends_with('/')
+            && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+    };
+    if !text.starts_with('/')
+        || !safe_text(text)
+        || text.split('/').any(|part| matches!(part, "." | ".."))
+    {
+        return None;
+    }
+    let trusted_directory = |entry: InrouExecutablePathMetadata| {
+        entry.mode & 0o170000 == 0o040000
+            && entry.uid == 0
+            && entry.gid == 0
+            && entry.mode & 0o022 == 0
+    };
+    let mut pending: std::collections::VecDeque<String> =
+        text.split('/').skip(1).map(str::to_owned).collect();
+    let mut current = PathBuf::from("/");
+    let root = metadata(&current)?;
+    if !trusted_directory(root) {
+        return None;
+    }
+    let mut observed = vec![(current.clone(), root, None)];
+    let mut links = 0_u8;
+    while let Some(part) = pending.pop_front() {
+        if part == "." {
+            continue;
+        }
+        if part == ".." {
+            current.pop();
+            continue;
+        }
+        let component = current.join(part);
+        let entry = metadata(&component)?;
+        let mut target = None;
+        if entry.mode & 0o170000 == 0o120000 {
+            links = links.checked_add(1)?;
+            if links > 40 || entry.uid != 0 || entry.gid != 0 || entry.links != 1 {
+                return None;
+            }
+            let link = read_link(&component)?;
+            let link_text = link.to_str()?;
+            if !safe_text(link_text) {
+                return None;
+            }
+            let absolute = link_text.starts_with('/');
+            if absolute {
+                current = PathBuf::from("/");
+            }
+            let parts = link_text.strip_prefix('/').unwrap_or(link_text);
+            for part in parts.split('/').rev() {
+                pending.push_front(part.to_owned());
+            }
+            target = Some(link);
+        } else {
+            if !pending.is_empty() && !trusted_directory(entry) {
+                return None;
+            }
+            current = component.clone();
+        }
+        observed.push((component, entry, target));
+    }
+    let resolved = metadata(&current)?;
+    if resolved.mode & 0o170000 != 0o100000
+        || resolved.uid != 0
+        || resolved.gid != 0
+        || resolved.links != 1
+        || resolved.mode & 0o111 == 0
+        || resolved.mode & 0o7022 != 0
+    {
+        return None;
+    }
+    for (path, before, target) in observed {
+        if metadata(&path)? != before || (target.is_some() && read_link(&path) != target) {
+            return None;
+        }
+    }
+    // Keep the admitted entry name: xtables dispatches using argv[0], so
+    // executing its canonical xtables-nft-multi target changes semantics.
+    Some(candidate.to_path_buf())
+}
+
 fn validate_portable_vm_kvm_identity(
     identity: &PortableVmChildIdentity,
     device: PortableVmKvmDeviceAccess,
@@ -13599,30 +13713,12 @@ fn validate_inrou_subordinate_id_unmapped(
 }
 #[cfg(target_os = "linux")]
 fn ensure_inrou_service_shell_custody(shell: &Path) -> eyre::Result<()> {
-    let entry = fs::symlink_metadata(shell)
-        .wrap_err_with(|| format!("inspect Inrou service shell {}", shell.display()))?;
-    if !(entry.is_file() || entry.file_type().is_symlink())
-        || entry.uid() != 0
-        || entry.mode() & 0o022 != 0
-        || !shell.ancestors().skip(1).all(|ancestor| {
-            fs::metadata(ancestor).ok().is_some_and(|metadata| {
-                metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
-            })
-        })
-    {
-        eyre::bail!(
-            "Inrou service shell {} and its resolved ancestor chain must be root-custodied and non-writable by group/other",
+    admit_inrou_root_custodied_executable_entry(shell).ok_or_else(|| {
+        eyre::eyre!(
+            "Inrou service shell {} must resolve through root-custodied entries to one non-privileged, singly-linked executable",
             shell.display()
-        );
-    }
-    let canonical = fs::canonicalize(shell)
-        .wrap_err_with(|| format!("resolve Inrou service shell {}", shell.display()))?;
-    if !is_resolved_executable(&canonical) || !is_root_owned_executable_path(&canonical) {
-        eyre::bail!(
-            "resolved Inrou service shell {} must be a root-custodied executable",
-            canonical.display()
-        );
-    }
+        )
+    })?;
     Ok(())
 }
 #[cfg(target_os = "linux")]
@@ -15885,6 +15981,16 @@ impl InrouLoopbackOwnerFirewall {
         public_listener: &TcpListener,
         child_identity: &PortableVmChildIdentity,
     ) -> eyre::Result<Self> {
+        let slot_lock = acquire_inrou_iptables_lock(inrou_firewall_identity_slot(child_identity)?)?;
+        Self::install_with_lock(public_listener, child_identity, slot_lock)
+    }
+
+    fn install_with_lock(
+        public_listener: &TcpListener,
+        child_identity: &PortableVmChildIdentity,
+        slot_lock: InrouOwnerSlotLock,
+    ) -> eyre::Result<Self> {
+        slot_lock.require_identity(child_identity)?;
         let supervisor_uid = rustix::process::geteuid().as_raw();
         if supervisor_uid != 0 {
             eyre::bail!("Inrou loopback ownership firewall requires the root supervisor identity");
@@ -15902,7 +16008,6 @@ impl InrouLoopbackOwnerFirewall {
         }
         let slot = inrou_firewall_identity_slot(child_identity)?;
         let chain = SORACLOUD_INROU_IPTABLES_CHAIN_SPECS[slot];
-        let slot_lock = acquire_inrou_iptables_lock(slot)?;
         let mut firewall = Self {
             iptables_binary,
             _slot_lock: slot_lock,
@@ -16119,7 +16224,7 @@ fn inrou_iptables_chain_marker_args(
     ]
 }
 #[cfg(target_os = "linux")]
-fn acquire_inrou_iptables_lock(slot: usize) -> eyre::Result<fs::File> {
+fn acquire_inrou_iptables_lock(slot: usize) -> eyre::Result<InrouOwnerSlotLock> {
     let lock_path = SORACLOUD_INROU_IPTABLES_LOCK_PATHS
         .get(slot)
         .map(|path| Path::new(*path))
@@ -16173,12 +16278,19 @@ fn acquire_inrou_iptables_lock(slot: usize) -> eyre::Result<fs::File> {
             lock_path.display()
         );
     }
+    lock_inrou_owner_slot(file, slot)
+}
+#[cfg(target_os = "linux")]
+fn lock_inrou_owner_slot(file: fs::File, slot: usize) -> eyre::Result<InrouOwnerSlotLock> {
+    if slot >= SORACLOUD_INROU_IPTABLES_LOCK_PATHS.len() {
+        eyre::bail!("Inrou owner lock slot is outside the canonical range");
+    }
     rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).wrap_err(
         format!(
             "acquire the Inrou firewall slot-{slot} lock; another supervisor for that canonical identity may be active"
         ),
     )?;
-    Ok(file)
+    Ok(InrouOwnerSlotLock { slot, _file: file })
 }
 #[cfg(target_os = "linux")]
 fn run_inrou_iptables_status(
@@ -16926,12 +17038,12 @@ fn build_inrou_portable_vm_command(
     expected_cgroup_path: &str,
 ) -> eyre::Result<Command> {
     require_inrou_self_exec_dispatch_armed()?;
-    if !expected_cgroup_path.starts_with('/')
-        || expected_cgroup_path.chars().any(char::is_whitespace)
-    {
-        eyre::bail!("Inrou expected cgroup path must be absolute and canonical");
-    }
     validate_portable_vm_child_identity_values(identity)?;
+    inrou_cgroup::validate_inrou_cgroup_owner_identity(
+        expected_cgroup_path,
+        identity.uid,
+        identity.gid,
+    )?;
     let mut next_descriptor = 3;
     let mut inherited_descriptors = Vec::with_capacity(namespace_plan.binding_files().len() + 2);
     inherited_descriptors.push(duplicate_inrou_launcher_descriptor(
@@ -17029,15 +17141,16 @@ fn append_inrou_startup_probe_qemu_args(
     command: &mut Command,
     guest_isa: SoraInrouGuestIsaV1,
     netdev: &str,
+    probe: iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1,
 ) {
-    const PROBE_MEMORY_MIB: u64 = 128;
     let profile = portable_vm_guest_machine_profile(guest_isa);
     command
         // The production machine, host CPU, vCPU, and memory-backend shape is
         // exercised without booting a kernel or attaching service artifacts.
         .arg("-object")
         .arg(format!(
-            "memory-backend-ram,id=vmmem,size={PROBE_MEMORY_MIB}M,share=on"
+            "memory-backend-ram,id=vmmem,size={}M,share=on",
+            probe.memory_mib()
         ))
         .arg("-machine")
         .arg(format!(
@@ -17047,7 +17160,7 @@ fn append_inrou_startup_probe_qemu_args(
         .arg("-cpu")
         .arg("host")
         .arg("-smp")
-        .arg(SORA_INROU_MAX_VCPUS_V1.to_string())
+        .arg(probe.vcpus().to_string())
         .arg("-S")
         .arg("-nodefaults")
         .arg("-display")
@@ -27995,7 +28108,8 @@ mod tests {
             (SoraInrouGuestIsaV1::Aarch64, "virt"),
         ] {
             let mut command = Command::new("qemu-system-test");
-            append_inrou_startup_probe_qemu_args(&mut command, guest_isa, netdev);
+            let probe = iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1::from_host_envelope(1_000, 768 * 1024 * 1024).unwrap();
+            append_inrou_startup_probe_qemu_args(&mut command, guest_isa, netdev, probe);
             let arguments = command
                 .get_args()
                 .map(|argument| argument.to_string_lossy().into_owned())
@@ -28004,13 +28118,13 @@ mod tests {
                 arguments,
                 vec![
                     "-object".to_owned(),
-                    "memory-backend-ram,id=vmmem,size=128M,share=on".to_owned(),
+                    "memory-backend-ram,id=vmmem,size=512M,share=on".to_owned(),
                     "-machine".to_owned(),
                     format!("{machine},accel=kvm,memory-backend=vmmem"),
                     "-cpu".to_owned(),
                     "host".to_owned(),
                     "-smp".to_owned(),
-                    SORA_INROU_MAX_VCPUS_V1.to_string(),
+                    "1".to_owned(),
                     "-S".to_owned(),
                     "-nodefaults".to_owned(),
                     "-display".to_owned(),
@@ -28131,35 +28245,28 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_startup_probe_uses_fixed_qualified_resources_independent_of_host_capacity() {
+    fn inrou_startup_probe_uses_the_configured_ceiling_including_vmm_overhead() {
         let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
-        config.max_cpu_millis = std::num::NonZeroU32::new(7_321).expect("CPU ceiling");
-        config.max_memory_bytes = std::num::NonZeroU64::new(9_876_543_210).expect("memory ceiling");
-        config.max_storage_bytes =
-            std::num::NonZeroU64::new(8_765_432_109).expect("storage ceiling");
-        let resources = inrou_startup_probe_resources(&config);
+        config.max_cpu_millis = std::num::NonZeroU32::new(1_000).unwrap();
+        config.max_memory_bytes = std::num::NonZeroU64::new(768 * 1024 * 1024).unwrap();
+        let probe = inrou_startup_probe_shape(&config).unwrap();
         assert_eq!(
-            resources.cpu_millis.get(),
-            iroha_data_model::soracloud::SORA_INROU_MAX_CPU_MILLIS_V1
+            probe.resources().checked_inrou_host_cpu_millis(),
+            Some(1_000)
         );
         assert_eq!(
-            resources.memory_bytes.get(),
-            iroha_data_model::soracloud::SORA_INROU_MIN_MEMORY_BYTES_V1
+            probe.resources().checked_inrou_host_memory_bytes(),
+            Some(768 * 1024 * 1024)
         );
-        assert_eq!(
-            resources.ephemeral_storage_bytes.get(),
-            iroha_data_model::soracloud::SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1
-        );
-        assert_eq!(
-            resources.max_open_files_per_process.get(),
-            iroha_data_model::soracloud::SORA_INROU_MIN_OPEN_FILES_PER_PROCESS_V1
-        );
-        assert_eq!(resources.max_tasks.get(), 1);
+        assert_eq!(probe.vcpus(), 1);
+        assert_eq!(probe.memory_mib(), 512);
+        config.max_cpu_millis = std::num::NonZeroU32::new(250).unwrap();
+        assert!(inrou_startup_probe_shape(&config).is_err());
     }
     #[test]
     fn inrou_vcpu_mapping_rejects_instead_of_clamping_above_v1() -> Result<()> {
         let config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
-        let baseline = inrou_startup_probe_resources(&config);
+        let baseline = inrou_startup_probe_shape(&config)?.resources();
         for (cpu_millis, expected_vcpus) in [(10, 1), (1_000, 1), (1_010, 2), (4_000, 4)] {
             let resources = SoraResourceLimitsV1 {
                 cpu_millis: std::num::NonZeroU32::new(cpu_millis).expect("nonzero CPU"),
@@ -33676,6 +33783,261 @@ mod tests {
         }
         Ok(())
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn startup_owner_lock_remains_exclusive_through_transfer_and_binds_the_slot() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        for slot in 0..4 {
+            let path = directory.path().join(format!("slot-{slot}.lock"));
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)?;
+            let guard = lock_inrou_owner_slot(file, slot)?;
+            let identity = PortableVmChildIdentity {
+                uid: 70_000 + slot as u32,
+                gid: 70_000 + slot as u32,
+                supplementary_gids: vec![108],
+            };
+            guard.require_identity(&identity)?;
+            let other = PortableVmChildIdentity {
+                uid: 70_000 + ((slot + 1) % 4) as u32,
+                gid: 70_000 + ((slot + 1) % 4) as u32,
+                supplementary_gids: vec![108],
+            };
+            assert!(guard.require_identity(&other).is_err());
+            let open = || fs::OpenOptions::new().read(true).write(true).open(&path);
+            assert!(
+                lock_inrou_owner_slot(open()?, slot).is_err(),
+                "same-slot supervisor must not enter the absence scan"
+            );
+            let transferred = guard;
+            assert!(
+                lock_inrou_owner_slot(open()?, slot).is_err(),
+                "moving the guard into a probe/firewall must not unlock it"
+            );
+            transferred.require_identity(&identity)?;
+            drop(transferred);
+            drop(lock_inrou_owner_slot(open()?, slot)?);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn inrou_executable_alternatives_fixture() -> (
+        BTreeMap<PathBuf, InrouExecutablePathMetadata>,
+        BTreeMap<PathBuf, PathBuf>,
+    ) {
+        let directory = InrouExecutablePathMetadata {
+            device: 1,
+            inode: 1,
+            mode: 0o040755,
+            uid: 0,
+            gid: 0,
+            links: 1,
+            size: 0,
+            modified: (1, 0),
+            changed: (1, 0),
+        };
+        let mut metadata = BTreeMap::new();
+        for (index, path) in ["/", "/usr", "/usr/sbin", "/etc", "/etc/alternatives"]
+            .into_iter()
+            .enumerate()
+        {
+            metadata.insert(
+                PathBuf::from(path),
+                InrouExecutablePathMetadata {
+                    inode: index as u64 + 1,
+                    ..directory
+                },
+            );
+        }
+        let links = BTreeMap::from([
+            (PathBuf::from("/sbin"), PathBuf::from("usr/sbin")),
+            (
+                PathBuf::from("/usr/sbin/iptables"),
+                PathBuf::from("/etc/alternatives/iptables"),
+            ),
+            (
+                PathBuf::from("/etc/alternatives/iptables"),
+                PathBuf::from("../../usr/sbin/iptables-nft"),
+            ),
+            (
+                PathBuf::from("/usr/sbin/iptables-nft"),
+                PathBuf::from("xtables-nft-multi"),
+            ),
+        ]);
+        for (index, path) in links.keys().enumerate() {
+            metadata.insert(
+                path.clone(),
+                InrouExecutablePathMetadata {
+                    inode: index as u64 + 10,
+                    mode: 0o120777,
+                    ..directory
+                },
+            );
+        }
+        metadata.insert(
+            PathBuf::from("/usr/sbin/xtables-nft-multi"),
+            InrouExecutablePathMetadata {
+                inode: 20,
+                mode: 0o100755,
+                ..directory
+            },
+        );
+        (metadata, links)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_executable_entry_admission_accepts_merged_usr_alternatives_and_preserves_dispatch_name()
+     {
+        let (metadata, links) = inrou_executable_alternatives_fixture();
+        for name in ["/usr/sbin/iptables", "/sbin/iptables"] {
+            let path = Path::new(name);
+            let admitted = admit_inrou_root_custodied_executable_entry_with(
+                path,
+                |path| metadata.get(path).copied(),
+                |path| links.get(path).cloned(),
+            )
+            .expect("root-custodied merged-/usr and alternatives entries must be admitted");
+            assert_eq!(admitted, path);
+            assert_eq!(
+                admitted.file_name(),
+                Some(OsStr::new("iptables")),
+                "xtables must receive the original iptables entry name for argv[0] dispatch"
+            );
+            assert_ne!(admitted, Path::new("/usr/sbin/xtables-nft-multi"));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_executable_entry_admission_rejects_untrusted_alias_chain_and_target() {
+        let (metadata, links) = inrou_executable_alternatives_fixture();
+        let alternatives = Path::new("/etc/alternatives");
+        let alias = Path::new("/etc/alternatives/iptables");
+        let resolved = Path::new("/usr/sbin/xtables-nft-multi");
+        let mut cases = Vec::new();
+        for path in [alternatives, alias, resolved] {
+            for field in ["uid", "gid"] {
+                let mut invalid = metadata[path];
+                if field == "uid" {
+                    invalid.uid = 70_000;
+                } else {
+                    invalid.gid = 70_000;
+                }
+                cases.push((path, invalid));
+            }
+        }
+        for mode in [0o040777, 0o100755] {
+            cases.push((
+                alternatives,
+                InrouExecutablePathMetadata {
+                    mode,
+                    ..metadata[alternatives]
+                },
+            ));
+        }
+        for mode in [0o104755, 0o102755, 0o100777, 0o100644, 0o040755] {
+            cases.push((
+                resolved,
+                InrouExecutablePathMetadata {
+                    mode,
+                    ..metadata[resolved]
+                },
+            ));
+        }
+        for path in [alias, resolved] {
+            cases.push((
+                path,
+                InrouExecutablePathMetadata {
+                    links: 2,
+                    ..metadata[path]
+                },
+            ));
+        }
+        for (path, invalid) in cases {
+            let mut entries = metadata.clone();
+            entries.insert(path.to_path_buf(), invalid);
+            assert!(
+                admit_inrou_root_custodied_executable_entry_with(
+                    Path::new("/usr/sbin/iptables"),
+                    |path| entries.get(path).copied(),
+                    |path| links.get(path).cloned(),
+                )
+                .is_none(),
+                "must reject unchecked intermediate/target custody at {}: {invalid:?}",
+                path.display()
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_executable_entry_admission_rejects_changed_or_cyclic_aliases() {
+        let (metadata, links) = inrou_executable_alternatives_fixture();
+        let alias = Path::new("/etc/alternatives/iptables");
+        let candidate = Path::new("/usr/sbin/iptables");
+        for target in [
+            "/usr/sbin/iptables",
+            "/missing",
+            "xtables//multi",
+            "xtables/",
+            "/usr/sbin/xtables-nft-multi/.",
+        ] {
+            let mut targets = links.clone();
+            targets.insert(alias.to_path_buf(), PathBuf::from(target));
+            assert!(
+                admit_inrou_root_custodied_executable_entry_with(
+                    candidate,
+                    |path| metadata.get(path).copied(),
+                    |path| targets.get(path).cloned(),
+                )
+                .is_none(),
+                "must reject malformed, cyclic or unresolved target {target}"
+            );
+        }
+        let mut reads = 0;
+        assert!(
+            admit_inrou_root_custodied_executable_entry_with(
+                candidate,
+                |path| metadata.get(path).copied(),
+                |path| {
+                    if path == alias {
+                        reads += 1;
+                        if reads > 1 {
+                            return Some(PathBuf::from("/usr/sbin/other"));
+                        }
+                    }
+                    links.get(path).cloned()
+                },
+            )
+            .is_none(),
+            "a changed intermediate alias must fail admission"
+        );
+        let mut inspections = 0;
+        assert!(
+            admit_inrou_root_custodied_executable_entry_with(
+                candidate,
+                |path| {
+                    let mut entry = metadata.get(path).copied()?;
+                    if path == alias {
+                        inspections += 1;
+                        if inspections > 1 {
+                            entry.inode += 1;
+                        }
+                    }
+                    Some(entry)
+                },
+                |path| links.get(path).cloned(),
+            )
+            .is_none(),
+            "a replaced intermediate inode must fail admission"
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn inrou_public_host_slot_zero_requires_a_locked_service_account() -> Result<()> {

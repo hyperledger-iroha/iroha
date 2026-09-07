@@ -329,7 +329,7 @@ private extension CurveId {
         #endif
         #if IROHASWIFT_ENABLE_MLDSA
         case .mldsa:
-            return "mldsa"
+            return "ml-dsa"
         #endif
         #if IROHASWIFT_ENABLE_BLS
         case .blsNormal:
@@ -443,6 +443,7 @@ private enum ControllerPayload {
             withUnsafeBytes(of: &length) { payload.append(contentsOf: $0) }
             payload.append(distidBytes)
             payload.append(publicKey)
+            try validatePublicKey(curve: curve, publicKey: payload)
             return payload
         }
         #endif
@@ -454,16 +455,11 @@ private enum ControllerPayload {
     }
 
     static func validatePublicKey(curve: CurveId, publicKey: Data) throws {
-        if curve == .ed25519,
-           !Ed25519PublicKeyAdmission.isValidPublicKey(publicKey) {
+        do {
+            try AccountAddress.validateCompactNoritoPublicKey(curve: curve, publicKey: publicKey)
+        } catch {
             throw AccountAddressError.invalidPublicKey
         }
-        #if IROHASWIFT_ENABLE_MLDSA
-        if curve == .mldsa,
-           (publicKey.count != 1_952 || !publicKey.contains(where: { $0 != 0 })) {
-            throw AccountAddressError.invalidPublicKey
-        }
-        #endif
     }
 
     func validatePublicKeys() throws {
@@ -563,23 +559,8 @@ private enum ControllerPayload {
                 throw AccountAddressError.invalidMultisigPolicy("ZeroThreshold")
             }
             if let decoded = try decodeMultisigMembers(
-                bytes: bytes,
-                cursor: cursor,
-                version: version,
-                threshold: threshold,
-                countWidth: .u16
-            ) {
-                return decoded
-            }
-            if let decoded = try decodeMultisigMembers(
-                bytes: bytes,
-                cursor: cursor,
-                version: version,
-                threshold: threshold,
-                countWidth: .u8
-            ) {
-                return decoded
-            }
+                bytes: bytes, cursor: cursor, version: version, threshold: threshold
+            ) { return decoded }
             throw AccountAddressError.invalidLength
         }
     }
@@ -590,38 +571,23 @@ private enum ControllerPayload {
         case singleKeyExtended = 0x02
     }
 
-    private enum MultisigCountWidth {
-        case u8
-        case u16
-    }
-
     private static func decodeMultisigMembers(
         bytes: Data,
         cursor: Int,
         version: UInt8,
-        threshold: UInt16,
-        countWidth: MultisigCountWidth
+        threshold: UInt16
     ) throws -> (ControllerPayload, Int)? {
         var cursor = cursor
-        let memberCount: Int
-        switch countWidth {
-        case .u8:
-            guard cursor < bytes.count else {
-                return nil
-            }
-            memberCount = Int(bytes[cursor])
-            cursor += 1
-        case .u16:
-            guard cursor + 1 < bytes.count else {
-                return nil
-            }
-            memberCount = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
-            cursor += 2
+        guard version == 1 else { throw AccountAddressError.invalidMultisigPolicy("InvalidVersion") }
+        guard cursor + 1 < bytes.count else { return nil }
+        let memberCount = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
+        cursor += 2
+        guard memberCount > 0, memberCount <= multisigMemberMax else {
+            throw AccountAddressError.invalidMultisigPolicy("InvalidMemberCount")
         }
-        guard memberCount <= multisigMemberMax else {
-            return nil
-        }
-
+        guard memberCount <= (bytes.count - cursor) / 6 else { return nil }
+        var previousSortKey: Data?
+        var totalWeight: UInt64 = 0
         var members: [MultisigMember] = []
         members.reserveCapacity(memberCount)
         for _ in 0..<memberCount {
@@ -647,12 +613,22 @@ private enum ControllerPayload {
             }
             let key = Data(bytes[cursor..<end])
             cursor = end
+            guard weight > 0, let algorithm = curve.signingAlgorithm else {
+                throw AccountAddressError.invalidMultisigPolicy("InvalidMember")
+            }
+            var sortKey = Data(algorithm.wireName.utf8)
+            sortKey.append(0); sortKey.append(key)
+            guard previousSortKey.map({ $0.lexicographicallyPrecedes(sortKey) }) ?? true else {
+                throw AccountAddressError.invalidMultisigPolicy("NonCanonicalMembers")
+            }
+            previousSortKey = sortKey
+            totalWeight += UInt64(weight)
             members.append(MultisigMember(curve: curve, weight: weight, publicKey: key))
         }
 
-        // Preserve already-issued on-chain identifiers even when the embedded
-        // multisig policy is degenerate. Callers that need to validate or build
-        // policies should enforce stronger invariants separately.
+        guard UInt64(threshold) <= totalWeight else {
+            throw AccountAddressError.invalidMultisigPolicy("ThresholdExceedsTotalWeight")
+        }
         return (.multiSig(version: version, threshold: threshold, members: members), cursor)
     }
 }
@@ -898,7 +874,7 @@ private let irohaPoemKanaHalfwidth: [String] = [
     "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
     "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 ]
-private let multisigMemberMax = 0xFF
+private let multisigMemberMax = 0xFFFF
 private let blake2bBlockLength = 128
 private let compressedAlphabet: [String] = base58Alphabet + irohaPoemKanaHalfwidth
 private let compressedChecksumLength = 6
@@ -1436,7 +1412,7 @@ extension AccountAddress {
         return (curve, publicKey)
     }
 
-    private static func validateCompactNoritoPublicKey(
+    fileprivate static func validateCompactNoritoPublicKey(
         curve: CurveId,
         publicKey: Data
     ) throws {
@@ -1695,6 +1671,7 @@ public enum MultisigBuilderError: Error, LocalizedError {
     case thresholdNotSet
     case noMembers
     case memberOverflow(Int)
+    case invalidPolicy(String)
     case unsupportedAlgorithm(SigningAlgorithm)
 
     public var errorDescription: String? {
@@ -1705,6 +1682,8 @@ public enum MultisigBuilderError: Error, LocalizedError {
             return "Multisig policies require at least one member."
         case let .memberOverflow(count):
             return "Multisig member count \(count) exceeds the supported maximum."
+        case let .invalidPolicy(reason):
+            return "Invalid multisig policy: \(reason)."
         case let .unsupportedAlgorithm(algorithm):
             return "Algorithm \(algorithm) is not available in this build."
         }
@@ -1779,7 +1758,24 @@ public final class MultisigPolicyBuilder {
             throw MultisigBuilderError.memberOverflow(members.count)
         }
 
-        let payloadMembers = try members.map { descriptor -> ControllerPayload.MultisigMember in
+        guard version == 1, resolvedThreshold > 0 else {
+            throw MultisigBuilderError.invalidPolicy("version and threshold must be canonical V1")
+        }
+        let canonicalMembers = members.sorted { left, right in
+            let algorithmOrder = left.algorithm.wireName.compare(right.algorithm.wireName)
+            return algorithmOrder == .orderedSame
+                ? left.publicKey.lexicographicallyPrecedes(right.publicKey)
+                : algorithmOrder == .orderedAscending
+        }
+        var previousSortKey: Data?
+        var totalWeight: UInt64 = 0
+        let payloadMembers = try canonicalMembers.map { descriptor -> ControllerPayload.MultisigMember in
+            guard descriptor.weight > 0 else { throw MultisigBuilderError.invalidPolicy("zero member weight") }
+            var sortKey = Data(descriptor.algorithm.wireName.utf8)
+            sortKey.append(0); sortKey.append(descriptor.publicKey)
+            guard previousSortKey != sortKey else { throw MultisigBuilderError.invalidPolicy("duplicate member") }
+            previousSortKey = sortKey
+            totalWeight += UInt64(descriptor.weight)
             let curve = try curveId(for: descriptor.algorithm)
             try ControllerPayload.validatePublicKey(
                 curve: curve,
@@ -1789,13 +1785,16 @@ public final class MultisigPolicyBuilder {
                                                     weight: descriptor.weight,
                                                     publicKey: descriptor.publicKey)
         }
+        guard UInt64(resolvedThreshold) <= totalWeight else {
+            throw MultisigBuilderError.invalidPolicy("threshold exceeds total member weight")
+        }
         let cbor = encodeMultisigPolicyCTAP2(version: version,
                                              threshold: resolvedThreshold,
                                              members: payloadMembers)
         let digest = blake2bMac256(cbor, personal: AccountAddress.multisigPersonalisation)
         return MultisigPolicy(version: version,
                               threshold: resolvedThreshold,
-                              members: members,
+                              members: canonicalMembers,
                               ctap2Cbor: cbor,
                               digestBlake2b256: digest)
     }

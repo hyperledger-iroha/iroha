@@ -4431,6 +4431,7 @@ impl NetworkRelayShared {
                 | Topic::PeerGossip
                 | Topic::TrustGossip
                 | Topic::Health
+                | Topic::Connect
                 | Topic::Other
         ) || matches!(msg, iroha_core::NetworkMessage::StreamingControl(_))
     }
@@ -13215,6 +13216,10 @@ fn validate_network_frame_runtime_limit(config: &Config) -> ReportResult<(), Con
         (
             "network.max_frame_bytes_health",
             config.network.max_frame_bytes_health,
+        ),
+        (
+            "network.max_frame_bytes_connect",
+            config.network.max_frame_bytes_connect,
         ),
         (
             "network.max_frame_bytes_other",

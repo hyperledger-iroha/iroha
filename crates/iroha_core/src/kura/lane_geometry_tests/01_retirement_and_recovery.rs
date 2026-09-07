@@ -181,9 +181,14 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
         extended_incarnations[&LaneId::new(1)],
         &producer,
     );
-    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-        Hash::new(b"pending-native-amx-retirement-lifecycle"),
-    ));
+    let height_context_id = payload_template.native_amx_receipts[0]
+        .as_ref()
+        .expect("pending Native coordinator receipt")
+        .legs[0]
+        .prepare_qc
+        .body
+        .round
+        .context_id;
     let payload = lifecycle_bound_autonomous_retirement_payload(
         &payload_template,
         height_context_id,
@@ -191,15 +196,15 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
     );
     let local_peer = PeerId::new(producer.public_key().clone());
     kura.bind_local_peer_id(local_peer.clone())
-        .expect("bind pending Native AMX lifecycle signer");
+        .expect("bind pending coordinator lifecycle signer");
     let generation = kura
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
-        .expect("claim pending Native AMX lifecycle process generation");
+        .expect("claim pending coordinator lifecycle process generation");
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist coordinator-owned participant work");
     let reservation_group =
         lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
-            .expect("bind pending Native AMX reservation group");
+            .expect("bind pending coordinator reservation group");
     let descriptor = &payload.origin_proposal.descriptor;
     let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
         height_context_id,
@@ -208,26 +213,36 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
         reservation_group,
         &local_peer,
     )
-    .expect("bind pending Native AMX lifecycle attempt");
+    .expect("bind exact pending coordinator lifecycle attempt");
     let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
-    let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
-        extended.entry(LaneId::SINGLE).expect("coordinator lane"),
+    let view_state_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        extended
+            .entry(descriptor.lane_id)
+            .expect("active coordinator lane"),
         &root,
         descriptor.lane_block_height,
         descriptor.proposal_height,
     );
     let projection = kura
-        .authorize_autonomous_lane_slot_retirement_persistence(&payload, &retirement, &view_path)
-        .expect("derive the pending Native AMX lifecycle state")
-        .consume_for_persistence(&payload, &retirement, &view_path)
-        .expect("bind the exact pending Native AMX lifecycle projection");
-    install_initial_geometry_retirement_lifecycle_cursor(
+        .authorize_autonomous_lane_slot_retirement_persistence(
+            &payload,
+            &retirement,
+            &view_state_path,
+        )
+        .expect("observe exact pending coordinator ownership")
+        .consume_for_persistence(&payload, &retirement, &view_state_path)
+        .expect("project the exact pending coordinator state");
+    let cursor = install_initial_geometry_retirement_lifecycle_cursor(
         &kura,
         &generation,
         &payload,
         &binding,
         projection.before,
         &producer,
+    );
+    assert_eq!(
+        cursor.phase_kind(),
+        AutonomousLifecycleCursorPhaseKindV1::Live
     );
     let error = kura
         .apply_lane_geometry_transition(

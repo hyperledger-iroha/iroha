@@ -482,7 +482,11 @@ fn collect_operations(
             }),
             gpu: probe.gpu_available.then(|| {
                 measure_in_place(&columns.coeff, config.warmups, config.iterations, |cols| {
-                    planner.fft_gpu(cols);
+                    planner
+                        .fft_gpu_pending(cols)
+                        .expect("GPU FFT benchmark requires an actual GPU dispatch")
+                        .wait()
+                        .expect("GPU FFT benchmark dispatch failed");
                 })
             }),
         };
@@ -502,7 +506,11 @@ fn collect_operations(
             }),
             gpu: probe.gpu_available.then(|| {
                 measure_in_place(&columns.time, config.warmups, config.iterations, |cols| {
-                    planner.ifft_gpu(cols);
+                    planner
+                        .ifft_gpu_pending(cols)
+                        .expect("GPU IFFT benchmark requires an actual GPU dispatch")
+                        .wait()
+                        .expect("GPU IFFT benchmark dispatch failed");
                 })
             }),
         };
@@ -528,7 +536,14 @@ fn collect_operations(
                     &columns.coeff,
                     config.warmups,
                     config.iterations,
-                    |coeffs| planner.lde_gpu(coeffs),
+                    |coeffs| {
+                        planner
+                            .lde_gpu_pending(coeffs)
+                            .expect("GPU LDE benchmark requires an actual GPU dispatch")
+                            .wait()
+                            .expect("GPU LDE benchmark dispatch failed")
+                            .expect("GPU LDE benchmark returned no GPU result")
+                    },
                 )
             }),
         };
@@ -1575,6 +1590,48 @@ mod tests {
             operations.last().expect("bn254 words op").operation,
             "bn254_poseidon_words"
         );
+    }
+
+    #[test]
+    fn collect_operations_rejects_gpu_timings_without_a_dispatch() {
+        let planner = Planner::new(find_by_name("fastpq-state-transition-stark-v1").unwrap());
+        let columns = ColumnSets {
+            time: Vec::new(),
+            coeff: Vec::new(),
+        };
+        let probe = ExecutionProbe {
+            resolved_mode: ExecutionMode::Gpu,
+            backend_label: "cuda".into(),
+            gpu_available: true,
+        };
+        for operation in ["fft", "ifft", "lde"] {
+            let config = Config::parse_from([
+                "fastpq_cuda_bench",
+                "--rows",
+                "8",
+                "--iterations",
+                "1",
+                "--warmups",
+                "0",
+                "--operation",
+                operation,
+            ]);
+            // Empty work cannot create a GPU dispatch on any host. A stale
+            // availability probe must not turn its CPU timing into GPU evidence.
+            let failure = std::panic::catch_unwind(|| {
+                collect_operations(&planner, &config, 8, 64, &columns, &probe)
+            });
+            let payload = match failure {
+                Ok(_) => panic!("missing GPU dispatch must abort capture"),
+                Err(payload) => payload,
+            };
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap();
+            assert!(message.contains("requires an actual GPU dispatch"));
+        }
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]

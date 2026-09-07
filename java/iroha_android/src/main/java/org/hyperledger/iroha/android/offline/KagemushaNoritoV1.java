@@ -8,6 +8,8 @@ import java.util.Objects;
 import org.hyperledger.iroha.sdk.core.model.NetworkId;
 import org.hyperledger.iroha.sdk.offline.KagemushaAcknowledgementV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAccountIdV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaEnrolledOpenSelectorV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaRetailEnrollmentOwnerV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAggregateStateCommitmentV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAssetDefinitionIdV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAssetIncarnationV1;
@@ -59,6 +61,25 @@ public final class KagemushaNoritoV1 {
   /** Maximum canonical bytes in secure-device operation 16's fixed public result. */
   public static final int MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaNoritoV1.MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES;
+
+  /** Maximum canonical bytes in the untrusted enrolled-open selector. */
+  public static final int MAXIMUM_ENROLLED_OPEN_SELECTOR_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaNoritoV1.MAXIMUM_ENROLLED_OPEN_SELECTOR_BYTES;
+
+  /** Computes correlation bytes without granting bank or hardware authority. */
+  public static byte[] retailEnrollmentIdentityShape(final KagemushaRetailEnrollmentOwnerV1 owner) {
+    return core().retailEnrollmentIdentityShape(Objects.requireNonNull(owner, "owner"));
+  }
+
+  /** Encodes the sole bounded native owner lookup projection. */
+  public static byte[] encodeEnrolledOpenSelectorShape(final KagemushaEnrolledOpenSelectorV1 value) {
+    return core().encodeEnrolledOpenSelectorShape(Objects.requireNonNull(value, "value"));
+  }
+
+  /** Decodes exact canonical lookup data without authenticating its owner. */
+  public static KagemushaEnrolledOpenSelectorV1 decodeEnrolledOpenSelectorShapeExact(final byte[] bytes) {
+    return core().decodeEnrolledOpenSelectorShapeExact(copy(bytes));
+  }
 
   private KagemushaNoritoV1() {}
 

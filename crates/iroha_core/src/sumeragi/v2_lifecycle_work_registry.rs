@@ -3323,8 +3323,10 @@ impl DurableRecoveredWalSignWork {
 }
 /// Whether one concrete registry row is still an executable adapter effect or
 /// a closed durable carrier awaiting its dedicated typed consumer. Installed
-/// move-only carriers remain inline, so exact-address admission introduces no
-/// later heap-allocation fail-stop cut before the carrier's typed consumer.
+/// move-only carriers retain their complete authority. The largest retained
+/// lineages are heap-owned so unrelated BTree entries do not copy their inline
+/// size. Live Broadcast storage is reserved before publication; its typed
+/// commit only initializes that allocation.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Debug)]
 enum ConcreteLifecycleWorkKind {
@@ -3342,10 +3344,10 @@ enum ConcreteLifecycleWorkKind {
     DurableRecoveredWalSign(DurableRecoveredWalSignWork),
     DurableRecoveredLifecycleNextWalVoteSign(DurableRecoveredLifecycleNextWalVoteSignWork),
     DurableRecoveredWalControlSign(DurableRecoveredWalControlSignWork),
-    DurableRecoveredLifecycleSignedBroadcast(DurableRecoveredLifecycleSignedBroadcastWork),
+    DurableRecoveredLifecycleSignedBroadcast(Box<DurableRecoveredLifecycleSignedBroadcastWork>),
     DurableRecoveredWalDecisionFetch(DurableRecoveredWalDecisionFetchWork),
     DurableRecoveredDecisionStore(DurableRecoveredDecisionStoreWork),
-    DurableRecoveredDecisionApply(DurableRecoveredDecisionApplyWork),
+    DurableRecoveredDecisionApply(Box<DurableRecoveredDecisionApplyWork>),
     DurableCertifiedServe(DurableCertifiedServeWork),
     DurableProducerTurn(DurableProducerTurnWork),
 }

@@ -36,7 +36,7 @@ pub const CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT: [u8; 32] = [
 /// case folding, and surrounding whitespace are never accepted.
 pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/ipa",
-    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-authorization-v1",
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -146,7 +146,7 @@ impl BackendTag {
 pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
     match label {
         "halo2/ipa"
-        | "halo2/pasta/kaigi-roster-v1"
+        | "halo2/pasta/kaigi-authorization-v1"
         | "halo2/pasta/kaigi-usage-v1"
         | "halo2/pasta/ivm-execution-v1"
         | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
@@ -984,6 +984,10 @@ mod tests {
             "halo2/pasta/ipa-pasta-cycle-v1",
             "halo2/pasta/ivm-overlay-bind",
             "halo2/pasta/tiny-add",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/ipa/kaigi-roster-v1",
+            "halo2/pasta/ipa/kaigi-authorization-v1",
+            "halo2/pasta/kaigi-authorization-v1/",
             "stark",
             "stark/fri",
             "STARK/FRI",

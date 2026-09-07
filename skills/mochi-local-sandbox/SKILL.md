@@ -29,7 +29,7 @@ Use Mochi as the local Iroha devnet launcher and MCP bridge.
 
 1. Prefer Mochi's curated local `iroha.*` MCP tools. Do not prefer raw `torii.*` tools when the local MCP surface is healthy.
 2. Treat `.env.local`, `session.json`, and any generated `IROHA_PRIVATE_KEY` value as runtime-only local-dev material. Do not commit them or copy them into permanent docs.
-3. Use `scripts/mochi_local_sandbox.sh env` when you need copy/paste shell exports for a local app.
+3. Use `scripts/mochi_local_sandbox.sh env` for public connection exports and the `IROHA_ENV_FILE` path. Load the owner-private file through the application's dotenv API; never print the file, copy its key into commands, or source it in a traced shell.
 4. Use `scripts/mochi_local_sandbox.sh reset` when the local chain must be wiped and regenerated.
 5. Expect generated local configs to enable `[torii.mcp]` with the curated writer profile and `[torii.transport.norito_rpc]` with `enabled = true`, `require_mtls = false`, and `stage = "ga"`.
 6. If `up` fails, inspect:

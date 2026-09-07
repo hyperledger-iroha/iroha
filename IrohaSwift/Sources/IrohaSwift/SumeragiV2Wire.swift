@@ -2127,6 +2127,8 @@ private struct SumeragiV2Reader {
         self.data = data
     }
 
+    var remainingBytes: Int { data.count - offset }
+
     mutating func u8(_ label: String) throws -> UInt8 {
         guard offset < data.count else { throw SumeragiV2WireError.invalid("\(label) is truncated") }
         defer { offset += 1 }
@@ -2335,6 +2337,11 @@ private func sumeragiV2DecodeVector<T>(
     guard count <= UInt64(Int.max) else {
         throw SumeragiV2WireError.invalid("vector count exceeds platform range")
     }
+    // Each element needs at least one compact length-prefix byte, even when
+    // its payload is empty. Bound allocation before trusting the wire count.
+    guard count <= UInt64(reader.remainingBytes) else {
+        throw SumeragiV2WireError.invalid("vector count exceeds remaining encoded fields")
+    }
     var values: [T] = []
     values.reserveCapacity(Int(count))
     for _ in 0..<Int(count) {
@@ -2352,9 +2359,6 @@ private func sumeragiV2RequireIncreasing(_ values: [UInt32], label: String) thro
 
 private extension SumeragiV2Reader {
     mutating func rawBytes(_ count: Int, label: String) throws -> Data {
-        var bytes = Data()
-        bytes.reserveCapacity(count)
-        for _ in 0..<count { bytes.append(try u8(label)) }
-        return bytes
+        try read(count, label: label)
     }
 }

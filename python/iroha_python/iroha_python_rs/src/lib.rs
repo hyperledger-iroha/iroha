@@ -4,6 +4,7 @@
 mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
+mod identity_codec_v1;
 mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
@@ -5545,6 +5546,31 @@ mod tests {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
     }
     #[test]
+    fn privacy_capability_native_builder_rejects_offline_inspection() {
+        ensure_python();
+        let private_key = parse_private_key(&[0x11; 32]).expect("seeded private key");
+        let authority = AccountId::new(PublicKey::from(private_key))
+            .canonical_i105()
+            .expect("canonical authority");
+        let mut builder = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("ordinary transaction builder");
+        let inspected = privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        );
+        Python::attach(|py| {
+            let manifest = Py::new(py, inspected).expect("native inspection object");
+            let error = builder
+                .bind_privacy_exact12_capability_manifest_v1(manifest.bind(py).borrow())
+                .expect_err("public native builder must reject an offline archive");
+            assert!(error.to_string().contains("inspection-only"));
+        });
+        assert!(builder.privacy_capability_manifest.is_none());
+    }
+    #[test]
     fn prepared_binding_parser_accepts_only_the_exact_v1_shape() {
         let binding = r#"{
             "schema":"iroha.taira.public-reset.mutation-binding.v1",
@@ -10677,6 +10703,7 @@ impl TransactionBuilder {
                 "native {protocol_label} construction requires a validated Torii Exact12 capability manifest"
             ))
         })?;
+        manifest.require_authenticated_network(self.network_id)?;
         manifest.require_network_profile(protocol_id)?;
         Ok(())
     }
@@ -10877,6 +10904,7 @@ impl TransactionBuilder {
         &mut self,
         manifest: PyRef<'_, privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>,
     ) -> PyResult<()> {
+        manifest.require_authenticated_network(self.network_id)?;
         if self.privacy_capability_manifest.is_some() {
             return Err(PyValueError::new_err(
                 "transaction builder already has an Exact12 capability manifest binding",
@@ -11176,6 +11204,14 @@ impl TransactionBuilder {
                     error.stage()
                 ))
             })?;
+        let mut resolved_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement);
+        resolved_statement.context_mut().transaction_intent_digest = intent;
+        self.privacy_capability_manifest
+            .as_ref()
+            .ok_or_else(|| {
+                PyRuntimeError::new_err("privacy preparation requires an admitted manifest")
+            })?
+            .require_governed_statement(&resolved_statement)?;
         Ok(PyBytes::new(py, intent.as_bytes()))
     }
     /// Validate and sign one canonical, intent-bound ZK-X509 identity presentation.
@@ -11203,6 +11239,12 @@ impl TransactionBuilder {
         }
         let canonical_genesis_hash = *self.network_id.as_bytes();
         let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
+        self.privacy_capability_manifest
+            .as_ref()
+            .ok_or_else(|| {
+                PyRuntimeError::new_err("privacy signing requires an admitted manifest")
+            })?
+            .require_governed_x509_action(&statement, credential_proof)?;
         let private_key = parse_private_key(private_key)?;
         self.validate_privacy_action_signing_authority_v1(&private_key)?;
         let proof = crate::privacy_native_actions::ZkX509CredentialProofBytesV1::try_new(
@@ -15166,6 +15208,7 @@ fn canonical_genesis_header_hash_v1_py(
 }
 #[pymodule]
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    identity_codec_v1::register(module)?;
     module.add(
         "SorafsMultiFetchError",
         _py.get_type::<SorafsMultiFetchError>(),
@@ -15462,6 +15505,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         privacy_capability_manifest::privacy_exact12_capability_manifest_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_capability_manifest::privacy_fetch_exact12_capability_manifest_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

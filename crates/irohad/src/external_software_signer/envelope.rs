@@ -1,8 +1,8 @@
 //! AEAD key-envelope handling with explicit in-memory secret scrubbing.
 use super::protocol::{
     SIGNER_KEY_MAGIC_V1, SIGNER_MAX_PRIVATE_KEY_BYTES_V1, SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1,
-    SIGNER_PROTOCOL_VERSION_V1, SoftwareSignerKeyAlgorithmV1, SoftwareSignerPurposeBindingV1,
-    SoftwareSignerRoleV1, digest_canonical, digest_parts, public_key_digest, scrub, valid_identity,
+    SIGNER_PROTOCOL_VERSION_V1, SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
+    digest_canonical, digest_parts, public_key_digest, scrub, valid_identity,
     valid_software_signer_handle,
 };
 use iroha_crypto::{
@@ -25,10 +25,10 @@ pub(super) struct SoftwareSignerKeyEnvelopeAadV1 {
     pub service_uid: u32,
     pub client_uid: u32,
     pub administrator_uid: u32,
-    pub role: SoftwareSignerRoleV1,
-    pub purpose_binding: SoftwareSignerPurposeBindingV1,
+    pub role: SignerRoleV1,
+    pub purpose_binding: SignerPurposeBindingV1,
     pub domain: String,
-    pub algorithm: SoftwareSignerKeyAlgorithmV1,
+    pub algorithm: SignerKeyAlgorithmV1,
     pub key_revision: u64,
     pub policy_revision: u64,
     pub policy_digest: [u8; 32],
@@ -122,7 +122,7 @@ impl SoftwareSignerKeyEnvelopeV1 {
         let plaintext = SoftwareSignerPrivateKeyPlaintextV1 {
             magic: SIGNER_KEY_MAGIC_V1,
             version: SIGNER_PROTOCOL_VERSION_V1,
-            algorithm: SoftwareSignerKeyAlgorithmV1::try_from(algorithm)
+            algorithm: SignerKeyAlgorithmV1::try_from(algorithm)
                 .map_err(|()| SoftwareSignerEnvelopeErrorV1::UnsupportedAlgorithm)?,
             private_payload,
         };
@@ -229,7 +229,7 @@ impl SoftwareSignerKeyEnvelopeV1 {
 struct SoftwareSignerPrivateKeyPlaintextV1 {
     magic: [u8; 8],
     version: u16,
-    algorithm: SoftwareSignerKeyAlgorithmV1,
+    algorithm: SignerKeyAlgorithmV1,
     private_payload: Vec<u8>,
 }
 impl Drop for SoftwareSignerPrivateKeyPlaintextV1 {
@@ -318,10 +318,10 @@ mod tests {
             service_uid: 4101,
             client_uid: 4102,
             administrator_uid: 4103,
-            role: SoftwareSignerRoleV1::Promotion,
-            purpose_binding: SoftwareSignerPurposeBindingV1::NativeOrPromotion,
-            domain: SoftwareSignerRoleV1::Promotion.domain().to_owned(),
-            algorithm: SoftwareSignerKeyAlgorithmV1::Ed25519,
+            role: SignerRoleV1::Promotion,
+            purpose_binding: SignerPurposeBindingV1::NativeOrPromotion,
+            domain: SignerRoleV1::Promotion.domain().to_owned(),
+            algorithm: SignerKeyAlgorithmV1::Ed25519,
             key_revision: 1,
             policy_revision: 1,
             policy_digest: [0x42; 32],

@@ -398,6 +398,28 @@ test("Exact12 envelope requires the final marker and every catalog lane", () => 
   assert.throws(() => noritoEncodePrivacyExact12FixtureBundleV1(retired));
 });
 
+test("Exact12 envelope requires each protocol's final proof system and engine", () => {
+  const bundle = noritoDecodePrivacyExact12FixtureBundleV1(BUNDLE_BYTES);
+  for (let rowIndex = 0; rowIndex < 12; rowIndex += 1) {
+    const original = Buffer.from(bundle.rows[rowIndex].envelopeNorito);
+    const frame = validateNoritoFrame(original);
+    const payloadStart = original.length - frame.payload.length;
+    let offset = 0;
+    for (let index = 0; index < 5; index += 1) {
+      const field = readCompactField(frame.payload, offset, `envelope.field[${index}]`);
+      offset = field.next;
+      if (index < 3) continue;
+      const mutated = cloneBundle(bundle);
+      const envelope = Buffer.from(original);
+      envelope.writeUInt32LE((envelope.readUInt32LE(payloadStart + field.payloadStart) + 1) % 9,
+        payloadStart + field.payloadStart);
+      rewriteOuterCrc(envelope);
+      mutated.rows[rowIndex].envelopeNorito = envelope;
+      assert.throws(() => noritoEncodePrivacyExact12FixtureBundleV1(mutated), /proof_system_id|engine_id/);
+    }
+  }
+});
+
 test("source, distribution, and browser-leaf Exact12 codecs stay byte-identical", async () => {
   const originalBuffer = globalThis.Buffer;
   const browserBuild = await build({

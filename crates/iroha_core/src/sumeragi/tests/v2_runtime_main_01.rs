@@ -1178,20 +1178,21 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
             wire::GlobalPhase::Prepare,
         ),
     ));
-    let blocked = signed_runtime_timeout_vote(&context, &keys, 0, 2);
-    let safe = signed_runtime_timeout_vote(&context, &keys, 2, 3);
+    let blocked = signed_runtime_timeout_vote(&context, &keys, 1, 2);
+    let safe = signed_runtime_timeout_vote(&context, &keys, 0, 3);
     let target_source = context.roster[1].validator.clone();
     let blocked_source = context.roster[2].validator.clone();
     let safe_source = context.roster[3].validator.clone();
     let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
-        preowned_leader_wire_ownerships_at_shared_cut(
-            &context,
+        preowned_runtime_wal_ownerships(
+            &runtime,
+            &directory,
             &[
                 (target.clone(), target_source),
                 (blocked.clone(), blocked_source),
                 (safe.clone(), safe_source),
             ],
-            runtime.ingress.lifecycle_ordinals.clone(),
+            true,
         );
     let [target_ownership, blocked_ownership, safe_ownership]: [FairV2IngressOwnershipEvidence; 3] =
         ownerships
@@ -1238,6 +1239,35 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
     runtime
         .arm_live_clocks(start)
         .expect("arm runtime after preowning mixed peer ingress");
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate_for_view(&context, &keys, 0),
+            ),
+        ))
+        .expect("admit actual TC0 after the three current-or-next owners");
+    let RuntimeStep::Advanced(view_effects) = runtime.step(start).expect("persist actual view one")
+    else {
+        panic!("actual TC0 must install view one")
+    };
+    assert!(
+        matches!(view_effects.as_slice(), [AdapterEffect::EnterView { tag, .. }] if tag.view() == 1)
+    );
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("retire TC0 scheduling evidence");
+    runtime
+        .take_effect_ownership(view_effects.len())
+        .expect("consume actual EnterView ownership");
+    _leader_wire_ingress
+        .advance_leader_wire_recovery_cut(
+            runtime
+                .driver
+                .leader_wire_recovery_authority()
+                .expect("actual installed WAL frontier"),
+        )
+        .expect("publish actual view-one consumer while preserving preowned receipts");
+
     runtime
         .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9))
         .expect("service the pre-fence retransmission episode");

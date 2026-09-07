@@ -1,4 +1,4 @@
-// Command sccp-circuits exposes the closed catalogue and deterministic test vectors.
+// Command sccp-circuits exposes closed profiles, test vectors, and canonical R1CS identities.
 package main
 
 import (
@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
+	"github.com/consensys/gnark/logger"
 
 	"github.com/hyperledger-iroha/iroha/circuits/sccp/internal/circuit"
 	"github.com/hyperledger-iroha/iroha/circuits/sccp/internal/profile"
@@ -34,6 +36,8 @@ func main() {
 }
 
 func constraintCount(arguments []string) {
+	// Keep stdout machine-readable while retaining compiler diagnostics.
+	logger.SetOutput(os.Stderr)
 	flags := flag.NewFlagSet("constraint-count", flag.ExitOnError)
 	profileID := flags.String("profile", "", "exact final-V1 profile id")
 	if err := flags.Parse(arguments); err != nil {
@@ -63,18 +67,30 @@ func constraintCount(arguments []string) {
 	if err != nil {
 		fatal("compile circuit: %v", err)
 	}
+	// Discard temporary compiler allocations before the pinned serializer
+	// prepares its internal byte sections. The output itself is hashed without
+	// retaining an additional copy or writing a multi-gigabyte artifact file.
+	runtime.GC()
+	size, digest, err := r1csIdentity(constraints)
+	if err != nil {
+		fatal("serialize circuit identity: %v", err)
+	}
 	result := struct {
 		Profile     string        `json:"profile"`
 		Role        profile.Role  `json:"role"`
 		OuterCurve  profile.Curve `json:"outer_curve"`
 		BLSMode     string        `json:"bls_mode"`
 		Constraints int           `json:"constraints"`
+		R1CSBytes   int64         `json:"r1cs_size_bytes"`
+		R1CSSHA256  string        `json:"r1cs_sha256"`
 	}{
 		Profile:     cfg.ID,
 		Role:        cfg.Role,
 		OuterCurve:  cfg.Curve,
 		BLSMode:     "emulated-bls12-381-g1-g2-pairing",
 		Constraints: constraints.GetNbConstraints(),
+		R1CSBytes:   size,
+		R1CSSHA256:  digest,
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
 		fatal("encode constraint count: %v", err)

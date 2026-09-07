@@ -221,10 +221,20 @@ The first-release native surface exposes local build metadata only:
 `privacy_compiled_profile_catalog_v1()`. The latter returns this binary's
 canonical Norito `PrivacyCompiledProfileCatalogV1` archive and contains no
 committed height, governance activation, or readiness state. The distinct
-`Client.privacy_capabilities_v1()` method fetches and strictly parses a fresh
-authoritative JSON `PrivacyCapabilitySnapshotV1` from live Torii. There is no
+`ToriiClient.privacy_capabilities_v1(canonical_auth=...)` method fetches the exact
+canonical Norito `PrivacyExact12CapabilityManifestV1` through authenticated HTTPS
+for its immutable local signing network. Native validation verifies the release
+and deployment evidence before retaining a private origin and network binding.
+Public `privacy_exact12_capability_manifest_v1(archive)` decoding is inspection-only;
+re-decoding archived bytes cannot mint transaction admission. Both the draft and
+native transaction builder reject missing origin or a different network. There is no
 local `privacy_capabilities_v1()` alias, generic request/build/verify
 dispatcher, or legacy algorithm alias.
+
+The retained X509 preparation path checks the resolved intent-bound statement against
+the effective governed activation and current consensus limits. Signing checks the
+complete candidate envelope, proof size, and action size before using the signing key.
+These checks do not enable an unavailable native engine or replace release qualification.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
 `zk-ace-pq-authorization-v1`, `anonymous-pgc-k-out-of-n-v1`,
@@ -234,8 +244,8 @@ dispatcher, or legacy algorithm alias.
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
 `pq-masp-stark-v1`. The parser rejects unknown fields, duplicate JSON keys,
-non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
-and malformed nested policy or profile data.
+non-finite numbers in native inspection projections, aliases, reordered or duplicate
+rows, normalized labels, and malformed nested policy or profile data.
 
 The eleven generic privacy protocols are constructed only by the admitted
 Rust `iroha_privacy_wallet_worker`. `PrivacyWalletWorkerControllerV1` is the
@@ -854,6 +864,9 @@ print(
 
 # Fetch non-authoritative operator and lane evidence separately.
 diagnostics = client.get_sumeragi_diagnostics_typed()
+# Settlement models own receipt tuples, including direct constructor inputs.
+# Parsed Native participant settlements retain their checked Prepare/Commit hash
+# when callers change the original response payload.
 print(
     "lane artifacts",
     len(diagnostics.lane_payload_ownerships),
@@ -1941,6 +1954,18 @@ if snapshot.telemetry_peers:
 Pass ``include_peer_telemetry=False`` when the deployment does not expose
 `/v1/telemetry/peers-info`; the helper still records the remaining endpoints for
 the audit trail.
+
+## Kaigi instruction identities
+
+The typed builders in `iroha_python.kaigi` obtain canonical `AccountId`,
+`DomainId`, and `Name` frames from the required native extension. Account inputs
+retain their full controller, including multisig member keys, weights, and
+threshold. Domain normalization and exact NFC name validation use the same
+pinned profiles as the node. Identity comparisons use the domainless controller
+bytes, so different I105 display prefixes cannot disguise duplicate accounts.
+Use the SDK and extension from the same source revision; a missing canonical
+identity encoder is an error. The resulting instruction archive is decoded and
+checked again by the native transaction builder.
 
 ## Kaigi relay inventory
 

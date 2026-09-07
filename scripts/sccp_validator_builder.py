@@ -680,6 +680,7 @@ def _closed_environment(
         "PATH": os.defpath,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_ATTR_NOSYSTEM": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_NO_LAZY_FETCH": "1",
         "GIT_TERMINAL_PROMPT": "0",
@@ -872,6 +873,7 @@ def _git_command(
     *,
     maximum: int = 1024 * 1024,
     scan_stdout: bool = True,
+    environment: Mapping[str, str] | None = None,
 ) -> bytes:
     stdout, _ = _run_bounded(
         git,
@@ -885,7 +887,7 @@ def _git_command(
             *arguments,
         ),
         cwd=ROOT,
-        environment=_closed_environment(),
+        environment=_closed_environment() if environment is None else environment,
         maximum_bytes=maximum,
         timeout_seconds=120,
         label="pinned Git operation",
@@ -933,12 +935,15 @@ def _reject_tracked_path_material(path: bytes) -> None:
     )
 
 
-def _source_tree_inventory(git: Path, commit: str) -> bytes:
+def _source_tree_inventory(
+    git: Path, commit: str, *, environment: Mapping[str, str] | None = None,
+) -> bytes:
     raw = _git_command(
         git,
         ("ls-tree", "-rz", "--full-tree", commit),
         maximum=64 * 1024 * 1024,
         scan_stdout=False,
+        environment=environment,
     )
     if not raw or not raw.endswith(b"\x00"):
         _fail("Git source tree inventory is empty or truncated")
@@ -1189,6 +1194,40 @@ def _write_private_file(path: Path, payload: bytes, *, label: str) -> None:
             os.close(descriptor)
 
 
+def _isolated_source_environment(
+    git: Path, commit: str, parent: Path,
+) -> dict[str, str]:
+    """Read source objects/index without loading its command configuration."""
+
+    paths: dict[str, Path] = {}
+    for name in ("objects", "index"):
+        raw = _git_command(
+            git, ("rev-parse", "--path-format=absolute", "--git-path", name),
+        )
+        try:
+            value = raw.decode("utf-8", "strict").removesuffix("\n")
+            path = Path(value)
+            if not path.is_absolute() or any(ord(character) < 0x20 for character in value):
+                _fail("Git source metadata path is not canonical absolute text")
+            paths[name] = path.resolve(strict=True)
+        except (OSError, UnicodeDecodeError, ValueError):
+            _fail("Git source metadata path is unavailable")
+    if not paths["objects"].is_dir() or not paths["index"].is_file():
+        _fail("Git source object store or index is unavailable")
+    isolated = common.create_isolated_git_directory(
+        parent, object_format="sha1" if len(commit) == 40 else "sha256", commit=commit,
+    )
+    environment = _closed_environment()
+    environment.update({
+        "GIT_DIR": os.fspath(isolated),
+        "GIT_OBJECT_DIRECTORY": os.fspath(paths["objects"]),
+        "GIT_INDEX_FILE": os.fspath(paths["index"]),
+        "GIT_WORK_TREE": os.fspath(ROOT),
+        "GIT_OPTIONAL_LOCKS": "0",
+    })
+    return environment
+
+
 def _verify_source_and_archive(
     git: Path,
     commit_verifier: Path,
@@ -1210,12 +1249,25 @@ def _verify_source_and_archive(
     head = _git_command(git, ("rev-parse", "--verify", "HEAD")).decode().strip()
     if head != commit:
         _fail("source HEAD does not match the approved full commit")
+    status_environment = _isolated_source_environment(git, commit, archive_path.parent)
+    source_environment = {
+        key: value for key, value in status_environment.items()
+        if key not in {"GIT_INDEX_FILE", "GIT_WORK_TREE"}
+    }
     status = _git_command(
         git,
-        ("status", "--porcelain=v1", "--untracked-files=all"),
+        ("status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=all"),
         maximum=32 * 1024 * 1024,
+        environment=status_environment,
     )
-    if status:
+    # Child worktrees are not archived. Detect staged gitlink changes from the
+    # original index without running status inside an untrusted submodule.
+    staged = _git_command(
+        git, ("diff-index", "--cached", "--raw", "--no-ext-diff", "--no-textconv",
+              "--ignore-submodules=none", commit, "--"),
+        environment=status_environment,
+    )
+    if status or staged:
         _fail("production validator builds require a completely clean source tree")
     verifier_path = os.fspath(commit_verifier)
     if (
@@ -1225,6 +1277,8 @@ def _verify_source_and_archive(
         or any(part in ("", ".", "..") for part in commit_verifier.parts[1:])
     ):
         _fail("commit signature verifier path is not canonical shell-inert text")
+    # Verification detects the format from the signed object, independently
+    # of gpg.format. Every helper slot must resolve to the authenticated tool.
     signature_configuration = (
         "-c",
         "gpg.format=openpgp",
@@ -1232,11 +1286,16 @@ def _verify_source_and_archive(
         f"gpg.openpgp.program={verifier_path}",
         "-c",
         f"gpg.program={verifier_path}",
+        "-c",
+        f"gpg.x509.program={verifier_path}",
+        "-c",
+        f"gpg.ssh.program={verifier_path}",
     )
     _git_command(
         git,
         (*signature_configuration, "verify-commit", "--raw", commit),
         maximum=256 * 1024,
+        environment=source_environment,
     )
     signature = _git_command(
         git,
@@ -1248,6 +1307,7 @@ def _verify_source_and_archive(
             commit,
         ),
         maximum=8 * 1024,
+        environment=source_environment,
     ).rstrip(b"\n")
     fields = signature.split(b"\x00")
     if len(fields) != 4 or fields[0] != b"G" or fields[3] != b"":
@@ -1259,13 +1319,15 @@ def _verify_source_and_archive(
     if source["commit_signer_fingerprint"] not in fingerprints:
         _fail("source commit signer does not match the approved fingerprint")
     timestamp = (
-        _git_command(git, ("show", "-s", "--format=%ct", commit)).decode().strip()
+        _git_command(
+            git, ("show", "-s", "--format=%ct", commit), environment=source_environment,
+        ).decode().strip()
     )
     if timestamp != str(source["source_date_epoch"]):
         _fail("source commit time does not match approved SOURCE_DATE_EPOCH")
 
     inventory_path = archive_path.parent / SOURCE_TREE_INVENTORY
-    inventory_payload = _source_tree_inventory(git, commit)
+    inventory_payload = _source_tree_inventory(git, commit, environment=source_environment)
     _scan_signed_source_blobs(inventory_payload, policy)
     _write_private_file(
         inventory_path,
@@ -1295,6 +1357,7 @@ def _verify_source_and_archive(
                 os.fspath(git),
                 "-C",
                 os.fspath(ROOT),
+                *signature_configuration,
                 "archive",
                 "--format=tar",
                 "--prefix=source/",
@@ -1303,7 +1366,7 @@ def _verify_source_and_archive(
                 commit,
             ],
             cwd=ROOT,
-            env=_closed_environment(source_date_epoch=source["source_date_epoch"]),
+            env={**source_environment, "SOURCE_DATE_EPOCH": str(source["source_date_epoch"])},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1399,7 +1462,14 @@ def _verify_source_and_archive(
         os.close(descriptor)
     if _git_command(git, ("rev-parse", "--verify", "HEAD")).decode().strip() != commit:
         _fail("source HEAD changed during archival")
-    if _git_command(git, ("status", "--porcelain=v1", "--untracked-files=all")):
+    if _git_command(
+        git, ("status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=all"),
+        environment=status_environment,
+    ) or _git_command(
+        git, ("diff-index", "--cached", "--raw", "--no-ext-diff", "--no-textconv",
+              "--ignore-submodules=none", commit, "--"),
+        environment=status_environment,
+    ):
         _fail("source tree changed during archival")
     archive_sha256, archive_size, archive_executable = _hash_direct_file(
         archive_path,

@@ -471,7 +471,7 @@ fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_truncated_prof() {
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical() {
-    use ff::PrimeField as _;
+    use ff::{Field as _, PrimeField as _};
     use halo2_proofs::halo2curves::pasta::Fp as Scalar;
 
     let proof = ipa_fixture::build_without_instances(

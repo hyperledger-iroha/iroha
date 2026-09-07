@@ -8,5 +8,7 @@ mod common;
 mod poseidon_manifest_consistency;
 #[path = "realistic_flows.rs"]
 mod realistic_flows;
+#[path = "resource_profile.rs"]
+mod resource_profile;
 #[path = "trace_commitment.rs"]
 mod trace_commitment;

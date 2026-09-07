@@ -543,6 +543,31 @@ public final class SorafsReferenceValidatorsJavaConsumerTest {
   }
 
   @Test
+  void popMembershipStructuralFixturesRequirePresentationBinding() throws IOException {
+    requireNativeBridge();
+    // These are native structural checks, not cryptographic recipient authorization.
+    final String[][] profiles = {
+      {"pop_membership_current_v1", "Ok", "SFS-OK-000"},
+      {"pop_membership_missing_binding_v1", "Error", "SFS-NORITO-001"},
+      {"pop_membership_zero_binding_v1", "Error", "SFS-VAL-001"},
+    };
+    for (final String[] profile : profiles) {
+      final String name = profile[0];
+      final String outcome = SorafsReferenceValidators.validatePopPayloadJson(
+          SorafsPopPayloadKind.MEMBERSHIP_PROOF,
+          fixture("sorafs_manifest", "reference_sdk", name + ".to"),
+          name + ".to",
+          123L);
+      final Map<?, ?> fields = (Map<?, ?>) JsonParser.parse(outcome);
+      assertTrue(profile[1].equals(fields.get("status")), name);
+      assertTrue(profile[2].equals(fields.get("code")), name);
+      assertTrue(fixtureText(
+              "sorafs_manifest", "reference_sdk", name + "_validation_outcome.json")
+          .equals(outcome), name);
+    }
+  }
+
+  @Test
   void validatesOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
     requireNativeBridge();
     final byte[] payload =

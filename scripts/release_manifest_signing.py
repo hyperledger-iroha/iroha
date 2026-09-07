@@ -24,6 +24,8 @@ executable into an owner-private directory, invokes that snapshot, and rejects
 path, permission, hard-link, digest, or identity drift. The verifier receives
 owner-private snapshots of the inspected manifest, key, and signature under a
 minimal environment, never their mutable source paths.
+Executable snapshots are streamed under a fixed 1 GiB ceiling, including files
+that grow while being copied; the trusted digest does not replace this bound.
 
 Release output directories remain descriptor-pinned across external execution.
 Publication and rollback operate relative to those directories, and substituted
@@ -50,6 +52,7 @@ ED25519_SIGNATURE_SIZE = 64
 ED25519_FIELD_MODULUS = (1 << 255) - 19
 ED25519_SCALAR_ORDER = (1 << 252) + 27742317777372353535851937790883648493
 MAX_MANIFEST_SIZE = 1024 * 1024
+MAX_EXECUTABLE_SIZE = 1024 * 1024 * 1024
 TIMED_OVN_AUDIT_MANIFEST_SIZE = 301
 TIMED_OVN_AUDIT_TOTAL_ARTIFACT_SIZE = 1024 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -234,6 +237,11 @@ def _stable_digest(
     executable: bool = False,
 ) -> Tuple[str, FileIdentity]:
     before = _inspect_regular(path, label, executable=executable)
+    if executable and (before.st_size <= 0 or before.st_size > MAX_EXECUTABLE_SIZE):
+        raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
+    # Stable hashing cannot legitimately consume more bytes than the inspected
+    # immutable file. Bound rechecks too, including growth after native execution.
+    maximum = before.st_size
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -247,12 +255,16 @@ def _stable_digest(
     closed: Optional[os.stat_result] = None
     try:
         opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        if _identity(opened) != _identity(before):
             raise ReleaseManifestSignatureError(f"{label} changed while it was opened")
+        consumed = 0
         while True:
-            chunk = os.read(descriptor, 1024 * 1024)
+            chunk = os.read(descriptor, min(1024 * 1024, maximum + 1 - consumed))
             if not chunk:
                 break
+            consumed += len(chunk)
+            if consumed > maximum:
+                raise ReleaseManifestSignatureError(f"{label} grew beyond its inspected byte bound")
             digest.update(chunk)
         closed = os.fstat(descriptor)
     finally:
@@ -579,6 +591,8 @@ def _snapshot_executable(
         label,
         executable=True,
     )
+    if before.st_size <= 0 or before.st_size > MAX_EXECUTABLE_SIZE:
+        raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
     snapshot_label = f"{label} snapshot"
     _require_new_output(destination, snapshot_label)
     read_flags = os.O_RDONLY
@@ -592,6 +606,8 @@ def _snapshot_executable(
     try:
         read_descriptor = os.open(source, read_flags)
         opened = os.fstat(read_descriptor)
+        if opened.st_size <= 0 or opened.st_size > MAX_EXECUTABLE_SIZE:
+            raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
             raise ReleaseManifestSignatureError(
                 f"{label} changed while it was opened"
@@ -599,10 +615,14 @@ def _snapshot_executable(
         write_descriptor = os.open(destination, write_flags, 0o700)
         snapshot_identity = _identity(os.fstat(write_descriptor))
         digest = hashlib.sha256()
+        copied = 0
         while True:
-            chunk = os.read(read_descriptor, 1024 * 1024)
+            chunk = os.read(read_descriptor, min(1024 * 1024, MAX_EXECUTABLE_SIZE + 1 - copied))
             if not chunk:
                 break
+            copied += len(chunk)
+            if copied > MAX_EXECUTABLE_SIZE:
+                raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
             digest.update(chunk)
             view = memoryview(chunk)
             while view:

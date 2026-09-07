@@ -4,6 +4,37 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
+  func testExactFrameSurvivesTransportBufferClearingAndCallerMutation() throws {
+    let requestID = fixed(0x11, count: 32)
+    let expected = KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+      operation: .readActiveHardwareCredential,
+      status: .success,
+      requestID: requestID,
+      payload: Data([4, 5]),
+      authenticator: fixed(0x44, count: 64)
+    )
+    var transportBuffer = expected
+    let decoded = try KagemushaDeviceLifecycleBridgeV1.decodeUnverifiedResponse(
+      transportBuffer, expectedOperation: .readActiveHardwareCredential,
+      expectedRequestID: requestID
+    )
+    transportBuffer.resetBytes(in: transportBuffer.startIndex..<transportBuffer.endIndex)
+    var callerCopy = decoded.canonicalResponseFrame
+    callerCopy.resetBytes(in: callerCopy.startIndex..<callerCopy.endIndex)
+    XCTAssertEqual(decoded.canonicalResponseFrame, expected)
+    XCTAssertEqual(decoded.payload, Data([4, 5]))
+
+    // This injected endpoint verifies buffer plumbing only, not hardware qualification.
+    let endpoint = FakeEndpoint()
+    endpoint.operation = .readActiveHardwareCredential
+    let bridge = try KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(endpoint)
+    let result = try bridge.executeAuthenticated(
+      operation: .readActiveHardwareCredential, requestID: requestID,
+      canonicalCommand: Data([1]), acceptedDevicePublicKey: nil
+    )
+    XCTAssertEqual(result.canonicalResponseFrame, expected)
+  }
+
   func testNativeContractVectorProbeIsBoundedWhenLinked() {
     XCTAssertEqual(KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes, 4 * 1024)
     if let vector = KagemushaDeviceLifecycleBridgeV1.nativeContractVector() {
@@ -12,6 +43,16 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
         vector.count,
         KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes
       )
+    }
+  }
+
+  func testUnverifiedResponseDecoderRequiresNonzeroRequestBinding() throws {
+    for requestID in [Data(), fixed(0, count: 32), fixed(0x11, count: 31)] {
+      let frame = KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+        operation: .readActiveHardwareCredential, status: .success,
+        requestID: requestID, payload: Data([1]), authenticator: fixed(0x44, count: 64))
+      XCTAssertThrowsError(try KagemushaDeviceLifecycleBridgeV1.decodeUnverifiedResponse(
+        frame, expectedOperation: .readActiveHardwareCredential, expectedRequestID: requestID))
     }
   }
 
@@ -220,6 +261,27 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
     )
   }
 
+  func testVerifierReceivesExactCommandAndRejectsReplyForAnotherCommand() throws {
+    let endpoint = FakeEndpoint()
+    endpoint.operation = .readPendingCreditWatermark
+    let expected = try KagemushaDeviceOperationCodecV1.encodeControlCommand(
+      .readPendingCreditWatermark(watermark: nil, target: .drainAll))
+    endpoint.authenticatedCommand = expected
+    let bridge = try KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(endpoint)
+    let id = fixed(0x11, count: 32)
+    _ = try bridge.executeAuthenticated(operation: .readPendingCreditWatermark,
+      requestID: id, canonicalCommand: expected, acceptedDevicePublicKey: devicePublicKey())
+    XCTAssertEqual(endpoint.verifiedCommand, expected)
+    XCTAssertEqual(endpoint.executedCommand, expected)
+
+    let substituted = try KagemushaDeviceOperationCodecV1.encodeControlCommand(
+      .readPendingCreditWatermark(watermark: nil, target: .requiredBalance(.init(1))))
+    XCTAssertThrowsError(try bridge.executeAuthenticated(operation: .readPendingCreditWatermark,
+      requestID: id, canonicalCommand: substituted, acceptedDevicePublicKey: devicePublicKey()))
+    XCTAssertEqual(endpoint.verifiedCommand, substituted)
+    XCTAssertEqual(endpoint.executedCommand, substituted)
+  }
+
   func testPartialCapabilityAndUnauthenticatedSuccessFailClosed() throws {
     for featureBit in 0..<16 {
       let partial = FakeEndpoint()
@@ -291,6 +353,9 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
 private final class FakeEndpoint: KagemushaDeviceLifecycleEndpointV1 {
   var operation: KagemushaDeviceLifecycleOperationV1 = .recoverTerminalOutcome
   var authenticator = Data(repeating: 0x44, count: 64)
+  var authenticatedCommand: Data?
+  var executedCommand: Data?
+  var verifiedCommand: Data?
   var capabilityFrame = try! KagemushaDeviceLifecycleBridgeV1.Codec
     .encodeCapabilitiesForTests(
       platform: 2,
@@ -303,6 +368,7 @@ private final class FakeEndpoint: KagemushaDeviceLifecycleEndpointV1 {
   func execute(_ command: Data) throws -> Data {
     XCTAssertEqual(Data(command.prefix(8)), Data("IKGMJCM1".utf8))
     let requestID = Data(command[12..<44])
+    executedCommand = Data(command.dropFirst(80))
     return KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
       operation: operation,
       status: .success,
@@ -314,13 +380,16 @@ private final class FakeEndpoint: KagemushaDeviceLifecycleEndpointV1 {
 
   func verifyResponseAuthenticator(
     response _: Data,
+    canonicalCommand: Data,
     operation _: KagemushaDeviceLifecycleOperationV1,
     requestID _: Data,
     hardwarePolicyID _: Data,
     qualificationReportDigest _: Data,
     acceptedDevicePublicKey _: Data?
   ) -> Bool {
-    authenticator.count == 64 && authenticator.contains(where: { $0 != 0 })
+    verifiedCommand = canonicalCommand
+    return (authenticatedCommand == nil || authenticatedCommand == canonicalCommand)
+      && authenticator.count == 64 && authenticator.contains(where: { $0 != 0 })
   }
 }
 

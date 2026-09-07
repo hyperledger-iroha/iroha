@@ -182,7 +182,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
-        tagged.local_proposal_worker_completed_before_deadline = worker_completed_before_deadline;
+        tagged.local_proposal_ready_before_deadline = worker_completed_before_deadline;
         tagged.candidate_semantic_statement = pending.candidate_statement();
         if !tagged.validate_admission_identity() {
             self.latch_fail_closed(

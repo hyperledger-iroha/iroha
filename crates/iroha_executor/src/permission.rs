@@ -2190,10 +2190,10 @@ mod tests {
             None,
         )
         .build(&make_other_account_id());
-        let sibling_grant = crate::tests::with_mock_asset_definitions(
-            vec![sibling_definition],
-            || sibling_dispatched.validate_grant(&authority, &context, &Iroha),
-        );
+        let sibling_grant =
+            crate::tests::with_mock_asset_definitions(vec![sibling_definition], || {
+                sibling_dispatched.validate_grant(&authority, &context, &Iroha)
+            });
         test_override::replace_permissions(previous);
         assert!(exact_grant.is_ok());
         assert!(exact_revoke.is_ok());

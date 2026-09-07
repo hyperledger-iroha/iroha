@@ -3103,7 +3103,7 @@ fn decode_request_auth_replay_state(
             "sealed request-auth replay state is not valid canonical Norito".to_owned(),
         )
     })?;
-    let canonical = norito::to_bytes(&state).map_err(|_| {
+    let canonical = norito::encode_canonical(&state).map_err(|_| {
         GovernanceDagServiceError::State(
             "sealed request-auth replay state could not be canonically encoded".to_owned(),
         )
@@ -3210,7 +3210,7 @@ fn consume_sealed_request_auth_nonce(
             expires_at_unix_secs,
         },
     );
-    let payload = norito::to_bytes(&state).map_err(|_| {
+    let payload = norito::encode_canonical(&state).map_err(|_| {
         GovernanceDagServiceError::State(
             "sealed request-auth replay state could not be canonically encoded".to_owned(),
         )
@@ -3329,7 +3329,7 @@ fn encode_mirror_index_store_payload(
     payload: &MirrorIndexStorePayloadV1,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
     validate_mirror_index_store_payload(payload)?;
-    let encoded = norito::to_bytes(payload).map_err(|error| {
+    let encoded = norito::encode_canonical(payload).map_err(|error| {
         GovernanceDagServiceError::State(format!("mirror two-slot payload encode failed: {error}"))
     })?;
     if encoded.len() > MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES {
@@ -3505,7 +3505,7 @@ fn verify_mirror_payload_against_intent(
 ) -> Result<(), GovernanceDagServiceError> {
     let value = mirror_json_value(payload)?;
     let expected_head_cid = hex::encode(&intent.target_head_block_cid);
-    let intent_bytes = norito::to_bytes(intent).map_err(|error| {
+    let intent_bytes = norito::encode_canonical(intent).map_err(|error| {
         GovernanceDagServiceError::State(format!(
             "publish intent encode failed while verifying mirror ownership: {error}"
         ))
@@ -3547,7 +3547,8 @@ fn load_checkpoint(
         durable_decode_limits(GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1),
     )
     .map_err(|err| GovernanceDagServiceError::State(format!("checkpoint decode failed: {err}")))?;
-    if norito::to_bytes(&body).map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
+    if norito::encode_canonical(&body)
+        .map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
         != record.payload
     {
         return Err(GovernanceDagServiceError::State(
@@ -3573,7 +3574,7 @@ fn save_checkpoint(
     body: &CheckpointBodyV1,
 ) -> Result<[u8; 32], GovernanceDagServiceError> {
     validate_checkpoint_body(body)?;
-    let bytes = norito::to_bytes(body).map_err(|err| {
+    let bytes = norito::encode_canonical(body).map_err(|err| {
         GovernanceDagServiceError::State(format!("checkpoint encode failed: {err}"))
     })?;
     save_sealed_record(
@@ -3598,7 +3599,7 @@ fn checkpoint_commitment(
                     "checkpoint commitment revision is zero".to_owned(),
                 ));
             }
-            let bytes = norito::to_bytes(checkpoint).map_err(|err| {
+            let bytes = norito::encode_canonical(checkpoint).map_err(|err| {
                 GovernanceDagServiceError::State(format!(
                     "checkpoint commitment encode failed: {err}"
                 ))
@@ -3810,7 +3811,7 @@ fn decode_signed_block_prefix_archive(
                     "signed block-prefix archive decode failed: {err}"
                 ))
             })?;
-    if norito::to_bytes(&archive)
+    if norito::encode_canonical(&archive)
         .map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
         != bytes
     {
@@ -3985,7 +3986,8 @@ fn load_publish_intent(
     .map_err(|err| {
         GovernanceDagServiceError::State(format!("publish intent decode failed: {err}"))
     })?;
-    if norito::to_bytes(&body).map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
+    if norito::encode_canonical(&body)
+        .map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
         != record.payload
     {
         return Err(GovernanceDagServiceError::State(
@@ -4011,7 +4013,7 @@ fn save_publish_intent(
     body: &PublishIntentBodyV1,
 ) -> Result<[u8; 32], GovernanceDagServiceError> {
     validate_publish_intent(body)?;
-    let bytes = norito::to_bytes(body).map_err(|err| {
+    let bytes = norito::encode_canonical(body).map_err(|err| {
         GovernanceDagServiceError::State(format!("publish intent encode failed: {err}"))
     })?;
     save_sealed_record(
@@ -4076,7 +4078,7 @@ fn load_producer_commit_guard(
             "local Governance DAG producer checkpoint decode failed: {err}"
         ))
     })?;
-    if norito::to_bytes(&checkpoint)
+    if norito::encode_canonical(&checkpoint)
         .map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
         != record.payload
     {
@@ -4431,7 +4433,7 @@ where
     T: norito::NoritoSerialize,
 {
     let max = bytes.len().max(1);
-    let value = norito::decode_from_bytes_with_limits(
+    norito::decode_canonical_with_limits(
         bytes,
         DecodeLimits::new(
             MAX_REPUTATION_TRUST_EDGES,
@@ -4441,16 +4443,12 @@ where
             128,
         ),
     )
-    .map_err(|err| GovernanceDagServiceError::Source(format!("{label} decode failed: {err}")))?;
-    let canonical = norito::to_bytes(&value).map_err(|err| {
-        GovernanceDagServiceError::Source(format!("{label} encode failed: {err}"))
-    })?;
-    if canonical != bytes {
-        return Err(GovernanceDagServiceError::Source(format!(
-            "{label} is not canonical Norito"
-        )));
-    }
-    Ok(value)
+    .map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => {
+            GovernanceDagServiceError::Source(format!("{label} is not canonical Norito"))
+        }
+        error => GovernanceDagServiceError::Source(format!("{label} decode failed: {error}")),
+    })
 }
 fn required_json_string(map: &JsonMap, field: &str) -> Result<String, GovernanceDagServiceError> {
     map.get(field)
@@ -4535,25 +4533,23 @@ fn canonical_source_payload_bytes(
     fn encode_bounded<T: norito::NoritoSerialize>(
         value: &T,
     ) -> Result<Vec<u8>, GovernanceDagServiceError> {
-        let exact = value.encoded_len_exact().ok_or_else(|| {
-            GovernanceDagServiceError::Source(
-                "canonical governance source payload has no allocation-free exact size".to_owned(),
-            )
+        let exact = norito::canonical_frame_len(value).map_err(|err| {
+            GovernanceDagServiceError::Source(format!("canonical source sizing failed: {err}"))
         })?;
         if exact > GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1 {
             return Err(GovernanceDagServiceError::Source(format!(
                 "canonical governance source payload exceeds the V1 ceiling of {GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1} bytes"
             )));
         }
-        let bytes = norito::to_bytes(value).map_err(|err| {
+        let bytes = norito::encode_canonical(value).map_err(|err| {
             GovernanceDagServiceError::Source(format!(
                 "failed to encode canonical governance source payload: {err}"
             ))
         })?;
-        if bytes.len() > GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1 {
-            return Err(GovernanceDagServiceError::Source(format!(
-                "canonical governance source payload exceeds the V1 ceiling of {GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1} bytes"
-            )));
+        if bytes.len() != exact {
+            return Err(GovernanceDagServiceError::Source(
+                "canonical governance source frame length changed after preflight".to_owned(),
+            ));
         }
         Ok(bytes)
     }
@@ -6933,7 +6929,7 @@ impl Service {
                 };
                 validate_signed_block_prefix_archive(&archive)?;
                 validate_block_prefix_archive_against_source(&archive, source)?;
-                let archive_bytes = norito::to_bytes(&archive).map_err(|err| {
+                let archive_bytes = norito::encode_canonical(&archive).map_err(|err| {
                     GovernanceDagServiceError::State(format!(
                         "signed block-prefix archive encode failed: {err}"
                     ))
@@ -8443,7 +8439,7 @@ fn commit_mirror_index_store(
             "mirror update is not the direct successor of the authenticated checkpoint".to_owned(),
         ));
     }
-    let intent_bytes = norito::to_bytes(intent).map_err(|error| {
+    let intent_bytes = norito::encode_canonical(intent).map_err(|error| {
         GovernanceDagServiceError::State(format!(
             "publish intent encode failed while binding mirror candidate: {error}"
         ))

@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod config;
 mod consensus_message_control;
+mod dedicated_read;
 pub mod fslock_ports;
 pub mod genesis_support;
 use color_eyre::eyre::{Context, Report, Result, eyre};
@@ -14,6 +15,7 @@ pub use consensus_message_control::{
     PrivateSettlementRouteControlCommand, PrivateSettlementRouteControlPhase,
 };
 use core::{fmt, future::Future, time::Duration};
+pub use dedicated_read::read_on_dedicated_thread;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
@@ -9080,30 +9082,10 @@ impl NetworkPeer {
                             let warn_gate = warn_gate.clone();
                             let http_seen = Arc::clone(&http_seen);
                             async move {
-                                let status =
-                                    match spawn_blocking(move || client.client().get_status()).await
-                                    {
-                                    Ok(status) => status,
-                                    Err(join_error) => {
-                                        let err = Report::new(join_error)
-                                            .wrap_err("get status join failed");
-                                        NetworkPeer::record_probe_error(&startup_probe, &err);
-                                        log_status_warning(
-                                            &warn_gate,
-                                            || warn!(
-                                                error = %err,
-                                                debug = ?err,
-                                                "get status failed"
-                                            ),
-                                            || debug!(
-                                                error = %err,
-                                                debug = ?err,
-                                                "get status failed"
-                                            ),
-                                        );
-                                        return Err(err);
-                                    }
-                                };
+                                let status = read_on_dedicated_thread(move || {
+                                    client.client().get_status()
+                                })
+                                .await;
                                 match status {
                                     Ok(status) => {
                                         let _ =
@@ -9270,8 +9252,8 @@ impl NetworkPeer {
                                     if !is_running.load(Ordering::Relaxed) {
                                         break;
                                     }
-                                    let poll_result = tokio::select! {
-                                        result = spawn_blocking({
+                                    let status = tokio::select! {
+                                        result = read_on_dedicated_thread({
                                             let client = poll_client.clone();
                                             move || client.client().get_status()
                                         }) => result,
@@ -9280,17 +9262,6 @@ impl NetworkPeer {
                                                 debug!("fatal notify received during status poll");
                                             }
                                             return;
-                                        }
-                                    };
-                                    let status = match poll_result {
-                                        Ok(result) => result,
-                                        Err(err) => {
-                                            if warn_gate.should_warn() {
-                                                warn!(error = %err, debug = ?err, "fallback status poll join error");
-                                            } else {
-                                                debug!(error = %err, debug = ?err, "fallback status poll join error");
-                                            }
-                                            continue;
                                         }
                                     };
                                     let status = match status {
@@ -9895,9 +9866,7 @@ impl NetworkPeer {
     }
     pub async fn status(&self) -> Result<Status> {
         let client = self.client();
-        let result = spawn_blocking(move || client.client().get_status())
-            .await
-            .expect("should not panic");
+        let result = read_on_dedicated_thread(move || client.client().get_status()).await;
         match &result {
             Ok(status) => self.record_status_success(status),
             Err(error) => self.record_status_failure(error),
@@ -9906,9 +9875,7 @@ impl NetworkPeer {
     }
     async fn sumeragi_v2_startup_snapshot(&self) -> Result<PeerSumeragiV2Snapshot> {
         let client = self.client();
-        let result = spawn_blocking(move || client.client().get_sumeragi_status())
-            .await
-            .expect("should not panic");
+        let result = read_on_dedicated_thread(move || client.client().get_sumeragi_status()).await;
         match result {
             Ok(status) => Ok(Self::record_probe_sumeragi_v2_status(
                 &self.startup_probe,

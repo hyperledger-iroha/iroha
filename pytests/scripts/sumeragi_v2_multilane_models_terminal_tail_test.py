@@ -286,3 +286,101 @@ def test_inflight_composed_contract_rejects_tla_noncanonical_key_prefix(
         and "CanonicalKeyPrefix" in error
         for error in errors
     ), errors
+
+
+# These controls refresh the item seals after every mutation. The independent
+# semantic contract must still reject a shipping raw-key release or an unchecked
+# transition before the one durable append.
+_DIRECT_RELEASE_AUTHORITY_MUTATIONS = (
+    ("raw_single_cfg", "queue", "release_lane_reservation", "#[cfg(test)]\n", ""),
+    ("raw_batch_cfg", "queue", "release_lane_reservations_in_order", "#[cfg(test)]\n", ""),
+    ("raw_journal_cfg", "journal", "release", "#[cfg(test)]\n", ""),
+    ("raw_single_public", "queue", "release_lane_reservation", "pub(crate) fn", "pub fn"),
+    ("raw_batch_public", "queue", "release_lane_reservations_in_order", "pub(crate) fn", "pub fn"),
+    ("fixture_variant_cfg", "queue", "enum", "#[cfg(test)]", ""),
+    ("fixture_arm_cfg", "queue", "release_lane_reservations_in_order_inner", "#[cfg(test)]", ""),
+    ("empty_authority", "queue", "release_strictly_absent_lane_reservations_in_order", "StrictAbsence(authorizations)", "StrictAbsence(Vec::new())"),
+    ("early_return", "queue", "release_lane_reservations_in_order_inner", "if self.transaction_selection_durability_faulted()", "return Ok(0);\n        if self.transaction_selection_durability_faulted()"),
+    ("skip_union", "queue", "release_lane_reservations_in_order_inner", "if authorized_hashes != entrypoint_hashes", "if false"),
+    ("skip_live_revalidation", "queue", "release_lane_reservations_in_order_inner", "self.revalidate_complete_live_pre_kura_group_locked(group, group_keys)?;", ""),
+    ("skip_complete_keys", "queue", "release_lane_reservations_in_order_inner", "if records.len() != keys.len()", "if false"),
+    ("skip_consume", "queue", "release_lane_reservations_in_order_inner", "for authorization in authorizations {\n                        let projection = authorization.consume_for_queue()", "for authorization in authorizations.into_iter().take(0) {\n                        let projection = authorization.consume_for_queue()"),
+    ("skip_fifo_terminal", "queue", "release_lane_reservations_in_order_inner", "if !terminal.ordinary_fifo_owner", "if false"),
+)
+
+
+def _direct_release_authority_fixture(tmp_path: Path):
+    from sumeragi_v2_multilane_models_test import copy_reviewed_rust_source_fixture
+
+    module = load_checker()
+    import check_sumeragi_v2_proof_ledger as ledger
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    copy_reviewed_rust_source_fixture(tmp_path, module, "crates/iroha_core/src/queue.rs")
+    copy_reviewed_rust_source_fixture(tmp_path, module, "crates/iroha_core/src/queue/reservation_journal.rs")
+    return module, ledger, contract
+
+
+def test_direct_release_authority_canonical_source_has_one_shipping_path(tmp_path: Path) -> None:
+    module, _ledger, contract = _direct_release_authority_fixture(tmp_path)
+    errors: list[str] = []
+    contract.validate_direct_release_authority_contract(tmp_path, errors, module._rust_binding_item)
+    assert errors == []
+
+
+def test_direct_release_authority_mutations_survive_digest_refresh(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+    import json
+
+    module, ledger, contract = _direct_release_authority_fixture(tmp_path)
+    queue_path = tmp_path / "crates/iroha_core/src/queue.rs"
+    journal_path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    originals = {"queue": queue_path.read_text(), "journal": journal_path.read_text()}
+    baseline: list[str] = []
+    contract.validate_direct_release_authority_contract(tmp_path, baseline, module._rust_binding_item)
+    assert baseline == []
+    for name, owner, symbol, before, after in _DIRECT_RELEASE_AUTHORITY_MUTATIONS:
+        queue_path.write_text(originals["queue"])
+        journal_path.write_text(originals["journal"])
+        path = queue_path if owner == "queue" else journal_path
+        source = originals[owner]
+        if symbol == "enum":
+            item_source = module._rust_binding_item(
+                tmp_path, "crates/iroha_core/src/queue.rs", "enum", "LaneQueueDirectReleaseGate", "direct-release gate mutation", [],
+            )
+            assert item_source is not None
+            changed = item_source.replace(before, after, 1)
+            assert changed != item_source
+            source = source.replace(item_source, changed, 1)
+        else:
+            item, = ledger.rust_items(source, symbol)
+            if before == "#[cfg(test)]\n":
+                prefix = "#[cfg(test)]\n" + item.source
+                assert source.count(prefix) == 1, name
+                source = source.replace(prefix, item.source, 1)
+            else:
+                assert before in item.source, name
+                changed = item.source.replace(before, after, 1)
+                source = source.replace(item.source, changed, 1)
+        path.write_text(source)
+        current = queue_path.read_text()
+        refreshed = {
+            symbol: ledger._rust_item_token_sha256(ledger.rust_items(current, symbol)[0])
+            for symbol in contract._DIRECT_RELEASE_PRODUCTION_ITEM_SHA256
+        }
+        with monkeypatch.context() as local_patch:
+            local_patch.setattr(contract, "_DIRECT_RELEASE_PRODUCTION_ITEM_SHA256", refreshed)
+            errors: list[str] = []
+            contract.validate_direct_release_authority_contract(tmp_path, errors, module._rust_binding_item)
+        retained = tmp_path / "mutants" / name
+        retained.mkdir(parents=True, exist_ok=False)
+        (retained / path.name).write_text(source)
+        (retained / "result.json").write_text(json.dumps({
+            "mutation": name,
+            "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+            "refreshed_item_seals": refreshed,
+            "errors": errors,
+        }, indent=2) + "\n")
+        assert errors, (name, hashlib.sha256(source.encode()).hexdigest())
+        assert not any("source seal" in error for error in errors), (name, errors)
+        assert any("direct-release authority" in error or "raw-key direct release" in error for error in errors), (name, errors)

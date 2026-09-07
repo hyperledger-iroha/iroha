@@ -507,6 +507,7 @@ fn parliament_transition_label(
         Kind::EscalateRisk => "escalate_risk",
         Kind::CompleteQualification => "complete_qualification",
         Kind::RegisterSortitionRequest => "register_sortition_request",
+        Kind::RegisterInitialSortition => "register_initial_sortition",
         Kind::ConsumeSortitionPulseBatch => "consume_sortition_pulse_batch",
         Kind::BeginInvitationAcceptance => "begin_invitation_acceptance",
         Kind::FailBodyElectionNoRoster => "fail_body_election_no_roster",
@@ -10013,6 +10014,16 @@ mod tests {
                 .with_label_values(&["enacted"])
                 .get(),
             0
+        );
+    }
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn initial_sortition_uses_an_exact_closed_metric_label() {
+        assert_eq!(
+            parliament_transition_label(
+                iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1::RegisterInitialSortition
+            ),
+            "register_initial_sortition"
         );
     }
     #[cfg(feature = "telemetry")]

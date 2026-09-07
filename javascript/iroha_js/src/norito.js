@@ -1,3 +1,4 @@
+import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
 import {
   BASE58_ALPHABET_TEXT,
@@ -48,6 +49,8 @@ import {
   parseStrictGovernanceInstructionJson,
 } from "./noritoGovernanceBoundary.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
+import { createNoritoNftMarketCodecs, NFT_MARKET_INSTRUCTION_NAMES_V1, NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
+import { createNoritoGameCodecs, GAME_INSTRUCTION_NAMES_V1, GAME_INSTRUCTION_WIRE_IDS_V1, gameValueMaximumBytesV1 } from "./noritoGameCodecs.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
 import {
   PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
@@ -279,6 +282,9 @@ const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(
   "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
   "hex",
 );
+const PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1 = /* @__PURE__ */ Object.freeze([
+  0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0,
+]);
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
@@ -342,6 +348,8 @@ const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeNa
 const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 16 * 1024;
 const KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING = 8;
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
+  ...Object.fromEntries(NFT_MARKET_INSTRUCTION_NAMES_V1.map((name, index) => [NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[index], `iroha_data_model::isi::nft_market::${name}`])),
+  ...Object.fromEntries(GAME_INSTRUCTION_NAMES_V1.map((name, index) => [GAME_INSTRUCTION_WIRE_IDS_V1[index], `iroha_data_model::isi::game::${name}`])),
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
   "iroha.register": "iroha_data_model::isi::register::RegisterBox",
@@ -2188,6 +2196,12 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   if (!envelopeFields.catalog_commitment.equals(PRIVACY_EXACT12_CATALOG_COMMITMENT_V1)) {
     throw new TypeError(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
   }
+  for (const field of ["proof_system_id", "engine_id"]) {
+    if (decodeU32Value(envelopeFields[field], `${context}.${field}`) !==
+        PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1[rowIndex]) {
+      throw new TypeError(`${context}.envelopeNorito carries a substituted ${field}`);
+    }
+  }
   if (
     decodeU32Value(
       envelopeFields.protocol_id,
@@ -2769,6 +2783,18 @@ function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
 }
 
 function encodePureJsInstructionPayload(instruction) {
+  const nftNames = NFT_MARKET_INSTRUCTION_NAMES_V1.filter(name => Object.prototype.hasOwnProperty.call(instruction, name));
+  if (nftNames.length) {
+    const name = nftNames[0]; assertExactObjectKeys(instruction, [name], "instruction");
+    return encodeInstructionEnvelope(NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[NFT_MARKET_INSTRUCTION_NAMES_V1.indexOf(name)], nftMarketCodecsV1.encode(name, instruction[name]));
+  }
+
+  const gameNames = GAME_INSTRUCTION_NAMES_V1.filter((name) => Object.prototype.hasOwnProperty.call(instruction, name));
+  if (gameNames.length > 0) {
+    assertExactObjectKeys(instruction, [gameNames[0]], "instruction");
+    const name = gameNames[0];
+    return encodeInstructionEnvelope(GAME_INSTRUCTION_WIRE_IDS_V1[GAME_INSTRUCTION_NAMES_V1.indexOf(name)], gameCodecsV1.encode(name, instruction[name]));
+  }
   if (!isPlainObject(instruction)) {
     throw new TypeError("instruction must be a JSON object");
   }
@@ -3057,6 +3083,14 @@ function decodePureJsInstruction(buffer) {
 }
 
 function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
+  const nftIndex = NFT_MARKET_INSTRUCTION_WIRE_IDS_V1.indexOf(wireId);
+  if (nftIndex >= 0) { const name = NFT_MARKET_INSTRUCTION_NAMES_V1[nftIndex]; return { [name]: nftMarketCodecsV1.decode(name, payload) }; }
+
+  const gameIndex = GAME_INSTRUCTION_WIRE_IDS_V1.indexOf(wireId);
+  if (gameIndex >= 0) {
+    const name = GAME_INSTRUCTION_NAMES_V1[gameIndex];
+    return { [name]: gameCodecsV1.decode(name, payload) };
+  }
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
@@ -4540,7 +4574,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
             ),
             usage_commitment: decodeOptionValue(
               fields.usage_commitment,
-              decodeHashValue,
+              decodeKaigiScalarValue,
               "Kaigi.RecordKaigiUsage.usage_commitment",
             ),
             proof: decodeOptionValue(
@@ -6750,7 +6784,7 @@ function encodeRecordKaigiUsagePayload(value) {
     [encodeKaigiIdValue(value.call_id, "Kaigi.RecordKaigiUsage.call_id")],
     [encodeU64NumberValue(value.duration_ms, "Kaigi.RecordKaigiUsage.duration_ms")],
     [encodeU64NumberValue(value.billed_gas, "Kaigi.RecordKaigiUsage.billed_gas")],
-    [encodeOptionValue(value.usage_commitment, encodeHashValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
+    [encodeOptionValue(value.usage_commitment, encodeKaigiScalarValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
     [encodeOptionValue(value.proof, encodeByteVecValue, "Kaigi.RecordKaigiUsage.proof")],
   ]);
 }
@@ -7067,33 +7101,43 @@ function decodeNewKaigiPayload(payload, context) {
   };
 }
 
+function encodeKaigiScalarValue(value, context) {
+  return Buffer.from(kaigiScalarBytesV1(value, context));
+}
+
+function decodeKaigiScalarValue(payload, context) {
+  return Array.from(kaigiScalarBytesV1(payload, context));
+}
+
 function encodeKaigiParticipantCommitmentValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("commitment" in value)) {
+    throw new TypeError(`${context} requires only commitment`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.commitment, `${context}.commitment`)],
-    [encodeOptionValue(value.alias_tag, encodeNoritoStringValue, `${context}.alias_tag`)],
+    [encodeKaigiScalarValue(value.commitment, `${context}.commitment`)],
   ]);
 }
 
 function decodeKaigiParticipantCommitmentValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["commitment", "alias_tag"]);
+  const fields = decodeStructFields(payload, context, ["commitment"]);
   return {
-    commitment: decodeHashValue(fields.commitment, `${context}.commitment`),
-    alias_tag: decodeOptionValue(fields.alias_tag, decodeStringValue, `${context}.alias_tag`),
+    commitment: decodeKaigiScalarValue(fields.commitment, `${context}.commitment`),
   };
 }
 
 function encodeKaigiParticipantNullifierValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("digest" in value)) {
+    throw new TypeError(`${context} requires only digest`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.digest, `${context}.digest`)],
-    [encodeU64NumberValue(value.issued_at_ms, `${context}.issued_at_ms`)],
+    [encodeKaigiScalarValue(value.digest, `${context}.digest`)],
   ]);
 }
 
 function decodeKaigiParticipantNullifierValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["digest", "issued_at_ms"]);
+  const fields = decodeStructFields(payload, context, ["digest"]);
   return {
-    digest: decodeHashValue(fields.digest, `${context}.digest`),
-    issued_at_ms: decodeU64NumberValue(fields.issued_at_ms, `${context}.issued_at_ms`),
+    digest: decodeKaigiScalarValue(fields.digest, `${context}.digest`),
   };
 }
 
@@ -8821,6 +8865,64 @@ const [
   encodeU8Value, isPlainObject, parsePublicKeyLiteral,
   publicKeyLiteralFromParts, readNoritoField,
 );
+const nftMarketCodecsV1 = /* @__PURE__ */ createNoritoNftMarketCodecs({
+  encodeStructValue, decodeStructFields, encodeEscrowIdValue, decodeEscrowIdValue,
+  encodeNftIdValue, decodeNftIdValue, encodeAccountIdValue, decodeAccountIdValue,
+  encodeAssetDefinitionIdValue, decodeAssetDefinitionIdValue, encodeQuantityValue, decodeQuantityValue,
+  encodeMetadataValue, decodeMetadataValue, encodeU16Value, decodeU16Value, encodeU32Value, encodeU64Value, decodeU64Value,
+  encodeOptionValue, decodeOptionValue,
+});
+/** Canonical bounded native NFT offer and metadata value encoding. */
+export function noritoEncodeNftMarketValueV1(name, value) {
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const bytes = nftMarketCodecsV1.encode(name, value);
+    if (bytes.length > 64 * 1024) throw new RangeError("native NFT value exceeds bound");
+    return bytes;
+  });
+}
+/** Exact decode, rejecting trailing bytes, alternate layouts and unknown fields. */
+export function noritoDecodeNftMarketValueV1(name, value) {
+  const bytes = toBuffer(value);
+  if (bytes.length > 64 * 1024) throw new RangeError("native NFT value exceeds bound");
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const decoded = nftMarketCodecsV1.decode(name, bytes);
+    if (!nftMarketCodecsV1.encode(name, decoded).equals(bytes)) throw new TypeError("native NFT value is not byte-canonical");
+    return decoded;
+  });
+}
+const gameCodecsV1 = /* @__PURE__ */ createNoritoGameCodecs({
+  encodeNftIdValue, decodeNftIdValue,
+  encodeStructValue, decodeStructFields, encodeNoritoVec, decodeNoritoVec,
+  encodeEscrowIdValue, decodeEscrowIdValue,
+  encodeAssetDefinitionIdValue, decodeAssetDefinitionIdValue,
+  encodeQuantityValue, decodeQuantityValue, encodeBoolValue, decodeBoolValue,
+  encodeU8Value, encodeU16Value, encodeU32Value, encodeU64Value,
+  decodeU8Value, decodeU16Value, decodeU32Value, decodeU64Value,
+  encodePublicKeyValue, decodePublicKeyValue, parsePublicKeyLiteral, publicKeyLiteralFromParts,
+  encodeConstVecU8Value, decodeConstVecU8Value, encodeByteVecValue, decodeByteVecValue,
+  encodeOptionValue, decodeOptionValue, encodeAccountIdValue, decodeAccountIdValue, encodeEnumTagValue,
+});
+
+/** Encode one exact native game or compiled adapter value with the consensus bare compact layout. */
+export function noritoEncodeGameValueV1(name, value) {
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const bytes = gameCodecsV1.encode(name, value);
+    if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError("native game value exceeds its compiled payload limit");
+    return bytes;
+  });
+}
+
+/** Decode an exact native game or compiled adapter value and reject noncanonical byte encodings. */
+export function noritoDecodeGameValueV1(name, value) {
+  const bytes = toBuffer(value);
+  if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError("native game value exceeds its compiled payload limit");
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const decoded = gameCodecsV1.decode(name, bytes);
+    if (!gameCodecsV1.encode(name, decoded).equals(bytes)) throw new TypeError("native game value is not byte-canonical");
+    return decoded;
+  });
+}
+
 function encodeEventFilterBoxFramePayload(value, context) {
   const frameBytes = decodeExactStandardBase64(value, context);
   const frame = decodeNoritoFrame(frameBytes, context, EVENT_FILTER_BOX_SCHEMA_HASH);

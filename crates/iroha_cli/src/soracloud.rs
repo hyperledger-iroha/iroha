@@ -527,7 +527,7 @@ const TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1: &str = "manifests/bundle.to";
 const TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1: &str = "manifests/aarch64.to";
 const TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1: &str = "manifests/discovery.to";
 const TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1: u64 = 1024 * 1024;
-const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES;
 const TAIRA_INROU_STAGE_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
 const TAIRA_INROU_CANARY_SERVICE_NAME_V1: &str = "taira_inrou_canary";
 const TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1: &str = "artifact-";
@@ -547,12 +547,16 @@ const TAIRA_INROU_CANARY_SERVICE_TEMPLATE_V1: &str =
 const TAIRA_INROU_CANARY_KERNEL_PATH_V1: &str = "/inrou/aarch64/vmlinux";
 const TAIRA_INROU_CANARY_ROOTFS_PATH_V1: &str = "/inrou/aarch64/rootfs.ext4";
 const TAIRA_INROU_CANARY_INITRD_PATH_V1: &str = "/inrou/aarch64/initrd.img";
-const TAIRA_INROU_CANARY_CPU_MILLIS_V1: u32 = 750;
-const TAIRA_INROU_CANARY_MEMORY_BYTES_V1: u64 = 512 * 1024 * 1024;
-const TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
-const TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
-const TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
-const TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+const TAIRA_INROU_CANARY_CPU_MILLIS_V1: u32 = defaults::taira::INROU_CANARY_CPU_MILLIS;
+const TAIRA_INROU_CANARY_MEMORY_BYTES_V1: u64 = defaults::taira::INROU_CANARY_MEMORY_BYTES;
+const TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_EPHEMERAL_STORAGE_BYTES;
+const TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_ROOT_VOLUME_BYTES;
+const TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_SHARED_VOLUME_BYTES;
+const TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_HOST_STORAGE_BYTES;
 const TAIRA_INROU_CANARY_MAX_OPEN_FILES_PER_PROCESS_V1: u32 = 512;
 const TAIRA_INROU_CANARY_MAX_TASKS_V1: u16 = 64;
 const INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES: u64 = BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES;
@@ -8690,21 +8694,18 @@ fn taira_inrou_validator_table(
     table.insert(
         "max_cpu_millis".to_owned(),
         taira_toml_integer(
-            u64::from(defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS.get()),
+            u64::from(defaults::taira::INROU_MAX_CPU_MILLIS),
             "max_cpu_millis",
         )?,
     );
     table.insert(
         "max_memory_bytes".to_owned(),
-        taira_toml_integer(
-            defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES.get(),
-            "max_memory_bytes",
-        )?,
+        taira_toml_integer(defaults::taira::INROU_MAX_MEMORY_BYTES, "max_memory_bytes")?,
     );
     table.insert(
         "max_storage_bytes".to_owned(),
         taira_toml_integer(
-            defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES.get(),
+            defaults::taira::INROU_MAX_STORAGE_BYTES,
             "max_storage_bytes",
         )?,
     );
@@ -8741,9 +8742,12 @@ fn expected_taira_inrou_validator_config(
         }),
         guest_image_max_bytes: NonZeroU64::new(TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1)
             .expect("Taira guest-image limit is nonzero"),
-        max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
-        max_memory_bytes: defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
-        max_storage_bytes: defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
+        max_cpu_millis: NonZeroU32::new(defaults::taira::INROU_MAX_CPU_MILLIS)
+            .expect("nonzero Taira resource ceiling"),
+        max_memory_bytes: NonZeroU64::new(defaults::taira::INROU_MAX_MEMORY_BYTES)
+            .expect("nonzero Taira resource ceiling"),
+        max_storage_bytes: NonZeroU64::new(defaults::taira::INROU_MAX_STORAGE_BYTES)
+            .expect("nonzero Taira resource ceiling"),
         bundle_archive_max_compressed_bytes:
             defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
         bundle_archive_max_decoded_bytes:
@@ -24907,7 +24911,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     #[cfg(unix)]
     #[test]
-    fn taira_validator_inrou_table_uses_only_exact_v1_defaults() {
+    fn taira_validator_inrou_table_uses_the_single_bounded_taira_profile() {
         let receipt = canonical_taira_stage_receipt_fixture();
         let table = taira_inrou_validator_table(2, &receipt)
             .expect("build exact Taira validator Inrou table");
@@ -24943,27 +24947,25 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             table
                 .get("guest_image_max_bytes")
                 .and_then(toml::Value::as_integer),
-            Some(10 * 1024 * 1024 * 1024)
+            i64::try_from(defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES).ok()
         );
         assert_eq!(
             table
                 .get("max_cpu_millis")
                 .and_then(toml::Value::as_integer),
-            Some(i64::from(
-                defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS.get()
-            ))
+            Some(i64::from(defaults::taira::INROU_MAX_CPU_MILLIS))
         );
         assert_eq!(
             table
                 .get("max_memory_bytes")
                 .and_then(toml::Value::as_integer),
-            i64::try_from(defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES.get()).ok()
+            i64::try_from(defaults::taira::INROU_MAX_MEMORY_BYTES).ok()
         );
         assert_eq!(
             table
                 .get("max_storage_bytes")
                 .and_then(toml::Value::as_integer),
-            i64::try_from(defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES.get()).ok()
+            i64::try_from(defaults::taira::INROU_MAX_STORAGE_BYTES).ok()
         );
         assert_eq!(
             table

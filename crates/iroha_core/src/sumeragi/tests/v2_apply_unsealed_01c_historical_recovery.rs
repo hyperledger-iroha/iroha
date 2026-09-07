@@ -1,3 +1,4 @@
+include!("v2_apply_unsealed_01c_second_autonomous_cycle.rs");
 v2_apply_test!(
     historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application,
     {
@@ -524,6 +525,14 @@ v2_apply_test!(
             prepare_qc,
             commit_qc,
         };
+        let retained_terminal_adapters = crate::sumeragi::v2_lane_work::tests::retain_public_lane_evidence_before_application_for_test(
+            Arc::clone(&fixture.state),
+            Arc::clone(&fixture.kura),
+            active_context.context().clone(),
+            limits,
+            &certificate,
+            &commit_votes[0],
+        );
         assert_eq!(
             lane_work.accept_lane_message(
                 crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
@@ -542,7 +551,11 @@ v2_apply_test!(
                 .expect("persist exact historical autonomous certificate and bundle"),
             crate::sumeragi::v2_lane_work::HistoricalRecoveryServiceOutcome::Complete(_)
         ));
-        assert!(!lane_work.has_pending_historical_recovery());
+        assert!(
+            !lane_work
+                .has_pending_historical_recovery()
+                .expect("inspect completed historical recovery")
+        );
         let source = fixture
             .kura
             .durable_autonomous_lane_merge_source(
@@ -1075,12 +1088,11 @@ v2_apply_test!(
             2
         );
         assert_eq!(native_entry.leaf.application_block_height, 3);
-        assert!(
+        assert_eq!(
             native_entry
                 .participant_settlement
-                .receipts
-                .iter()
-                .all(|receipt| receipt.timestamp_ms == 2)
+                .authority_context_height(),
+            2
         );
         assert_eq!(native_entry.leaf.members.len(), 2);
         let native_amx_frontiers = State::native_amx_participant_frontier_markers_and_merge_entry(
@@ -1389,7 +1401,7 @@ v2_apply_test!(
         assert!(
             fixture
                 .state
-                .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+                .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
                 .expect("read repaired Native State frontiers")
                 .is_empty()
         );
@@ -1460,5 +1472,32 @@ v2_apply_test!(
             SumeragiAutonomousLaneExecutionStage::QueueFinalized,
         );
         assert_eq!(terminal_row, finalized_row);
+        crate::sumeragi::v2_lane_work::tests::inspect_applied_public_lane_qc_replay_for_test(
+            Arc::clone(&fixture.state),
+            Arc::clone(&fixture.kura),
+            startup_context,
+            limits,
+            iroha_data_model::block::consensus::LaneBlockCertificateV1 {
+                proposal: execution.proposal.clone(),
+                prepare_qc: execution.prepare_qc.clone(),
+                commit_qc: execution.commit_qc.clone(),
+            },
+            [prepare_votes.as_slice(), commit_votes.as_slice()],
+            &validator_keys,
+            &local_key,
+            retained_terminal_adapters,
+        );
+        second_autonomous_cycle_preserves_terminal_replay(
+            &fixture,
+            iroha_data_model::block::consensus::LaneBlockCertificateV1 {
+                proposal: execution.proposal.clone(),
+                prepare_qc: execution.prepare_qc.clone(),
+                commit_qc: execution.commit_qc.clone(),
+            },
+            [prepare_votes.as_slice(), commit_votes.as_slice()],
+            &validator_keys,
+            &local_key,
+            limits,
+        );
     }
 );

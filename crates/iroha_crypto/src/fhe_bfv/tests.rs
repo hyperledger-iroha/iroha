@@ -11351,27 +11351,40 @@ fn full_bootstrap_native_stark_air_domain_tag_binds_statement_hash() {
     let repeated_tag = bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash);
     let alternate_tag = bfv_full_bootstrap_native_stark_air_domain_tag_v1(alternate_statement_hash);
     assert_eq!(tag, repeated_tag);
-    assert_ne_row! { tag, alternate_tag, "native STARK/AIR domain tags must bind the execution statement hash" };
+    assert_ne!(
+        tag, alternate_tag,
+        "domain tags bind the execution statement"
+    );
     assert_eq!(tag.len(), BFV_GOLDILOCKS_DIGEST384_BYTES_V1 * 2);
     assert!(tag.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    assert_row! { tag.bytes() .all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_lowercase()), "native STARK/AIR domain tags must use canonical lowercase hex" };
-    let statement_hash_bytes: [u8; Hash::LENGTH] = statement_hash.into();
-    let expected_digest = bfv_goldilocks_digest384_v1(
-        BfvGoldilocksDigest384DomainV1 {
-            role: b"air-transcript",
-            phase: b"domain-tag",
-            level: 0,
-            index: 0,
-            counter: 0,
-        },
-        &[
-            BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_DOMAIN_TAG_DOMAIN,
-            &statement_hash_bytes,
-        ],
-    )
-    .expect("native AIR transcript digest frame");
-    assert_eq!(tag, hex::encode(expected_digest.as_ref()));
-    assert_eq_row! { BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1, "IROHA-BFV-FULL-BOOTSTRAP-AIR-V1" };
+    assert!(
+        tag.bytes()
+            .all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_lowercase())
+    );
+    // Independently reproduced through fastpq_isi::hash_bytes_384_v1, using catalog
+    // iroha-privacy-exact12-v1, protocol ram_lfe_bfv_v1, the six-lane STARK profile,
+    // role air-transcript, phase domain-tag, zero coordinates, and the explicit
+    // domain string followed by the statement's 32 bytes. This avoids recomputing
+    // the expected value with the BFV implementation under test.
+    assert_eq!(
+        tag,
+        "4fbe81387345ec0a93659bda617368b94d21445b3f5b3a05a4843b4c092cc07c9dbce812c3aa01eff40c1ea537abc9fa"
+    );
+    assert_eq!(
+        alternate_tag,
+        "6bf5a2c1cb97d6ce4bdcc6ec6e0c4c25ef117aa06eb03e5687a280424eff9152b9d3ff02df7179be3a29af392676eece"
+    );
+    for encoded in [tag, alternate_tag] {
+        let bytes: [u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] = hex::decode(encoded)
+            .expect("canonical hex")
+            .try_into()
+            .expect("complete digest");
+        assert!(BfvGoldilocksDigest384V1::from_le_bytes(bytes).is_some());
+    }
+    assert_eq!(
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1,
+        "IROHA-BFV-FULL-BOOTSTRAP-AIR-V1"
+    );
 }
 #[test]
 fn refresh_key_generators_preflight_metadata_and_public_key_before_masks() {

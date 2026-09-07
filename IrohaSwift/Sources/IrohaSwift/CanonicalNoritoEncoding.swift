@@ -538,7 +538,6 @@ public enum CanonicalNorito {
     static let maxNumericScale: UInt32 = 28
     static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
-    private static let isRunningXCTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     static func wrap(typeName: String, payload: Data) -> Data {
         noritoEncode(typeName: typeName, payload: payload, flags: 0)
@@ -557,16 +556,6 @@ public enum CanonicalNorito {
     /// so that receipt payloads, challenge preimages, and all other Norito structures
     /// produce byte-identical output.
     static func encodeAccountId(_ value: String) throws -> Data {
-        if isRunningXCTest {
-            if let canonical = try? canonicalEncodedAccount(value) {
-                return try canonical.address.noritoAccountControllerPayload()
-            }
-            let canonical = try canonicalizeAccountIdWithoutNativeParse(value)
-            var accountControllerPayload = CanonicalNoritoWriter()
-            accountControllerPayload.writeUInt32LE(0)
-            accountControllerPayload.writeField(encodeString(canonical))
-            return accountControllerPayload.data
-        }
         return try canonicalEncodedAccount(value).address
             .noritoAccountControllerPayload()
     }
@@ -799,23 +788,6 @@ public enum CanonicalNorito {
         let namePayload = encodeString(canonical)
         writer.writeField(namePayload)
         return writer.data
-    }
-
-    private static func canonicalizeAccountIdWithoutNativeParse(_ value: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw CanonicalNoritoError.invalidAccountId(value)
-        }
-        if trimmed != value {
-            throw CanonicalNoritoError.invalidAccountId(trimmed)
-        }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw CanonicalNoritoError.invalidAccountId(trimmed)
-        }
-        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
-            throw CanonicalNoritoError.invalidAccountId(trimmed)
-        }
-        return trimmed
     }
 
     private static func canonicalizeEncodedAccountId(_ value: String) throws -> String {

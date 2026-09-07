@@ -795,6 +795,18 @@ async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
                 &mut app,
             );
+    let candidates = torii_all_dataspace_routes(app.as_ref());
+    let (allowed, denied) =
+        torii_partition_alias_index_routes_by_permission(&app, candidates, Some(&authority), 0)
+            .expect("resolve explicit alias permissions");
+    assert_eq!(
+        allowed,
+        vec![RoutingDecision::new(LaneId::new(0), DataSpaceId::new(0))]
+    );
+    assert_eq!(
+        denied, 2,
+        "UAID visibility does not grant alias resolution permission"
+    );
     let request = routing::AliasResolveIndexRequestDto { index: 0 };
     let body = norito::json::to_vec(&request).expect("encode request");
     let method = axum::http::Method::POST;
@@ -825,14 +837,24 @@ async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_
             .headers()
             .get("x-iroha-fanout-routes-denied")
             .and_then(|value| value.to_str().ok()),
-        Some("1")
+        Some("2"),
+        "both restricted routes require an explicit alias resolution permission"
     );
     assert_eq!(
         response
             .headers()
             .get("x-iroha-fanout-routes-unavailable")
             .and_then(|value| value.to_str().ok()),
-        Some("1")
+        Some("0"),
+        "the foreign route is denied before any proxy attempt"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-not-found")
+            .and_then(|value| value.to_str().ok()),
+        Some("1"),
+        "the allowed public Nexus route has no alias at this index"
     );
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await

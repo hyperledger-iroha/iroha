@@ -6,6 +6,18 @@
 //! durable journal seal crosses explicit proof and hardware-guard verifier hooks; the supplied
 //! reject-all implementations make an unintegrated deployment fail closed.
 
+#[cfg(unix)]
+mod bootstrap_checkpoint;
+#[cfg(unix)]
+pub use bootstrap_checkpoint::{
+    KagemushaBootstrapCheckpointV1, KagemushaBootstrapJournalStageV1, KagemushaBootstrappedWalletV1,
+};
+#[cfg(unix)]
+mod response_evidence_archive;
+#[cfg(unix)]
+pub use response_evidence_archive::{
+    KagemushaResponseEvidenceArchiveErrorV1, KagemushaResponseEvidenceArchiveV1,
+};
 mod candidate_lifecycle;
 #[cfg(unix)]
 mod coordinator_operation_store;
@@ -24,7 +36,15 @@ mod outgoing_operation_index;
 mod private_journal;
 mod receive_fold;
 mod receive_fold_operation;
+mod recovery_metadata;
 mod redemption_release;
+pub use recovery_metadata::{
+    KagemushaAcceptedCredentialFloorV1, KagemushaCurrentRecoveryOwnerV1,
+    KagemushaCurrentRecoverySelectionV1, KagemushaRecoveryCheckpointCandidateV1,
+    KagemushaRecoveryCheckpointIdentityV1, KagemushaRecoveryCheckpointPublicationV1,
+    KagemushaRecoveryCheckpointStatementV1, KagemushaRecoveryEnrollmentBindingV1,
+    KagemushaRecoveryJournalPrefixV1, KagemushaRecoveryJournalsV1, KagemushaRecoveryMetadataV1,
+};
 mod sparse_merkle;
 
 pub use candidate_lifecycle::{
@@ -309,6 +329,14 @@ const TRANSITION_STATEMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:transition-state
 const TRANSITION_LIFECYCLE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:transition-lifecycle\0";
 const TRANSPORT_STATEMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:transport-statement\0";
 const EMPTY_DURABLE_EFFECT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:durable-effect:empty\0";
+
+/// Derive the sole empty durable-effect digest for an already selected release identity.
+/// This deterministic value does not authenticate that identity or grant release authority.
+pub(crate) fn canonical_empty_durable_effect_digest_v1(
+    release_id: DigestV1,
+) -> Result<DigestV1, KagemushaStateErrorV1> {
+    canonical_sha256_digest(EMPTY_DURABLE_EFFECT_DOMAIN, &release_id)
+}
 const TRANSITION_INTENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:transition-intent\0";
 const RECOVERY_RECORD_DOMAIN: &[u8] = b"iroha:kagemusha:v1:recovery-record\0";
 const DURABLE_INBOX_EFFECT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:durable-inbox-effect\0";
@@ -338,7 +366,7 @@ impl KagemushaStateProofReleaseV1 {
         release: &KagemushaAuthenticatedReleaseV1,
     ) -> Result<Self, KagemushaStateErrorV1> {
         let canonical_empty_effect_digest =
-            canonical_sha256_digest(EMPTY_DURABLE_EFFECT_DOMAIN, &release.release_id())?;
+            canonical_empty_durable_effect_digest_v1(release.release_id())?;
         Self::from_release_parts(
             KagemushaRecursionArtifactsV1::from_authenticated_release(
                 release,
@@ -1322,17 +1350,24 @@ pub trait KagemushaGuardBundleVerifierV1 {
         Err("KAGEMUSHA qualified mint inbox verifier is unavailable".to_owned())
     }
 
-    /// Verify initial device registration and bootstrap authorization.
+    /// Verify initial device registration and bootstrap authorization against Core's complete
+    /// normalized statement, including the locally derived intent and recovery bindings.
+    /// The proof archive must never select these expected context fields.
     fn verify_bootstrap(
         &self,
         statement: &BootstrapStatementV1,
+        normalized: &KagemushaNormalizedGuardStatementV1,
         guard_bundle: &[u8],
     ) -> Result<(), String>;
 
-    /// Verify an exact-next monetary or rotation transition.
+    /// Verify an exact-next monetary or rotation transition against both Core's structural
+    /// statement and its complete normalized hardware statement. Implementations must bind all
+    /// three caller-derived statements before accepting the proof archive.
     fn verify_transition(
         &self,
         statement: &HardwareTransitionStatementV1,
+        proof_statement: &TransitionProofStatementV1,
+        normalized: &KagemushaNormalizedGuardStatementV1,
         guard_bundle: &[u8],
     ) -> Result<(), String>;
 
@@ -1342,6 +1377,31 @@ pub trait KagemushaGuardBundleVerifierV1 {
         statement: &CreditStageStatementV1,
         guard_bundle: &[u8],
     ) -> Result<(), String>;
+
+    /// Verify the exact atomic metadata CAS, including durable material and original terminal
+    /// certificate. The successor must match the actual live monetary state, epoch and counters
+    /// in the same hardware transaction. A signature without those checks and the non-forking
+    /// predecessor comparison is insufficient.
+    // TODO: Implement only with the qualified native hardware CAS and descriptor-owned recovery material.
+    fn verify_recovery_checkpoint_cas(
+        &self,
+        _statement: &KagemushaRecoveryCheckpointStatementV1,
+        _guard_bundle: &[u8],
+    ) -> Result<(), String> {
+        Err("Kagemusha qualified recovery checkpoint CAS is unavailable".to_owned())
+    }
+
+    /// Read and authenticate the current hardware checkpoint with a verifier-owned fresh
+    /// challenge. Also verify the exact selected journal prefixes and any speculative suffix
+    /// against native-owned descriptors. Historical signatures and host-provided freshness
+    /// assertions must never satisfy this hook.
+    fn verify_current_recovery_checkpoint(
+        &self,
+        _statement: &DurabilityAnchorStatementV1,
+        _journals: &KagemushaRecoveryJournalsV1,
+    ) -> Result<(), String> {
+        Err("Kagemusha fresh recovery checkpoint selection is unavailable".to_owned())
+    }
 
     /// Verify a hardware-sealed crash-recovery anchor.
     fn verify_durability_anchor(
@@ -1359,6 +1419,7 @@ impl KagemushaGuardBundleVerifierV1 for RejectAllKagemushaGuardBundleVerifierV1 
     fn verify_bootstrap(
         &self,
         _statement: &BootstrapStatementV1,
+        _normalized: &KagemushaNormalizedGuardStatementV1,
         _guard_bundle: &[u8],
     ) -> Result<(), String> {
         Err("Kagemusha V1 hardware bootstrap verifier is unavailable".to_owned())
@@ -1367,6 +1428,8 @@ impl KagemushaGuardBundleVerifierV1 for RejectAllKagemushaGuardBundleVerifierV1 
     fn verify_transition(
         &self,
         _statement: &HardwareTransitionStatementV1,
+        _proof_statement: &TransitionProofStatementV1,
+        _normalized: &KagemushaNormalizedGuardStatementV1,
         _guard_bundle: &[u8],
     ) -> Result<(), String> {
         Err("Kagemusha V1 hardware transition verifier is unavailable".to_owned())
@@ -1454,6 +1517,8 @@ pub struct BootstrapAuthorizationV1 {
 /// One hardware-sealed recovery statement.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct DurabilityAnchorStatementV1 {
+    /// Stable-wallet metadata revision; never resets on hardware epoch rotation.
+    pub metadata_revision: u128,
     /// State-machine version.
     pub version: u16,
     /// Stable lane and asset scope.
@@ -1488,6 +1553,8 @@ pub struct DurabilityAnchorV1 {
 /// Canonical crash-recovery projection for one aggregate lane.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStateSnapshotV1 {
+    /// Required credential floor and complete recovery-journal checkpoint metadata.
+    pub recovery_metadata: KagemushaRecoveryMetadataV1,
     /// State-machine version.
     pub version: u16,
     /// Current private aggregate state.
@@ -1525,6 +1592,7 @@ pub struct KagemushaStateSnapshotV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct SnapshotCommitmentPreimageV1 {
+    recovery_metadata: KagemushaRecoveryMetadataV1,
     version: u16,
     state: KagemushaStateV1,
     journal_revision: u128,
@@ -1778,13 +1846,27 @@ pub enum KagemushaStateErrorV1 {
     /// The proof-authenticated SHA-256/Pasta root association was missing or did not match.
     #[error("Kagemusha authenticated-history proof-root bridge is missing or mismatched")]
     AuthenticatedHistoryProofRootBridgeUnavailable,
+    /// Exact native recovery material could not be initialized or authenticated.
+    #[error("Kagemusha recovery material failed closed: {0}")]
+    RecoveryMaterial(String),
     /// A snapshot did not match the latest hardware-sealed anchor.
     #[error("Kagemusha recovery snapshot is stale or from another lane")]
     SnapshotRollback,
 }
 
+// A selected checkpoint retains the exact history prefix sealed by that same hardware CAS.
+// Later local Prepare/Abort records may exist beyond it; no later hardware commit may.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublishedRecoveryCheckpointV1 {
+    anchor: DurabilityAnchorV1,
+    authenticated_history_commitment: DigestV1,
+}
+
 /// Aggregate Kagemusha V1 state machine with governed recursion and hardware verifiers.
 pub struct KagemushaStateMachineV1<R, G, H = KagemushaMemoryAuthenticatedHistoryStoreV1> {
+    recovery_metadata: KagemushaRecoveryMetadataV1,
+    // None exists only inside the opaque bootstrap staging owner, never in a returned machine.
+    published_checkpoint: Option<PublishedRecoveryCheckpointV1>,
     state: KagemushaStateV1,
     journal_revision: u128,
     inbox_revision: u128,
@@ -1800,6 +1882,14 @@ pub struct KagemushaStateMachineV1<R, G, H = KagemushaMemoryAuthenticatedHistory
     proof_release: KagemushaStateProofReleaseV1,
     recursive_verifier: R,
     guard_verifier: G,
+}
+
+impl<R, G, H> KagemushaStateMachineV1<R, G, H> {
+    /// Borrow the current aggregate state.
+    #[must_use]
+    pub fn state(&self) -> &KagemushaStateV1 {
+        &self.state
+    }
 }
 
 /// Compute the private store identity from the exact governed lane and state context.
@@ -1852,6 +1942,8 @@ where
         snapshot: KagemushaStateSnapshotV1,
         current_hardware_anchor: &DurabilityAnchorV1,
         proof_release: KagemushaStateProofReleaseV1,
+        credential_floor_release: KagemushaStateProofReleaseV1,
+        expected_enrollment: &KagemushaRecoveryEnrollmentBindingV1,
         history_directory: &std::path::Path,
         history_credentials: KagemushaHistoryDeviceCredentialsV1,
         overlay_capacity_bytes: u64,
@@ -1878,6 +1970,8 @@ where
             snapshot,
             current_hardware_anchor,
             proof_release,
+            credential_floor_release,
+            expected_enrollment,
             history_store,
             recursive_verifier,
             guard_verifier,
@@ -1958,8 +2052,10 @@ where
         })
     }
 
-    /// Bootstrap a zero-balance lane after both proof and hardware registration verification.
-    pub fn bootstrap(
+    /// Stage a new wallet from opaque verified retail enrollment and exact proof/hardware authority.
+    /// The enrollment instant must equal the bootstrap's hardware-bound trusted commit time.
+    #[cfg(unix)]
+    pub fn stage_bootstrap(
         proof_release: KagemushaStateProofReleaseV1,
         state_context: KagemushaStateContextV1,
         lane: KagemushaLaneIdV1,
@@ -1970,9 +2066,94 @@ where
         durable_capacity: KagemushaDurableCapacityV1,
         history_store: H,
         authorization: BootstrapAuthorizationV1,
+        enrollment: &iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentCertificateV1,
         recursive_verifier: R,
         guard_verifier: G,
-    ) -> Result<Self, KagemushaStateErrorV1> {
+    ) -> Result<KagemushaBootstrapJournalStageV1<R, G, H>, KagemushaStateErrorV1> {
+        let subject = &enrollment.certificate().subject;
+        if enrollment.authenticated_at_ms() != trusted_commit_time_ms
+            || subject.issuance.release_id != proof_release.release_id()
+        {
+            return Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool);
+        }
+        let owner = KagemushaRecoveryEnrollmentBindingV1 {
+            enrollment_id: subject.enrollment_id,
+            owner: subject.owner.clone(),
+        };
+        Self::stage_bootstrap_with_owner(
+            proof_release,
+            state_context,
+            lane,
+            hardware_epoch,
+            device_policy_binding,
+            state_nonce_commitment,
+            trusted_commit_time_ms,
+            durable_capacity,
+            history_store,
+            authorization,
+            subject.issuance.credential,
+            owner,
+            recursive_verifier,
+            guard_verifier,
+        )
+    }
+
+    /// Test-only synthetic ownership fixture; still runs all proof, hardware and journal stages.
+    /// This is absent from every non-test library artifact and provides no production enrollment.
+    #[cfg(all(test, unix))]
+    pub(crate) fn stage_bootstrap_for_test(
+        proof_release: KagemushaStateProofReleaseV1,
+        state_context: KagemushaStateContextV1,
+        lane: KagemushaLaneIdV1,
+        hardware_epoch: HardwareEpochV1,
+        device_policy_binding: DevicePolicyBindingV1,
+        state_nonce_commitment: DigestV1,
+        trusted_commit_time_ms: u64,
+        durable_capacity: KagemushaDurableCapacityV1,
+        history_store: H,
+        authorization: BootstrapAuthorizationV1,
+        initial_credential: iroha_data_model::kagemusha::KagemushaHardwareCredentialV1,
+        synthetic_owner: KagemushaRecoveryEnrollmentBindingV1,
+        recursive_verifier: R,
+        guard_verifier: G,
+    ) -> Result<KagemushaBootstrapJournalStageV1<R, G, H>, KagemushaStateErrorV1> {
+        Self::stage_bootstrap_with_owner(
+            proof_release,
+            state_context,
+            lane,
+            hardware_epoch,
+            device_policy_binding,
+            state_nonce_commitment,
+            trusted_commit_time_ms,
+            durable_capacity,
+            history_store,
+            authorization,
+            initial_credential,
+            synthetic_owner,
+            recursive_verifier,
+            guard_verifier,
+        )
+    }
+
+    /// Stage a zero-balance lane after proof and hardware registration verification.
+    /// The returned opaque owner cannot perform wallet operations before checkpoint publication.
+    #[cfg(unix)]
+    fn stage_bootstrap_with_owner(
+        proof_release: KagemushaStateProofReleaseV1,
+        state_context: KagemushaStateContextV1,
+        lane: KagemushaLaneIdV1,
+        hardware_epoch: HardwareEpochV1,
+        device_policy_binding: DevicePolicyBindingV1,
+        state_nonce_commitment: DigestV1,
+        trusted_commit_time_ms: u64,
+        durable_capacity: KagemushaDurableCapacityV1,
+        history_store: H,
+        authorization: BootstrapAuthorizationV1,
+        initial_credential: iroha_data_model::kagemusha::KagemushaHardwareCredentialV1,
+        enrollment: KagemushaRecoveryEnrollmentBindingV1,
+        recursive_verifier: R,
+        guard_verifier: G,
+    ) -> Result<KagemushaBootstrapJournalStageV1<R, G, H>, KagemushaStateErrorV1> {
         durable_capacity.validate()?;
         let authenticated_history = KagemushaStateAuthenticatedHistoryV1::open(history_store)
             .map_err(map_authenticated_history_error)?;
@@ -1999,35 +2180,22 @@ where
         )
         .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))?;
         guard_verifier
-            .verify_bootstrap(&preview.statement, &authorization.guard_bundle)
+            .verify_bootstrap(
+                &preview.statement,
+                &preview.normalized_guard_statement,
+                &authorization.guard_bundle,
+            )
             .map_err(KagemushaStateErrorV1::GuardRejected)?;
-        Ok(Self {
-            state: preview.state,
-            journal_revision: 0,
-            inbox_revision: 0,
-            pending_credits: BTreeMap::new(),
-            accepted_recipient_bindings: BTreeSet::from([device_policy_binding]),
-            accepted_payment_receipts: BTreeMap::new(),
-            mint_inbox: KagemushaMintInboxV1::default(),
-            consumed_credits: ExactConsumedCreditIndex::empty(),
-            authenticated_history,
-            receiver_inbox_capacity: KagemushaReceiverInboxCapacityV1::new(
-                durable_capacity.inbox_bytes,
-            ),
-            sender_outbox_capacity: KagemushaSenderOutboxCapacityV1::new(
-                durable_capacity.outbox_bytes,
-            ),
-            outgoing_candidate_journal: KagemushaOutgoingCandidateJournalV1::default(),
+        KagemushaBootstrapJournalStageV1::new(
+            preview.state,
             proof_release,
+            initial_credential,
+            enrollment,
+            durable_capacity,
+            authenticated_history,
             recursive_verifier,
             guard_verifier,
-        })
-    }
-
-    /// Borrow the current aggregate state.
-    #[must_use]
-    pub fn state(&self) -> &KagemushaStateV1 {
-        &self.state
+        )
     }
 
     /// Return the current durable journal revision.
@@ -2244,6 +2412,84 @@ where
         )
     }
 
+    /// Reconstruct the exact Core send preview for the genuine-proof diagnostic corridor.
+    ///
+    /// This test-only projection cannot mint a candidate or refresh its authorization time. It
+    /// requires the current machine, original preparation time, and every reconstructed byte to
+    /// match the already prepared candidate before exposing the private prover inputs.
+    #[cfg(all(test, feature = "zk-halo2-ipa"))]
+    pub(crate) fn diagnostic_send_split_preview(
+        &self,
+        candidate: &PreparedOutgoingCandidateV1,
+        trusted_commit_time_ms: u64,
+    ) -> Result<TransitionPreviewV1, KagemushaStateErrorV1> {
+        let PreparedOutgoingRecoveryViewV1::Send {
+            request,
+            output,
+            encrypted_credit,
+            ..
+        } = candidate.recovery_view()
+        else {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        };
+        if candidate.predecessor_state != self.state
+            || trusted_commit_time_ms != output.committed_at_ms
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let rebuilt = self.prepare_send_split(SendSplitPreparationV1 {
+            request: request.clone(),
+            encrypted_credit: encrypted_credit.to_vec(),
+            transition_nullifier: output.transition_nullifier,
+            ciphertext_commitment: output.ciphertext_commitment,
+            successor_state_nonce_commitment: candidate.successor_state.state_nonce_commitment,
+            commit_evidence: output.commit_evidence,
+            commit_authorization_reference_ms: trusted_commit_time_ms,
+            outbox_reservation: candidate.outbox_reservation,
+            prepared_one_use_authorization_digest: candidate.prepared_one_use_authorization_digest,
+            sealed_transition_inputs: candidate.sealed_transition_inputs.clone(),
+            sealed_recovery_seeds: candidate.sealed_recovery_seeds.clone(),
+        })?;
+        if rebuilt != *candidate {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let statement = &rebuilt.proof_statement;
+        let preview = self.transition_preview(
+            KagemushaTransitionKindV1::SendSplit,
+            rebuilt.successor_state.clone(),
+            statement.effect_digest,
+            [0; 32],
+            [0; 32],
+            statement.peer_credit_id,
+            statement.recipient_encryption_key_binding,
+            TransitionAuxiliaryBindingsV1 {
+                lifecycle_binding_digest: statement.lifecycle_binding_digest,
+                prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
+                ..TransitionAuxiliaryBindingsV1::default()
+            },
+            trusted_commit_time_ms,
+            |normalized_digest| {
+                local_transition_transport_digest(
+                    KagemushaTransitionKindV1::SendSplit,
+                    self.state.release_id,
+                    self.state.liability_pool_id,
+                    statement.prepared_transition_binding_digest,
+                    self.state.state_commitment,
+                    rebuilt.successor_state.state_commitment,
+                    normalized_digest,
+                )
+            },
+        )?;
+        if preview.proof_statement != *statement
+            || preview.hardware_statement.state_transition_digest != rebuilt.state_transition_digest
+            || preview.hardware_statement.normalized_guard_statement_digest
+                != rebuilt.normalized_guard_statement_digest
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(preview)
+    }
+
     /// Derive one complete, recoverable full or partial `RedeemSplit` intent.
     ///
     /// Core derives the private aggregate successor, terminal lifecycle, redemption ID, proof
@@ -2377,14 +2623,16 @@ where
 
     /// Atomically bind a caller ID, reserve sender bytes, and prepare the exact transition.
     ///
-    /// `authenticated_credential_id` must come from a qualified native session. Core binds it
-    /// immutably but does not authenticate arbitrary host-supplied credential IDs. Call
+    /// Both authenticated identity arguments must come from a qualified native session. Core
+    /// binds them immutably but does not authenticate host-supplied credentials or Core
+    /// authorization keys. Call
     /// [`Self::classify_outgoing_operation_prepare`] before deriving a new candidate so a lost
     /// response recovers an existing operation at any phase without invoking preparation again.
     pub fn prepare_indexed_outgoing_candidate(
         &mut self,
         operation_id: DigestV1,
         authenticated_credential_id: DigestV1,
+        authenticated_core_authorization_key_reference: DigestV1,
         prepared: PreparedOutgoingCandidateV1,
     ) -> Result<
         (
@@ -2405,8 +2653,12 @@ where
         let reservation = prepared.outbox_reservation;
         let mut next_outbox = self.sender_outbox_capacity.clone();
         let mut next_journal = self.outgoing_candidate_journal.clone();
-        let indexed_outcome =
-            next_journal.prepare_indexed(operation_id, authenticated_credential_id, prepared)?;
+        let indexed_outcome = next_journal.prepare_indexed(
+            operation_id,
+            authenticated_credential_id,
+            authenticated_core_authorization_key_reference,
+            prepared,
+        )?;
         let reservation_outcome = next_outbox.reserve(reservation, &next_journal)?;
         self.sender_outbox_capacity = next_outbox;
         self.outgoing_candidate_journal = next_journal;
@@ -3445,15 +3697,35 @@ where
 
     /// Build a canonical recovery snapshot with a self-consistent commitment.
     pub fn snapshot(&self) -> Result<KagemushaStateSnapshotV1, KagemushaStateErrorV1> {
+        self.snapshot_with_history_checkpoint(None)
+    }
+
+    // Used only to revalidate an already authenticated hardware checkpoint. Every Core field
+    // still comes from the current machine, and the store must validate the selected prefix
+    // and its entire permitted local suffix. Public snapshots always include the latest head.
+    fn snapshot_with_history_checkpoint(
+        &self,
+        selected_history: Option<DigestV1>,
+    ) -> Result<KagemushaStateSnapshotV1, KagemushaStateErrorV1> {
+        self.recovery_metadata.validate_shape()?;
         self.validate_mint_inbox_snapshot()?;
         let authenticated_history_roots =
             validate_committed_history_v1(&self.authenticated_history.store)
                 .map_err(map_authenticated_history_error)?;
-        let authenticated_history_commitment = self
-            .authenticated_history
-            .store
-            .recovery_commitment()
-            .map_err(map_authenticated_history_error)?;
+        let authenticated_history_commitment = match selected_history {
+            Some(selected) => {
+                self.authenticated_history
+                    .store
+                    .validate_recovery_checkpoint(selected)
+                    .map_err(map_authenticated_history_error)?;
+                selected
+            }
+            None => self
+                .authenticated_history
+                .store
+                .recovery_commitment()
+                .map_err(map_authenticated_history_error)?,
+        };
         let receiver_snapshot_usage = receiver_snapshot_capacity_usage_v1(
             &self.pending_credits,
             &self.accepted_payment_receipts,
@@ -3489,6 +3761,7 @@ where
         let snapshot_commitment = canonical_poseidon_digest(
             SNAPSHOT_COMMITMENT_DOMAIN,
             &SnapshotCommitmentPreimageV1 {
+                recovery_metadata: self.recovery_metadata.clone(),
                 version: KAGEMUSHA_STATE_VERSION_V1,
                 state: self.state.clone(),
                 journal_revision: self.journal_revision,
@@ -3506,6 +3779,7 @@ where
             },
         )?;
         Ok(KagemushaStateSnapshotV1 {
+            recovery_metadata: self.recovery_metadata.clone(),
             version: KAGEMUSHA_STATE_VERSION_V1,
             state: self.state.clone(),
             journal_revision: self.journal_revision,
@@ -3530,6 +3804,7 @@ where
     ) -> Result<DurabilityAnchorStatementV1, KagemushaStateErrorV1> {
         let snapshot = self.snapshot()?;
         Ok(DurabilityAnchorStatementV1 {
+            metadata_revision: self.recovery_metadata.revision,
             version: KAGEMUSHA_STATE_VERSION_V1,
             lane: self.state.lane.clone(),
             state_commitment: self.state.state_commitment,
@@ -3543,27 +3818,13 @@ where
         })
     }
 
-    /// Verify and package a hardware-sealed recovery anchor.
-    pub fn seal_durability_anchor(
-        &self,
-        guard_bundle: Vec<u8>,
-    ) -> Result<DurabilityAnchorV1, KagemushaStateErrorV1> {
-        validate_guard_bytes(&guard_bundle)?;
-        let statement = self.preview_durability_anchor()?;
-        self.guard_verifier
-            .verify_durability_anchor(&statement, &guard_bundle)
-            .map_err(KagemushaStateErrorV1::GuardRejected)?;
-        Ok(DurabilityAnchorV1 {
-            statement,
-            guard_bundle,
-        })
-    }
-
     /// Restore a canonical snapshot only when it exactly matches the latest hardware anchor.
     pub fn restore(
         snapshot: KagemushaStateSnapshotV1,
         anchor: &DurabilityAnchorV1,
         proof_release: KagemushaStateProofReleaseV1,
+        credential_floor_release: KagemushaStateProofReleaseV1,
+        expected_enrollment: &KagemushaRecoveryEnrollmentBindingV1,
         history_store: H,
         recursive_verifier: R,
         guard_verifier: G,
@@ -3588,6 +3849,7 @@ where
         let expected_snapshot_commitment = canonical_poseidon_digest(
             SNAPSHOT_COMMITMENT_DOMAIN,
             &SnapshotCommitmentPreimageV1 {
+                recovery_metadata: snapshot.recovery_metadata.clone(),
                 version: snapshot.version,
                 state: snapshot.state.clone(),
                 journal_revision: snapshot.journal_revision,
@@ -3608,6 +3870,7 @@ where
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let expected_anchor = DurabilityAnchorStatementV1 {
+            metadata_revision: snapshot.recovery_metadata.revision,
             version: KAGEMUSHA_STATE_VERSION_V1,
             lane: snapshot.state.lane.clone(),
             state_commitment: snapshot.state.state_commitment,
@@ -3622,6 +3885,26 @@ where
         if anchor.statement != expected_anchor {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
+        snapshot.recovery_metadata.validate_restored(
+            &snapshot.state,
+            &snapshot.accepted_recipient_bindings,
+            &credential_floor_release,
+            expected_enrollment,
+        )?;
+        guard_verifier
+            .verify_recovery_checkpoint_cas(
+                &snapshot
+                    .recovery_metadata
+                    .checkpoint_statement(expected_anchor.clone()),
+                &anchor.guard_bundle,
+            )
+            .map_err(KagemushaStateErrorV1::GuardRejected)?;
+        guard_verifier
+            .verify_current_recovery_checkpoint(
+                &expected_anchor,
+                &snapshot.recovery_metadata.journals,
+            )
+            .map_err(KagemushaStateErrorV1::GuardRejected)?;
         let authenticated_history = KagemushaStateAuthenticatedHistoryV1::recover(
             history_store,
             snapshot.authenticated_history_roots,
@@ -3860,6 +4143,11 @@ where
                 receiver_snapshot_usage.pending_receipt_entry_bytes,
             )?;
         let recovered = Self {
+            recovery_metadata: snapshot.recovery_metadata,
+            published_checkpoint: Some(PublishedRecoveryCheckpointV1 {
+                anchor: anchor.clone(),
+                authenticated_history_commitment: snapshot.authenticated_history_commitment,
+            }),
             state: snapshot.state,
             journal_revision: snapshot.journal_revision,
             inbox_revision: snapshot.inbox_revision,
@@ -4256,6 +4544,8 @@ where
         self.guard_verifier
             .verify_transition(
                 &preview.hardware_statement,
+                &preview.proof_statement,
+                &preview.normalized_guard_statement,
                 &authorization.hardware_certificate.guard_bundle,
             )
             .map_err(KagemushaStateErrorV1::GuardRejected)

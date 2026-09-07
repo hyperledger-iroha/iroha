@@ -158,19 +158,16 @@ fn trace_column_root_v1(params: &StarkParameterSet, trace: &Trace) -> Result<Nat
         if !current.len().is_multiple_of(2) {
             current.push(*current.last().expect("non-empty trace commitment level"));
         }
-        current = current
-            .chunks_exact(2)
-            .enumerate()
-            .map(|(index, children)| {
-                hash_trace_bytes_v1(
-                    params,
-                    TRACE_NODE_PHASE_V1,
-                    level,
-                    index,
-                    &[&children[0].to_le_bytes(), &children[1].to_le_bytes()],
+        current = crate::digest_executor::hash_digest384_pairs_v1(
+            &current,
+            |index| trace_digest_domain_v1(params, TRACE_NODE_PHASE_V1, level, index),
+            &mut |frames| {
+                crate::digest_executor::execute_digest384_frames_v1(
+                    frames,
+                    crate::digest_executor::DigestExecutionV1::Cpu,
                 )
-            })
-            .collect::<Result<Vec<_>>>()?;
+            },
+        )?;
         level = level
             .checked_add(1)
             .ok_or(Error::QueryIndexOverflow { index: level })?;
@@ -185,7 +182,21 @@ fn hash_trace_bytes_v1(
     index: usize,
     fields: &[&[u8]],
 ) -> Result<NativeDigest384V1> {
-    let domain = GoldilocksDigestDomainV1 {
+    let domain = trace_digest_domain_v1(params, phase, level, index)?;
+    hash_bytes_384_v1(domain, fields).ok_or_else(|| Error::PayloadLengthOverflow {
+        length: fields
+            .iter()
+            .fold(0_usize, |total, field| total.saturating_add(field.len())),
+    })
+}
+
+fn trace_digest_domain_v1<'a>(
+    params: &'a StarkParameterSet,
+    phase: &'a [u8],
+    level: usize,
+    index: usize,
+) -> Result<GoldilocksDigestDomainV1<'a>> {
+    Ok(GoldilocksDigestDomainV1 {
         catalog: FASTPQ_CATALOG_V1.as_bytes(),
         protocol: FASTPQ_FINAL_V1_ID.as_bytes(),
         profile: params.name.as_bytes(),
@@ -194,11 +205,6 @@ fn hash_trace_bytes_v1(
         level: u64::try_from(level).map_err(|_| Error::QueryIndexOverflow { index: level })?,
         index: u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
         counter: 0,
-    };
-    hash_bytes_384_v1(domain, fields).ok_or_else(|| Error::PayloadLengthOverflow {
-        length: fields
-            .iter()
-            .fold(0_usize, |total, field| total.saturating_add(field.len())),
     })
 }
 #[cfg(test)]
@@ -301,10 +307,16 @@ mod tests {
         }
     }
     fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
-        let sender_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
-        let receiver_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes();
+        let sender_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.from_account,
+        )
+        .expect("canonical balance key");
+        let receiver_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.to_account,
+        )
+        .expect("canonical balance key");
         let (from, to) = transfer::build_transfer_smt_witness_pair(
             &sender_key,
             numeric_u64(&delta.from_balance_before),
@@ -327,13 +339,21 @@ mod tests {
             .iter()
             .flat_map(|delta| {
                 let sender = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.from_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.from_balance_before),
                     numeric_to_bytes(&delta.from_balance_after),
                     OperationKind::Transfer,
                 );
                 let receiver = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.to_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.to_balance_before),
                     numeric_to_bytes(&delta.to_balance_after),
                     OperationKind::Transfer,

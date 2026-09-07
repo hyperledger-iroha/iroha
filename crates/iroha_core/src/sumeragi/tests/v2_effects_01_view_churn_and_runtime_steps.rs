@@ -7,7 +7,8 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
     let original = fixture.qc(wire::GlobalPhase::Prepare);
     let original_sources = certified_sources(&fixture, &original);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: consumer_tag(0),
                 round: original.round,
@@ -23,7 +24,8 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
     let mut first_timeout = timeout_at_view(&fixture, 0);
     first_timeout.groups[0].highest_prepare_qc = Some(original.clone());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: consumer_tag(1),
                 certificate: first_timeout,
@@ -50,7 +52,8 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
     let mut replacement_timeout = timeout_at_view(&fixture, 1);
     replacement_timeout.groups[0].highest_prepare_qc = Some(replacement.clone());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: consumer_tag(2),
                 certificate: replacement_timeout,
@@ -65,7 +68,8 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
     assert_eq!(services.cancelled_fetches, vec![original_id]);
     let replacement_sources = certified_sources(&fixture, &replacement);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: consumer_tag(2),
                 round: replacement.round,
@@ -99,7 +103,8 @@ fn certified_view_churn_cancels_stale_fetches_and_releases_capacity() {
         };
         let sources = certified_sources(&fixture, &certificate);
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: EventTag::new(1, view, Generation::new(7 + view)),
                     round: manifest.round,
@@ -113,7 +118,8 @@ fn certified_view_churn_cancels_stale_fetches_and_releases_capacity() {
             .expect("begin view fetch");
         assert_eq!(executor.pending_fetches.len(), 1);
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::EnterView {
                     tag: EventTag::new(1, view + 1, Generation::new(8 + view)),
                     certificate: timeout_at_view(&fixture, view),
@@ -144,7 +150,8 @@ fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
             manifest.clone(),
         );
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::Sign {
                     tag: EventTag::new(1, view, Generation::new(7 + view)),
                     request: SignRequest::Vote(wire::Vote {
@@ -163,7 +170,8 @@ fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
         stale_ids.push(services.sign_tasks.last().expect("sign task").id());
         assert_eq!(executor.pending_signatures.len(), 1);
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::EnterView {
                     tag: EventTag::new(1, view + 1, Generation::new(8 + view)),
                     certificate: timeout_at_view(&fixture, view),

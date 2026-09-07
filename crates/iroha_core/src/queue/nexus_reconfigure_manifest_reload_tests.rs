@@ -72,3 +72,85 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
     assert!(explicitly_reloaded.has_manifest_source_alias("future"));
     assert_ne!(explicitly_reloaded.consensus_policy_digest(), frozen_digest);
 }
+
+#[test]
+fn nexus_reconfiguration_uses_state_authority_instead_of_empty_or_stale_queue_cache() {
+    let (canonical_validator, _) = gen_account_in("wonderland");
+    let (stale_validator, _) = gen_account_in("wonderland");
+    let registry = |validator: AccountId| {
+        let lane = LaneConfig::default();
+        Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
+            lane.id,
+            LaneManifestStatus {
+                lane: lane.id,
+                alias: lane.alias,
+                dataspace: lane.dataspace_id,
+                visibility: lane.visibility,
+                storage: lane.storage,
+                governance: lane.governance,
+                manifest_path: Some(PathBuf::from("/tmp/state-authority.manifest.json")),
+                governance_rules: Some(GovernanceRules {
+                    validators: vec![validator],
+                    ..GovernanceRules::default()
+                }),
+                privacy_commitments: Vec::new(),
+            },
+        )])))
+    };
+    // Exercise both State entry points: a fresh empty Queue and a stale Queue
+    // must adopt installed authority; stale Queue policy must never resurrect
+    // authority absent from State.
+    for with_view in [false, true] {
+        for (state_has_authority, queue_is_stale) in [(true, false), (true, true), (false, true)] {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            if state_has_authority {
+                state.install_lane_manifests(&registry(canonical_validator.clone()));
+            }
+            let installed = state.lane_manifests.read().clone();
+            let nexus = state.nexus_snapshot();
+            let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+            let queue = Queue::test(config_factory(), &time_source);
+            if queue_is_stale {
+                queue.install_lane_manifests(&registry(stale_validator.clone()));
+            }
+            assert_ne!(
+                queue.lane_manifests.read().consensus_policy_digest(),
+                installed.consensus_policy_digest(),
+                "the fixture must start with different State and Queue authority"
+            );
+            if with_view {
+                queue.reconfigure_nexus(&nexus, &state.view(), None);
+            } else {
+                queue.reconfigure_nexus_with_state(&nexus, &state, None);
+            }
+            assert!(
+                Arc::ptr_eq(&state.lane_manifests.read(), &installed),
+                "routing refresh cannot replace installed State policy"
+            );
+            let queue_registry = queue.lane_manifests.read().clone();
+            assert_eq!(
+                queue_registry.consensus_policy_digest(),
+                installed.consensus_policy_digest(),
+                "Queue must consume the installed State policy"
+            );
+            if state_has_authority {
+                assert_eq!(
+                    queue_registry
+                        .lane_rules(LaneId::SINGLE)
+                        .expect("retain the installed State validators")
+                        .validators,
+                    vec![canonical_validator.clone()]
+                );
+            } else {
+                assert!(
+                    queue_registry.lane_rules(LaneId::SINGLE).is_none(),
+                    "stale Queue validators must not revive missing State authority"
+                );
+            }
+        }
+    }
+}

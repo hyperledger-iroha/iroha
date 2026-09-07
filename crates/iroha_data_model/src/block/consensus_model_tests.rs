@@ -788,11 +788,11 @@ fn sample_native_amx_leg(
     );
     let participant_settlement = prepare_qc
         .body
-        .computed_grouped_participant_settlement(&[prepare_qc.body.source_id])
+        .computed_grouped_participant_settlement(None, &[prepare_qc.body.source_id])
         .expect("single-source test fixture settlement is valid");
-    let participant_settlement_hash =
-        compute_native_amx_participant_settlement_hash(&participant_settlement)
-            .expect("fixture participant settlement hashes");
+    let participant_settlement_hash = participant_settlement
+        .computed_hash()
+        .expect("fixture participant settlement hashes");
     NativeAmxLegRecordV2 {
         lane_id: participant.0,
         dataspace_id: participant.1,
@@ -817,6 +817,342 @@ fn grouped_native_amx_commitment_fixture() -> LaneBlockCommitment {
         .expect("grouped Native AMX fixture contains golden receipt group");
     norito::json::from_value(commitment)
         .expect("decode Rust-owned grouped Native AMX lane commitment")
+}
+
+fn native_amx_participant_settlement_wire(
+    settlement: &NativeAmxParticipantSettlement,
+) -> NativeAmxParticipantSettlementWire {
+    NativeAmxParticipantSettlementWire {
+        lane_id: settlement.lane_id(),
+        dataspace_id: settlement.dataspace_id(),
+        lane_incarnation: settlement.lane_incarnation(),
+        participant_lane_block_height: settlement.participant_lane_block_height(),
+        authority_context_height: settlement.authority_context_height(),
+        previous_native_settlement_hash: settlement.previous_native_settlement_hash(),
+        source_ids: settlement.source_ids().to_vec(),
+    }
+}
+fn flat_native_amx_participant_settlement() -> NativeAmxParticipantSettlement {
+    NativeAmxParticipantSettlement::try_new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        Hash::new(b"flat Native participant incarnation"),
+        7,
+        40,
+        None,
+        vec![[0xF0; 32], [0x10; 32]],
+    )
+    .expect("default catalog route and FIFO sources are valid")
+}
+#[test]
+fn native_amx_participant_settlement_has_nonrecursive_schema_and_bounded_default_stack_codec() {
+    use norito::core::NoritoSerialize as _;
+    let schema = NativeAmxParticipantSettlement::schema();
+    assert!(!schema.contains_key::<LaneBlockCommitment>());
+    assert!(!schema.contains_key::<NativeAmxReceipt>());
+    assert!(!schema.contains_key::<NativeAmxLegRecordV2>());
+    let sources = (1..=NATIVE_AMX_GROUP_SOURCES_MAX)
+        .rev()
+        .map(|index| {
+            let mut source = [0; Hash::LENGTH];
+            source[..8].copy_from_slice(&u64::try_from(index).unwrap().to_le_bytes());
+            source
+        })
+        .collect::<Vec<_>>();
+    let settlement = NativeAmxParticipantSettlement::try_new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        Hash::new(b"maximum flat participant"),
+        1,
+        1,
+        None,
+        sources.clone(),
+    )
+    .expect("maximum unique source group is valid");
+    let exact = settlement
+        .encoded_len_exact()
+        .expect("flat control has exact encoded length");
+    let mut payload = Vec::new();
+    settlement
+        .serialize(&mut norito::core::Encoder::for_buffer(&mut payload))
+        .expect("serialize maximum flat control on the default test stack");
+    assert_eq!(exact, payload.len());
+    let encoded = norito::encode_canonical(&settlement).expect("encode maximum flat control");
+    let decoded = norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded)
+        .expect("decode maximum flat control");
+    assert_eq!(decoded.source_ids(), sources);
+    assert_eq!(decoded, settlement);
+    assert_eq!(
+        decoded.computed_hash().unwrap(),
+        settlement.computed_hash().unwrap()
+    );
+    drop(decoded);
+    drop(settlement);
+}
+#[test]
+fn native_amx_participant_settlement_binary_and_json_decode_enforce_constructor() {
+    let settlement = flat_native_amx_participant_settlement();
+    let wire = native_amx_participant_settlement_wire(&settlement);
+    assert_eq!(settlement.encode(), wire.encode());
+    assert_eq!(
+        NativeAmxParticipantSettlement::decode(&mut settlement.encode().as_slice()).unwrap(),
+        settlement
+    );
+    let mut invalid = Vec::new();
+    let mut empty = wire.clone();
+    empty.source_ids.clear();
+    invalid.push(empty);
+    let mut oversized = wire.clone();
+    oversized.source_ids = vec![[1; 32]; NATIVE_AMX_GROUP_SOURCES_MAX + 1];
+    invalid.push(oversized);
+    let mut duplicate = wire.clone();
+    duplicate.source_ids[1] = duplicate.source_ids[0];
+    invalid.push(duplicate);
+    let mut zero_source = wire.clone();
+    zero_source.source_ids[0] = [0; 32];
+    invalid.push(zero_source);
+    let mut zero_incarnation = wire.clone();
+    zero_incarnation.lane_incarnation = Hash::prehashed([0; Hash::LENGTH]);
+    invalid.push(zero_incarnation);
+    let mut zero_lane_height = wire.clone();
+    zero_lane_height.participant_lane_block_height = 0;
+    invalid.push(zero_lane_height);
+    let mut zero_authority = wire.clone();
+    zero_authority.authority_context_height = 0;
+    invalid.push(zero_authority);
+    let mut zero_previous = wire.clone();
+    zero_previous.previous_native_settlement_hash = Some(HashOf::from_untyped_unchecked(
+        Hash::prehashed([0; Hash::LENGTH]),
+    ));
+    invalid.push(zero_previous);
+    let mut first_with_previous = wire;
+    first_with_previous.participant_lane_block_height = 1;
+    first_with_previous.previous_native_settlement_hash = Some(settlement.computed_hash().unwrap());
+    invalid.push(first_with_previous);
+    for invalid in invalid {
+        assert!(NativeAmxParticipantSettlement::decode(&mut invalid.encode().as_slice()).is_err());
+        assert!(
+            norito::json::from_value::<NativeAmxParticipantSettlement>(
+                norito::json::to_value(&invalid).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            NativeAmxParticipantSettlement::try_new(
+                invalid.lane_id,
+                invalid.dataspace_id,
+                invalid.lane_incarnation,
+                invalid.participant_lane_block_height,
+                invalid.authority_context_height,
+                invalid.previous_native_settlement_hash,
+                invalid.source_ids,
+            )
+            .is_err()
+        );
+    }
+}
+#[test]
+fn native_amx_participant_settlement_rejects_removed_fields_and_missing_authority() {
+    let settlement = flat_native_amx_participant_settlement();
+    let canonical = norito::json::to_value(&settlement).unwrap();
+    for forbidden in [
+        "block_height",
+        "tx_count",
+        "receipts",
+        "total_local_amount",
+        "total_xor_due",
+        "total_xor_after_haircut",
+        "total_xor_variance",
+        "swap_metadata",
+        "nexus_fee_receipts",
+        "native_amx_receipts",
+    ] {
+        let mut value = canonical.clone();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(forbidden.to_owned(), norito::json!([]));
+        assert!(
+            norito::json::from_value::<NativeAmxParticipantSettlement>(value).is_err(),
+            "removed field {forbidden} cannot reintroduce economic or recursive structure"
+        );
+    }
+    for required in [
+        "lane_id",
+        "dataspace_id",
+        "lane_incarnation",
+        "participant_lane_block_height",
+        "authority_context_height",
+        "previous_native_settlement_hash",
+        "source_ids",
+    ] {
+        let mut value = canonical.clone();
+        value.as_object_mut().unwrap().remove(required);
+        assert!(norito::json::from_value::<NativeAmxParticipantSettlement>(value).is_err());
+    }
+    assert_eq!(
+        norito::json::from_value::<NativeAmxParticipantSettlement>(canonical).unwrap(),
+        settlement
+    );
+}
+
+#[test]
+fn native_amx_participant_settlement_rejects_unlinked_six_field_binary_shape() {
+    #[derive(Encode)]
+    struct UnlinkedParticipantSettlement {
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        participant_lane_block_height: u64,
+        authority_context_height: u64,
+        source_ids: Vec<[u8; Hash::LENGTH]>,
+    }
+    let settlement = flat_native_amx_participant_settlement();
+    let unlinked = UnlinkedParticipantSettlement {
+        lane_id: settlement.lane_id(),
+        dataspace_id: settlement.dataspace_id(),
+        lane_incarnation: settlement.lane_incarnation(),
+        participant_lane_block_height: settlement.participant_lane_block_height(),
+        authority_context_height: settlement.authority_context_height(),
+        source_ids: settlement.source_ids().to_vec(),
+    };
+    assert!(
+        NativeAmxParticipantSettlement::decode(&mut unlinked.encode().as_slice()).is_err(),
+        "the omitted predecessor field is not a second binary representation of None"
+    );
+}
+#[test]
+fn native_amx_participant_settlement_hash_binds_exact_type_domain_and_source_order() {
+    let settlement = flat_native_amx_participant_settlement();
+    let bytes = norito::encode_canonical(&settlement).unwrap();
+    let domain = b"iroha:native-amx:participant-settlement:v1";
+    let length = u64::try_from(domain.len()).unwrap().to_le_bytes();
+    let expected = Hash::new_from_chunks(&[&length, domain, &bytes]);
+    assert_eq!(Hash::from(settlement.computed_hash().unwrap()), expected);
+    assert_ne!(
+        settlement.computed_hash().unwrap(),
+        HashOf::new(&settlement)
+    );
+    let mut reversed = settlement.source_ids().to_vec();
+    reversed.reverse();
+    let reversed = NativeAmxParticipantSettlement::try_new(
+        settlement.lane_id(),
+        settlement.dataspace_id(),
+        settlement.lane_incarnation(),
+        settlement.participant_lane_block_height(),
+        settlement.authority_context_height(),
+        settlement.previous_native_settlement_hash(),
+        reversed,
+    )
+    .unwrap();
+    assert_ne!(
+        settlement.computed_hash().unwrap(),
+        reversed.computed_hash().unwrap()
+    );
+}
+
+#[test]
+fn native_amx_participant_settlement_matches_independent_sdk_array_vectors() {
+    // These vectors were independently encoded by the SDKs after qualifying
+    // fixed-array field framing against the Rust-generated grouped corpus.
+    // Exercise both Option shapes so a shared SDK mistake cannot qualify itself.
+    let incarnation = Hash::prehashed([1; Hash::LENGTH]);
+    for (height, previous, expected) in [
+        (
+            1,
+            None,
+            "hash:350CB3C0D8728E39820775AC522B345C84631FA81BA164F72FB70043657012CF#EB51",
+        ),
+        (
+            2,
+            None,
+            "hash:C3196EEEB6B5795424F82CDCCA551495E9F459E75EE274EE957FEC51EEE69393#EC1E",
+        ),
+        (
+            2,
+            Some(HashOf::from_untyped_unchecked(incarnation)),
+            "hash:1F71F0A536D50BB281A9C0FC3A9BF7AA5070F8860BF24173671FFB00D500DED5#1CF3",
+        ),
+    ] {
+        let settlement = NativeAmxParticipantSettlement::try_new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            incarnation,
+            height,
+            2,
+            previous,
+            vec![[0xF0; Hash::LENGTH], [0x10; Hash::LENGTH]],
+        )
+        .expect("bounded FIFO participant settlement");
+        assert_eq!(
+            Hash::from(settlement.computed_hash().unwrap()),
+            norito::json::from_value::<Hash>(norito::json::Value::String(expected.to_owned()))
+                .expect("canonical SDK hash literal")
+        );
+        let bytes = norito::encode_canonical(&settlement).unwrap();
+        assert_eq!(bytes.len(), if previous.is_some() { 282 } else { 249 });
+        assert_eq!(
+            norito::decode_canonical::<NativeAmxParticipantSettlement>(&bytes).unwrap(),
+            settlement
+        );
+    }
+}
+
+#[test]
+fn native_amx_participant_settlement_hash_authenticates_sparse_native_history() {
+    let first = flat_native_amx_participant_settlement();
+    assert_eq!(first.participant_lane_block_height(), 7);
+    assert_eq!(
+        first.previous_native_settlement_hash(),
+        None,
+        "the first Native control may follow ordinary lane blocks"
+    );
+    let previous_hash = first.computed_hash().unwrap();
+    let linked = NativeAmxParticipantSettlement::try_new(
+        first.lane_id(),
+        first.dataspace_id(),
+        first.lane_incarnation(),
+        9,
+        42,
+        Some(previous_hash),
+        first.source_ids().to_vec(),
+    )
+    .expect("a prior Native control need not occupy the preceding lane height");
+    let unlinked = NativeAmxParticipantSettlement::try_new(
+        first.lane_id(),
+        first.dataspace_id(),
+        first.lane_incarnation(),
+        9,
+        42,
+        None,
+        first.source_ids().to_vec(),
+    )
+    .expect("State must authenticate a claimed first Native control above height one");
+    assert_ne!(
+        linked.computed_hash().unwrap(),
+        unlinked.computed_hash().unwrap()
+    );
+    let encoded = norito::encode_canonical(&linked).unwrap();
+    let decoded = norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded).unwrap();
+    assert_eq!(
+        decoded.previous_native_settlement_hash(),
+        Some(previous_hash)
+    );
+    assert_eq!(decoded, linked);
+    assert_eq!(
+        norito::json::from_value::<NativeAmxParticipantSettlement>(
+            norito::json::to_value(&linked).unwrap()
+        )
+        .unwrap(),
+        linked
+    );
+    let absent_json = norito::json::to_value(&unlinked).unwrap();
+    assert!(
+        absent_json
+            .get("previous_native_settlement_hash")
+            .unwrap()
+            .is_null()
+    );
 }
 
 #[expect(
@@ -970,6 +1306,8 @@ fn validate_grouped_native_amx_application_evidence(
             || descriptor.descriptor_hash != leaf.descriptor_hash
             || leg.participant_proposal.proposal_hash != leaf.proposal_hash
             || leg.participant_settlement_hash != leaf.settlement_hash
+            || leg.participant_settlement.previous_native_settlement_hash()
+                != leaf.previous_native_settlement_hash
             || leg.prepare_qc.body.source_id != member.source_id
             || leg.prepare_qc.body.tx_entrypoint_hash != member.entrypoint_hash
             || !descriptor
@@ -1152,7 +1490,7 @@ fn apply_grouped_native_amx_fixture_mutation(
 }
 #[test]
 fn native_amx_receipt_negative_corpus_fails_closed() {
-    const EXPECTED_RECEIPT_CONTROLS: usize = 46;
+    const EXPECTED_RECEIPT_CONTROLS: usize = 47;
     let canonical = grouped_native_amx_fixture_document();
     let controls = canonical
         .get("negative_controls")
@@ -1224,7 +1562,7 @@ fn native_amx_receipt_negative_corpus_fails_closed() {
 }
 #[test]
 fn native_amx_application_evidence_negative_corpus_fails_closed() {
-    const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 10;
+    const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 11;
     let canonical = grouped_native_amx_fixture_document();
     validate_grouped_native_amx_application_evidence(&canonical)
         .expect("the canonical application evidence must be valid before mutation");
@@ -1289,17 +1627,13 @@ fn native_amx_grouped_receipts_reject_duplicate_bounds_and_same_route_drift() {
         duplicate.validate_native_amx_receipts(),
         Err("Native AMX receipt sources must be unique")
     );
-    let mut oversized = grouped_native_amx_commitment_fixture();
-    let template = oversized.native_amx_receipts[0].legs[0]
-        .participant_settlement
-        .receipts[0]
-        .clone();
-    oversized.native_amx_receipts[0].legs[0]
-        .participant_settlement
-        .receipts = vec![template; NATIVE_AMX_GROUP_SOURCES_MAX + 1];
-    assert_eq!(
-        oversized.validate_native_amx_receipts(),
-        Err("Native AMX participant settlement is structurally invalid")
+    let oversized = grouped_native_amx_commitment_fixture();
+    let settlement = &oversized.native_amx_receipts[0].legs[0].participant_settlement;
+    let mut wire = native_amx_participant_settlement_wire(settlement);
+    wire.source_ids = vec![wire.source_ids[0]; NATIVE_AMX_GROUP_SOURCES_MAX + 1];
+    assert!(
+        NativeAmxParticipantSettlement::decode(&mut wire.encode().as_slice()).is_err(),
+        "oversized membership cannot be constructed through binary decoding"
     );
     let mut same_route_drift = grouped_native_amx_commitment_fixture();
     let receipt = &mut same_route_drift.native_amx_receipts[0];
@@ -1488,7 +1822,7 @@ fn native_amx_grouped_receipts_reject_qc_and_group_membership_drift() {
     let mut group_drift = grouped_native_amx_commitment_fixture();
     group_drift.native_amx_receipts[0].legs[0]
         .participant_settlement
-        .receipts
+        .source_ids
         .swap(0, 1);
     assert_eq!(
         group_drift.validate_native_amx_receipts(),
@@ -1616,76 +1950,58 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
     )
     .body;
     let settlement = body
-        .computed_grouped_participant_settlement(&fifo_sources)
-        .expect("FIFO-ordered grouped participant settlement");
-    assert_eq!(settlement.block_height, body.participant_lane_block_height);
-    assert_eq!(settlement.lane_id, body.participant_lane_id);
+        .computed_grouped_participant_settlement(None, &fifo_sources)
+        .expect("FIFO-ordered grouped participant control");
     assert_eq!(
-        settlement.lane_incarnation,
+        settlement.participant_lane_block_height(),
+        body.participant_lane_block_height
+    );
+    assert_eq!(settlement.lane_id(), body.participant_lane_id);
+    assert_eq!(
+        settlement.lane_incarnation(),
         body.participant_lane_incarnation
     );
-    assert_eq!(settlement.dataspace_id, body.participant_dataspace_id);
-    assert_eq!(settlement.tx_count, 2);
-    assert!(settlement.total_local_amount.is_zero());
-    assert!(settlement.total_xor_due.is_zero());
-    assert!(settlement.total_xor_after_haircut.is_zero());
-    assert!(settlement.total_xor_variance.is_zero());
-    assert!(settlement.swap_metadata.is_none());
-    assert!(settlement.nexus_fee_receipts.is_empty());
+    assert_eq!(settlement.dataspace_id(), body.participant_dataspace_id);
     assert_eq!(
-        settlement
-            .receipts
-            .iter()
-            .map(|receipt| receipt.source_id)
-            .collect::<Vec<_>>(),
-        fifo_sources
+        settlement.authority_context_height(),
+        body.authority_context_height
     );
-    assert!(settlement.receipts.iter().all(|receipt| {
-        receipt.local_amount.is_zero()
-            && receipt.xor_due.is_zero()
-            && receipt.xor_after_haircut.is_zero()
-            && receipt.xor_variance.is_zero()
-            && receipt.timestamp_ms == body.authority_context_height
-    }));
+    assert_eq!(settlement.tx_count(), 2);
+    assert_eq!(settlement.source_ids(), fifo_sources);
     assert_eq!(
-        compute_native_amx_participant_settlement_hash(&settlement)
-            .expect("computed participant settlement must hash"),
-        body.computed_grouped_participant_settlement_commitment(&fifo_sources)
-            .expect("FIFO-ordered grouped participant commitment")
+        Hash::from(settlement.computed_hash().unwrap()),
+        body.computed_grouped_participant_settlement_commitment(None, &fifo_sources)
+            .unwrap()
+    );
+    let previous_native_settlement_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+        b"preceding Native settlement before an ordinary block",
+    )));
+    let linked = body
+        .computed_grouped_participant_settlement(previous_native_settlement_hash, &fifo_sources)
+        .expect("the grouped constructor retains the explicit Native history link");
+    assert_eq!(
+        linked.previous_native_settlement_hash(),
+        previous_native_settlement_hash
     );
     assert_ne!(
-        compute_native_amx_participant_settlement_hash(&settlement)
-            .expect("computed participant settlement must hash"),
-        HashOf::new(&settlement),
-        "Native AMX participant settlement commitment must use its protocol domain"
-    );
-    let encoded = norito::to_bytes(&settlement).expect("encode participant settlement");
-    let decoded = norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded)
-        .expect("decode participant settlement");
-    assert_eq!(decoded, settlement);
-    let json = norito::json::to_value(&settlement).expect("serialize participant settlement JSON");
-    assert!(
-        json.get("native_amx_receipts").is_none(),
-        "the dedicated participant settlement wire type cannot nest Native AMX receipts"
+        linked.computed_hash().unwrap(),
+        settlement.computed_hash().unwrap()
     );
     assert_eq!(
-        norito::json::from_value::<NativeAmxParticipantSettlement>(json.clone())
-            .expect("decode participant settlement JSON"),
+        Hash::from(linked.computed_hash().unwrap()),
+        body.computed_grouped_participant_settlement_commitment(
+            previous_native_settlement_hash,
+            &fifo_sources
+        )
+        .unwrap()
+    );
+    let encoded = norito::encode_canonical(&settlement).unwrap();
+    assert_eq!(
+        norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded).unwrap(),
         settlement
     );
-    for nested_receipts in [norito::json!([]), norito::json!([{}])] {
-        let mut recursive_settlement = json.clone();
-        recursive_settlement
-            .as_object_mut()
-            .expect("participant settlement is a JSON object")
-            .insert("native_amx_receipts".to_owned(), nested_receipts);
-        assert!(
-            norito::json::from_value::<NativeAmxParticipantSettlement>(recursive_settlement)
-                .is_err(),
-            "participant settlement JSON must reject the removed recursive field even when empty"
-        );
-    }
 }
+
 #[test]
 fn native_amx_v2_leg_rejects_removed_recursive_settlement_layout() {
     use norito::core::{DecodeFlagsGuard, header_flags};
@@ -1716,18 +2032,29 @@ fn native_amx_v2_leg_rejects_removed_recursive_settlement_layout() {
         dataspace_id: leg.dataspace_id,
         participant_proposal: leg.participant_proposal.clone(),
         participant_settlement: LaneBlockCommitment {
-            block_height: settlement.block_height,
-            lane_id: settlement.lane_id,
-            lane_incarnation: settlement.lane_incarnation,
-            dataspace_id: settlement.dataspace_id,
-            tx_count: settlement.tx_count,
-            total_local_amount: settlement.total_local_amount.clone(),
-            total_xor_due: settlement.total_xor_due.clone(),
-            total_xor_after_haircut: settlement.total_xor_after_haircut.clone(),
-            total_xor_variance: settlement.total_xor_variance.clone(),
-            swap_metadata: settlement.swap_metadata.clone(),
-            receipts: settlement.receipts.clone(),
-            nexus_fee_receipts: settlement.nexus_fee_receipts.clone(),
+            block_height: settlement.participant_lane_block_height(),
+            lane_id: settlement.lane_id(),
+            lane_incarnation: settlement.lane_incarnation(),
+            dataspace_id: settlement.dataspace_id(),
+            tx_count: settlement.tx_count(),
+            total_local_amount: Quantity::zero(),
+            total_xor_due: Quantity::zero(),
+            total_xor_after_haircut: Quantity::zero(),
+            total_xor_variance: Quantity::zero(),
+            swap_metadata: None,
+            receipts: settlement
+                .source_ids()
+                .iter()
+                .map(|source_id| LaneSettlementReceipt {
+                    source_id: *source_id,
+                    local_amount: Quantity::zero(),
+                    xor_due: Quantity::zero(),
+                    xor_after_haircut: Quantity::zero(),
+                    xor_variance: Quantity::zero(),
+                    timestamp_ms: settlement.authority_context_height(),
+                })
+                .collect(),
+            nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         },
         participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::from(
@@ -1778,42 +2105,28 @@ fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() 
         sample_roster(),
     )
     .body;
-    assert!(body.computed_grouped_participant_settlement(&[]).is_err());
     assert!(
-        body.computed_grouped_participant_settlement(&[[0x32; 32]])
+        body.computed_grouped_participant_settlement(None, &[])
+            .is_err()
+    );
+    assert!(
+        body.computed_grouped_participant_settlement(None, &[[0x32; 32]])
             .is_err()
     );
     assert_eq!(
-        body.computed_grouped_participant_settlement(&[body.source_id, body.source_id]),
+        body.computed_grouped_participant_settlement(None, &[body.source_id, body.source_id]),
         Err("Native AMX participant source group must be unique")
     );
     let reverse_hash_order = [[0x32; 32], body.source_id];
     let reverse_settlement = body
-        .computed_grouped_participant_settlement(&reverse_hash_order)
+        .computed_grouped_participant_settlement(None, &reverse_hash_order)
         .expect("candidate order is independent of source hash order");
-    assert_eq!(
-        reverse_settlement
-            .receipts
-            .iter()
-            .map(|receipt| receipt.source_id)
-            .collect::<Vec<_>>(),
-        reverse_hash_order
-    );
-    let forward_settlement = body
-        .computed_grouped_participant_settlement(&[body.source_id, [0x32; 32]])
-        .expect("forward candidate order is valid");
-    assert_ne!(
-        compute_native_amx_participant_settlement_hash(&forward_settlement)
-            .expect("forward participant settlement must hash"),
-        compute_native_amx_participant_settlement_hash(&reverse_settlement)
-            .expect("reverse participant settlement must hash"),
-        "participant settlement commitment binds canonical source order"
-    );
+    assert_eq!(reverse_settlement.source_ids(), reverse_hash_order);
     assert!(
-        body.computed_grouped_participant_settlement(&vec![
-            body.source_id;
-            NATIVE_AMX_GROUP_SOURCES_MAX + 1
-        ])
+        body.computed_grouped_participant_settlement(
+            None,
+            &vec![body.source_id; NATIVE_AMX_GROUP_SOURCES_MAX + 1]
+        )
         .is_err()
     );
 }

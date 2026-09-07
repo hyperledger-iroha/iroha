@@ -99,6 +99,11 @@ fn queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes() {
     adapter
         .retain_merge_sidecars_for_global_view(view, None, None)
         .expect("view");
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(view)
+            .expect("service the separately scheduled durable admission handoff")
+    );
     let effect = adapter
         .drain_effects(usize::MAX)
         .into_iter()

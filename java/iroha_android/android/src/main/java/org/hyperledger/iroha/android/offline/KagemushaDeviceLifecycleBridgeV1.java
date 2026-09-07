@@ -135,6 +135,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     private final Status status;
     private final byte[] payload;
     private final byte[] authenticator;
+    private final byte[] canonicalResponseFrame;
 
     private Result(
         final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Result source) {
@@ -142,6 +143,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       status = Status.valueOf(source.getStatus().name());
       payload = source.payload();
       authenticator = source.authenticator();
+      canonicalResponseFrame = source.canonicalResponseFrame();
     }
 
     public Operation operation() {
@@ -158,6 +160,11 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
 
     public byte[] authenticator() {
       return authenticator.clone();
+    }
+
+    /** Exact bounded frame; framing alone grants no device or enrollment authority. */
+    public byte[] canonicalResponseFrame() {
+      return canonicalResponseFrame.clone();
     }
   }
 

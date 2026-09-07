@@ -3,6 +3,8 @@
 //! This binary implements the first SF-11 validator slice without adding a new workspace crate. It
 //! validates Norito-encoded provider adverts and replication orders, then emits stable
 //! `ValidationOutcomeV1` JSON/table/YAML output.
+#[path = "sorafs-validate/release_manifest_receipt.rs"]
+mod release_manifest_receipt;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use iroha_crypto::{
     sha256,
@@ -17,16 +19,16 @@ use sorafs_manifest::{
     AdvertSignature, FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, GovernanceLogNodeV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, HedgingValidationPayloadKindV1,
     ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, OrderbookValidationPayloadKindV1,
-    PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1, PopValidationPayloadKindV1, ProofStreamTier,
-    ProviderAdvertV1, RepairValidationPayloadKindV1, ReplicationOrderSignatureV1,
-    ReplicationOrderV1, SIGNED_REPLICATION_ORDER_VERSION_V1, SignatureAlgorithm,
-    SignedReplicationOrderV1, ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
-    decode_order_cancel_v1, decode_order_request_v1, decode_provider_advert_v1,
-    decode_settlement_receipt_v1, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
-    sign_settlement_receipt_ed25519_v1, validate_fixture_bundle_payloads,
-    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_hedging_payload_bytes,
-    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    POP_REFERENCE_PAYLOAD_MAX_BYTES_V1, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
+    PopValidationPayloadKindV1, ProofStreamTier, ProviderAdvertV1, RepairValidationPayloadKindV1,
+    ReplicationOrderSignatureV1, ReplicationOrderV1, SIGNED_REPLICATION_ORDER_VERSION_V1,
+    SignatureAlgorithm, SignedReplicationOrderV1, ValidationContextFieldV1, ValidationInputV1,
+    ValidationOutcomeV1, decode_order_cancel_v1, decode_order_request_v1,
+    decode_provider_advert_v1, decode_settlement_receipt_v1, sign_order_cancel_ed25519_v1,
+    sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_hedging_payload_bytes, validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
     validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
     validate_pdp_proof_bytes, validate_pop_payload_bytes, validate_por_challenge_proof_bytes,
@@ -78,12 +80,13 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<ExitCode, CliError> {
         "bundle" => run_bundle(BundleArgs::parse(&args[1..])?),
         "governance" => run_governance(GovernanceArgs::parse(&args[1..])?),
         "release-manifest" => run_release_manifest(ReleaseManifestArgs::parse(&args[1..])?),
+        "release-manifest-receipt" => release_manifest_receipt::run(&args[1..]),
         "timed-ovn-release-audit" => {
             run_timed_ovn_release_audit(TimedOvnReleaseAuditArgs::parse(&args[1..])?)
         }
         "sign" => run_sign(SignArgs::parse(&args[1..])?),
         other => Err(CliError::Config(format!(
-            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, pop, hedging, por, potr, repair, bundle, governance, release-manifest, timed-ovn-release-audit, sign"
+            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, pop, hedging, por, potr, repair, bundle, governance, release-manifest, release-manifest-receipt, timed-ovn-release-audit, sign"
         ))),
     }
 }
@@ -231,8 +234,7 @@ fn run_pop(args: PopArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-    let bytes = fs::read(&input)
-        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
+    let bytes = read_cli_bytes_bounded(&input, POP_REFERENCE_PAYLOAD_MAX_BYTES_V1)?;
     let outcome =
         validate_pop_payload_bytes(kind, &bytes, input.display().to_string(), generated_at);
     if let Some(path) = args.telemetry_out {
@@ -3270,6 +3272,7 @@ Usage:
   sorafs-validate governance --block <path> [--cid <block-cid|hex:HEX>] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate governance --head <path> --block <path> [--block <path>...] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate release-manifest --manifest <path> --public-key <raw-32-byte-path> --public-key-fingerprint <lowercase-sha256-hex> --signature <raw-64-byte-path>
+  sorafs-validate release-manifest-receipt --manifest <path> --signature <raw-64-byte-path> --public-key <raw-32-byte-path> --public-key-fingerprint <sha256> --signer-policy <canonical-norito> --signer-policy-sha256 <sha256> --custody-trust <canonical-norito> --custody-trust-sha256 <sha256> --completed-operation-state <signed-canonical-norito> --operation-receipt <canonical-norito> --now-unix-ms <trusted-time>
   sorafs-validate release-manifest --manifest <path> --public-key <raw-32-byte-path> --public-key-fingerprint <lowercase-sha256-hex> --signing-seed <raw-32-byte-path> --signature-out <path> --development-local-signing
   sorafs-validate timed-ovn-release-audit --audit-manifest <raw-301-byte-path> --implementation-source-archive <path> --release-artifact-manifest <path> --supported-target-inventory <path> --audit-report <path> --audit-evidence-archive <path> --trusted-reviewer-public-key <raw-32-byte-path>
   sorafs-validate sign --kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml] [--now <unix-seconds>]
@@ -3902,6 +3905,79 @@ mod tests {
                 "retired repair payload flag {flag} must be rejected"
             );
         }
+    }
+    #[test]
+    fn pop_cli_reads_regular_canonical_input() {
+        let directory = tempfile::tempdir().expect("temporary PoP input directory");
+        let input = directory.path().join("enrollment.to");
+        let payload = sorafs_manifest::PopEnrollmentRequestV1 {
+            version: sorafs_manifest::POP_ENROLLMENT_REQUEST_VERSION_V1,
+            request_id: [0x21; 32],
+            applicant_id: "fixture-applicant".to_owned(),
+            requested_class: sorafs_manifest::PopEligibilityClassV1::General,
+            requested_attributes: vec!["residency".to_owned()],
+            attestation_digest: [0x22; 32],
+            submitted_at_epoch: 100,
+            expires_at_epoch: 200,
+        };
+        let bytes = norito::encode_canonical(&payload).expect("canonical enrollment fixture");
+        fs::write(&input, &bytes).expect("write regular PoP input");
+        assert_eq!(
+            read_cli_bytes_bounded(&input, POP_REFERENCE_PAYLOAD_MAX_BYTES_V1).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            run_pop(PopArgs {
+                input: Some(input),
+                kind: Some(PopValidationPayloadKindV1::EnrollmentRequest),
+                format: Some(OutputFormat::Json),
+                generated_at: Some(123),
+                ..PopArgs::default()
+            })
+            .expect("bounded regular PoP input validates"),
+            ExitCode::SUCCESS
+        );
+    }
+    #[test]
+    fn pop_cli_rejects_oversized_input_before_decode() {
+        let directory = tempfile::tempdir().expect("temporary PoP input directory");
+        let input = directory.path().join("oversized.to");
+        fs::File::create(&input)
+            .unwrap()
+            .set_len(POP_REFERENCE_PAYLOAD_MAX_BYTES_V1 as u64 + 1)
+            .unwrap();
+        let expected = format!(
+            "{} exceeds the {POP_REFERENCE_PAYLOAD_MAX_BYTES_V1}-byte input ceiling",
+            input.display()
+        );
+        assert!(matches!(
+            run_pop(PopArgs {
+                input: Some(input),
+                kind: Some(PopValidationPayloadKindV1::MembershipProof),
+                generated_at: Some(123),
+                ..PopArgs::default()
+            }),
+            Err(CliError::Validation(message)) if message == expected
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn pop_cli_rejects_symbolic_link_input_before_decode() {
+        let directory = tempfile::tempdir().expect("temporary PoP input directory");
+        let target = directory.path().join("target.to");
+        let input = directory.path().join("link.to");
+        fs::write(&target, b"not a proof").unwrap();
+        std::os::unix::fs::symlink(&target, &input).unwrap();
+        let expected = format!("failed to open {}:", input.display());
+        assert!(matches!(
+            run_pop(PopArgs {
+                input: Some(input),
+                kind: Some(PopValidationPayloadKindV1::MembershipProof),
+                generated_at: Some(123),
+                ..PopArgs::default()
+            }),
+            Err(CliError::Io(message)) if message.starts_with(&expected)
+        ));
     }
     #[test]
     fn pop_args_parse_reads_kind_input_format_and_generated_at() {

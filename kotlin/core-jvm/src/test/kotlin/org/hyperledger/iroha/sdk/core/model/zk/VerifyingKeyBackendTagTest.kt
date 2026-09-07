@@ -11,7 +11,7 @@ class VerifyingKeyBackendTagTest {
 
     private val registry = linkedSetOf(
         "halo2/ipa",
-        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/kaigi-authorization-v1",
         "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -88,6 +88,11 @@ class VerifyingKeyBackendTagTest {
                 label,
             )
             assertTrue(VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(label), label)
+            assertTrue(VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label), label)
+            assertEquals(
+                VerifyingKeyBackendCatalogTag.PRODUCTION,
+                VerifyingKeyBackendTag.fromCatalogLabel(label),
+            )
             assertEquals(
                 label,
                 VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(label),
@@ -99,6 +104,8 @@ class VerifyingKeyBackendTagTest {
     fun `registry rejects aliases retired families and confusables`() {
         val rejected = listOf(
             "",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "halo2-ipa-pasta",
             "stark",
             " halo2/ipa",
@@ -264,6 +271,8 @@ class VerifyingKeyBackendTagTest {
     fun `production verifier classifier rejects unsafe labels and surrounding whitespace`() {
         for (label in listOf(
             "",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             " halo2/ipa",
             "halo2/ipa ",
             "halo2/ipa\u0000",

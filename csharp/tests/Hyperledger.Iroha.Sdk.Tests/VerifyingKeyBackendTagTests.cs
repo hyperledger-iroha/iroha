@@ -106,10 +106,9 @@ public sealed class VerifyingKeyBackendTagTests
 
     [Theory]
     [InlineData("halo2/ipa")]
-    [InlineData("halo2/pasta/kaigi-roster-v1")]
+    [InlineData("halo2/pasta/kaigi-authorization-v1")]
     [InlineData("halo2/pasta/kaigi-usage-v1")]
     [InlineData("halo2/pasta/ivm-execution-v1")]
-    [InlineData("halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1")]
     [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
@@ -118,6 +117,9 @@ public sealed class VerifyingKeyBackendTagTests
     {
         Assert.True(VerifierBackendRegistryLabels.IsSupportedLabel(label));
         Assert.Equal(label, VerifierBackendRegistryLabels.RequireSupportedLabel(label));
+        Assert.True(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(label));
+        Assert.Equal(VerifyingKeyBackendCatalogTag.Production,
+            VerifyingKeyBackendTags.FromCatalogLabel(label));
     }
 
     [Theory]
@@ -125,6 +127,13 @@ public sealed class VerifyingKeyBackendTagTests
     public void VerifierRegistryRejectsAliasesAndRetiredProfiles(string? label)
     {
         Assert.False(VerifierBackendRegistryLabels.IsSupportedLabel(label));
+        if (label is "halo2/pasta/kaigi-roster-v1"
+            or "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1")
+        {
+            Assert.False(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(label));
+            Assert.Equal(VerifyingKeyBackendCatalogTag.Unsupported,
+                VerifyingKeyBackendTags.FromCatalogLabel(label));
+        }
         var error = Assert.Throws<ArgumentException>(
             () => VerifierBackendRegistryLabels.RequireSupportedLabel(
                 label,
@@ -137,6 +146,8 @@ public sealed class VerifyingKeyBackendTagTests
         string?[] labels =
         [
             null,
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "",
             " ",
             " halo2/ipa",

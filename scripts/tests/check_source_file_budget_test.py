@@ -85,6 +85,67 @@ def test_evaluate_requires_exact_ratcheting_baselines() -> None:
     )[0].message
 
 
+@pytest.mark.parametrize(
+    ("path", "reviewed_limit"),
+    (
+        ("crates/sorafs_car/src/lib.rs", 9_141),
+        ("crates/sorafs_node/src/store.rs", 8_672),
+        ("crates/sorafs_node/src/transparency.rs", 8_134),
+        ("crates/sorafs_orchestrator/src/bin/sorafs_cli.rs", 21_365),
+        ("crates/sorafs_orchestrator/src/lib.rs", 9_608),
+        ("crates/sorafs_orchestrator/tests/sorafs_cli.rs", 4_787),
+        ("scripts/check_sorafs_production_readiness.py", 7_028),
+        ("scripts/tests/check_sorafs_production_readiness_test.py", 17_654),
+        ("scripts/tests/check_sorafs_rollout_gate_contract_test.py", 28_844),
+        ("xtask/src/sorafs.rs", 7_763),
+    ),
+)
+def test_sorafs_source_caps_reject_growth_after_reviewed_reductions(
+    path: str, reviewed_limit: int,
+) -> None:
+    """Removed source cannot be reclaimed by raising an existing SoraFS ratchet."""
+    candidate = MODULE.load_budget(MODULE_PATH.parents[1] / "ci/source_file_budget.json")
+    effective_limit = candidate.exceptions.get(path, MODULE.limit_for(path, candidate))
+    assert effective_limit <= reviewed_limit
+    scoped_budget = MODULE.Budget(
+        production_limit=candidate.production_limit,
+        test_limit=candidate.test_limit,
+        excluded_prefixes=candidate.excluded_prefixes,
+        exceptions={path: effective_limit} if path in candidate.exceptions else {},
+    )
+
+    findings = MODULE.evaluate({path: reviewed_limit + 1}, scoped_budget)
+    assert len(findings) == 1
+    assert findings[0].path == path
+    assert "grew from baseline" in findings[0].message or "exceeds" in findings[0].message
+
+
+@pytest.mark.parametrize(
+    ("path", "limit"),
+    (
+        ("crates/sorafs_car/src/bin/sorafs_fetch.rs", 5_000),
+        ("crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", 3_000),
+    ),
+)
+def test_fetch_cli_modules_obey_default_caps_without_exceptions(path: str, limit: int) -> None:
+    """The owned test module removes the fetch CLI's oversized-source exception."""
+    candidate = MODULE.load_budget(MODULE_PATH.parents[1] / "ci/source_file_budget.json")
+    assert path not in candidate.exceptions
+    assert MODULE.limit_for(path, candidate) == limit
+    scoped_budget = MODULE.Budget(
+        production_limit=candidate.production_limit,
+        test_limit=candidate.test_limit,
+        excluded_prefixes=candidate.excluded_prefixes,
+        exceptions={},
+    )
+    source = MODULE_PATH.parents[1] / path
+    assert MODULE.evaluate({path: len(source.read_bytes().splitlines())}, scoped_budget) == []
+    findings = MODULE.evaluate({path: limit + 1}, scoped_budget)
+    assert len(findings) == 1
+    assert findings[0].path == path
+    assert "exceeds" in findings[0].message
+
+
 @pytest.mark.parametrize("oversized", [False, True])
 def test_main_reports_all_rust_lines_and_enforces_only_file_limits(
     tmp_path: Path,

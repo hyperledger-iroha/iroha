@@ -58,13 +58,15 @@ fn remittance_batch() -> TransitionBatch {
     let from_account = deterministic_account("alice", &domain);
     let to_account = deterministic_account("bob", &domain);
     batch.push(StateTransition::new(
-        format!("asset/{asset_definition}/{from_account}").into_bytes(),
+        iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &from_account)
+            .expect("canonical balance key"),
         encode_u64(ALICE_START),
         encode_u64(ALICE_START - REMIT_AMOUNT),
         OperationKind::Transfer,
     ));
     batch.push(StateTransition::new(
-        format!("asset/{asset_definition}/{to_account}").into_bytes(),
+        iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &to_account)
+            .expect("canonical balance key"),
         encode_u64(BOB_START),
         encode_u64(BOB_START + REMIT_AMOUNT),
         OperationKind::Transfer,

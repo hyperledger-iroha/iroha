@@ -4,7 +4,8 @@
 //!
 //! The GPU backend is optional – enable the `fastpq-gpu` feature and provide a CUDA toolchain
 //! (SM80+) to compile the kernels. When unavailable, all entry points return
-//! [`CudaBackendError::Unavailable`] so the caller can fall back to the scalar implementation.
+//! [`CudaBackendError::Unavailable`]. The explicit six-lane frame API propagates
+//! failure and never substitutes CPU execution.
 use crate::bn254::{self, BN254_LIMBS};
 #[cfg(feature = "fastpq-gpu")]
 use crate::trace::PoseidonColumnSlice;
@@ -181,6 +182,15 @@ mod native {
             stage_twiddle_len: usize,
             coset: *const u64,
             out: *mut u64,
+        ) -> i32;
+        fn fastpq_digest384_hash_frames_v1_cuda(
+            words: *const u64,
+            word_count: usize,
+            descriptors: *const u64,
+            frame_count: usize,
+            parameters: *const u64,
+            parameter_count: usize,
+            output: *mut u64,
         ) -> i32;
         fn fastpq_poseidon_permute_cuda(states: *mut u64, state_count: usize) -> i32;
         fn fastpq_poseidon_hash_columns_cuda(
@@ -379,6 +389,28 @@ mod native {
         };
         map_cuda(code)
     }
+    pub(super) fn digest384_hash_frames_v1(
+        staged: &crate::digest384_gpu::StagedDigest384V1,
+        output: &mut [u64],
+    ) -> Result<()> {
+        let parameters = crate::digest384_gpu::digest384_gpu_parameters_v1();
+        // SAFETY: only the bounded canonical staging owner constructs these
+        // buffers; descriptor ranges and six-word output shape are checked.
+        // Native completion or quarantine takes ownership of every async copy
+        // before this synchronous call returns.
+        let code = unsafe {
+            fastpq_digest384_hash_frames_v1_cuda(
+                staged.words.as_ptr(),
+                staged.words.len(),
+                staged.descriptors.as_ptr(),
+                staged.frame_count,
+                parameters.as_ptr(),
+                parameters.len(),
+                output.as_mut_ptr(),
+            )
+        };
+        map_cuda(code)
+    }
     pub(super) fn bn254_poseidon_hash_words(
         words: &[u64],
         slices: &[Bn254PoseidonCudaSlice],
@@ -493,6 +525,13 @@ mod native {
         Err(CudaBackendError::Unavailable)
     }
     #[cfg(feature = "fastpq-gpu")]
+    pub(super) fn digest384_hash_frames_v1(
+        _staged: &crate::digest384_gpu::StagedDigest384V1,
+        _output: &mut [u64],
+    ) -> Result<()> {
+        Err(CudaBackendError::Unavailable)
+    }
+    #[cfg(feature = "fastpq-gpu")]
     pub(super) fn bn254_poseidon_hash_words(
         _words: &[u64],
         _slices: &[Bn254PoseidonCudaSlice],
@@ -502,6 +541,18 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
+}
+#[cfg(feature = "fastpq-gpu")]
+pub(crate) fn digest384_hash_frames_v1(
+    staged: &crate::digest384_gpu::StagedDigest384V1,
+    output: &mut [u64],
+) -> Result<()> {
+    if output.len() != staged.frame_count * 6 {
+        return Err(CudaBackendError::InvalidInput(
+            "six-lane CUDA output shape mismatch",
+        ));
+    }
+    native::digest384_hash_frames_v1(staged, output)
 }
 #[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn backend_quarantined() -> bool {
@@ -855,6 +906,49 @@ mod tests {
         scalar_from_canonical_limbs, scalars_to_canonical, stage_twiddles_scalars,
     };
     use iroha_zkp_halo2::Bn254Scalar;
+
+    // Hardware qualification must opt into failing on unavailable/broken CUDA;
+    // developer runs without a GPU retain the optional-backend test behavior.
+    fn cuda_test_succeeded(result: super::Result<()>, required: bool, context: &str) -> bool {
+        match result {
+            Ok(()) => true,
+            Err(err @ (CudaBackendError::Unavailable | CudaBackendError::Cuda { .. }))
+                if !required =>
+            {
+                eprintln!("skipping {context}: {err}");
+                false
+            }
+            Err(err) => panic!("{context} failed: {err}"),
+        }
+    }
+
+    #[test]
+    fn cuda_test_requirement_fails_closed_on_unavailable_or_faulted_backends() {
+        assert!(cuda_test_succeeded(Ok(()), true, "test"));
+        for error in [
+            CudaBackendError::Unavailable,
+            CudaBackendError::Cuda { code: 35 },
+            CudaBackendError::Cuda { code: 700 },
+        ] {
+            assert!(!cuda_test_succeeded(Err(error), false, "test"));
+            assert!(
+                std::panic::catch_unwind(|| {
+                    cuda_test_succeeded(Err(error), true, "required test")
+                })
+                .is_err()
+            );
+        }
+        assert!(
+            std::panic::catch_unwind(|| {
+                cuda_test_succeeded(
+                    Err(CudaBackendError::InvalidInput("bad input")),
+                    false,
+                    "test",
+                )
+            })
+            .is_err()
+        );
+    }
     #[test]
     fn validate_bn254_dense_requires_full_limb_columns() {
         let err = validate_bn254_dense(3, 1, 0).expect_err("shape mismatch");
@@ -1168,6 +1262,10 @@ mod tests {
         match super::native::test_wait_timeout(1) {
             Err(CudaBackendError::Cuda { .. }) => {}
             Err(CudaBackendError::Unavailable) => {
+                assert!(
+                    std::env::var_os("FASTPQ_CUDA_REQUIRE").is_none(),
+                    "required CUDA timeout harness backend unavailable"
+                );
                 eprintln!("skipping CUDA timeout harness: backend unavailable");
             }
             Ok(()) => panic!("timeout harness unexpectedly reported success"),
@@ -1187,13 +1285,12 @@ mod tests {
         cpu_fft(&mut cpu_columns, log_size, &twiddles);
         let cpu_expected = scalars_to_canonical(&cpu_columns);
         let mut dense = gpu_columns.concat();
-        match fastpq_bn254_fft(&mut dense, column_count, log_size) {
-            Ok(()) => {}
-            Err(err @ (CudaBackendError::Unavailable | CudaBackendError::Cuda { .. })) => {
-                eprintln!("skipping BN254 CUDA FFT parity test: {err}");
-                return;
-            }
-            Err(err) => panic!("BN254 CUDA FFT failed: {err}"),
+        if !cuda_test_succeeded(
+            fastpq_bn254_fft(&mut dense, column_count, log_size),
+            std::env::var_os("FASTPQ_CUDA_REQUIRE").is_some(),
+            "BN254 CUDA FFT parity test",
+        ) {
+            return;
         }
         for (column, chunk) in gpu_columns
             .iter_mut()
@@ -1219,20 +1316,19 @@ mod tests {
         let cpu_eval = cpu_lde(&coeff_scalars, trace_log, blowup_log, &twiddles, coset);
         let cpu_expected = scalars_to_canonical(&cpu_eval);
         let mut out = vec![0u64; column_count * (1usize << (trace_log + blowup_log)) * BN254_LIMBS];
-        match fastpq_bn254_lde(
-            &coeffs.concat(),
-            column_count,
-            trace_log,
-            blowup_log,
-            coset_limbs,
-            &mut out,
+        if !cuda_test_succeeded(
+            fastpq_bn254_lde(
+                &coeffs.concat(),
+                column_count,
+                trace_log,
+                blowup_log,
+                coset_limbs,
+                &mut out,
+            ),
+            std::env::var_os("FASTPQ_CUDA_REQUIRE").is_some(),
+            "BN254 CUDA LDE parity test",
         ) {
-            Ok(()) => {}
-            Err(err @ (CudaBackendError::Unavailable | CudaBackendError::Cuda { .. })) => {
-                eprintln!("skipping BN254 CUDA LDE parity test: {err}");
-                return;
-            }
-            Err(err) => panic!("BN254 CUDA LDE failed: {err}"),
+            return;
         }
         let eval_extent = (1usize << (trace_log + blowup_log)) * BN254_LIMBS;
         let gpu_eval: Vec<Vec<u64>> = out.chunks_exact(eval_extent).map(<[u64]>::to_vec).collect();
@@ -1246,13 +1342,12 @@ mod tests {
         let mut expected_fft: Option<Vec<u64>> = None;
         for _ in 0..3 {
             let mut dense = columns.concat();
-            match fastpq_bn254_fft(&mut dense, column_count, log_size) {
-                Ok(()) => {}
-                Err(err @ (CudaBackendError::Unavailable | CudaBackendError::Cuda { .. })) => {
-                    eprintln!("skipping BN254 CUDA repeat determinism test: {err}");
-                    return;
-                }
-                Err(err) => panic!("BN254 CUDA FFT failed: {err}"),
+            if !cuda_test_succeeded(
+                fastpq_bn254_fft(&mut dense, column_count, log_size),
+                std::env::var_os("FASTPQ_CUDA_REQUIRE").is_some(),
+                "BN254 CUDA FFT repeat determinism test",
+            ) {
+                return;
             }
             if let Some(expected) = &expected_fft {
                 assert_eq!(
@@ -1270,20 +1365,19 @@ mod tests {
         for _ in 0..3 {
             let mut out =
                 vec![0u64; column_count * (1usize << (trace_log + blowup_log)) * BN254_LIMBS];
-            match fastpq_bn254_lde(
-                &coeffs.concat(),
-                column_count,
-                trace_log,
-                blowup_log,
-                coset_limbs,
-                &mut out,
+            if !cuda_test_succeeded(
+                fastpq_bn254_lde(
+                    &coeffs.concat(),
+                    column_count,
+                    trace_log,
+                    blowup_log,
+                    coset_limbs,
+                    &mut out,
+                ),
+                std::env::var_os("FASTPQ_CUDA_REQUIRE").is_some(),
+                "BN254 CUDA LDE repeat determinism test",
             ) {
-                Ok(()) => {}
-                Err(err @ (CudaBackendError::Unavailable | CudaBackendError::Cuda { .. })) => {
-                    eprintln!("skipping BN254 CUDA repeat determinism test: {err}");
-                    return;
-                }
-                Err(err) => panic!("BN254 CUDA LDE failed: {err}"),
+                return;
             }
             if let Some(expected) = &expected_lde {
                 assert_eq!(

@@ -5,6 +5,7 @@ package org.hyperledger.iroha.sdk.privacy
 
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import java.util.Collections
 import java.util.LinkedHashMap
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -127,7 +128,7 @@ class PrivacyExact12ReleaseManifestV1 internal constructor(
 class PrivacyExact12DeploymentQualificationV1 internal constructor(
     @JvmField val version: Int,
     @JvmField val chainId: Any?,
-    @JvmField val networkId: Any?,
+    @JvmField val networkId: NetworkId,
     @JvmField val genesisHash: PrivacyFixed32V1,
     @JvmField val releaseManifestDigest: PrivacyFixed32V1,
     @JvmField val activationTransactionDigest: PrivacyFixed32V1,
@@ -143,6 +144,12 @@ class PrivacyExact12DeploymentQualificationV1 internal constructor(
     @JvmField
     val activations: List<PrivacyDeploymentActivationV1> =
         Collections.unmodifiableList(activations.toList())
+
+    init {
+        require(networkId.bytes().contentEquals(genesisHash.bytes())) {
+            "Exact12 deployment network identity must equal its genesis hash"
+        }
+    }
 }
 
 /** Singleton release plus target-network evidence from committed state. */
@@ -253,11 +260,10 @@ class PrivacyExact12CapabilityRowV1 internal constructor(
 /**
  * Native-validated canonical Torii Exact12 capability manifest.
  *
- * [canonicalBytes] are the exact immutable Norito bytes received from Torii. The manifest digest
- * identifies content but is not an authentication mechanism; transport authentication
- * remains the caller's responsibility. Instances can only be issued through [PrivacyNativeBridge].
+ * Public decoding provides inspection only. Admission also requires the private origin binding
+ * issued by the configured Torii transport after an authenticated response for its exact network.
  */
-class PrivacyExact12CapabilityManifestV1 internal constructor(
+class PrivacyExact12CapabilityManifestV1 private constructor(
     @JvmField val version: Int,
     @JvmField val committedHeight: BigInteger,
     @JvmField val consensusPolicy: PrivacyConsensusPolicyV1,
@@ -265,6 +271,7 @@ class PrivacyExact12CapabilityManifestV1 internal constructor(
     protocols: List<PrivacyExact12CapabilityRowV1>,
     @JvmField val manifestDigest: PrivacyFixed32V1,
     canonicalArchive: ByteArray,
+    private val authenticatedNetworkId: NetworkId? = null,
 ) {
     @JvmField
     val protocols: List<PrivacyExact12CapabilityRowV1>
@@ -310,6 +317,11 @@ class PrivacyExact12CapabilityManifestV1 internal constructor(
             check(it.protocolId == protocolId) { "Exact12 protocol registry order drifted" }
         }
 
+    internal fun requireAuthenticatedNetwork(): NetworkId =
+        requireNotNull(authenticatedNetworkId) {
+            "Exact12 admission requires an authenticated Torii response; decoded archives are inspection-only"
+        }
+
     override fun equals(other: Any?): Boolean =
         other is PrivacyExact12CapabilityManifestV1 && archive.contentEquals(other.archive)
 
@@ -318,6 +330,39 @@ class PrivacyExact12CapabilityManifestV1 internal constructor(
     companion object {
         const val VERSION: Int = 1
         const val MAX_ARCHIVE_BYTES: Int = 256 * 1024
+
+        @JvmSynthetic
+        internal fun inspection(
+            version: Int,
+            committedHeight: BigInteger,
+            consensusPolicy: PrivacyConsensusPolicyV1,
+            qualification: PrivacyExact12QualificationRecordV1?,
+            protocols: List<PrivacyExact12CapabilityRowV1>,
+            manifestDigest: PrivacyFixed32V1,
+            canonicalArchive: ByteArray,
+        ): PrivacyExact12CapabilityManifestV1 = PrivacyExact12CapabilityManifestV1(
+            version, committedHeight, consensusPolicy, qualification, protocols,
+            manifestDigest, canonicalArchive,
+        )
+
+        /** Only the SDK's authenticated Torii transport may issue this origin binding. */
+        @JvmSynthetic
+        internal fun fromAuthenticatedTorii(
+            archive: ByteArray,
+            expectedNetworkId: NetworkId,
+        ): PrivacyExact12CapabilityManifestV1 {
+            val decoded = PrivacyNativeBridge.requireExact12CapabilityManifest(
+                archive, expectedNetworkId,
+            )
+            require(decoded.qualification?.deploymentQualification?.networkId.let {
+                it == null || it == expectedNetworkId
+            }) { "Exact12 deployment qualification belongs to a different network" }
+            return PrivacyExact12CapabilityManifestV1(
+                decoded.version, decoded.committedHeight, decoded.consensusPolicy,
+                decoded.qualification, decoded.protocols, decoded.manifestDigest,
+                decoded.archive, expectedNetworkId,
+            )
+        }
     }
 }
 
@@ -328,9 +373,16 @@ class PrivacyExact12CapabilityTupleAdmissionV1 private constructor(
     @JvmField val manifestDigest: PrivacyFixed32V1,
     @JvmField val operationSchema: PrivacyOperationSchemaV1,
     canonicalManifestArchive: ByteArray,
+    private val expectedNetworkId: NetworkId,
     private val seal: Any,
 ) {
     private val manifestArchive = canonicalManifestArchive.copyOf()
+
+    internal fun requireNetwork(networkId: NetworkId) {
+        require(expectedNetworkId == networkId) {
+            "Exact12 capability admission belongs to a different transaction network"
+        }
+    }
 
     companion object {
         private val SEAL = Any()
@@ -340,13 +392,15 @@ class PrivacyExact12CapabilityTupleAdmissionV1 private constructor(
             row: PrivacyExact12CapabilityRowV1,
         ): PrivacyExact12CapabilityTupleAdmissionV1 {
             val archive = manifest.canonicalBytes()
-            PrivacyNativeBridge.requireExact12CapabilityTuple(archive, row.protocolId)
+            val networkId = manifest.requireAuthenticatedNetwork()
+            PrivacyNativeBridge.requireExact12CapabilityTuple(archive, row.protocolId, networkId)
             return PrivacyExact12CapabilityTupleAdmissionV1(
                 row.protocolId,
                 manifest.committedHeight,
                 manifest.manifestDigest,
                 row.operationSchema,
                 archive,
+                networkId,
                 SEAL,
             )
         }
@@ -361,6 +415,7 @@ class PrivacyExact12CapabilityTupleAdmissionV1 private constructor(
             PrivacyNativeBridge.requireExact12CapabilityTuple(
                 admission.manifestArchive,
                 protocolId,
+                admission.expectedNetworkId,
             )
         }
 
@@ -374,6 +429,7 @@ class PrivacyExact12CapabilityTupleAdmissionV1 private constructor(
                 admission.manifestArchive,
                 protocolId,
                 instructionArchive,
+                admission.expectedNetworkId,
             )
         }
     }
@@ -391,6 +447,7 @@ object PrivacyExact12CapabilityAdmissionV1 {
         manifest: PrivacyExact12CapabilityManifestV1,
         protocolId: PrivacyProtocolIdV1,
     ): PrivacyExact12CapabilityTupleAdmissionV1 {
+        manifest.requireAuthenticatedNetwork()
         val row = manifest.rowFor(protocolId)
         require(row.isNetworkAvailable()) {
             "Exact12 protocol ${protocolId.canonicalLabel} is not active and ready in committed state"
@@ -506,7 +563,7 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
             manifest["manifest_digest"],
             "Exact12 capability manifest.manifest_digest",
         )
-        return PrivacyExact12CapabilityManifestV1(
+        return PrivacyExact12CapabilityManifestV1.inspection(
             version,
             committedHeight,
             consensusPolicy,
@@ -1077,7 +1134,7 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         val deploymentQualification = PrivacyExact12DeploymentQualificationV1(
             deploymentVersion,
             immutableJsonValue(deployment["chain_id"]),
-            immutableJsonValue(deployment["network_id"]),
+            NetworkId.parse(text(deployment["network_id"], "$deploymentPath.network_id")),
             fixed32(deployment["genesis_hash"], "$deploymentPath.genesis_hash"),
             deployedReleaseDigest,
             fixed32(

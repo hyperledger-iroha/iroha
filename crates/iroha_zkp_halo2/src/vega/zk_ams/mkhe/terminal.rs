@@ -2576,7 +2576,17 @@ mod tests {
                 4 => history.context_digest[0] ^= 1,
                 _ => unreachable!(),
             }
-            history = reseal_history(history);
+            if mutation == 2 {
+                // The canonical digest encoder rejects a missing commitment
+                // before it can be resealed. The prover must reject the same
+                // malformed history as well.
+                assert_eq!(
+                    fold_history_digest(&history),
+                    Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+                );
+            } else {
+                history = reseal_history(history);
+            }
             assert!(
                 fixture
                     .prove_with(&fixture.governed, &history, fixture.materialized.clone())

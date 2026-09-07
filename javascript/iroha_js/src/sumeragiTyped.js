@@ -93,7 +93,7 @@ function parseSumeragiNexusFeeReceipt(value, context) {
   });
 }
 
-const MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096;
+const MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_SOURCES = 4096;
 
 function parseSumeragiNativeAmxBody(value, context) {
   const record = assertExactSumeragiRecord(
@@ -317,7 +317,7 @@ const SUMERAGI_NATIVE_SETTLEMENT_TYPE =
   "iroha_data_model::block::consensus::NativeAmxParticipantSettlement";
 
 const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
-  "iroha.consensus.native-amx.participant-settlement.v1",
+  "iroha:native-amx:participant-settlement:v1",
   "utf8",
 );
 
@@ -534,80 +534,71 @@ function computeSumeragiNativeProposalHash(descriptor) {
   );
 }
 
-function encodeSumeragiNativeBigInt(value) {
-  if (value === 0n) {
-    return Buffer.alloc(0);
+function parseSumeragiNativeParticipantSettlement(value, context) {
+  const record = assertExactSumeragiRecord(value, [
+    "lane_id", "dataspace_id", "lane_incarnation",
+    "participant_lane_block_height", "authority_context_height",
+    "previous_native_settlement_hash", "source_ids",
+  ], context);
+  const sourceIds = assertSumeragiArrayBound(
+    record.source_ids, MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_SOURCES,
+    `${context}.source_ids`, 1,
+  ).map((value, index) => {
+    const source = parseSumeragiByte32(value, `${context}.source_ids[${index}]`);
+    if (/^0{64}$/u.test(source)) {
+      throw new TypeError(`${context}.source_ids[${index}] must be nonzero`);
+    }
+    return source;
+  });
+  if (new Set(sourceIds).size !== sourceIds.length) {
+    throw new TypeError(`${context}.source_ids must be unique`);
   }
-  let hex = value.toString(16);
-  if (hex.length % 2 !== 0) {
-    hex = `0${hex}`;
+  const incarnation = parseSumeragiNonzeroHash(record.lane_incarnation, `${context}.lane_incarnation`);
+  if (/^0{63}1$/u.test(incarnation.slice(5, 69))) {
+    throw new TypeError(`${context}.lane_incarnation must not be the marked zero hash`);
   }
-  const bigEndian = Buffer.from(hex, "hex");
-  const littleEndian = Buffer.from(bigEndian).reverse();
-  return (littleEndian[littleEndian.length - 1] & 0x80) !== 0
-    ? Buffer.concat([littleEndian, Buffer.from([0])])
-    : littleEndian;
+  const height = parseSumeragiUnsigned(record.participant_lane_block_height,
+    `${context}.participant_lane_block_height`, { positive: true });
+  const previous = record.previous_native_settlement_hash === null ? null
+    : parseSumeragiNonzeroHash(record.previous_native_settlement_hash,
+      `${context}.previous_native_settlement_hash`);
+  if (previous !== null && /^0{63}1$/u.test(previous.slice(5, 69))) {
+    throw new TypeError(`${context}.previous_native_settlement_hash must not be the marked zero hash`);
+  }
+  if (BigInt(height) === 1n && previous !== null) {
+    throw new TypeError(`${context}.previous_native_settlement_hash must be null at participant height one`);
+  }
+  return Object.freeze({
+    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, { max: 0xffffffff }),
+    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
+    lane_incarnation: incarnation,
+    participant_lane_block_height: height,
+    authority_context_height: parseSumeragiUnsigned(record.authority_context_height,
+      `${context}.authority_context_height`, { positive: true }),
+    previous_native_settlement_hash: previous,
+    source_ids: Object.freeze(sourceIds),
+  });
 }
 
-function encodeSumeragiNativeQuantity(value) {
-  const [whole, fraction = ""] = value.split(".");
-  const mantissa = BigInt(`${whole}${fraction}`);
-  const encoded = encodeSumeragiNativeBigInt(mantissa);
-  return encodeSumeragiNativeStruct([
-    Buffer.concat([encodeSumeragiNativeU32(encoded.length), encoded]),
-    encodeSumeragiNativeU32(fraction.length),
-  ]);
-}
-
-function encodeSumeragiNativeSettlementReceipt(receipt) {
-  return encodeSumeragiNativeStruct([
-    Buffer.from(receipt.source_id, "hex"),
-    encodeSumeragiNativeQuantity(receipt.local_amount),
-    encodeSumeragiNativeQuantity(receipt.xor_due),
-    encodeSumeragiNativeQuantity(receipt.xor_after_haircut),
-    encodeSumeragiNativeQuantity(receipt.xor_variance),
-    u64ToLittleEndianBuffer(receipt.timestamp_ms),
-  ]);
-}
-
-const SUMERAGI_NATIVE_PARTICIPANT_SETTLEMENT_FIELDS = [
-  "block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count",
-  "total_local_amount", "total_xor_due", "total_xor_after_haircut",
-  "total_xor_variance", "swap_metadata", "receipts", "nexus_fee_receipts",
-];
-
-function computeSumeragiNativeParticipantSettlementHash(settlement) {
-  const canonicalSettlement = parseSumeragiNativeParticipantSettlement(
-    settlement,
-    "Native AMX participant settlement",
-  );
+function computeSumeragiNativeParticipantSettlementHash(value) {
+  const settlement = parseSumeragiNativeParticipantSettlement(value, "Native AMX participant settlement");
   const payload = encodeSumeragiNativeStruct([
-    u64ToLittleEndianBuffer(canonicalSettlement.block_height),
-    encodeSumeragiNativeLaneId(canonicalSettlement.lane_id),
-    encodeSumeragiNativeHash(canonicalSettlement.lane_incarnation),
-    encodeSumeragiNativeDataspaceId(canonicalSettlement.dataspace_id),
-    u64ToLittleEndianBuffer(canonicalSettlement.tx_count),
-    encodeSumeragiNativeQuantity(canonicalSettlement.total_local_amount),
-    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_due),
-    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_after_haircut),
-    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_variance),
-    Buffer.from([0]),
-    encodeNoritoVec(
-      canonicalSettlement.receipts,
-      encodeSumeragiNativeSettlementReceipt,
-      true,
-    ),
-    encodeNoritoVec([], (value) => value, true),
+    encodeSumeragiNativeLaneId(settlement.lane_id),
+    encodeSumeragiNativeDataspaceId(settlement.dataspace_id),
+    encodeSumeragiNativeHash(settlement.lane_incarnation),
+    u64ToLittleEndianBuffer(settlement.participant_lane_block_height),
+    u64ToLittleEndianBuffer(settlement.authority_context_height),
+    encodeSumeragiNativeOptionalHash(settlement.previous_native_settlement_hash),
+    // Norito [u8; 32] frames each byte; this is not the raw Hash representation.
+    encodeNoritoVec(settlement.source_ids, (source) => encodeSumeragiNativeStruct(
+      [...Buffer.from(source, "hex")].map((byte) => Buffer.from([byte])),
+    ), true),
   ]);
-  const framedSettlement = frameNoritoPayload(
-    SUMERAGI_NATIVE_SETTLEMENT_TYPE,
-    payload,
-    2,
-  );
+  const frame = frameNoritoPayload(SUMERAGI_NATIVE_SETTLEMENT_TYPE, payload, 2);
   return formatSumeragiNativeHash(Buffer.concat([
     u64ToLittleEndianBuffer(SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN.length),
     SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN,
-    framedSettlement,
+    frame,
   ]));
 }
 
@@ -974,45 +965,6 @@ function parseSumeragiLaneSettlementReceipt(receipt, context) {
   };
 }
 
-function parseSumeragiNativeParticipantSettlement(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    SUMERAGI_NATIVE_PARTICIPANT_SETTLEMENT_FIELDS,
-    context,
-  );
-  if (
-    record.swap_metadata !== null ||
-    !Array.isArray(record.nexus_fee_receipts) ||
-    record.nexus_fee_receipts.length !== 0
-  ) {
-    throw new TypeError(`${context} cannot contain swap metadata or fee receipts`);
-  }
-  const receipts = assertSumeragiArrayBound(
-    record.receipts,
-    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-    `${context}.receipts`,
-    1,
-  ).map((receipt, index) =>
-    Object.freeze(
-      parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${index}]`),
-    ),
-  );
-  return Object.freeze({
-    block_height: parseSumeragiUnsigned(record.block_height, `${context}.block_height`),
-    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, { max: 0xffffffff }),
-    lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${context}.lane_incarnation`),
-    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
-    tx_count: parseSumeragiUnsigned(record.tx_count, `${context}.tx_count`),
-    total_local_amount: requireCanonicalQuantity(record.total_local_amount, `${context}.total_local_amount`),
-    total_xor_due: requireCanonicalQuantity(record.total_xor_due, `${context}.total_xor_due`),
-    total_xor_after_haircut: requireCanonicalQuantity(record.total_xor_after_haircut, `${context}.total_xor_after_haircut`),
-    total_xor_variance: requireCanonicalQuantity(record.total_xor_variance, `${context}.total_xor_variance`),
-    swap_metadata: null,
-    receipts: Object.freeze(receipts),
-    nexus_fee_receipts: Object.freeze([]),
-  });
-}
-
 function parseSumeragiNativeAmxLeg(value, context) {
   const record = assertExactSumeragiRecord(
     value,
@@ -1036,8 +988,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
     `${context}.participant_proposal`,
   );
   const participantSettlement = parseSumeragiNativeParticipantSettlement(
-    record.participant_settlement,
-    `${context}.participant_settlement`,
+    record.participant_settlement, `${context}.participant_settlement`,
   );
   const participantSettlementHash = parseSumeragiNonzeroHash(
     record.participant_settlement_hash,
@@ -1095,13 +1046,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
   ) {
     throw new TypeError(`${context} participant proposal differs from its signed body`);
   }
-  const receipts = participantSettlement.receipts;
-  const receiptSources = receipts.map((receipt) => receipt.source_id);
-  if (receiptSources.some((sourceId, index) => index > 0 && receiptSources[index - 1] >= sourceId)) {
-    throw new TypeError(
-      `${context}.participant_settlement.receipts must be strictly ordered by source_id`,
-    );
-  }
+  const receiptSources = participantSettlement.source_ids;
   const matchingEntrypointPositions = descriptor.accepted_transaction_hashes
     .flatMap((hash, index) => (hash === body.tx_entrypoint_hash ? [index] : []));
   if (matchingEntrypointPositions.length > 1) {
@@ -1113,8 +1058,8 @@ function parseSumeragiNativeAmxLeg(value, context) {
   if (
     !requiresMixedRoleAnchorValidation &&
     (
-      descriptor.accepted_candidate_indices.length !== receipts.length ||
-      descriptor.accepted_transaction_hashes.length !== receipts.length ||
+      descriptor.accepted_candidate_indices.length !== receiptSources.length ||
+      descriptor.accepted_transaction_hashes.length !== receiptSources.length ||
       receiptSources[matchingEntrypointPositions[0]] !== body.source_id
     )
   ) {
@@ -1124,27 +1069,12 @@ function parseSumeragiNativeAmxLeg(value, context) {
   }
   if (
     participantSettlementHash !== body.participant_settlement_commitment ||
-    participantSettlement.block_height !== body.participant_lane_block_height ||
+    participantSettlement.participant_lane_block_height !== body.participant_lane_block_height ||
     participantSettlement.lane_id !== laneId ||
     participantSettlement.dataspace_id !== dataspaceId ||
     participantSettlement.lane_incarnation !== body.participant_lane_incarnation ||
-    participantSettlement.tx_count !== receipts.length ||
-    participantSettlement.total_local_amount !== "0" ||
-    participantSettlement.total_xor_due !== "0" ||
-    participantSettlement.total_xor_after_haircut !== "0" ||
-    participantSettlement.total_xor_variance !== "0" ||
-    participantSettlement.swap_metadata !== null ||
-    new Set(receiptSources).size !== receiptSources.length ||
-    receiptSources.filter((sourceId) => sourceId === body.source_id).length !== 1 ||
-    receipts.some(
-      (receipt) =>
-        receipt.local_amount !== "0" ||
-        receipt.xor_due !== "0" ||
-        receipt.xor_after_haircut !== "0" ||
-        receipt.xor_variance !== "0" ||
-        receipt.timestamp_ms !== body.authority_context_height,
-    ) ||
-    participantSettlement.nexus_fee_receipts.length !== 0
+    participantSettlement.authority_context_height !== body.authority_context_height ||
+    receiptSources.filter((sourceId) => sourceId === body.source_id).length !== 1
   ) {
     throw new TypeError(`${context} participant settlement differs from its signed body`);
   }
@@ -1327,7 +1257,7 @@ function parseLaneSettlementCommitments(payload) {
           ["Tier1", "Tier2", "Tier3"],
           `status.lane_settlement_commitments[${index}].swap_metadata.liquidity_profile`,
         ),
-        twap_local_per_xor: requireNonEmptyString(
+        twap_local_per_xor: requireCanonicalNumeric(
           metadata.twap_local_per_xor,
           `status.lane_settlement_commitments[${index}].swap_metadata.twap_local_per_xor`,
         ),
@@ -1364,7 +1294,7 @@ function parseLaneSettlementCommitments(payload) {
     const nativeAmxReceipts = Object.freeze(
       assertSumeragiArrayBound(
         record.native_amx_receipts,
-        MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+        MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_SOURCES,
         `${context}.native_amx_receipts`,
       ).map((receipt, receiptIndex) =>
         parseSumeragiNativeAmxReceipt(
@@ -1389,12 +1319,6 @@ function parseLaneSettlementCommitments(payload) {
       throw new TypeError(`${context} contains duplicate native AMX receipt sources`);
     }
     const nativeAmxSources = nativeAmxReceipts.map((receipt) => receipt.source_id);
-    if (nativeAmxSources.some(
-      (sourceId, sourceIndex) =>
-        sourceIndex > 0 && nativeAmxSources[sourceIndex - 1] >= sourceId,
-    )) {
-      throw new TypeError(`${context} native AMX receipt sources must be strictly ordered`);
-    }
     if (
       nexusFeeReceipts.some(
         (receipt) =>
@@ -1419,9 +1343,8 @@ function parseLaneSettlementCommitments(payload) {
     if (
       nativeAmxReceipts.some((receipt) =>
         receipt.legs.some((leg) =>
-          JSON.stringify(
-            leg.participant_settlement.receipts.map((entry) => entry.source_id),
-          ) !== JSON.stringify(nativeAmxSources),
+          leg.lane_id === receipt.lane_id && leg.dataspace_id === receipt.dataspace_id &&
+          JSON.stringify(leg.participant_settlement.source_ids) !== JSON.stringify(nativeAmxSources),
         ),
       )
     ) {
@@ -3888,6 +3811,26 @@ function requireCanonicalQuantity(value, name) {
   }
 }
 
+function requireCanonicalNumeric(value, name) {
+  if (typeof value !== "string" || value.length > 156) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a bounded canonical Numeric string`,
+      name,
+    );
+  }
+  try {
+    return NumericV1.decodeDecimalJson(value).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a canonical signed Numeric (${error.code})`,
+      name,
+    );
+  }
+}
+
 function parseHashLiteralToHex(literal, name) {
   const match = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/.exec(literal);
   if (!match) {
@@ -3998,6 +3941,7 @@ export function parseSumeragiDiagnosticsJson(
 
 export const __sumeragiNativeAmxTestHelpers = Object.freeze({
   computeDescriptorHash: computeSumeragiNativeDescriptorHash,
+  parseParticipantSettlement: parseSumeragiNativeParticipantSettlement,
   computeParticipantSettlementHash:
     computeSumeragiNativeParticipantSettlementHash,
   computeProposalHash: computeSumeragiNativeProposalHash,

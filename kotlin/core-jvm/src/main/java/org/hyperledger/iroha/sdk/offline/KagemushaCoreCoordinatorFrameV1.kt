@@ -10,7 +10,7 @@ import java.nio.ByteOrder
 enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
     RESERVE_OPERATION_ID(1), ACCEPT_QUALIFICATION(2), ACCEPT_AUTHENTICATED_REPLY(3),
     BEGIN_SENDER_TRANSITION(4), PROVE_PREPARED_SENDER_TRANSITION(5), BUILD_TERMINAL_ENVELOPE(6),
-    ACCEPT_INSTALLED_TERMINAL(7), RECOVER_SENDER(8), RECOVER_TERMINAL_ENVELOPE(9), RELEASE_OUTBOX(10),
+    ACCEPT_INSTALLED_TERMINAL(7), RECOVER_SENDER(8), RECOVER_TERMINAL_ENVELOPE(9), RELEASE_OUTBOX(10), BEGIN_OBSERVATION(11),
 }
 
 /**
@@ -111,13 +111,19 @@ object KagemushaCoreCoordinatorFrameV1 {
         when (method) {
             KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID -> {
                 count(fields, 3); operation(fields, 0); digest(fields, 1); nonempty(fields, 2)
+                require(number(fields, 0) !in setOf(1, 13, 18, 21)) { "read operations require a transient native observation" }
+            }
+            KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION -> {
+                count(fields, 2); require(number(fields, 0) in setOf(1, 13, 18, 21)); nonempty(fields, 1)
             }
             KagemushaCoreCoordinatorMethodV1.ACCEPT_QUALIFICATION -> {
                 count(fields, 6); qualification(fields, 0); digest(fields, 5)
             }
             KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY -> {
-                count(fields, 9); operation(fields, 0); digest(fields, 1)
-                nonempty(fields, 2); nonempty(fields, 3); qualification(fields, 4)
+                count(fields, 10); operation(fields, 0); digest(fields, 1)
+                nonempty(fields, 2); nonempty(fields, 3)
+                KagemushaP256Codec.requireRawLowSSignature(field(fields, 4))
+                qualification(fields, 5)
             }
             KagemushaCoreCoordinatorMethodV1.BEGIN_SENDER_TRANSITION -> {
                 digest(fields, 0)
@@ -153,6 +159,7 @@ object KagemushaCoreCoordinatorFrameV1 {
             KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID -> {
                 count(response, 1); digest(response, 0); equal(response, 0, request, 1)
             }
+            KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION -> { count(response, 1); digest(response, 0) }
             KagemushaCoreCoordinatorMethodV1.ACCEPT_QUALIFICATION,
             KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY -> count(response, 0)
             KagemushaCoreCoordinatorMethodV1.BEGIN_SENDER_TRANSITION -> {

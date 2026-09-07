@@ -644,16 +644,27 @@ impl Kura {
     fn lane_block_application_receipt_available_under_prune_guard(
         &self,
         proposal: &LaneBlockProposalV1,
-    ) -> bool {
-        self.read_exact_lane_block_application_receipt_under_prune_guard(proposal)
-            .is_some()
+    ) -> Result<bool> {
+        let _canonical = self.canonical_chain_lock.lock();
+        self.lane_block_application_receipt_available_under_prune_and_canonical_guards(proposal)
     }
     fn lane_block_application_receipt_available_under_prune_and_canonical_guards(
         &self,
         proposal: &LaneBlockProposalV1,
-    ) -> bool {
-        self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
-            .is_some()
+    ) -> Result<bool> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "lane mutation terminal evidence",
+            });
+        }
+        self.ensure_prune_recovery_not_required()?;
+        Ok(self
+            .read_lane_application_receipt_under_guards(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+                true,
+            )?
+            .is_some_and(|receipt| receipt.proposal == *proposal))
     }
     fn lane_block_application_receipt_matches_available_evidence(
         &self,

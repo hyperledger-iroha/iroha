@@ -106,8 +106,18 @@ pub proof fn production_in_flight_first_release_transition_refines_named_next(
     ensures
         check_production_in_flight_first_release_transition(projection) == Some(projection)
             ==> production_in_flight_first_release_transition_kernel(projection),
+        check_production_in_flight_first_release_transition(projection) == Some(projection)
+            ==> projection.after.payload_binding_a
+                == if projection.action
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA)
+                {
+                    projection.before.payload_binding_a | projection.actor
+                } else {
+                    projection.before.payload_binding_a
+                },
 {
     reveal(check_production_in_flight_first_release_transition);
+    reveal(production_in_flight_first_release_transition_kernel);
 }
 /// A structurally authenticated V1 witness names the exact checked action,
 /// parameters, and reviewed TLA+ source while refining the same composed
@@ -129,10 +139,10 @@ pub proof fn production_in_flight_first_release_witness_refines_named_next(
         witness.action == projection.action,
         witness.actor == projection.actor,
         witness.target == projection.target,
-        witness.source_identity.word0 == 0x2a743bb211d4b36fu64,
-        witness.source_identity.word1 == 0x587cdd65bffc84c9u64,
-        witness.source_identity.word2 == 0xe822a45b2c7c7115u64,
-        witness.source_identity.word3 == 0x0a0ae281fb6f8598u64,
+        witness.source_identity.word0 == 0xf4d30d3227a52943u64,
+        witness.source_identity.word1 == 0x38ff8af3a4abb2ffu64,
+        witness.source_identity.word2 == 0x75a46bd118a682e0u64,
+        witness.source_identity.word3 == 0x5689f396ded5a7f7u64,
         production_in_flight_first_release_transition_kernel(projection),
 {
     reveal(production_in_flight_first_release_witness_binding_kernel);
@@ -330,12 +340,18 @@ pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(
         production_in_flight_first_release_terminal_owner(state) == Some(terminal),
     ensures
         !(terminal.ordinary_fifo_owner && terminal.canonical_wsv_owner),
+        terminal.canonical_wsv_owner == state.decision.wsv_committed,
         terminal.commit_terminal != terminal.release_terminal,
         terminal.canonical_wsv_owner ==> (
             state.history.reservation_commit_forgotten_prefix
                 == state.queue.selected_count
         ),
         terminal.release_terminal ==> !terminal.canonical_wsv_owner,
+        terminal.release_terminal ==> (
+            state.decision.lane_commit_owner == 0u128
+            && state.decision.application_count == 0u8
+            && state.decision.applied_by == 0u128
+        ),
         (terminal.release_terminal && !terminal.ordinary_fifo_owner) ==> (
             state.queue.reservation_state
                 == refinement_tag_value!(

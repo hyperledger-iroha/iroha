@@ -349,6 +349,7 @@ Root {
         max_frame_bytes_tx_gossip: 262144,
         max_frame_bytes_peer_gossip: 65536,
         max_frame_bytes_health: 32768,
+        max_frame_bytes_connect: 131072,
         max_frame_bytes_other: 131072,
         quic_max_idle_timeout: None,
     },
@@ -2485,8 +2486,8 @@ Root {
         bridge_proof_max_future_drift_blocks: 0,
         poseidon_params_id: None,
         pedersen_params_id: None,
-        kaigi_roster_join_vk: None,
-        kaigi_roster_leave_vk: None,
+        kaigi_authorization_vk: None,
+
         kaigi_usage_vk: None,
         max_proof_size_bytes: 1048576,
         max_nullifiers_per_tx: 8,

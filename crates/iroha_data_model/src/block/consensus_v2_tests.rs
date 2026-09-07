@@ -344,6 +344,7 @@ mod tests {
             descriptor_hash: Hash::new(b"native leaf descriptor"),
             proposal_hash: Hash::new(b"native leaf proposal"),
             settlement_hash: HashOf::from_untyped_unchecked(Hash::new(b"native leaf settlement")),
+            previous_native_settlement_hash: None,
             members: vec![member(1, 0x11), member(2, 0x22)],
             application_block_height: 21,
             application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
@@ -352,6 +353,46 @@ mod tests {
             executed_block_wire_hash: Hash::new(b"native leaf executed wire"),
         };
         assert_eq!(leaf.validate(), Ok(()));
+        let previous_native = HashOf::from_untyped_unchecked(Hash::new(b"previous Native control"));
+        let first_native_hash = HashOf::new(&leaf);
+        leaf.previous_native_settlement_hash = Some(previous_native);
+        assert_eq!(
+            leaf.validate(),
+            Ok(()),
+            "later lane slots may link across ordinary blocks"
+        );
+        assert_ne!(
+            HashOf::new(&leaf),
+            first_native_hash,
+            "manifest authenticates the Native link"
+        );
+        let linked_bytes = norito::encode_canonical(&leaf).expect("encode linked Native leaf");
+        assert_eq!(
+            norito::decode_from_bytes::<NativeAmxApplicationManifestLeafV1>(&linked_bytes)
+                .expect("decode linked Native leaf"),
+            leaf
+        );
+        leaf.previous_native_settlement_hash = Some(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0; Hash::LENGTH]),
+        ));
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf)
+        );
+        leaf.previous_native_settlement_hash = Some(previous_native);
+        leaf.participant_height = 1;
+        leaf.predecessor_height = 0;
+        leaf.predecessor_descriptor_hash = None;
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf),
+            "lane genesis cannot name a previous Native control"
+        );
+        leaf.previous_native_settlement_hash = None;
+        assert_eq!(leaf.validate(), Ok(()));
+        leaf.participant_height = 8;
+        leaf.predecessor_height = 7;
+        leaf.predecessor_descriptor_hash = Some(Hash::new(b"native leaf predecessor"));
         leaf.members.swap(0, 1);
         assert_eq!(
             leaf.validate(),
@@ -560,6 +601,7 @@ mod tests {
             settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
                 b"current native leaf settlement",
             )),
+            previous_native_settlement_hash: None,
             members: Vec::new(),
             application_block_height: 1,
             application_block_hash: HashOf::from_untyped_unchecked(Hash::new(

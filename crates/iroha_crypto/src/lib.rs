@@ -42,6 +42,8 @@ pub mod timed_ovn;
 #[cfg(feature = "bls")]
 /// Generic timelock-encryption KEM/DEM helpers outside the folded ballot path.
 pub mod tle;
+/// SHAKE256 expansion into caller-owned buffers.
+pub mod xof;
 /// Deterministic dual-`rand_core` RNG used by protocols that must replay an
 /// exact prover-randomness schedule from secret seed material.
 pub use rng::rng_from_seed_slice;

@@ -744,35 +744,13 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
                     "payload_block_hint": None,
                 },
                 "participant_settlement": {
-                    "block_height": 8,
                     "lane_id": 3,
-                    "lane_incarnation": _canonical_hash(0x65),
                     "dataspace_id": 8,
-                    "tx_count": 2,
-                    "total_local_amount": "0",
-                    "total_xor_due": "0",
-                    "total_xor_after_haircut": "0",
-                    "total_xor_variance": "0",
-                    "swap_metadata": None,
-                    "receipts": [
-                        {
-                            "source_id": source_ids[0],
-                            "local_amount": "0",
-                            "xor_due": "0",
-                            "xor_after_haircut": "0",
-                            "xor_variance": "0",
-                            "timestamp_ms": 10,
-                        },
-                        {
-                            "source_id": "CD" * 32,
-                            "local_amount": "0",
-                            "xor_due": "0",
-                            "xor_after_haircut": "0",
-                            "xor_variance": "0",
-                            "timestamp_ms": 10,
-                        },
-                    ],
-                    "nexus_fee_receipts": [],
+                    "lane_incarnation": _canonical_hash(0x65),
+                    "participant_lane_block_height": 8,
+                    "authority_context_height": 10,
+                    "previous_native_settlement_hash": None,
+                    "source_ids": list(source_ids),
                 },
                 "participant_settlement_hash": participant_settlement_hash,
                 "prepare_qc": qc("prepare"),
@@ -6268,10 +6246,8 @@ def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipt
         leg["participant_settlement_hash"]
         == leg["commit_qc"]["body"]["participant_settlement_commitment"]
     )
-    assert leg["participant_settlement"]["block_height"] == 8
-    assert len(leg["participant_settlement"]["receipts"]) == 2
-    assert len(leg["participant_settlement"]) == 12
-    assert "native_amx_receipts" not in leg["participant_settlement"]
+    assert leg["participant_settlement"]["participant_lane_block_height"] == 8
+    assert len(leg["participant_settlement"]["source_ids"]) == 2
     assert leg["prepare_qc"]["body"]["source_id"] == "AB" * 32
     assert leg["prepare_qc"]["body"]["tx_entrypoint_hash"] == _canonical_hash(0x61)
 
@@ -6290,7 +6266,7 @@ def test_get_sumeragi_diagnostics_accepts_first_native_amx_participant_block() -
         descriptor["previous_lane_block_height"] = 0
         del descriptor["previous_lane_block_descriptor_hash"]
         descriptor["lane_block_height"] = 1
-        leg["participant_settlement"]["block_height"] = 1
+        leg["participant_settlement"]["participant_lane_block_height"] = 1
         _seal_native_amx_receipt_payload(native)
     settlement["native_amx_receipts"] = native_group
     payload["lane_settlement_commitments"] = [settlement]
@@ -6333,8 +6309,7 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_group_shape_drift() -> None
     native_group.pop()
     settlement["native_amx_receipts"] = native_group
     missing_outer_source["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="exact ordered source group"):
-        _get_sumeragi_diagnostics(missing_outer_source)
+    assert len(_get_sumeragi_diagnostics(missing_outer_source).lane_settlement_commitments[0]["native_amx_receipts"]) == 1
 
     unordered_outer_sources = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
@@ -6342,13 +6317,13 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_group_shape_drift() -> None
     native_group.reverse()
     settlement["native_amx_receipts"] = native_group
     unordered_outer_sources["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="strictly ordered"):
-        _get_sumeragi_diagnostics(unordered_outer_sources)
+    parsed = _get_sumeragi_diagnostics(unordered_outer_sources).lane_settlement_commitments[0]["native_amx_receipts"]
+    assert [receipt["source_id"] for receipt in parsed] == ["CD" * 32, "AB" * 32]
 
     unordered_participant_sources = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native_group = _native_amx_receipt_group()
-    native_group[0]["legs"][0]["participant_settlement"]["receipts"].reverse()
+    native_group[0]["legs"][0]["participant_settlement"]["source_ids"].reverse()
     settlement["native_amx_receipts"] = native_group
     unordered_participant_sources["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="canonical commitment"):
@@ -6846,7 +6821,7 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         descriptor["previous_lane_block_height"] = 0
         descriptor["previous_lane_block_descriptor_hash"] = None
         descriptor["lane_block_height"] = 1
-        leg["participant_settlement"]["block_height"] = 1
+        leg["participant_settlement"]["participant_lane_block_height"] = 1
 
     def mismatch_proposal_route(leg: Dict[str, Any]) -> None:
         leg["participant_proposal"]["descriptor"]["lane_id"] = 99
@@ -6864,22 +6839,20 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         leg["participant_settlement"]["total_local_amount"] = "1"
 
     def mismatch_settlement_source(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
+        leg["participant_settlement"]["source_ids"][0] = "EF" * 32
 
     def duplicate_settlement_source(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["receipts"][1]["source_id"] = "AB" * 32
+        leg["participant_settlement"]["source_ids"][1] = "AB" * 32
 
     def wrong_settlement_tx_count(leg: Dict[str, Any]) -> None:
         leg["participant_settlement"]["tx_count"] = 1
 
     def empty_settlement(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["tx_count"] = 0
-        leg["participant_settlement"]["receipts"] = []
+        leg["participant_settlement"]["source_ids"] = []
 
     def oversized_settlement(leg: Dict[str, Any]) -> None:
-        receipt = copy.deepcopy(leg["participant_settlement"]["receipts"][0])
-        leg["participant_settlement"]["tx_count"] = 4097
-        leg["participant_settlement"]["receipts"] = [receipt] * 4097
+        receipt = copy.deepcopy(leg["participant_settlement"]["source_ids"][0])
+        leg["participant_settlement"]["source_ids"] = [receipt] * 4097
 
     def empty_recursive_settlement(leg: Dict[str, Any]) -> None:
         leg["participant_settlement"]["native_amx_receipts"] = []

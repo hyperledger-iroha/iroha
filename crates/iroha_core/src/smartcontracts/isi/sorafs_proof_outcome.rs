@@ -305,32 +305,25 @@ fn block_time_ms(
     }
     Ok(now)
 }
-fn has_named_permission(
+fn has_policy_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
-    permission_name: &str,
 ) -> bool {
     if state_transaction._curr_block.is_genesis() {
         return true;
     }
+    let required = Permission::from(CanManageSorafsProofOutcomePolicy);
     let direct = state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|permissions| {
-            permissions
-                .iter()
-                .any(|permission| permission.name() == permission_name)
-        });
+        .is_some_and(|permissions| permissions.contains(&required));
     direct
         || state_transaction
             .world
             .account_roles_iter(authority)
             .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-            .any(|role| {
-                role.permissions()
-                    .any(|permission| permission.name() == permission_name)
-            })
+            .any(|role| role.permissions().any(|permission| permission == &required))
 }
 fn has_scheduler_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -375,7 +368,7 @@ fn validate_mldsa_public_key(bytes: &[u8], label: &str) -> Result<(), Instructio
 fn policy_digest(
     policy: &ProofOutcomeSignerPolicyV1,
 ) -> Result<[u8; 32], InstructionExecutionError> {
-    let encoded_len = norito::core::encoded_frame_len(policy)
+    let encoded_len = norito::canonical_frame_len(policy)
         .map_err(|error| invalid_parameter(format!("failed to encode signer policy: {error}")))?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(POLICY_DIGEST_DOMAIN_V1);
@@ -394,7 +387,7 @@ fn policy_digest(
             Ok(())
         }
     }
-    norito::core::write_frame_to_writer(policy, &mut Blake3Writer(&mut hasher))
+    norito::core::write_canonical_to_writer(policy, &mut Blake3Writer(&mut hasher))
         .map_err(|error| invalid_parameter(format!("failed to encode signer policy: {error}")))?;
     Ok(*hasher.finalize().as_bytes())
 }
@@ -1128,11 +1121,7 @@ impl Execute for SetSorafsProofOutcomeSignerPolicy {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        if !has_named_permission(
-            state_transaction,
-            authority,
-            Permission::from(CanManageSorafsProofOutcomePolicy).name(),
-        ) {
+        if !has_policy_permission(state_transaction, authority) {
             return Err(invalid_parameter(
                 "CanManageSorafsProofOutcomePolicy permission is required",
             ));
@@ -1371,7 +1360,7 @@ fn ensure_page_budget<T: norito::core::NoritoSerialize>(
     let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
         PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1,
     );
-    let length = norito::core::encoded_frame_len(value).map_err(|error| {
+    let length = norito::canonical_frame_len(value).map_err(|error| {
         QueryExecutionFail::Conversion(format!("failed to size proof-outcome event page: {error}"))
     })?;
     if length > maximum {
@@ -1596,7 +1585,7 @@ fn query_event_page(
         )?;
         let position = ProofOutcomeQueryEventPosition::from(&event);
         let resolved = resolve_committed_event(state_ro, event)?;
-        let resolved_bytes = norito::core::encoded_frame_len(&resolved).map_err(|error| {
+        let resolved_bytes = norito::canonical_frame_len(&resolved).map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to size committed proof-outcome event: {error}"
             ))
@@ -1688,6 +1677,7 @@ impl ValidSingularQuery for FindSorafsProofOutcomeEvents {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("sorafs/proof_outcome_permission_token_tests.rs");
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -2050,6 +2040,39 @@ mod tests {
             error.contains(expected),
             "unexpected instruction error: {error}"
         );
+    }
+    #[test]
+    fn signer_policy_digest_is_canonical_under_every_ambient_layout() {
+        let policy = signer_policy(
+            1,
+            None,
+            &ed25519_keypair(0x11),
+            &mldsa_keypair(0x12),
+            &ed25519_keypair(0x13),
+        );
+        let canonical = norito::encode_canonical(&policy).expect("canonical policy frame");
+        let mut expected = blake3::Hasher::new();
+        expected.update(POLICY_DIGEST_DOMAIN_V1);
+        expected.update(
+            &u64::try_from(canonical.len())
+                .expect("policy frame length")
+                .to_le_bytes(),
+        );
+        expected.update(&canonical);
+        let expected = *expected.finalize().as_bytes();
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(policy_digest(&policy).expect("policy digest"), expected);
+            let mut changed = policy.clone();
+            changed.valid_until_unix += 1;
+            assert_ne!(
+                policy_digest(&changed).expect("changed policy digest"),
+                expected
+            );
+        }
     }
     #[test]
     fn signed_pdp_and_potr_relay_permissionlessly_and_split_peer_replay_is_single_event() {

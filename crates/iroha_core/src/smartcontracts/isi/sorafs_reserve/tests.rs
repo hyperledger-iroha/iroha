@@ -168,12 +168,15 @@ fn transact(
     let header = block_header_at(height, now_unix);
     let mut block = state.block(header.clone());
     let mut transaction = block.transaction();
+    transaction.tx_call_hash = Some(Hash::new(
+        [height.to_le_bytes(), now_unix.to_le_bytes()].concat(),
+    ));
     operation(&mut transaction)?;
     transaction.apply();
     block
         .commit_world_overlay_for_testing()
         .expect("commit reserve test block");
-    state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
+    state.push_block_hash_for_testing(header.hash());
     Ok(())
 }
 fn reserve_asset_balance(state: &State, owner: &AccountId) -> XorQuantity {
@@ -193,8 +196,14 @@ fn reserve_custody_rejects_user_debits_but_allows_exact_approved_withdrawal() {
     let provider = account(&keypair(0x52));
     let custody = account(&keypair(0x53));
     let treasury = account(&keypair(0x54));
-    let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-    let top_up = xor_micro(50_000_000);
+    let mut state = state_fixture_with_provider_balance(
+        &governance,
+        &provider,
+        &custody,
+        &treasury,
+        quantity_micro(500_000_000),
+    );
+    let top_up = xor_micro(300_000_000);
     let slash_lien = xor_micro(10_000_000);
     let withdrawal = xor_micro(1);
     transact(&mut state, 1, NOW, |transaction| {
@@ -2115,9 +2124,9 @@ fn policy_rotation_rejects_regressed_activation_time() {
         .execute(&governance, &mut transaction)
         .expect_err("regressed reserve policy activation must fail");
     assert!(
-        error
-            .to_string()
-            .contains("predates active policy activation"),
+        matches!(&error, InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(message)
+        ) if message.contains("predates active policy activation")),
         "policy rotation failed for the wrong reason: {error}"
     );
     assert_eq!(

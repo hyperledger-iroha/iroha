@@ -66,6 +66,15 @@ GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -mod=vendor ./...
 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go build -mod=vendor ./cmd/sccp-circuits
 ```
 
+`constraint-count --profile <closed-id>` compiles one exact R1CS and emits its
+constraint count, canonical `ConstraintSystem.WriteTo` byte length, and SHA-256
+identity as one JSON record. Compiler diagnostics go to stderr. The command
+hashes serialized bytes without retaining an extra output copy or writing an
+R1CS file, and generates no setup or key material. The pinned gnark serializer
+still buffers internal sections, so run large profiles sequentially and monitor
+memory pressure. Tune `GOMEMLIMIT` and `GOMAXPROCS` against shared host headroom;
+the Go memory limit is a soft GC target rather than a process memory cap.
+
 The fixed catalogue and one KAT can be inspected without key material:
 
 ```sh
@@ -110,19 +119,25 @@ invalidates the affected Phase-2 artifacts. Ceremony receipts, audit reports,
 guardian material, and production keys are external release inputs and must
 never be replaced by repository placeholders.
 
-The composable epoch-anchor recurrence repair changes all four epoch R1CS
-definitions by 97 constraints while leaving their positive KAT public values
-unchanged. `manifests/constraint-counts-final-v1.json` records the fresh
-canonical R1CS byte lengths and SHA-256 identities. All earlier epoch Phase-2
-transcripts, PK/VK pairs, fixed verifiers, and deployments are invalid; the two
-curve Phase-1 ceremonies and the four message-circuit definitions are not
-changed by this circuit-specific repair.
-
-Message authorization additionally binds the checkpoint block, context, and
+Composable epoch-anchor authorization binds each transition to the retained
+checkpoint's exact epoch and ordered roster. Message authorization also binds
+the checkpoint block, context, and
 finality artifact when the message finality height equals the retained
 checkpoint height. Focused tests cover matching and independently mismatched
 identities in both outer fields while retaining authorization for later blocks
 in the same epoch. This consistency repair changes all four message R1CS
-definitions without changing their positive KAT public values. The manifest's
-message constraint counts are historical pending recount; fresh R1CS identities,
-Phase-2 artifacts, verifiers, deployments, and independent audits remain required.
+definitions without changing their positive KAT public values. The manifest
+records canonical R1CS byte lengths and SHA-256 identities for freshly measured
+profiles and explicitly lists any still requiring measurement. Earlier affected
+Phase-2 artifacts, verifiers, and deployments remain invalid; fresh ceremonies
+and independent audits are required even when every local R1CS identity is current.
+The manifest also binds a deterministic definition-source and dependency closure;
+the focused inventory test rejects freshness claims after those inputs change.
+
+The circuit uses the canonical Rust wire namespace: TRON domain `5`, payload
+codecs text `1`, EVM `2`, TRON `5`, TON `7`, transfer payload tag `2`, and
+transfer hub-message kind `5`. These values are separate from network tags
+and destination-proof backend tags. Focused transfer-parser tests reject the
+retired compact identifiers in all four lanes; the shared Rust transfer fixture
+also guards circuit, release-script, and contract constants against drift.
+Namespace alignment changes message KATs and invalidates affected R1CS identities.

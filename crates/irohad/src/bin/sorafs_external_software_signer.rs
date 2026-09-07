@@ -13,10 +13,10 @@ mod unix_main {
         ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerNativeAdapterV1,
         ExternalSoftwareSignerPotrGatewayAdapterV1, ExternalSoftwareSignerPotrProviderAdapterV1,
         ExternalSoftwareSignerStreamTokenAdapterV1, RuntimeConsensusThresholdSignerBackendsV1,
+        SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
         SoftwareSignerAdministratorClientV1, SoftwareSignerClientV1,
-        SoftwareSignerEndpointPolicyV1, SoftwareSignerKeyAlgorithmV1,
-        SoftwareSignerLiveProvenanceV1, SoftwareSignerProvisioningV1,
-        SoftwareSignerPublicBindingV1, SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
+        SoftwareSignerEndpointPolicyV1, SoftwareSignerLiveProvenanceV1,
+        SoftwareSignerProvisioningV1, SoftwareSignerPublicBindingV1,
         SoftwareSignerRotationRequestV1, SoftwareSignerServerV1, SoftwareSignerServiceV1,
         SoftwareSignerSignatureReceiptV1, SoftwareSignerWrappingKeyV1,
         load_software_signer_wrapping_key_from_credential_v1,
@@ -134,7 +134,7 @@ mod unix_main {
         administrator_uid: u32,
         /// Isolated signing role.
         #[arg(long)]
-        role: SoftwareSignerRoleV1,
+        role: SignerRoleV1,
         /// Lowercase-hex Governance DAG publisher peer ID (Governance only).
         #[arg(long, value_name = "LOWER_HEX")]
         governance_publisher_peer_id_hex: Option<String>,
@@ -152,7 +152,7 @@ mod unix_main {
         pop_issuer_id: Option<String>,
         /// Ed25519 or ML-DSA-65; promotion permits Ed25519 only.
         #[arg(long)]
-        algorithm: SoftwareSignerKeyAlgorithmV1,
+        algorithm: SignerKeyAlgorithmV1,
         /// Initial positive monotonic key revision.
         #[arg(long)]
         key_revision: u64,
@@ -272,7 +272,7 @@ mod unix_main {
         #[arg(long, value_name = "LOWER_HEX_64")]
         new_policy_digest_sha256: String,
         #[arg(long)]
-        algorithm: SoftwareSignerKeyAlgorithmV1,
+        algorithm: SignerKeyAlgorithmV1,
         /// New successor binding file; the reviewed predecessor is preserved.
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         binding_out: PathBuf,
@@ -417,9 +417,7 @@ mod unix_main {
             0o644,
         )
     }
-    fn purpose_binding_from_args(
-        args: &ProvisionArgs,
-    ) -> Result<SoftwareSignerPurposeBindingV1, CliError> {
+    fn purpose_binding_from_args(args: &ProvisionArgs) -> Result<SignerPurposeBindingV1, CliError> {
         let no_peer = args.governance_publisher_peer_id_hex.is_none();
         let no_signer = args.potr_signer_id_hex.is_none();
         let no_provider = args.potr_provider_id_hex.is_none();
@@ -427,18 +425,16 @@ mod unix_main {
         let no_issuer = args.pop_issuer_id.is_none();
         let no_context = no_peer && no_signer && no_provider && no_billing && no_issuer;
         match args.role {
-            SoftwareSignerRoleV1::ProofOutcome
-            | SoftwareSignerRoleV1::Repair
-            | SoftwareSignerRoleV1::Reserve
-            | SoftwareSignerRoleV1::Orderbook
-            | SoftwareSignerRoleV1::Promotion
+            SignerRoleV1::ProofOutcome
+            | SignerRoleV1::Repair
+            | SignerRoleV1::Reserve
+            | SignerRoleV1::Orderbook
+            | SignerRoleV1::Promotion
                 if no_context =>
             {
-                Ok(SoftwareSignerPurposeBindingV1::NativeOrPromotion)
+                Ok(SignerPurposeBindingV1::NativeOrPromotion)
             }
-            SoftwareSignerRoleV1::GovernanceDag
-                if no_signer && no_provider && no_billing && no_issuer =>
-            {
+            SignerRoleV1::GovernanceDag if no_signer && no_provider && no_billing && no_issuer => {
                 let encoded = args
                     .governance_publisher_peer_id_hex
                     .as_deref()
@@ -450,19 +446,17 @@ mod unix_main {
                 if publisher_peer_id.is_empty() {
                     return Err(CliError::Input);
                 }
-                Ok(SoftwareSignerPurposeBindingV1::GovernanceDag { publisher_peer_id })
+                Ok(SignerPurposeBindingV1::GovernanceDag { publisher_peer_id })
             }
-            SoftwareSignerRoleV1::PotrGateway
-                if no_peer && no_provider && no_billing && no_issuer =>
-            {
-                Ok(SoftwareSignerPurposeBindingV1::PotrGateway {
+            SignerRoleV1::PotrGateway if no_peer && no_provider && no_billing && no_issuer => {
+                Ok(SignerPurposeBindingV1::PotrGateway {
                     signer_id: parse_digest(
                         args.potr_signer_id_hex.as_deref().ok_or(CliError::Input)?,
                     )?,
                 })
             }
-            SoftwareSignerRoleV1::PotrProvider if no_peer && no_billing && no_issuer => {
-                Ok(SoftwareSignerPurposeBindingV1::PotrProvider {
+            SignerRoleV1::PotrProvider if no_peer && no_billing && no_issuer => {
+                Ok(SignerPurposeBindingV1::PotrProvider {
                     signer_id: parse_digest(
                         args.potr_signer_id_hex.as_deref().ok_or(CliError::Input)?,
                     )?,
@@ -473,23 +467,17 @@ mod unix_main {
                     )?,
                 })
             }
-            SoftwareSignerRoleV1::BillingStatement
-                if no_peer && no_signer && no_provider && no_issuer =>
-            {
-                Ok(SoftwareSignerPurposeBindingV1::BillingStatement {
+            SignerRoleV1::BillingStatement if no_peer && no_signer && no_provider && no_issuer => {
+                Ok(SignerPurposeBindingV1::BillingStatement {
                     signer_id: args.billing_signer_id.clone().ok_or(CliError::Input)?,
                 })
             }
-            SoftwareSignerRoleV1::EvidenceViewer if no_context => {
-                Ok(SoftwareSignerPurposeBindingV1::EvidenceViewer)
+            SignerRoleV1::EvidenceViewer if no_context => {
+                Ok(SignerPurposeBindingV1::EvidenceViewer)
             }
-            SoftwareSignerRoleV1::StreamToken if no_context => {
-                Ok(SoftwareSignerPurposeBindingV1::StreamToken)
-            }
-            SoftwareSignerRoleV1::PopCredentials
-                if no_peer && no_signer && no_provider && no_billing =>
-            {
-                Ok(SoftwareSignerPurposeBindingV1::PopCredentials {
+            SignerRoleV1::StreamToken if no_context => Ok(SignerPurposeBindingV1::StreamToken),
+            SignerRoleV1::PopCredentials if no_peer && no_signer && no_provider && no_billing => {
+                Ok(SignerPurposeBindingV1::PopCredentials {
                     issuer_id: args.pop_issuer_id.clone().ok_or(CliError::Input)?,
                 })
             }
@@ -670,7 +658,7 @@ mod unix_main {
                     ))
                 }
                 IrohaRuntimeProviderSlotV1::GovernanceDagSigner => {
-                    let SoftwareSignerPurposeBindingV1::GovernanceDag { publisher_peer_id } =
+                    let SignerPurposeBindingV1::GovernanceDag { publisher_peer_id } =
                         binding.purpose_binding
                     else {
                         return Err(CliError::Binding);
@@ -684,8 +672,7 @@ mod unix_main {
                     ))
                 }
                 IrohaRuntimeProviderSlotV1::PotrGatewaySigner => {
-                    let SoftwareSignerPurposeBindingV1::PotrGateway { signer_id } =
-                        binding.purpose_binding
+                    let SignerPurposeBindingV1::PotrGateway { signer_id } = binding.purpose_binding
                     else {
                         return Err(CliError::Binding);
                     };
@@ -695,7 +682,7 @@ mod unix_main {
                     ))
                 }
                 IrohaRuntimeProviderSlotV1::PotrProviderSigner => {
-                    let SoftwareSignerPurposeBindingV1::PotrProvider {
+                    let SignerPurposeBindingV1::PotrProvider {
                         signer_id,
                         provider_id,
                     } = binding.purpose_binding
@@ -712,7 +699,7 @@ mod unix_main {
                     ))
                 }
                 IrohaRuntimeProviderSlotV1::BillingStatementSigner => {
-                    let SoftwareSignerPurposeBindingV1::BillingStatement { signer_id } =
+                    let SignerPurposeBindingV1::BillingStatement { signer_id } =
                         binding.purpose_binding
                     else {
                         return Err(CliError::Binding);

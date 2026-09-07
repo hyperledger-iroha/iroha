@@ -731,14 +731,14 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         assert!(!safety_wal_source.contains(&format!("impl Copy for {capability}")));
     }
     for required in [
-        "#[cfg(any(test, not(all(unix, not(target_os = \"espidf\")))))]\nuse std::fs::OpenOptions;",
+        "#[cfg(all(test, unix, not(target_os = \"espidf\")))]\nuse std::fs::OpenOptions;",
         "direct_lexical_directory_metadata(expected_path)?",
         "open_canonical_directory_nofollow(&canonical_path)?",
-        "let metadata = fs::symlink_metadata(expected_path)?;",
-        "fs::symlink_metadata(&self.expected_path)",
-        "let linked = fs::symlink_metadata(self.expected_path.join(name))?;",
+        "let metadata = fs::symlink_metadata(path)?;",
+        "direct_lexical_directory_metadata(&self.expected_path)?",
+        "rustix::fs::statat(&self.directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)",
         "rustix::fs::OFlags::CREATE\n                        | rustix::fs::OFlags::EXCL",
-        "unix_file_identity(&opened) != expected_identity",
+        "unix_file_identity(&opened) != (existing.st_dev as u64, existing.st_ino as u64)",
         "fn write_all(&mut self, bytes: &[u8])",
         "fn sync_data(&mut self)",
         "self.directory.verify_leaf(self.file, self.wal_name)",
@@ -746,7 +746,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         "promoted adjacent snapshot changed across directory sync",
         "BoundSafetyWalDirectory::from_kura_authority(kura, authority)",
         "safety-WAL authority belongs to a different Kura instance",
-        "#[cfg(test)]\n    fn bind(expected_path: &Path)",
+        "#[cfg(all(test, unix, not(target_os = \"espidf\")))]\n    fn bind(expected_path: &Path)",
         "#[cfg(test)]\n    pub(crate) fn open(",
     ] {
         assert!(
@@ -754,6 +754,28 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "opened WAL-directory authority omitted {required}"
         );
     }
+    let verify_wal_leaf = source_region(
+        safety_wal_source,
+        "fn verify_leaf(&self, file: &File, name: &OsStr)",
+        "fn sync(&self)",
+    );
+    assert_source_tokens_in_order(
+        verify_wal_leaf,
+        &[
+            "self.verify_linked()?",
+            "let opened = file.metadata()?",
+            "rustix::fs::statat(&self.directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)",
+            "ensure_unix_regular_single_link_stat(&linked)?",
+            "!opened.is_file()",
+            "opened.nlink() != 1",
+            "opened.dev() != linked.st_dev as u64",
+            "opened.ino() != linked.st_ino as u64",
+        ],
+    );
+    assert_forbidden_source_tokens(
+        verify_wal_leaf,
+        &["fs::symlink_metadata", "OpenOptions::new"],
+    );
     for required in [
         "store_root_directory: BoundProgressDirectory",
         "Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?",
@@ -780,13 +802,34 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "Kura-root WAL authority omitted {required}"
         );
     }
-    assert_eq!(
-        safety_wal_source
-            .matches("Err(SafetyWalError::UnsupportedStorageBinding {")
-            .count(),
-        3,
-        "the production Kura-root open and both adjacent authority mints must reject on non-Unix"
-    );
+    // Count rejection inside each production operation, excluding the
+    // separately gated test-path constructor and its negative tests.
+    for (start, end) in [
+        (
+            "/// Reject production opening where descriptor-relative ancestry is unavailable.",
+            "/// Open or create a WAL bound to the supplied protocol",
+        ),
+        (
+            "pub(crate) fn mint_serviced_candidate_store_authority(",
+            "/// Mint the sole fixed leader-wire lifecycle sibling authority.",
+        ),
+        (
+            "pub(crate) fn mint_leader_wire_store_authority(",
+            "fn verify_expected_binding(",
+        ),
+    ] {
+        let operation = source_region(safety_wal_source, start, end);
+        assert_required_source_tokens(
+            operation,
+            &["#[cfg(not(all(unix, not(target_os = \"espidf\"))))]"],
+        );
+        assert_source_token_count(
+            operation,
+            "Err(SafetyWalError::UnsupportedStorageBinding {",
+            1,
+        );
+        assert_forbidden_source_tokens(operation, &["OpenOptions::new", "create_dir_all"]);
+    }
     assert_eq!(
         safety_wal_source
             .matches("snapshot storage is unsupported on this platform")
@@ -1380,10 +1423,21 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         lifecycle_run_inner_source,
         &[
             "executor.ready_to_finish()",
-            "if apply_terminal_settled && !ready_to_finish",
-            "sealed Ready classifier can settle that exact row",
-            "let _ = wake_rx.recv_timeout(IDLE_POLL);\n            continue;",
-            "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
+            "let terminal_planning_fenced =",
+        ],
+    );
+    let terminal_tail = lifecycle_run_inner_source
+        .split_once("let terminal_planning_fenced =")
+        .expect("active-height terminal planning cut")
+        .1;
+    assert_source_tokens_in_order(
+        terminal_tail,
+        &[
+            "terminal_finalization_fenced || producer_claim.apply_terminal_settled()",
+            "if terminal_planning_fenced && !ready_to_finish",
+            "output_guard.close_admission_for_restart()",
+            "return Err(V2RunnerError::RestartRequired)",
+            "if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
             "let finalization_ready =",
             "activated.ready_for_finalized_rollover(&mut active_runner)?",
@@ -1392,12 +1446,34 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "if finalization_ready && !rollover_ready",
             "if rollover_ready",
             "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
+        ],
+    );
+    let closed_terminal_tail = terminal_tail
+        .split_once("close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)")
+        .expect("finalized drain occurs only after physical ingress closure")
+        .1;
+    assert_source_tokens_in_order(
+        closed_terminal_tail,
+        &[
             "let (drained_terminal_ingress, drained_terminal_relay) =",
             "drain_decided_lane_recovery_ingress(",
             "drain_finalized_lane_relay_prefix(",
             "if drained_terminal_ingress || drained_terminal_relay",
             "ensure_closed_drained_cut()",
             "finalize_lifecycle_height(",
+        ],
+    );
+    let terminal_reopened = source_region(
+        terminal_tail,
+        "if terminal_planning_fenced && !ready_to_finish",
+        "if !terminal_planning_fenced",
+    );
+    assert_forbidden_source_tokens(
+        terminal_reopened,
+        &[
+            "wake_rx.recv_timeout",
+            "continue;",
+            "schedule_local_proposal(",
         ],
     );
 
@@ -1648,9 +1724,20 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "!refanned_broadcasts.contains(&record.ordinal)",
         ],
     );
-    assert!(lifecycle_run_inner_source.contains(
-        "let finalization_ready = if ready_to_finish {\n            activated.ready_for_finalized_rollover(&mut active_runner)?\n        } else {\n            false\n        };"
-    ));
+    let finalization_readiness = source_region(
+        terminal_tail,
+        "let finalization_ready =",
+        "if ready_to_finish && !finalization_ready",
+    );
+    assert_source_tokens_in_order(
+        finalization_readiness,
+        &[
+            "if ready_to_finish && !block_sync_server.has_pending_historical_body_serve()",
+            "activated.ready_for_finalized_rollover(&mut active_runner)?",
+            "} else {",
+            "false",
+        ],
+    );
     assert!(lifecycle_scheduler_completion_source.contains(
         "finalization accepts the exact volatile refanout wait after its next Sign retires"
     ));

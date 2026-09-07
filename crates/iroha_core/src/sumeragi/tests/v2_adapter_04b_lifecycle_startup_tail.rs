@@ -1,5 +1,12 @@
 #[test]
 fn recovered_prepare_already_repaired_child_reopens_and_publishes() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_already_repaired_child_reopens_and_publishes",
+        recovered_prepare_already_repaired_child_reopens_and_publishes_body,
+    );
+}
+
+fn recovered_prepare_already_repaired_child_reopens_and_publishes_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let safety = TempDir::new().expect("repaired-child safety directory");

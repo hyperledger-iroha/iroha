@@ -6,69 +6,86 @@
     "gnark": "v0.16.3",
     "builder": "frontend.Compile+r1cs.NewBuilder",
     "module_mode": "vendor",
-    "network": "none"
+    "network": "none",
+    "r1cs_serialization": "gnark-v0.16.3-constraint-system-writeto"
   },
-  "definition_state": "final-v1-wire-identifiers-aligned",
+  "definition_state": "post-canonical-wire-and-checkpoint-binding",
   "profiles": [
     {
       "profile": "sccp-final-v1-bsc-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bn254",
-      "constraints": 115576820,
-      "kat_sha256": "602def10b174dd298ed1f44bdbcb2ab9010b67ecb6f81ef832e9558a07f1d14d"
+      "constraints": 115576684,
+      "kat_sha256": "602def10b174dd298ed1f44bdbcb2ab9010b67ecb6f81ef832e9558a07f1d14d",
+      "r1cs_size_bytes": 7315800116,
+      "r1cs_sha256": "1a598864f9c64422bc0ea24bbe4ee1cbcbaa321a5f1e631c72fee1d1f49105a5"
     },
     {
       "profile": "sccp-final-v1-bsc-mainnet-message",
       "role": "message",
       "outer_curve": "bn254",
-      "constraints": 36473351,
-      "kat_sha256": "bf0bdf95282961bcf3e97903487fc0773d6de8ba62280ec0954affa4c72872ad"
+      "constraints": 36473477,
+      "kat_sha256": "0cd6a39f110f0afa17fd0343b586feacd0e66902c1e5bb2e51cfe8753f0a761c",
+      "r1cs_size_bytes": 2488261263,
+      "r1cs_sha256": "c228b472c1ed7d4a816992f5e369c9153645395a98a8b6a824a8a843b8f9b37c"
     },
     {
       "profile": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bn254",
-      "constraints": 115576901,
-      "kat_sha256": "eec2fa96f1ec575e53aeaab74fcc80d99aad6a3425e27b41078cae6cf73cb878"
+      "constraints": 115576765,
+      "kat_sha256": "eec2fa96f1ec575e53aeaab74fcc80d99aad6a3425e27b41078cae6cf73cb878",
+      "r1cs_size_bytes": 7315802647,
+      "r1cs_sha256": "968e6395ef53d5e5f48c2ec6ac81eea0e4529c2f5d4ee98116ba4ac14591feff"
     },
     {
       "profile": "sccp-final-v1-ethereum-mainnet-message",
       "role": "message",
       "outer_curve": "bn254",
-      "constraints": 36473349,
-      "kat_sha256": "48715de72c792496a52d930e53573ac1abbd7571ebc09151ae9c94c8b268cf6f"
+      "constraints": 36473475,
+      "kat_sha256": "d43a5d4b6f0c4f7adef5435fea98f914e491abf5aa449a6581fb7227ea53efb8",
+      "r1cs_size_bytes": 2488248354,
+      "r1cs_sha256": "b28f2cad9490912bd7e6fca90fc2ba3a24240ee24f42fb036e61c5dcc1cda2e2"
     },
     {
       "profile": "sccp-final-v1-ton-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bls12-381",
-      "constraints": 113227081,
-      "kat_sha256": "542b5d46a121aa144458be6666b109d8cb37e1b117895f237201c087b285af66"
+      "constraints": 113226945,
+      "kat_sha256": "542b5d46a121aa144458be6666b109d8cb37e1b117895f237201c087b285af66",
+      "r1cs_size_bytes": 7158453841,
+      "r1cs_sha256": "f444dbe844a046a67c8a2da086e7db2e2b4b30a84b5c117d02a16d3d9037b2ec"
     },
     {
       "profile": "sccp-final-v1-ton-mainnet-message",
       "role": "message",
       "outer_curve": "bls12-381",
-      "constraints": 34718292,
-      "kat_sha256": "b469b281edb4d8cba398a631d68579b8459e4d39d9e71825350b80a30d9fd763"
+      "constraints": 34718418,
+      "kat_sha256": "490f0b73ceebb25dceec13f619a02793ebdcbaff7b4f82ebc48ff77966955954",
+      "r1cs_size_bytes": 2358870853,
+      "r1cs_sha256": "063cb0058e40357bb84f340033596a5b4703b7adbadeba37f2ebb88da1f8b529"
     },
     {
       "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bn254",
-      "constraints": 115576832,
-      "kat_sha256": "ed115b44ccfb5e1b19444021c03f1da604ad749c2f2aa656799004afeb368cf6"
+      "constraints": 115576696,
+      "kat_sha256": "ed115b44ccfb5e1b19444021c03f1da604ad749c2f2aa656799004afeb368cf6",
+      "r1cs_size_bytes": 7315793288,
+      "r1cs_sha256": "2bf94c7e88dcabc517fd7659b639c910c0ecf39f07d4370b2c24074a6ca11571"
     },
     {
       "profile": "sccp-final-v1-tron-mainnet-message",
       "role": "message",
       "outer_curve": "bn254",
-      "constraints": 36474274,
-      "kat_sha256": "43db673cc7c4d17c4bd71ed9a1e80b8f5dc3b378e0c8125fccc5e85d3c825518"
+      "constraints": 36474400,
+      "kat_sha256": "28be620f9ccefa56859717c04b9c2d4a70b25b743b7d060af449aafba2296a22",
+      "r1cs_size_bytes": 2488266117,
+      "r1cs_sha256": "9b1adf3ada4eee983988238b54dc5bf83c13527a948635eb3af8f1a4bed0e848"
     }
   ],
   "artifact_state": {
-    "r1cs_identities_current": false,
+    "r1cs_identities_current": true,
     "invalidated_artifact_roles": [
       "r1cs",
       "phase2_transcript",
@@ -83,16 +100,10 @@
       "reproducibility_ceremony_audit",
       "destination_integration_audit"
     ],
-    "profiles_requiring_fresh_r1cs": [
-      "sccp-final-v1-bsc-mainnet-message",
-      "sccp-final-v1-ethereum-mainnet-message",
-      "sccp-final-v1-ton-mainnet-epoch-anchor-update",
-      "sccp-final-v1-ton-mainnet-message",
-      "sccp-final-v1-tron-mainnet-epoch-anchor-update",
-      "sccp-final-v1-tron-mainnet-message"
-    ],
-    "reason": "Final-V1 payload discriminant, hub-kind, domain, codec, and destination-backend identifiers were aligned with the canonical Rust wire format. Message authorization additionally constrains same-height checkpoint block, context, and finality-artifact equality. No earlier R1CS identity or dependent release artifact for these profiles is current."
+    "profiles_requiring_fresh_r1cs": [],
+    "reason": "Final-V1 wire-identifier alignment and same-height message checkpoint checks invalidated affected R1CS definitions and their dependent release artifacts. Newly measured local R1CS identities do not authenticate Phase-2 transcripts, proving keys, verifying keys, fixed verifiers, destination deployments, or required signed audit attestations."
   },
   "production_admissible": false,
-  "note": "Listed message constraint counts are historical and require recount after adding same-height checkpoint identity constraints; epoch counts are unchanged by this consistency repair. Corrected positive KATs remain current, but fresh R1CS identities, circuit-specific ceremonies, destination deployments, and all three independent audits are mandatory before release."
+  "note": "All eight constraint counts, canonical R1CS byte lengths, and SHA-256 identities have been freshly measured with the pinned vendored toolchain after wire-identifier alignment and the same-height message checkpoint consistency repair. These local measurements do not make earlier Phase-2 artifacts compatible or authorize production release. Fresh circuit-specific ceremonies, destination deployments, and required signed audit attestations remain mandatory.",
+  "definition_source_closure_sha256": "2926b916e2e905126ad16157b907ac045280b75ded21d0050d5d5f7f36973318"
 }

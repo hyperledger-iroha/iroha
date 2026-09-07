@@ -584,48 +584,75 @@ v2_apply_test!(
     durable_decision_retains_exact_earlier_view_sidecar_and_prunes_losers,
     {
         let fixture = ApplyFixture::new();
-        let exact = pending_merge_entry(&fixture.context, 1, b"exact earlier-view sidecar");
-        let losing = pending_merge_entry(&fixture.context, 2, b"losing later-view sidecar");
-        let exact_hash = fixture
-            .kura
-            .persist_pending_certified_merge_entry(&exact)
-            .expect("persist exact decided sidecar");
-        let losing_hash = fixture
-            .kura
-            .persist_pending_certified_merge_entry(&losing)
-            .expect("persist losing sidecar");
-        assert_ne!(exact_hash, losing_hash);
-        let body = body_with_merge_reference(CertifiedMergeLedgerReference::new(&exact));
+        let mut context = fixture.context.clone();
+        context.height = 2;
+        context.parent_commit_qc = Some(fixture.task.certificate().clone());
+        context.validate().expect("valid successor sidecar context");
+        let pending = |height, view, label: &[u8], parent| {
+            let mut entry = pending_merge_entry(&context, view, label);
+            entry.merge_qc.carrier_height = height;
+            entry.merge_qc.carrier_parent_hash = parent;
+            entry
+        };
+        let parent = fixture.body.hash();
+        let exact = pending(2, 1, b"exact locked-view sidecar", parent);
+        let earlier = pending(2, 0, b"earlier same-parent validation owner", parent);
+        let losing = pending(2, 2, b"impossible future-view sidecar", parent);
+        let wrong_parent = pending(
+            2,
+            1,
+            b"wrong-parent sidecar",
+            HashOf::from_untyped_unchecked(Hash::new(b"another parent")),
+        );
+        let later_height = pending(3, 0, b"another height remains untouched", parent);
+        let mut hashes = Vec::new();
+        for entry in [&exact, &earlier, &losing, &wrong_parent, &later_height] {
+            hashes.push(
+                fixture
+                    .kura
+                    .persist_pending_certified_merge_entry(entry)
+                    .expect("persist bounded sidecar lineage fixture"),
+            );
+        }
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(parent), None, None, 2, 1);
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_merge_entry(CertifiedMergeLedgerReference::new(&exact)),
+        ));
+        let body = builder.build_with_signature(0, fixture.genesis_key.private_key());
         fixture
             .service
-            .retain_decided_merge_sidecar(&fixture.context, &body)
-            .expect("bind exact sidecar from durable decided body");
-        assert_eq!(
-            fixture
-                .kura
-                .merge_entry_by_hash(exact_hash)
-                .expect("read exact sidecar after decision binding"),
+            .retain_decided_merge_sidecar(&context, &body)
+            .expect("retain exactly the locked carrier lineage");
+        for (index, expected) in [
             Some(exact),
-            "the exact earlier-view reference remains protected until finalization"
-        );
-        assert!(
-            fixture
-                .kura
-                .merge_entry_by_hash(losing_hash)
-                .expect("read losing sidecar after decision binding")
-                .is_none(),
-            "a durable decision must release every non-referenced sidecar at its height"
-        );
+            Some(earlier),
+            None,
+            None,
+            Some(later_height.clone()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                fixture
+                    .kura
+                    .merge_entry_by_hash(hashes[index])
+                    .expect("read sidecar after locked-carrier retention"),
+                expected
+            );
+        }
         fixture
             .kura
-            .prune_finalized_pending_certified_merge_entries(fixture.context.height)
-            .expect("finalized height retires the exact protected sidecar");
-        assert!(
-            fixture
-                .kura
-                .merge_entry_by_hash(exact_hash)
-                .expect("read exact sidecar after finalization")
-                .is_none()
+            .prune_finalized_pending_certified_merge_entries(2)
+            .expect("finalization retires all sidecars through the finalized height");
+        for hash in &hashes[..4] {
+            assert!(fixture.kura.merge_entry_by_hash(*hash).unwrap().is_none());
+        }
+        assert_eq!(
+            fixture.kura.merge_entry_by_hash(hashes[4]).unwrap(),
+            Some(later_height)
         );
     }
 );
@@ -1108,18 +1135,33 @@ v2_apply_test!(
         );
         let signature = SignatureOf::try_from_hash(conflicting_key.private_key(), header.hash())
             .expect("sign conflicting block");
-        let conflicting =
+        let mut conflicting =
             SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
+        conflicting
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("the conflicting canonical block has complete empty execution results");
+        let signature =
+            SignatureOf::try_from_hash(conflicting_key.private_key(), conflicting.header().hash())
+                .expect("sign the complete conflicting canonical block");
+        conflicting
+            .replace_signatures([BlockSignature::new(0, signature)].into())
+            .expect("retain the exact signature for the executed block");
         assert_ne!(conflicting.hash(), fixture.body.hash());
         fixture
             .kura
             .store_block(conflicting)
             .expect("persist conflicting canonical block");
         let mut store = fixture.reopen_body_store();
+        let error = fixture
+            .execute(&mut store)
+            .expect_err("conflicting canonical storage");
         assert!(matches!(
-            fixture.execute(&mut store),
-            Err(V2ApplyError::KuraConflict)
+            &error,
+            V2ApplyError::CanonicalStorageRead(crate::kura::Error::CanonicalBlockWireMismatch {
+                height: 1
+            })
         ));
+        assert!(error.requires_restart_recovery());
         assert_eq!(fixture.state.committed_height(), 0);
         fixture.assert_no_post_apply_sidecars();
     }
@@ -1148,10 +1190,11 @@ v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
     assert_eq!(fixture.state.committed_height(), 1);
     assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
     let mut store = fixture.reopen_body_store();
-    assert!(matches!(
-        fixture.execute(&mut store),
-        Err(V2ApplyError::StateAheadOfKura)
-    ));
+    let error = fixture
+        .execute(&mut store)
+        .expect_err("WSV cannot outrun canonical storage");
+    assert!(matches!(&error, V2ApplyError::StateAheadOfKura));
+    assert!(error.requires_restart_recovery());
     fixture.assert_no_post_apply_sidecars();
 });
 v2_apply_test!(

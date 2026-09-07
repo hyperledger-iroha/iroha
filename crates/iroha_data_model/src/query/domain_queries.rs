@@ -2214,3 +2214,52 @@ impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationEvents
         => crate::sorafs::moderation_ledger::ModerationFinalizedEventPageV1
 );
+
+/// Generic game session query definitions.
+pub mod game {
+    use derive_more::Display;
+    queries! {
+        /// Read one session including certified frontier and terminal receipt.
+        #[derive(Display)]
+        #[display("Find native game session `{session_id}`")]
+        #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::game::model::FindGameSessionById")]
+        pub struct FindGameSessionById {
+            /// Immutable session identifier.
+            pub session_id: iroha_crypto::Hash,
+        }
+        /// Read one compact receipt identifying a proof in a finalized block.
+        #[derive(Display)]
+        #[display("Find execution proof verification `{verification_id}`")]
+        #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::game::model::FindExecutionProofVerificationById")]
+        pub struct FindExecutionProofVerificationById {
+            /// Network-bound profile and statement receipt identifier.
+            pub verification_id: iroha_crypto::Hash,
+        }
+    }
+    /// Generic game session and proof-receipt query exports.
+    pub mod prelude {
+        pub use super::{FindExecutionProofVerificationById, FindGameSessionById};
+    }
+}
+
+/// Native exact-price NFT offer lookups.
+pub mod nft_market {
+    use derive_more::Display;
+    queries! {
+        /// Read complete immutable sale terms and the retained terminal decision.
+        #[derive(Display)]
+        #[display("Find native NFT offer `{offer_id}`")]
+        #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::nft_market::model::FindNftSaleOfferById")]
+        pub struct FindNftSaleOfferById {
+            /// Exact permanent offer identifier.
+            pub offer_id: iroha_crypto::Hash,
+        }
+    }
+    /// Native NFT marketplace query exports.
+    pub mod prelude {
+        pub use super::FindNftSaleOfferById;
+    }
+}

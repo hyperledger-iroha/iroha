@@ -30,6 +30,9 @@ use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_data_model::bridge::SccpOutboundMessageDescriptorV1;
+use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
+use iroha_data_model::game::GameSessionRecordV1;
+use iroha_data_model::nft_market::{NftCustodyRecordV1, NftSaleRecordV1};
 use iroha_data_model::{
     IntoKeyValue,
     account::{
@@ -47,8 +50,7 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{
-            EvidenceRecord, ExecKv, ExecWitness, LaneBlockCommitment,
-            NativeAmxParticipantSettlement, NexusFeeReceipt,
+            EvidenceRecord, ExecKv, ExecWitness, LaneBlockCommitment, NexusFeeReceipt,
             SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
             SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiAutonomousLaneExecution,
             SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
@@ -1225,6 +1227,17 @@ macro_rules! with_world_overlay_fields {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            execution_proof_profiles,
+            execution_proof_verifications,
+            game_sessions,
+            nft_sale_offers,
+            nft_custody_records,
+            nft_custody_by_nft,
+            nft_custody_owner_refs,
+            nft_custody_domain_refs,
+            game_custody_by_account,
+            game_account_references,
+            game_asset_references,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -2310,7 +2323,8 @@ pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
     /// Exact participant proposal identity.
     pub(crate) participant_proposal_hash: Hash,
     /// Exact zero-effect participant settlement identity.
-    pub(crate) participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
+    pub(crate) participant_settlement_hash:
+        HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
     /// Canonical global carrier height.
     pub(crate) application_block_height: u64,
     /// Canonical global carrier hash.
@@ -2336,7 +2350,7 @@ struct NativeAmxParticipantApplicationDiagnosticIdentity {
     predecessor_descriptor_hash: Option<Hash>,
     descriptor_hash: Hash,
     proposal_hash: Hash,
-    settlement_hash: HashOf<NativeAmxParticipantSettlement>,
+    settlement_hash: HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
     source_count: u64,
 }
 impl NativeAmxParticipantApplicationDiagnosticIdentity {
@@ -4512,7 +4526,35 @@ pub struct World {
     /// Native asset escrows grouped by lifecycle status.
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    /// Registered immutable compiled execution-proof profiles.
+    pub(crate) execution_proof_profiles: Storage<Hash, ExecutionProofProfileV1>,
+    /// Successfully verified mathematical statements, distinct from settlement.
+    pub(crate) execution_proof_verifications: Storage<Hash, ExecutionProofVerificationV1>,
+    /// Authoritative generic game session records, including closed custody identities.
+    pub(crate) game_sessions: Storage<Hash, GameSessionRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_records: Storage<AccountId, NftCustodyRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    #[norito(skip)]
+    pub(crate) nft_custody_by_nft: Storage<NftId, AccountId>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    #[norito(skip)]
+    pub(crate) nft_custody_owner_refs: Storage<AccountId, u32>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    #[norito(skip)]
+    pub(crate) nft_custody_domain_refs: Storage<DomainId, u32>,
+    /// Exact permanent game custody ownership.
+    #[norito(skip)]
+    pub(crate) game_custody_by_account: Storage<AccountId, Hash>,
+    /// Number of funded game sessions retaining each participant wallet.
+    #[norito(skip)]
+    pub(crate) game_account_references: Storage<AccountId, u32>,
+    /// Number of funded game sessions retaining each asset definition.
+    #[norito(skip)]
+    pub(crate) game_asset_references: Storage<AssetDefinitionId, u32>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: Storage<[u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     #[norito(skip)]
@@ -5267,7 +5309,35 @@ pub struct WorldBlock<'world> {
     /// Native asset escrows grouped by lifecycle status.
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    /// Registered immutable compiled execution-proof profiles.
+    pub(crate) execution_proof_profiles: StorageBlock<'world, Hash, ExecutionProofProfileV1>,
+    /// Successfully verified mathematical statements, distinct from settlement.
+    pub(crate) execution_proof_verifications:
+        StorageBlock<'world, Hash, ExecutionProofVerificationV1>,
+    pub(crate) game_sessions: StorageBlock<'world, Hash, GameSessionRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_sale_offers: StorageBlock<'world, Hash, NftSaleRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_records: StorageBlock<'world, AccountId, NftCustodyRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    #[norito(skip)]
+    pub(crate) nft_custody_by_nft: StorageBlock<'world, NftId, AccountId>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    #[norito(skip)]
+    pub(crate) nft_custody_owner_refs: StorageBlock<'world, AccountId, u32>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    #[norito(skip)]
+    pub(crate) nft_custody_domain_refs: StorageBlock<'world, DomainId, u32>,
+    /// Exact permanent game custody ownership.
+    #[norito(skip)]
+    pub(crate) game_custody_by_account: StorageBlock<'world, AccountId, Hash>,
+    /// Number of funded game sessions retaining each participant wallet.
+    #[norito(skip)]
+    pub(crate) game_account_references: StorageBlock<'world, AccountId, u32>,
+    /// Number of funded game sessions retaining each asset definition.
+    #[norito(skip)]
+    pub(crate) game_asset_references: StorageBlock<'world, AssetDefinitionId, u32>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: StorageBlock<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     #[norito(skip)]
@@ -6304,6 +6374,17 @@ impl WorldBlock<'_> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            execution_proof_profiles,
+            execution_proof_verifications,
+            game_sessions,
+            nft_sale_offers,
+            nft_custody_records,
+            nft_custody_by_nft,
+            nft_custody_owner_refs,
+            nft_custody_domain_refs,
+            game_custody_by_account,
+            game_account_references,
+            game_asset_references,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -6697,7 +6778,31 @@ pub struct WorldTransaction<'block, 'world> {
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status:
         StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    /// Registered immutable compiled execution-proof profiles.
+    pub(crate) execution_proof_profiles:
+        StorageTransaction<'block, 'world, Hash, ExecutionProofProfileV1>,
+    /// Successfully verified mathematical statements, distinct from settlement.
+    pub(crate) execution_proof_verifications:
+        StorageTransaction<'block, 'world, Hash, ExecutionProofVerificationV1>,
+    pub(crate) game_sessions: StorageTransaction<'block, 'world, Hash, GameSessionRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_sale_offers: StorageTransaction<'block, 'world, Hash, NftSaleRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_records:
+        StorageTransaction<'block, 'world, AccountId, NftCustodyRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_by_nft: StorageTransaction<'block, 'world, NftId, AccountId>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_owner_refs: StorageTransaction<'block, 'world, AccountId, u32>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_domain_refs: StorageTransaction<'block, 'world, DomainId, u32>,
+    /// Exact permanent game custody ownership.
+    pub(crate) game_custody_by_account: StorageTransaction<'block, 'world, AccountId, Hash>,
+    /// Number of funded game sessions retaining each participant wallet.
+    pub(crate) game_account_references: StorageTransaction<'block, 'world, AccountId, u32>,
+    /// Number of funded game sessions retaining each asset definition.
+    pub(crate) game_asset_references: StorageTransaction<'block, 'world, AssetDefinitionId, u32>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: StorageTransaction<'block, 'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     pub(crate) vpn_active_lease_by_account: StorageTransaction<'block, 'world, AccountId, [u8; 32]>,
@@ -8884,7 +8989,29 @@ pub struct WorldView<'world> {
     pub(crate) asset_escrows_by_buyer: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status: StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    /// Registered immutable compiled execution-proof profiles.
+    pub(crate) execution_proof_profiles: StorageView<'world, Hash, ExecutionProofProfileV1>,
+    /// Successfully verified mathematical statements, distinct from settlement.
+    pub(crate) execution_proof_verifications:
+        StorageView<'world, Hash, ExecutionProofVerificationV1>,
+    pub(crate) game_sessions: StorageView<'world, Hash, GameSessionRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_records: StorageView<'world, AccountId, NftCustodyRecordV1>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_by_nft: StorageView<'world, NftId, AccountId>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_owner_refs: StorageView<'world, AccountId, u32>,
+    /// Native NFT sale/custody state or derived reservation guard.
+    pub(crate) nft_custody_domain_refs: StorageView<'world, DomainId, u32>,
+    /// Exact permanent game custody ownership.
+    pub(crate) game_custody_by_account: StorageView<'world, AccountId, Hash>,
+    /// Number of funded game sessions retaining each participant wallet.
+    pub(crate) game_account_references: StorageView<'world, AccountId, u32>,
+    /// Number of funded game sessions retaining each asset definition.
+    pub(crate) game_asset_references: StorageView<'world, AssetDefinitionId, u32>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: StorageView<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     pub(crate) vpn_active_lease_by_account: StorageView<'world, AccountId, [u8; 32]>,
@@ -11156,7 +11283,7 @@ mod stateless_validation_cache_tests {
 /// Background persistor for DA shard cursor journals.
 struct DaShardCursorJournalPersistor {
     inner: Arc<DaShardCursorJournalPersistorInner>,
-    background_enabled: bool,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 struct DaShardCursorJournalPersistorInner {
     pending: parking_lot::Mutex<Option<DaShardCursorJournal>>,
@@ -11171,7 +11298,7 @@ impl DaShardCursorJournalPersistor {
             shutdown: AtomicBool::new(false),
         });
         let thread_inner = Arc::clone(&inner);
-        let background_enabled = match std::thread::Builder::new()
+        let worker = match std::thread::Builder::new()
             .name("da-shard-cursor-journal".to_string())
             .spawn(move || {
                 loop {
@@ -11192,22 +11319,19 @@ impl DaShardCursorJournalPersistor {
                     }
                 }
             }) {
-            Ok(_handle) => true,
+            Ok(handle) => Some(handle),
             Err(err) => {
                 warn!(
                     ?err,
                     "failed to spawn DA shard cursor journal persistor; falling back to synchronous writes"
                 );
-                false
+                None
             }
         };
-        Self {
-            inner,
-            background_enabled,
-        }
+        Self { inner, worker }
     }
     fn schedule(&self, journal: DaShardCursorJournal) {
-        if !self.background_enabled {
+        if self.worker.is_none() {
             if let Err(err) = journal.persist() {
                 warn!(?err, "failed to persist DA shard cursor journal");
             }
@@ -11220,13 +11344,73 @@ impl DaShardCursorJournalPersistor {
 }
 impl Drop for DaShardCursorJournalPersistor {
     fn drop(&mut self) {
-        if !self.background_enabled {
+        let Some(worker) = self.worker.take() else {
             return;
+        };
+        {
+            // The shutdown predicate and wait share this mutex: notifying outside it could
+            // lose the wake-up between the predicate check and the worker starting to wait.
+            let _pending = self.inner.pending.lock();
+            self.inner.shutdown.store(true, Ordering::Relaxed);
+            self.inner.cvar.notify_one();
         }
-        self.inner.shutdown.store(true, Ordering::Relaxed);
-        self.inner.cvar.notify_one();
+        // Drain the last snapshot and release the mutex before joining. No old writer may
+        // outlive State and overwrite a subsequently reopened journal.
+        if worker.join().is_err() {
+            warn!("DA shard cursor journal persistor panicked during shutdown");
+        }
     }
 }
+#[cfg(test)]
+mod da_shard_cursor_persistor_tests {
+    use super::*;
+
+    #[test]
+    fn dropping_persistor_drains_latest_snapshot_before_reopen() {
+        let directory = tempfile::tempdir().expect("cursor journal directory");
+        let config = iroha_config::parameters::actual::LaneConfig::from_catalog(
+            &iroha_data_model::nexus::LaneCatalog::default(),
+        );
+        let path = DaShardCursorJournal::journal_path(directory.path());
+        let persistor = DaShardCursorJournalPersistor::new();
+        assert!(
+            persistor.worker.is_some(),
+            "exercise the real background writer"
+        );
+        let weak = Arc::downgrade(&persistor.inner);
+        let mut index = DaShardCursorIndex::default();
+        let lanes = BTreeSet::from([LaneId::new(0)]);
+        for height in [1, 2] {
+            index.mark_lanes_canonically_reset(&lanes, height);
+            persistor.schedule(DaShardCursorJournal::from_index(&config, &index, &path));
+        }
+        drop(persistor);
+        assert!(
+            weak.upgrade().is_none(),
+            "no detached writer may survive State teardown"
+        );
+        let restored = DaShardCursorJournal::load(&config, &path).expect("reopen drained journal");
+        assert_eq!(
+            restored.canonical_reset_height_for_lane(LaneId::new(0)),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn dropping_idle_persistor_joins_its_worker() {
+        for _ in 0..32 {
+            let persistor = DaShardCursorJournalPersistor::new();
+            assert!(persistor.worker.is_some());
+            let weak = Arc::downgrade(&persistor.inner);
+            drop(persistor);
+            assert!(
+                weak.upgrade().is_none(),
+                "idle worker must acknowledge shutdown"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "telemetry")]
 fn record_tiered_snapshot_metrics(backend: &TieredStateBackend, telemetry: &StateTelemetry) {
     let manifest = backend.last_manifest().cloned();
@@ -18835,8 +19019,14 @@ impl World {
             .rebuild_governance_read_indexes()
             .expect("invalid governance read indexes in world constructor");
         world.rebuild_nft_owner_index();
+        world
+            .rebuild_nft_custody_indexes()
+            .expect("invalid native NFT custody in world constructor");
         world.rebuild_rwa_indexes();
         world.rebuild_escrow_indexes();
+        world
+            .rebuild_game_session_indexes()
+            .expect("invalid game session indexes in world constructor");
         world
             .rebuild_vpn_lease_indexes()
             .expect("invalid VPN lease indexes in world constructor");
@@ -19636,6 +19826,163 @@ impl World {
         self.asset_escrows_by_buyer = public_by_buyer.into_iter().collect();
         self.asset_escrows_by_status = public_by_status.into_iter().collect();
     }
+    /// Rebuild skipped custody and liability indexes from retained session records.
+    pub(crate) fn rebuild_game_session_indexes(&mut self) -> Result<(), String> {
+        use iroha_data_model::game::{
+            GAME_MAX_PARTICIPANTS_V1, GameAdmissionBodyV1, GamePhaseV1, game_roster_hash_v1,
+        };
+
+        let mut custody = BTreeMap::<AccountId, Hash>::new();
+        let mut accounts = BTreeMap::<AccountId, u32>::new();
+        let mut assets = BTreeMap::<AssetDefinitionId, u32>::new();
+        for (id, session) in self.game_sessions.view().iter() {
+            if session.version != 1
+                || id != &session.session_id
+                || session.profile_id != session.manifest.profile_id
+                || session.manifest_hash
+                    != iroha_data_model::game::game_message_hash_v1(
+                        &session.network_id,
+                        "session-manifest",
+                        &session.manifest,
+                    )
+                || session.participants.len() > GAME_MAX_PARTICIPANTS_V1
+                || session.payout_scale > iroha_primitives::numeric::MAX_DECIMAL_SCALE
+                || matches!(session.phase, GamePhaseV1::Settled | GamePhaseV1::Cancelled)
+                    != session.terminal_at_height.is_some()
+                || session.terminal_at_height == Some(0)
+                || self.accounts.view().get(&session.custody).is_none()
+                || session.custody
+                    != crate::smartcontracts::isi::game::game_custody_account_v1(
+                        &session.network_id,
+                        id,
+                        &session.asset_definition,
+                    )
+            {
+                return Err("invalid native game session identity, precision or custody".into());
+            }
+            let participants = session.participants.len();
+            if participants > usize::from(session.manifest.max_participants)
+                || match session.phase {
+                    GamePhaseV1::Lobby => false,
+                    GamePhaseV1::Cancelled => {
+                        participants >= usize::from(session.manifest.min_participants)
+                    }
+                    _ => participants < usize::from(session.manifest.min_participants),
+                }
+            {
+                return Err("native game roster is impossible for its manifest and phase".into());
+            }
+            let admission = GameAdmissionBodyV1::from_session(session);
+            admission.validate()?;
+            if session.phase != GamePhaseV1::Lobby
+                && session.roster_hash != game_roster_hash_v1(&session.network_id, id, &admission)
+            {
+                return Err(
+                    "native game admission commitment differs from its immutable records".into(),
+                );
+            }
+            crate::smartcontracts::isi::game::items::validate_restored_items(self, session)?;
+            crate::smartcontracts::isi::game::resources::validate_restored_resources(
+                self, session,
+            )?;
+            if custody.insert(session.custody.clone(), *id).is_some() {
+                return Err("duplicate native game custody account".into());
+            }
+            let mut seen_accounts = BTreeSet::new();
+            let mut seen_keys = BTreeSet::new();
+            let mut expected_liability = Quantity::zero();
+            for participant in &session.participants {
+                if participant.account == session.custody
+                    || !seen_accounts.insert(&participant.account)
+                    || !seen_keys.insert(&participant.input_key)
+                {
+                    return Err("duplicate or invalid native game participant authority".into());
+                }
+                expected_liability = expected_liability
+                    .checked_add(&session.stake)
+                    .map_err(|_| "native game liability overflow".to_owned())?;
+            }
+            if matches!(session.phase, GamePhaseV1::Settled | GamePhaseV1::Cancelled) {
+                let awards = crate::smartcontracts::isi::game::expected_game_awards_v1(session)
+                    .map_err(|error| format!("invalid closed native game awards: {error}"))?;
+                if session.payout_claims.len() != awards.len() {
+                    return Err("native game payout claims differ from immutable awards".into());
+                }
+                expected_liability = Quantity::zero();
+                for (claim, (slot, amount)) in session.payout_claims.iter().zip(awards) {
+                    if claim.slot != slot
+                        || claim.amount != amount
+                        || claim.remaining > claim.amount
+                    {
+                        return Err(
+                            "native game claim changed its immutable award or exceeds its entitlement"
+                                .into(),
+                        );
+                    }
+                    expected_liability =
+                        expected_liability
+                            .checked_add(&claim.remaining)
+                            .map_err(|_| {
+                                "native game outstanding claim liability overflow".to_owned()
+                            })?;
+                }
+            } else if !session.payout_claims.is_empty() {
+                return Err("active native game cannot carry closed payout claims".into());
+            }
+            if session.liability != expected_liability {
+                return Err("native game liability differs from retained original stakes".into());
+            }
+            if !session.liability.is_zero() {
+                if self
+                    .asset_definitions
+                    .view()
+                    .get(&session.asset_definition)
+                    .is_none_or(|definition| {
+                        definition.balance_scope_policy()
+                            != iroha_data_model::asset::AssetBalancePolicy::Global
+                    })
+                {
+                    return Err(
+                        "funded V1 game stakes require an existing globally scoped asset".into(),
+                    );
+                }
+            }
+            let balance_id = iroha_data_model::asset::AssetId::of(
+                session.asset_definition.clone(),
+                session.custody.clone(),
+            );
+            let custody_balance = self
+                .assets
+                .view()
+                .get(&balance_id)
+                .map(|balance| balance.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            if custody_balance != session.liability {
+                return Err("native game custody balance differs from its exact liability".into());
+            }
+            if !session.liability.is_zero() {
+                let value = assets.entry(session.asset_definition.clone()).or_default();
+                *value = value
+                    .checked_add(1)
+                    .ok_or_else(|| "game asset reference overflow".to_owned())?;
+            }
+            for account in crate::smartcontracts::isi::game::referenced_game_wallets(session) {
+                if self.accounts.view().get(&account).is_none() {
+                    return Err("retained game participant or unpaid award owner is absent".into());
+                }
+                let value = accounts.entry(account).or_default();
+                *value = value
+                    .checked_add(1)
+                    .ok_or_else(|| "game wallet reference overflow".to_owned())?;
+            }
+        }
+        // Publish only after every record validates; a rejected snapshot must not
+        // leave partially rebuilt custody guards on an otherwise reusable world.
+        self.game_custody_by_account = custody.into_iter().collect();
+        self.game_account_references = accounts.into_iter().collect();
+        self.game_asset_references = assets.into_iter().collect();
+        Ok(())
+    }
     fn rebuild_vpn_lease_indexes(&mut self) -> Result<(), String> {
         let mut active_by_account = BTreeMap::<AccountId, [u8; 32]>::new();
         let mut active_by_address_slot = BTreeMap::<VpnAddressSlotV1, [u8; 32]>::new();
@@ -20422,7 +20769,29 @@ macro_rules! world_ro_accessors {
             storage asset_escrows_by_buyer: AccountId => BTreeSet<EscrowId>;
             /// Native asset escrow ids grouped by lifecycle status.
             storage asset_escrows_by_status: AssetEscrowStatus => BTreeSet<EscrowId>;
-            /// Native SoraNet VPN lease escrow records keyed by lease identifier.
+            /// Immutable registered native execution relations and security descriptors.
+            storage execution_proof_profiles: Hash => ExecutionProofProfileV1;
+            /// First mathematical proof receipts indexed by exact profile and statement.
+            storage execution_proof_verifications: Hash => ExecutionProofVerificationV1;
+            /// Generic immutable manifests, certified progress, and settlement receipts.
+            storage game_sessions: Hash => GameSessionRecordV1;
+            /// Immutable native NFT sale terms and permanent terminal decisions.
+            storage nft_sale_offers: Hash => NftSaleRecordV1;
+            /// Permanent non-signing custody records shared by native NFT protocols.
+            storage nft_custody_records: AccountId => NftCustodyRecordV1;
+            /// Exact active reservation custody account for each retained NFT.
+            storage nft_custody_by_nft: NftId => AccountId;
+            /// Active native NFT reservation references retaining original wallets.
+            storage nft_custody_owner_refs: AccountId => u32;
+            /// Active native NFT reservation references protecting domain contents.
+            storage nft_custody_domain_refs: DomainId => u32;
+            /// Exact permanent native game custody ownership.
+            storage game_custody_by_account: AccountId => Hash;
+            /// Wallet retention for funded pools, unpaid claims and potential NFT recipients.
+            storage game_account_references: AccountId => u32;
+            /// Funded-session asset retention counts.
+            storage game_asset_references: AssetDefinitionId => u32;
+            /// Native VPN leases.
             storage vpn_leases: [u8; 32] => VpnLeaseRecordV1;
             /// Active VPN lease id claimed by each client account.
             storage vpn_active_lease_by_account: AccountId => [u8; 32];
@@ -22231,6 +22600,17 @@ impl<'world> WorldBlock<'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            execution_proof_profiles,
+            execution_proof_verifications,
+            game_sessions,
+            nft_sale_offers,
+            nft_custody_records,
+            nft_custody_by_nft,
+            nft_custody_owner_refs,
+            nft_custody_domain_refs,
+            game_custody_by_account,
+            game_account_references,
+            game_asset_references,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -22621,6 +23001,17 @@ impl<'world> WorldBlock<'world> {
         asset_escrows_by_seller.commit();
         asset_escrows_by_buyer.commit();
         asset_escrows_by_status.commit();
+        execution_proof_profiles.commit();
+        execution_proof_verifications.commit();
+        game_sessions.commit();
+        nft_sale_offers.commit();
+        nft_custody_records.commit();
+        nft_custody_by_nft.commit();
+        nft_custody_owner_refs.commit();
+        nft_custody_domain_refs.commit();
+        game_custody_by_account.commit();
+        game_account_references.commit();
+        game_asset_references.commit();
         vpn_leases.commit();
         vpn_active_lease_by_account.commit();
         vpn_active_lease_by_address_slot.commit();
@@ -24908,6 +25299,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            execution_proof_profiles,
+            execution_proof_verifications,
+            game_sessions,
+            nft_sale_offers,
+            nft_custody_records,
+            nft_custody_by_nft,
+            nft_custody_owner_refs,
+            nft_custody_domain_refs,
+            game_custody_by_account,
+            game_account_references,
+            game_asset_references,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -25310,6 +25712,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         asset_escrows_by_seller.apply();
         asset_escrows_by_buyer.apply();
         asset_escrows_by_status.apply();
+        execution_proof_profiles.apply();
+        execution_proof_verifications.apply();
+        game_sessions.apply();
+        nft_sale_offers.apply();
+        nft_custody_records.apply();
+        nft_custody_by_nft.apply();
+        nft_custody_owner_refs.apply();
+        nft_custody_domain_refs.apply();
+        game_custody_by_account.apply();
+        game_account_references.apply();
+        game_asset_references.apply();
         vpn_leases.apply();
         vpn_active_lease_by_account.apply();
         vpn_active_lease_by_address_slot.apply();
@@ -25867,6 +26280,36 @@ pub(crate) struct CertifiedLaneBlockPersistenceAuthority {
     dataspace_id: DataSpaceId,
     lane_incarnation: Hash,
     canonical_reset_height: Option<u64>,
+}
+/// Read-only Native application projections derived from one bounded history
+/// authentication per active route. Only replicated markers are repair owners.
+#[derive(Default)]
+struct NativeAmxParticipantApplicationSnapshot {
+    applied: Vec<AppliedNativeAmxParticipantFrontierMarker>,
+    applied_slots: BTreeSet<(LaneId, DataSpaceId, Hash, u64)>,
+    repair: Vec<AppliedNativeAmxParticipantFrontierMarker>,
+    blocked: BTreeMap<(LaneId, DataSpaceId), u64>,
+}
+/// Explicit producer-current or execution/replay-prefix application authority.
+/// All modes authenticate the complete occupied history before selecting usable
+/// evidence; only replay may exclude valid future applications from its prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LanePredecessorApplicationMode {
+    /// Producer admission requires the full current durable tip with no later occupancy.
+    CurrentTip,
+    /// Require a durable receipt, replicated application marker or audited import.
+    AppliedStatePrefix,
+    /// Also accept an exact ordinary canonical body while its receipt is repaired.
+    OrdinaryBodyStatePrefix,
+}
+/// Exact Native predecessor availability after authenticating retained history.
+pub(crate) enum NativeAmxParticipantPredecessor {
+    /// No Native control has yet been applied in this incarnation.
+    FirstControl,
+    /// Exact last applied Native control, independent of ordinary lane heights.
+    Applied(HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>),
+    /// Durable or replicated application publication is incomplete.
+    Pending,
 }
 /// Immutable startup projection of certified ordinary-lane evidence.
 ///
@@ -27646,6 +28089,18 @@ impl State {
             .rebuild_contract_alias_indexes()
             .map_err(|error| format!("failed to rebuild contract alias indexes: {error}"))?;
         self.rebuild_snapshot_root_indexes()?;
+        self.world.rebuild_game_session_indexes()?;
+        self.world.rebuild_nft_custody_indexes()?;
+        for (_, record) in self.world.nft_custody_records.view().iter() {
+            if record.network_id != self.network_id {
+                return Err("native NFT custody belongs to another network".into());
+            }
+        }
+        for (_, session) in self.world.game_sessions.view().iter() {
+            if session.network_id != self.network_id {
+                return Err("native game session belongs to another network".into());
+            }
+        }
         let leases = self.world.vpn_leases.view();
         for (_, record) in leases.iter() {
             validate_vpn_lease_network(record, &self.network_id)?;
@@ -28172,8 +28627,8 @@ impl State {
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
                     iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-                kaigi_roster_join_vk: None,
-                kaigi_roster_leave_vk: None,
+                kaigi_authorization_vk: None,
+
                 kaigi_usage_vk: None,
                 max_proof_size_bytes:
                     iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
@@ -30526,6 +30981,32 @@ impl State {
     ) {
         self.transactions
             .record_committed_entrypoint_membership_for_tests(entrypoints, height);
+    }
+    /// Seed a committed QueuePlan projection for focused recovery fixtures.
+    ///
+    /// Resolve the exact pending route/alias markers with the production storage
+    /// helper before publishing synthetic membership. The membership-only helper
+    /// remains available for tests that deliberately construct malformed State.
+    #[cfg(test)]
+    pub(crate) fn record_committed_queue_plan_entrypoints_for_tests(
+        &self,
+        entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
+        height: NonZeroUsize,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let entrypoints = entrypoints.into_iter().collect::<Vec<_>>();
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(self.network_id_ref());
+        let mut world = self.world.block();
+        for entrypoint_hash in &entrypoints {
+            Self::resolve_queue_plan_pending_obligation_in_storage(
+                &mut world.smart_contract_state,
+                network_id_digest,
+                *entrypoint_hash,
+            )?;
+        }
+        world.commit();
+        self.record_committed_entrypoints_for_tests(entrypoints, height);
+        Ok(())
     }
     /// Return the transaction admission limits used by ingress validation.
     ///
@@ -34126,9 +34607,11 @@ impl State {
                 })
             || self
                 .unapplied_certified_lane_block_heights_snapshot_cached()
-                .contains_key(&(lane_id, dataspace_id))
+                .map_or(true, |pending| {
+                    pending.contains_key(&(lane_id, dataspace_id))
+                })
             || self
-                .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+                .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
                 .map_or(true, |markers| {
                     markers.iter().any(|marker| {
                         marker.lane_id == lane_id
@@ -35406,27 +35889,32 @@ impl State {
     #[must_use]
     pub(crate) fn lane_block_artifact_tips_snapshot_cached(
         &self,
-    ) -> Result<Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)>, crate::kura::Error> {
+    ) -> Result<Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)>, MergeLedgerCommitError> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut tips = Vec::new();
         for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
-            let Some(artifact) =
-                self.kura
-                    .latest_lane_block_artifact_matching(lane_id, |artifact| {
-                        let ownership = &artifact.ownership;
-                        ownership.dataspace_id == dataspace_id
-                            && lifecycle.lane_route_and_incarnation_matches(
-                                lane_id,
-                                dataspace_id,
-                                ownership.proposal_height,
-                                ownership.lane_incarnation,
-                            )
-                    })?
+            let Some(artifact) = self
+                .kura
+                .latest_lane_block_artifact_matching(lane_id, |artifact| {
+                    let ownership = &artifact.ownership;
+                    ownership.dataspace_id == dataspace_id
+                        && lifecycle.lane_route_and_incarnation_matches(
+                            lane_id,
+                            dataspace_id,
+                            ownership.proposal_height,
+                            ownership.lane_incarnation,
+                        )
+                })
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "failed to authenticate lane artifact tip: {error}"
+                    ))
+                })?
             else {
                 continue;
             };
             let lane_block_height = artifact.ownership.lane_block_height;
-            if !self.lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact) {
+            if !self.lane_block_artifact_is_applied_or_snapshot_anchored(&artifact)? {
                 continue;
             }
             tips.push((
@@ -35437,22 +35925,20 @@ impl State {
                 artifact.ownership.lane_block_descriptor_hash,
             ));
         }
-        tips.extend(self.native_amx_participant_application_tips_snapshot_cached());
+        tips.extend(self.native_amx_participant_application_tips_snapshot()?);
         let mut latest = BTreeMap::<(LaneId, DataSpaceId, Hash), (u64, Option<Hash>)>::new();
         for (lane_id, dataspace_id, incarnation, height, descriptor_hash) in tips {
-            latest
+            let current = latest
                 .entry((lane_id, dataspace_id, incarnation))
-                .and_modify(|(latest_height, latest_hash)| {
-                    if height > *latest_height {
-                        *latest_height = height;
-                        *latest_hash = descriptor_hash;
-                    } else if height == *latest_height && *latest_hash != descriptor_hash {
-                        // Conflicting evidence at one lane-local height must not
-                        // authorize a predecessor hash for the next proposal.
-                        *latest_hash = None;
-                    }
-                })
                 .or_insert((height, descriptor_hash));
+            if height > current.0 {
+                *current = (height, descriptor_hash);
+            } else if height == current.0 && current.1 != descriptor_hash {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "authenticated raw and Native application tips conflict for lane {} height {height}",
+                    lane_id.as_u32(),
+                )));
+            }
         }
         Ok(latest
             .into_iter()
@@ -35597,7 +36083,7 @@ impl State {
                 descriptor_hash: descriptor.descriptor_hash,
                 proposal_hash: leg.participant_proposal.proposal_hash,
                 settlement_hash: leg.participant_settlement_hash,
-                source_count: leg.participant_settlement.tx_count,
+                source_count: leg.participant_settlement.tx_count(),
                 application_block_height: None,
                 application_block_hash: None,
                 state: SumeragiNativeAmxParticipantApplicationState::CertifiedPendingCarrier,
@@ -35870,15 +36356,15 @@ impl State {
         let mut rows =
             BTreeMap::<(LaneId, DataSpaceId, Hash), SumeragiNativeAmxParticipantApplication>::new();
         for (lane_id, dataspace_id, incarnation) in active_routes.iter().copied() {
-            if let Some(receipt) = self
+            let observation = self
                 .kura
-                .checked_latest_native_amx_participant_application_receipt_matching(
-                    lane_id,
-                    dataspace_id,
-                    incarnation,
-                    |_| true,
-                )
-                .map_err(MergeLedgerCommitError::Persistence)?
+                .read_latest_native_amx_participant_application_receipt(lane_id)
+                .map_err(MergeLedgerCommitError::Persistence)?;
+            if let crate::kura::NativeAmxLatestReceiptObservation::Applied(receipt)
+            | crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(receipt) =
+                observation
+                && receipt.participant_proposal.descriptor.dataspace_id == dataspace_id
+                && receipt.participant_proposal.descriptor.lane_incarnation == incarnation
             {
                 let row = Self::native_amx_participant_application_diagnostic_row_from_receipt(
                     &receipt,
@@ -36167,191 +36653,502 @@ impl State {
         debug_assert!(rows.len() <= SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX);
         Ok(rows)
     }
-    /// Snapshot durably applied Native AMX participant-control frontiers.
-    ///
-    /// The result is bounded by the active lane catalog. A replicated control
-    /// marker is not a usable predecessor until the exact route/incarnation
-    /// application receipt survives full canonical evidence revalidation.
-    #[must_use]
-    pub(crate) fn native_amx_participant_application_tips_snapshot_cached(
+    /// Native Apply stages both replicated frontiers in the same World
+    /// transaction. Later ordinary application may advance the shared frontier;
+    /// Native application cannot outrun it or disagree at the same height.
+    fn validate_native_amx_participant_shared_frontier(
+        world: &impl WorldReadOnly,
+        marker: &AppliedNativeAmxParticipantFrontierMarker,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let shared = Self::canonical_merged_lane_frontier_from_world(
+            world,
+            marker.lane_id,
+            marker.dataspace_id,
+            marker.lane_incarnation,
+        )?;
+        if marker.lane_block_height > shared.0
+            || (marker.lane_block_height == shared.0
+                && Some(marker.lane_block_descriptor_hash) != shared.1)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "Native AMX participant frontier for lane {} conflicts with its replicated shared lane frontier",
+                marker.lane_id.as_u32(),
+            )));
+        }
+        Ok(())
+    }
+    /// Authenticate the complete bounded Native history for every active route
+    /// before deriving application, repair, or producer-blocking authority.
+    fn native_amx_participant_application_snapshot(
         &self,
-    ) -> Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)> {
+    ) -> Result<NativeAmxParticipantApplicationSnapshot, MergeLedgerCommitError> {
+        use crate::kura::NativeAmxParticipantApplicationObservation;
+
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let world = self.world.view();
-        lifecycle
-            .nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .filter_map(|lane| {
-                let incarnation = lifecycle.incarnations.get(&lane.id).copied()?;
-                let marker = Self::canonical_native_amx_participant_frontier_from_world(
-                    &world,
-                    lane.id,
-                    lane.dataspace_id,
-                    incarnation,
+        let mut snapshot = NativeAmxParticipantApplicationSnapshot::default();
+        for lane in lifecycle.nexus.lane_catalog.lanes() {
+            let incarnation = lifecycle
+                .incarnations
+                .get(&lane.id)
+                .copied()
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "active Native AMX participant route {} has no incarnation",
+                        lane.id.as_u32(),
+                    ))
+                })?;
+            // Read before marker filtering: a valid pending carrier may be
+            // durable before its replicated frontier is visible in this State.
+            let history = self
+                .kura
+                .consensus_storage_read(
+                    self.kura
+                        .read_native_amx_participant_application_history(lane.id),
                 )
-                .ok()??;
+                .map_err(MergeLedgerCommitError::Persistence)?;
+            let marker = Self::canonical_native_amx_participant_frontier_from_world(
+                &world,
+                lane.id,
+                lane.dataspace_id,
+                incarnation,
+            )?;
+            if let Some(marker) = marker {
                 if !lifecycle.lane_route_and_incarnation_matches(
                     lane.id,
                     lane.dataspace_id,
                     marker.application_block_height,
                     incarnation,
                 ) {
-                    return None;
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "Native AMX participant frontier for lane {} is stale at application height {}",
+                        lane.id.as_u32(),
+                        marker.application_block_height,
+                    )));
                 }
-                let receipt = self.kura.read_native_amx_participant_application_receipt(
-                    lane.id,
-                    lane.dataspace_id,
-                    incarnation,
-                    marker.lane_block_height,
-                )?;
-                Self::native_amx_participant_receipt_matches_frontier(&receipt, marker).then_some((
-                    lane.id,
-                    lane.dataspace_id,
-                    incarnation,
-                    marker.lane_block_height,
-                    Some(marker.lane_block_descriptor_hash),
-                ))
-            })
-            .collect()
-    }
-    /// Return active Native AMX frontier markers missing exact durable receipts.
-    ///
-    /// The scan is deterministically bounded by the active lane catalog. It is
-    /// intended for startup publication repair: malformed markers and
-    /// route/incarnation drift are errors rather than silently skipped rows.
-    pub(crate) fn native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached(
-        &self,
-    ) -> Result<Vec<AppliedNativeAmxParticipantFrontierMarker>, MergeLedgerCommitError> {
-        let lifecycle = self.lane_consensus_lifecycle_snapshot();
-        let world = self.world.view();
-        let mut pending = Vec::new();
-        for lane in lifecycle.nexus.lane_catalog.lanes() {
-            let Some(incarnation) = lifecycle.incarnations.get(&lane.id).copied() else {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "active Native AMX participant route {} has no incarnation",
-                    lane.id.as_u32(),
-                )));
-            };
-            let Some(marker) = Self::canonical_native_amx_participant_frontier_from_world(
-                &world,
-                lane.id,
-                lane.dataspace_id,
-                incarnation,
-            )?
-            else {
+            }
+            if let Some(marker) = marker {
+                Self::validate_native_amx_participant_shared_frontier(&world, &marker)?;
+            }
+            let route = (lane.id, lane.dataspace_id);
+            for (height, observation) in history.entries() {
+                let (
+                    observed_lane,
+                    observed_dataspace,
+                    observed_incarnation,
+                    application_height,
+                    marker_matches,
+                ) = match observation {
+                    NativeAmxParticipantApplicationObservation::Applied(receipt)
+                    | NativeAmxParticipantApplicationObservation::PendingTipMetadata(receipt)
+                    | NativeAmxParticipantApplicationObservation::PendingManifestRepair(receipt) => {
+                        let descriptor = &receipt.participant_proposal.descriptor;
+                        (
+                            descriptor.lane_id,
+                            descriptor.dataspace_id,
+                            descriptor.lane_incarnation,
+                            receipt.application_block_height,
+                            marker.is_none_or(|marker| {
+                                marker.lane_block_height != height
+                                    || Self::native_amx_participant_receipt_matches_frontier(
+                                        receipt, marker,
+                                    )
+                            }),
+                        )
+                    }
+                    NativeAmxParticipantApplicationObservation::PendingReceiptRepair(manifest) => {
+                        let leaf = &manifest.leaf;
+                        (leaf.lane_id, leaf.dataspace_id, leaf.lane_incarnation,
+                            leaf.application_block_height, marker.is_none_or(|marker| {
+                                marker.lane_block_height != height
+                                    || crate::kura::Kura::native_amx_manifest_leaf_matches_frontier_marker(leaf, &marker)
+                            }))
+                    }
+                };
+                if observed_lane != lane.id
+                    || observed_dataspace != lane.dataspace_id
+                    || observed_incarnation != incarnation
+                    || !lifecycle.lane_route_and_incarnation_matches(
+                        observed_lane,
+                        observed_dataspace,
+                        application_height,
+                        observed_incarnation,
+                    )
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "Native AMX durable history for lane {} disagrees with the active State route at height {height}",
+                        lane.id.as_u32(),
+                    )));
+                }
+                if !marker_matches {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "Native AMX durable evidence conflicts with its replicated frontier for lane {} height {height}",
+                        lane.id.as_u32(),
+                    )));
+                }
+                if !matches!(
+                    observation,
+                    NativeAmxParticipantApplicationObservation::Applied(_)
+                ) || marker.is_none_or(|marker| height > marker.lane_block_height)
+                {
+                    snapshot
+                        .blocked
+                        .entry(route)
+                        .and_modify(|blocked| *blocked = (*blocked).max(height))
+                        .or_insert(height);
+                } else {
+                    snapshot.applied_slots.insert((
+                        lane.id,
+                        lane.dataspace_id,
+                        incarnation,
+                        height,
+                    ));
+                }
+            }
+            let Some(marker) = marker else {
                 continue;
             };
-            if !lifecycle.lane_route_and_incarnation_matches(
-                lane.id,
-                lane.dataspace_id,
-                marker.application_block_height,
-                incarnation,
+            if matches!(
+                history.get(marker.lane_block_height),
+                Some(NativeAmxParticipantApplicationObservation::Applied(_))
             ) {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "Native AMX participant frontier for lane {} is stale at application height {}",
-                    lane.id.as_u32(),
-                    marker.application_block_height,
-                )));
-            }
-            let applied = self
-                .kura
-                .read_native_amx_participant_application_receipt(
-                    lane.id,
-                    lane.dataspace_id,
-                    incarnation,
-                    marker.lane_block_height,
-                )
-                .is_some_and(|receipt| {
-                    Self::native_amx_participant_receipt_matches_frontier(&receipt, marker)
-                });
-            if !applied {
-                pending.push(marker);
+                snapshot.applied.push(marker);
+            } else {
+                snapshot.repair.push(marker);
+                snapshot
+                    .blocked
+                    .entry(route)
+                    .and_modify(|blocked| *blocked = (*blocked).max(marker.lane_block_height))
+                    .or_insert(marker.lane_block_height);
             }
         }
-        Ok(pending)
+        Ok(snapshot)
     }
-    /// Revalidate the exact durable predecessor for a Native AMX participant
-    /// proposal against a read-only admission snapshot.
-    ///
-    /// The highest ordinary application receipt, merge frontier, and Native
-    /// participant frontier must agree. A missing Native sidecar, an unapplied
-    /// ordinary artifact, or conflicting same-height hashes fails closed.
-    pub(crate) fn native_amx_participant_predecessor_is_current_for_snapshot(
+    /// Resolve the Native hash chain independently of the shared lane height.
+    pub(crate) fn native_amx_participant_predecessor_snapshot(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        authority_height: u64,
+    ) -> Result<NativeAmxParticipantPredecessor, MergeLedgerCommitError> {
+        let lifecycle = self.lane_consensus_lifecycle_snapshot();
+        let snapshot = self.native_amx_participant_application_snapshot()?;
+        if !lifecycle.lane_route_and_incarnation_matches(
+            lane_id,
+            dataspace_id,
+            authority_height,
+            lane_incarnation,
+        ) || snapshot.blocked.contains_key(&(lane_id, dataspace_id))
+        {
+            return Ok(NativeAmxParticipantPredecessor::Pending);
+        }
+        match snapshot
+            .applied
+            .into_iter()
+            .find(|marker| marker.lane_id == lane_id && marker.dataspace_id == dataspace_id)
+        {
+            Some(marker)
+                if marker.lane_incarnation == lane_incarnation
+                    && marker.application_block_height < authority_height =>
+            {
+                Ok(NativeAmxParticipantPredecessor::Applied(
+                    marker.participant_settlement_hash,
+                ))
+            }
+            Some(_) => Ok(NativeAmxParticipantPredecessor::Pending),
+            None => Ok(NativeAmxParticipantPredecessor::FirstControl),
+        }
+    }
+    /// Validate both authenticated predecessor chains in the same admission view.
+    pub(crate) fn native_amx_control_predecessor_is_current_for_snapshot(
         state: &impl StateReadOnly,
         proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    ) -> bool {
+        previous_native_settlement_hash: Option<
+            HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+        >,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        if !Self::lane_block_predecessor_is_applied_for_snapshot(
+            state,
+            proposal,
+            LanePredecessorApplicationMode::AppliedStatePrefix,
+        )? {
+            return Ok(false);
+        }
         let descriptor = &proposal.descriptor;
-        let mut tips = Vec::<(u64, Hash)>::new();
-        let merge_frontier = match Self::canonical_merged_lane_frontier_from_world(
+        let marker = Self::canonical_native_amx_participant_frontier_from_world(
             state.world(),
             descriptor.lane_id,
             descriptor.dataspace_id,
             descriptor.lane_incarnation,
-        ) {
-            Ok(frontier) => frontier,
-            Err(_) => return false,
+        )?;
+        Ok(previous_native_settlement_hash
+            == marker.map(|marker| marker.participant_settlement_hash))
+    }
+    /// Snapshot durably applied Native AMX participant-control frontiers.
+    ///
+    /// The result is bounded by the active catalog. Every usable frontier has
+    /// an exact replicated marker and fully authenticated application receipt.
+    pub(crate) fn native_amx_participant_application_tips_snapshot(
+        &self,
+    ) -> Result<Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)>, MergeLedgerCommitError> {
+        Ok(self
+            .native_amx_participant_application_snapshot()?
+            .applied
+            .into_iter()
+            .map(|marker| {
+                (
+                    marker.lane_id,
+                    marker.dataspace_id,
+                    marker.lane_incarnation,
+                    marker.lane_block_height,
+                    Some(marker.lane_block_descriptor_hash),
+                )
+            })
+            .collect())
+    }
+    /// Return replicated Native frontiers with genuinely incomplete durable
+    /// application evidence. Malformed or conflicting occupied slots are errors.
+    pub(crate) fn native_amx_participant_frontiers_pending_durable_evidence_snapshot(
+        &self,
+    ) -> Result<Vec<AppliedNativeAmxParticipantFrontierMarker>, MergeLedgerCommitError> {
+        Ok(self.native_amx_participant_application_snapshot()?.repair)
+    }
+    /// Authenticate the shared Native/ordinary predecessor against the supplied
+    /// committed State prefix, even when Kura retains later replay history.
+    /// Producer tip discovery uses its separate complete-current-history scan.
+    ///
+    /// Missing application evidence or a valid competing proposal is pending
+    /// or ineligible. Malformed local evidence is an error. Exact imported
+    /// snapshot authority is resolved here and never retried by the caller.
+    pub(crate) fn lane_block_predecessor_is_applied_for_snapshot(
+        state: &impl StateReadOnly,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+        mode: LanePredecessorApplicationMode,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let descriptor = &proposal.descriptor;
+        let prefix_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
+        let prefix_contains = |height: u64, hash: HashOf<BlockHeader>| {
+            let index = height
+                .checked_sub(1)
+                .and_then(|height| usize::try_from(height).ok());
+            height <= prefix_height
+                && index.is_some_and(|index| state.block_hashes().get(index) == Some(&hash))
         };
+        let mut tips = Vec::<(u64, Hash)>::new();
+        let merge_frontier = Self::canonical_merged_lane_frontier_from_world(
+            state.world(),
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+        )?;
         if let (height, Some(hash)) = merge_frontier {
             tips.push((height, hash));
         }
-        let native_marker = match Self::canonical_native_amx_participant_frontier_from_world(
+        let native_marker = Self::canonical_native_amx_participant_frontier_from_world(
             state.world(),
             descriptor.lane_id,
             descriptor.dataspace_id,
             descriptor.lane_incarnation,
-        ) {
-            Ok(marker) => marker,
-            Err(_) => return false,
-        };
+        )?;
         if let Some(marker) = native_marker {
-            let receipt = state
-                .kura()
-                .read_native_amx_participant_application_receipt(
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                    marker.lane_block_height,
-                );
-            if !receipt.is_some_and(|receipt| {
-                Self::native_amx_participant_receipt_matches_frontier(&receipt, marker)
-            }) {
-                return false;
+            Self::validate_native_amx_participant_shared_frontier(state.world(), &marker)?;
+            if !prefix_contains(
+                marker.application_block_height,
+                marker.application_block_hash,
+            ) {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "Native AMX replicated predecessor lies outside the supplied committed State prefix".to_owned(),
+                ));
             }
-            tips.push((marker.lane_block_height, marker.lane_block_descriptor_hash));
         }
-        let latest =
-            state
-                .kura()
-                .latest_lane_block_artifact_matching(descriptor.lane_id, |artifact| {
-                    artifact.ownership.dataspace_id == descriptor.dataspace_id
-                        && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
-                });
-        let latest = match latest {
-            Ok(latest) => latest,
-            Err(_) => return false,
-        };
+        use crate::kura::NativeAmxParticipantApplicationObservation as Observation;
+        let history = state
+            .kura()
+            .read_native_amx_participant_application_history(descriptor.lane_id)
+            .map_err(MergeLedgerCommitError::Persistence)?;
+        let mut pending = false;
+        let mut route_matches = true;
+        let mut native_receipt = None;
+        for (height, observation) in history.entries() {
+            let (
+                lane_id,
+                dataspace_id,
+                incarnation,
+                application_height,
+                application_hash,
+                marker_matches,
+            ) = match observation {
+                Observation::Applied(receipt)
+                | Observation::PendingTipMetadata(receipt)
+                | Observation::PendingManifestRepair(receipt) => {
+                    let stored = &receipt.participant_proposal.descriptor;
+                    (
+                        stored.lane_id,
+                        stored.dataspace_id,
+                        stored.lane_incarnation,
+                        receipt.application_block_height,
+                        receipt.application_block_hash,
+                        native_marker.is_none_or(|marker| {
+                            marker.lane_block_height != height
+                                || Self::native_amx_participant_receipt_matches_frontier(
+                                    receipt, marker,
+                                )
+                        }),
+                    )
+                }
+                Observation::PendingReceiptRepair(manifest) => {
+                    let leaf = &manifest.leaf;
+                    (leaf.lane_id, leaf.dataspace_id, leaf.lane_incarnation,
+                        leaf.application_block_height, leaf.application_block_hash,
+                        native_marker.is_none_or(|marker| marker.lane_block_height != height
+                            || crate::kura::Kura::native_amx_manifest_leaf_matches_frontier_marker(leaf, &marker)))
+                }
+            };
+            // The full read above authenticates every occupied slot, including
+            // later corruption. Valid future applications cannot supply or block
+            // authority in a historical WSV prefix.
+            if application_height > prefix_height {
+                if mode == LanePredecessorApplicationMode::CurrentTip {
+                    return Ok(false);
+                }
+                continue;
+            }
+            if !prefix_contains(application_height, application_hash) {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "Native AMX application history differs from the supplied committed State prefix".to_owned(),
+                ));
+            }
+            let same_route = lane_id == descriptor.lane_id
+                && dataspace_id == descriptor.dataspace_id
+                && incarnation == descriptor.lane_incarnation;
+            if same_route && !marker_matches {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "Native AMX snapshot marker conflicts with its authenticated application history".to_owned(),
+                ));
+            }
+            route_matches &= same_route;
+            pending |= !matches!(observation, Observation::Applied(_));
+            if let Observation::Applied(receipt) = observation {
+                native_receipt = Some(receipt);
+            }
+        }
+        if pending || !route_matches {
+            return Ok(false);
+        }
+        match (native_marker, native_receipt) {
+            (Some(marker), Some(receipt)) => {
+                if receipt.participant_proposal.descriptor.lane_block_height
+                    != marker.lane_block_height
+                {
+                    // Durable application and its replicated marker cross
+                    // separate publication boundaries. Wait for this exact
+                    // snapshot to catch up instead of inventing an empty tip.
+                    return Ok(false);
+                }
+                if !Self::native_amx_participant_receipt_matches_frontier(&receipt, marker) {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "Native AMX snapshot marker conflicts with its authenticated application receipt".to_owned(),
+                    ));
+                }
+                if receipt.application_block_height >= descriptor.proposal_height {
+                    return Ok(false);
+                }
+                tips.push((marker.lane_block_height, marker.lane_block_descriptor_hash));
+            }
+            (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => return Ok(false),
+        }
+        let latest = state
+            .kura()
+            .latest_lane_block_artifact_matching(descriptor.lane_id, |artifact| {
+                artifact.ownership.dataspace_id == descriptor.dataspace_id
+                    && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
+                    && (mode == LanePredecessorApplicationMode::CurrentTip
+                        || artifact.ownership.proposal_height <= prefix_height)
+            })
+            .map_err(MergeLedgerCommitError::Persistence)?;
         if let Some(artifact) = latest {
             let ownership = &artifact.ownership;
-            let Some(artifact_descriptor_hash) = ownership.lane_block_descriptor_hash else {
-                return false;
-            };
-            let receipt_applies = state
+            let artifact_descriptor_hash =
+                ownership.lane_block_descriptor_hash.ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "Native AMX predecessor ownership lacks its canonical descriptor hash"
+                            .to_owned(),
+                    )
+                })?;
+            if ownership.proposal_height > prefix_height {
+                return Ok(false);
+            }
+            if !prefix_contains(ownership.proposal_height, artifact.proposal_block_hash) {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "ordinary lane predecessor differs from the supplied committed State prefix"
+                        .to_owned(),
+                ));
+            }
+            let receipt = state
                 .kura()
-                .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
-                .is_some_and(|receipt| {
-                    Self::lane_block_artifact_matches_certified_proposal(
-                        &artifact,
-                        &receipt.proposal,
-                    ) && state
-                        .kura()
-                        .lane_block_application_receipt_available(&receipt.proposal)
-                });
+                .read_lane_application_receipt(ownership.lane_id, ownership.lane_block_height)
+                .map_err(MergeLedgerCommitError::Persistence)?;
+            if receipt.as_ref().is_some_and(|receipt| {
+                Self::lane_block_artifact_matches_certified_proposal(&artifact, &receipt.proposal)
+                    && receipt.application_block_height > prefix_height
+            }) {
+                return Ok(false);
+            }
+            let receipt_applies = match receipt.as_ref() {
+                Some(receipt) if Self::lane_block_artifact_matches_certified_proposal(&artifact, &receipt.proposal)
+                    && prefix_contains(receipt.application_block_height, receipt.application_block_hash) => true,
+                Some(_) => return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "Native AMX predecessor raw ownership conflicts with its authenticated application receipt".to_owned(),
+                )),
+                None => false,
+            };
             let merge_applies =
                 merge_frontier == (ownership.lane_block_height, Some(artifact_descriptor_hash));
             if !receipt_applies && !merge_applies {
-                return false;
+                // Resolve imported snapshot authority or the explicitly selected
+                // ordinary canonical-body receipt repair here, after all Native
+                // pending/conflict checks. Callers cannot retry ineligibility
+                // through a more permissive independent fallback.
+                let Some(height) = usize::try_from(ownership.proposal_height)
+                    .ok()
+                    .and_then(NonZeroUsize::new)
+                else {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "Native AMX snapshot predecessor has an invalid canonical height"
+                            .to_owned(),
+                    ));
+                };
+                let body = state
+                    .kura()
+                    .read_block_body(height)
+                    .map_err(MergeLedgerCommitError::Persistence)?;
+                if body.is_none() {
+                    if !state.kura().is_audited_snapshot_import_height(height) {
+                        return Ok(false);
+                    }
+                } else {
+                    if mode != LanePredecessorApplicationMode::OrdinaryBodyStatePrefix {
+                        return Ok(false);
+                    }
+                    // Ordinary v2 replay may reconstruct its application receipt
+                    // only from this exact canonical carrier in the State prefix.
+                    let canonical = state
+                        .kura()
+                        .canonical_lane_block_artifacts_at_proposal_height_matching(
+                            ownership.proposal_height,
+                            2,
+                            |candidate| candidate == ownership,
+                        )
+                        .map_err(MergeLedgerCommitError::Persistence)?;
+                    if canonical.as_slice() != [artifact.clone()] {
+                        return Ok(false);
+                    }
+                }
+            }
+            if ownership.proposal_height >= descriptor.proposal_height {
+                return Ok(false);
             }
             tips.push((ownership.lane_block_height, artifact_descriptor_hash));
         }
@@ -36359,18 +37156,18 @@ impl State {
         for (height, hash) in tips {
             match latest {
                 None => latest = Some((height, hash)),
-                Some((latest_height, _)) if height > latest_height => {
-                    latest = Some((height, hash));
-                }
+                Some((latest_height, _)) if height > latest_height => latest = Some((height, hash)),
                 Some((latest_height, latest_hash))
                     if height == latest_height && hash != latest_hash =>
                 {
-                    return false;
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "Native AMX predecessor sources disagree at the same authenticated lane height".to_owned(),
+                    ));
                 }
                 _ => {}
             }
         }
-        match latest {
+        Ok(match latest {
             None => {
                 descriptor.previous_lane_block_height == 0
                     && descriptor.previous_lane_block_descriptor_hash.is_none()
@@ -36381,45 +37178,14 @@ impl State {
                     && descriptor.previous_lane_block_descriptor_hash == Some(hash)
                     && height.checked_add(1) == Some(descriptor.lane_block_height)
             }
-        }
+        })
     }
-    /// Active participant controls whose replicated frontier is not yet
-    /// backed by exact durable application evidence.
-    #[must_use]
-    pub(crate) fn unapplied_native_amx_participant_control_heights_snapshot_cached(
+    /// Active participant controls whose durable or replicated frontier is
+    /// still awaiting exact application evidence in this State snapshot.
+    pub(crate) fn unapplied_native_amx_participant_control_heights_snapshot(
         &self,
-    ) -> BTreeMap<(LaneId, DataSpaceId), u64> {
-        let lifecycle = self.lane_consensus_lifecycle_snapshot();
-        let world = self.world.view();
-        let mut pending = BTreeMap::new();
-        for lane in lifecycle.nexus.lane_catalog.lanes() {
-            let Some(incarnation) = lifecycle.incarnations.get(&lane.id).copied() else {
-                continue;
-            };
-            let Ok(Some(marker)) = Self::canonical_native_amx_participant_frontier_from_world(
-                &world,
-                lane.id,
-                lane.dataspace_id,
-                incarnation,
-            ) else {
-                continue;
-            };
-            let applied = self
-                .kura
-                .read_native_amx_participant_application_receipt(
-                    lane.id,
-                    lane.dataspace_id,
-                    incarnation,
-                    marker.lane_block_height,
-                )
-                .is_some_and(|receipt| {
-                    Self::native_amx_participant_receipt_matches_frontier(&receipt, marker)
-                });
-            if !applied {
-                pending.insert((lane.id, lane.dataspace_id), marker.lane_block_height);
-            }
-        }
-        pending
+    ) -> Result<BTreeMap<(LaneId, DataSpaceId), u64>, MergeLedgerCommitError> {
+        Ok(self.native_amx_participant_application_snapshot()?.blocked)
     }
     /// Snapshot active catalog lanes with globally anchored lane-local payload
     /// artifacts that do not yet have matching application receipts.
@@ -36432,33 +37198,38 @@ impl State {
     #[must_use]
     pub(crate) fn unapplied_lane_block_artifact_heights_snapshot_cached(
         &self,
-    ) -> Result<BTreeMap<(LaneId, DataSpaceId), u64>, crate::kura::Error> {
+    ) -> Result<BTreeMap<(LaneId, DataSpaceId), u64>, MergeLedgerCommitError> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut heights = BTreeMap::new();
         for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
-            let Some(artifact) =
-                self.kura
-                    .latest_lane_block_artifact_matching(lane_id, |artifact| {
-                        let ownership = &artifact.ownership;
-                        ownership.dataspace_id == dataspace_id
-                            && lifecycle.lane_route_and_incarnation_matches(
-                                lane_id,
-                                dataspace_id,
-                                ownership.proposal_height,
-                                ownership.lane_incarnation,
-                            )
-                    })?
+            let Some(artifact) = self
+                .kura
+                .latest_lane_block_artifact_matching(lane_id, |artifact| {
+                    let ownership = &artifact.ownership;
+                    ownership.dataspace_id == dataspace_id
+                        && lifecycle.lane_route_and_incarnation_matches(
+                            lane_id,
+                            dataspace_id,
+                            ownership.proposal_height,
+                            ownership.lane_incarnation,
+                        )
+                })
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "failed to authenticate unapplied lane artifact tip: {error}"
+                    ))
+                })?
             else {
                 continue;
             };
             let lane_block_height = artifact.ownership.lane_block_height;
-            if self.lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact) {
+            if self.lane_block_artifact_is_applied_or_snapshot_anchored(&artifact)? {
                 continue;
             }
             heights.insert((lane_id, dataspace_id), lane_block_height);
         }
         for (route, lane_block_height) in
-            self.unapplied_native_amx_participant_control_heights_snapshot_cached()
+            self.unapplied_native_amx_participant_control_heights_snapshot()?
         {
             heights
                 .entry(route)
@@ -36476,35 +37247,40 @@ impl State {
     #[must_use]
     pub(crate) fn certified_lane_block_tips_snapshot_cached(
         &self,
-    ) -> Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)> {
+    ) -> Result<Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)>, MergeLedgerCommitError> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
-        Self::lane_block_artifact_routes(&lifecycle.nexus)
-            .into_iter()
-            .filter_map(|(lane_id, dataspace_id)| {
-                let artifact = self.kura.latest_certified_lane_block_artifact_matching(
-                    lane_id,
-                    |artifact| {
-                        let descriptor = &artifact.proposal.descriptor;
-                        descriptor.dataspace_id == dataspace_id
-                            && lifecycle.lane_route_and_incarnation_matches(
-                                lane_id,
-                                dataspace_id,
-                                descriptor.proposal_height,
-                                descriptor.lane_incarnation,
-                            )
-                    },
-                )?;
-                let descriptor = &artifact.proposal.descriptor;
-                let lane_block_height = descriptor.lane_block_height;
-                Some((
-                    lane_id,
-                    dataspace_id,
-                    descriptor.lane_incarnation,
-                    lane_block_height,
-                    Some(descriptor.descriptor_hash),
-                ))
-            })
-            .collect()
+        let mut tips = Vec::new();
+        for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
+            let Some(artifact) = self
+                .kura
+                .latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
+                    let descriptor = &artifact.proposal.descriptor;
+                    descriptor.dataspace_id == dataspace_id
+                        && lifecycle.lane_route_and_incarnation_matches(
+                            lane_id,
+                            dataspace_id,
+                            descriptor.proposal_height,
+                            descriptor.lane_incarnation,
+                        )
+                })
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "certified lane tip storage read failed: {error}"
+                    ))
+                })?
+            else {
+                continue;
+            };
+            let descriptor = &artifact.proposal.descriptor;
+            tips.push((
+                lane_id,
+                dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.lane_block_height,
+                Some(descriptor.descriptor_hash),
+            ));
+        }
+        Ok(tips)
     }
     /// Derive bounded autonomous execution stages exclusively from current
     /// lifecycle State and independently revalidated durable Kura evidence.
@@ -37431,7 +38207,7 @@ impl State {
         let mut earliest = Vec::new();
         let mut traversed_total = 0_usize;
         for mut session in frontiers {
-            if self.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session) {
+            if self.certified_lane_block_session_is_applied_or_snapshot_anchored(&session)? {
                 continue;
             }
             let mut traversed = 0_usize;
@@ -37457,9 +38233,9 @@ impl State {
                         descriptor.lane_id.as_u32()
                     )));
                 }
-                if self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                if self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored(
                     &session.proposal,
-                ) {
+                )? {
                     break;
                 }
                 traversed = traversed.saturating_add(1);
@@ -37523,9 +38299,7 @@ impl State {
                     prepare_qc: previous.prepare_qc,
                     commit_qc: previous.commit_qc,
                 };
-                if self
-                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session)
-                {
+                if self.certified_lane_block_session_is_applied_or_snapshot_anchored(&session)? {
                     return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                         "ordinary certified lane route {} selected an already-applied predecessor",
                         route_lane_id.as_u32()
@@ -37559,79 +38333,129 @@ impl State {
             earliest_unapplied: earliest,
         })
     }
-    pub(crate) fn lane_block_artifact_is_applied_or_snapshot_anchored_cached(
+    pub(crate) fn lane_block_artifact_is_applied_or_snapshot_anchored(
         &self,
         artifact: &crate::kura::LaneBlockArtifact,
-    ) -> bool {
-        self.lane_block_artifact_has_matching_application_receipt(artifact)
-            || self.lane_block_artifact_has_hash_only_snapshot_anchor(artifact)
+    ) -> Result<bool, MergeLedgerCommitError> {
+        Ok(
+            self.lane_block_artifact_has_matching_application_receipt(artifact)?
+                || self.lane_block_artifact_has_hash_only_snapshot_anchor(artifact),
+        )
     }
-    pub(crate) fn certified_lane_block_session_is_applied_or_snapshot_anchored_cached(
+    pub(crate) fn certified_lane_block_session_is_applied_or_snapshot_anchored(
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
-    ) -> bool {
+    ) -> Result<bool, MergeLedgerCommitError> {
         if session.prepare_qc.payload_availability_qc.is_some() {
-            return self
-                .certified_autonomous_lane_block_is_globally_applied_cached(&session.proposal);
+            return self.certified_autonomous_lane_block_is_globally_applied(&session.proposal);
         }
-        self.certified_lane_block_proposal_has_hash_only_snapshot_anchor(&session.proposal)
-            || self
-                .kura
-                .lane_block_application_receipt_available_without_sidecar_repair(&session.proposal)
+        Ok(
+            self.certified_lane_block_proposal_has_authenticated_application_receipt(
+                &session.proposal,
+            )? || self
+                .certified_lane_block_proposal_has_hash_only_snapshot_anchor(&session.proposal)?,
+        )
     }
-    pub(crate) fn certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+    pub(crate) fn certified_lane_block_predecessor_is_applied_or_snapshot_anchored(
         &self,
         proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    ) -> bool {
+    ) -> Result<bool, MergeLedgerCommitError> {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;
         if previous_height == 0 {
-            return descriptor.lane_block_height == 1
-                && descriptor.previous_lane_block_descriptor_hash.is_none();
-        }
-        let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
-            return false;
-        };
-        if self
-            .kura
-            .read_lane_block_artifact_without_sidecar_repair(descriptor.lane_id, previous_height)
-            .is_some_and(|artifact| {
-                artifact.ownership.dataspace_id == descriptor.dataspace_id
-                    && artifact.ownership.lane_block_height == previous_height
-                    && artifact.ownership.lane_block_descriptor_hash
-                        == Some(previous_descriptor_hash)
-                    && self.lane_block_artifact_has_hash_only_snapshot_anchor(&artifact)
-            })
+            if descriptor.lane_block_height != 1
+                || descriptor.previous_lane_block_descriptor_hash.is_some()
+            {
+                return Ok(false);
+            }
+        } else if descriptor.previous_lane_block_descriptor_hash.is_none()
+            || previous_height.checked_add(1) != Some(descriptor.lane_block_height)
         {
-            return true;
+            return Ok(false);
         }
-        self.kura
-            .lane_block_predecessor_application_receipt_available_without_sidecar_repair(proposal)
+        // A replicated or hash-only frontier cannot bypass an interrupted or
+        // corrupt Native publication in the same shared lane sequence.
+        let native_snapshot = self.native_amx_participant_application_snapshot()?;
+        if native_snapshot
+            .blocked
+            .contains_key(&(descriptor.lane_id, descriptor.dataspace_id))
+        {
+            return Ok(false);
+        }
+        // An empty predecessor is still an application-authority decision:
+        // a pending or corrupt Native first slot must not become a fresh lane.
+        let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
+            return Ok(true);
+        };
+        let artifact = self
+            .kura
+            .read_lane_block_artifact_read_only(descriptor.lane_id, previous_height)
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "failed to authenticate lane predecessor ownership: {error}"
+                ))
+            })?;
+        if artifact.is_some_and(|artifact| {
+            artifact.ownership.dataspace_id == descriptor.dataspace_id
+                && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
+                && artifact.ownership.lane_block_height == previous_height
+                && artifact.ownership.lane_block_descriptor_hash == Some(previous_descriptor_hash)
+                && self.lane_block_artifact_has_hash_only_snapshot_anchor(&artifact)
+        }) {
+            return Ok(true);
+        }
+        self.lane_block_predecessor_has_authenticated_receipt(proposal, &native_snapshot)
     }
-    fn certified_lane_block_artifact_is_applied_or_snapshot_anchored_cached(
+    fn certified_lane_block_artifact_is_applied_or_snapshot_anchored(
         &self,
         artifact: &crate::kura::CertifiedLaneBlockArtifact,
-    ) -> bool {
-        self.certified_lane_block_proposal_has_hash_only_snapshot_anchor(&artifact.proposal)
-            || self
-                .kura
-                .lane_block_application_receipt_available(&artifact.proposal)
+    ) -> Result<bool, MergeLedgerCommitError> {
+        if artifact.prepare_qc.payload_availability_qc.is_some() {
+            return self.certified_autonomous_lane_block_is_globally_applied(&artifact.proposal);
+        }
+        Ok(
+            self.certified_lane_block_proposal_has_authenticated_application_receipt(
+                &artifact.proposal,
+            )? || self
+                .certified_lane_block_proposal_has_hash_only_snapshot_anchor(&artifact.proposal)?,
+        )
+    }
+    /// Authenticate an occupied application slot before comparing the candidate.
+    fn certified_lane_block_proposal_has_authenticated_application_receipt(
+        &self,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let descriptor = &proposal.descriptor;
+        let receipt = self
+            .kura
+            .read_lane_application_receipt(descriptor.lane_id, descriptor.lane_block_height)
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "failed to authenticate lane application receipt: {error}"
+                ))
+            })?;
+        Ok(receipt.is_some_and(|receipt| receipt.proposal == *proposal))
     }
     fn certified_lane_block_proposal_has_hash_only_snapshot_anchor(
         &self,
         proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    ) -> bool {
+    ) -> Result<bool, MergeLedgerCommitError> {
         let descriptor = &proposal.descriptor;
-        let Some(artifact) = self.kura.read_lane_block_artifact_without_sidecar_repair(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-        ) else {
-            return false;
+        let Some(artifact) = self
+            .kura
+            .read_lane_block_artifact_read_only(descriptor.lane_id, descriptor.lane_block_height)
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "failed to authenticate lane snapshot ownership: {error}"
+                ))
+            })?
+        else {
+            return Ok(false);
         };
         if !Self::lane_block_artifact_matches_certified_proposal(&artifact, proposal) {
-            return false;
+            return Ok(false);
         }
-        self.lane_block_artifact_has_hash_only_snapshot_anchor(&artifact)
+        Ok(self.lane_block_artifact_has_hash_only_snapshot_anchor(&artifact))
     }
     fn lane_block_artifact_matches_certified_proposal(
         artifact: &crate::kura::LaneBlockArtifact,
@@ -37662,20 +38486,31 @@ impl State {
     fn lane_block_artifact_has_matching_application_receipt(
         &self,
         artifact: &crate::kura::LaneBlockArtifact,
-    ) -> bool {
+    ) -> Result<bool, MergeLedgerCommitError> {
         let ownership = &artifact.ownership;
         let Some(receipt) = self
             .kura
-            .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
+            .read_lane_application_receipt(ownership.lane_id, ownership.lane_block_height)
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "failed to authenticate lane ownership application receipt: {error}"
+                ))
+            })?
         else {
-            return false;
+            return Ok(false);
         };
         if !Self::lane_block_artifact_matches_certified_proposal(artifact, &receipt.proposal) {
-            return false;
+            return Ok(false);
         }
-        self.kura
-            .read_certified_lane_block_artifact(ownership.lane_id, ownership.lane_block_height)
-            .is_some_and(|certified| certified.proposal == receipt.proposal)
+        let certified = self
+            .kura
+            .read_lane_completion_certificate(ownership.lane_id, ownership.lane_block_height)
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "failed to authenticate applied lane ownership certificate: {error}"
+                ))
+            })?;
+        Ok(certified.is_some_and(|certified| certified.proposal == receipt.proposal))
     }
     fn lane_block_artifact_has_hash_only_snapshot_anchor(
         &self,
@@ -37712,27 +38547,31 @@ impl State {
     #[must_use]
     pub(crate) fn unapplied_certified_lane_block_heights_snapshot_cached(
         &self,
-    ) -> BTreeMap<(LaneId, DataSpaceId), u64> {
+    ) -> Result<BTreeMap<(LaneId, DataSpaceId), u64>, MergeLedgerCommitError> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut heights = BTreeMap::new();
         for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
-            let Some(artifact) =
-                self.kura
-                    .latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
-                        let descriptor = &artifact.proposal.descriptor;
-                        descriptor.dataspace_id == dataspace_id
-                            && lifecycle.lane_route_and_incarnation_matches(
-                                lane_id,
-                                dataspace_id,
-                                descriptor.proposal_height,
-                                descriptor.lane_incarnation,
-                            )
-                    })
+            let Some(artifact) = self
+                .kura
+                .latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
+                    let descriptor = &artifact.proposal.descriptor;
+                    descriptor.dataspace_id == dataspace_id
+                        && lifecycle.lane_route_and_incarnation_matches(
+                            lane_id,
+                            dataspace_id,
+                            descriptor.proposal_height,
+                            descriptor.lane_incarnation,
+                        )
+                })
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "certified lane unapplied frontier read failed: {error}"
+                    ))
+                })?
             else {
                 continue;
             };
-            if self.certified_lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact)
-            {
+            if self.certified_lane_block_artifact_is_applied_or_snapshot_anchored(&artifact)? {
                 continue;
             }
             heights.insert(
@@ -37740,7 +38579,7 @@ impl State {
                 artifact.proposal.descriptor.lane_block_height,
             );
         }
-        heights
+        Ok(heights)
     }
     fn unmerged_merge_admissible_relay_progress(
         &self,
@@ -37785,9 +38624,10 @@ impl State {
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
-    ) -> Option<u64> {
+    ) -> Result<Option<u64>, MergeLedgerCommitError> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
-        self.kura
+        let Some(artifact) = self
+            .kura
             .latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
                 let descriptor = &artifact.proposal.descriptor;
                 descriptor.dataspace_id == dataspace_id
@@ -37798,13 +38638,19 @@ impl State {
                         descriptor.lane_incarnation,
                     )
             })
-            .and_then(|artifact| {
-                let lane_block_height = artifact.proposal.descriptor.lane_block_height;
-                (!self.certified_lane_block_artifact_is_applied_or_snapshot_anchored_cached(
-                    &artifact,
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "certified lane retirement frontier read failed: {error}"
                 ))
-                .then_some(lane_block_height)
-            })
+            })?
+        else {
+            return Ok(None);
+        };
+        let height = artifact.proposal.descriptor.lane_block_height;
+        Ok(
+            (!self.certified_lane_block_artifact_is_applied_or_snapshot_anchored(&artifact)?)
+                .then_some(height),
+        )
     }
     /// Access the unified settlement engine.
     #[inline]
@@ -40419,30 +41265,32 @@ impl State {
         if marker.lane_block_height < lane_block_height {
             return Ok(frontier);
         }
-        let receipt = kura
-            .read_native_amx_participant_application_receipt(
-                lane_id,
-                dataspace_id,
-                lane_incarnation,
-                lane_block_height,
-            )
-            .filter(|receipt| {
-                Self::native_amx_participant_receipt_matches_frontier(receipt, marker)
-            })
-            .ok_or_else(|| {
-                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+        let history = kura
+            .consensus_storage_read(kura.read_native_amx_participant_application_history(lane_id))
+            .map_err(MergeLedgerCommitError::Persistence)?;
+        let receipt = match history.get(lane_block_height) {
+            Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(receipt)) => {
+                receipt
+            }
+            _ => {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "Native AMX drain frontier for lane {} lacks exact durable application evidence",
                     lane_id.as_u32(),
-                ))
-            })?;
-        let evidence = kura
-            .native_amx_participant_application_drain_evidence(&receipt)
-            .ok_or_else(|| {
-                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "Native AMX drain frontier for lane {} lacks an exact durable manifest, finality, application, receipt, or latest-index identity",
-                    lane_id.as_u32(),
-                ))
-            })?;
+                )));
+            }
+        };
+        if !Self::native_amx_participant_receipt_matches_frontier(receipt, marker) {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "Native AMX drain frontier for lane {} conflicts with its authenticated receipt",
+                lane_id.as_u32(),
+            )));
+        }
+        let evidence = history.drain_evidence(lane_block_height).copied().ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "Native AMX drain frontier for lane {} lacks an exact applied highest manifest, finality, application, receipt, or latest-index identity",
+                lane_id.as_u32(),
+            ))
+        })?;
         if evidence.participant_view != marker.participant_view
             || evidence.predecessor_height != marker.previous_lane_block_height
             || evidence.predecessor_descriptor_hash != marker.previous_lane_block_descriptor_hash
@@ -44665,8 +45513,9 @@ impl State {
                     reason: "it has unmerged relay progress",
                 });
             }
-            if let Some(lane_block_height) =
-                self.unapplied_certified_lane_block_height(*lane, dataspace_id)
+            if let Some(lane_block_height) = self
+                .unapplied_certified_lane_block_height(*lane, dataspace_id)
+                .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?
             {
                 warn!(
                     lane = lane.as_u32(),
@@ -47962,8 +48811,8 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-        kaigi_roster_join_vk: None,
-        kaigi_roster_leave_vk: None,
+        kaigi_authorization_vk: None,
+
         kaigi_usage_vk: None,
         max_proof_size_bytes:
             iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
@@ -49565,13 +50414,8 @@ pub fn compute_zk_consensus_policy_hash(
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
     zk_policy_put_option_vk_ref(
         &mut h,
-        "kaigi_roster_join_vk",
-        &zk_config.kaigi_roster_join_vk,
-    );
-    zk_policy_put_option_vk_ref(
-        &mut h,
-        "kaigi_roster_leave_vk",
-        &zk_config.kaigi_roster_leave_vk,
+        "kaigi_authorization_vk",
+        &zk_config.kaigi_authorization_vk,
     );
     zk_policy_put_option_vk_ref(&mut h, "kaigi_usage_vk", &zk_config.kaigi_usage_vk);
     zk_policy_put_u32(
@@ -50471,24 +51315,13 @@ impl<'state> StateBlock<'state> {
                 .collect();
             let has_fastpq =
                 !witness.fastpq_transcripts.is_empty() || !witness.fastpq_batches.is_empty();
-            let tx_set_hash = if witness.fastpq_transcripts.is_empty()
-                && witness.fastpq_batches.is_empty()
-            {
-                None
+            // Only block execution owns the complete ordered canonical wires.
+            // Transcript identities cannot reconstruct that commitment; leave
+            // missing authority absent so the prover job rejects it.
+            let tx_set_hash = if has_fastpq {
+                self.fastpq_tx_set_hash
             } else {
-                Some(self.fastpq_tx_set_hash.unwrap_or_else(|| {
-                    if witness.fastpq_transcripts.is_empty() {
-                        [0u8; 32]
-                    } else {
-                        let mut entry_hashes: Vec<Hash> = witness
-                            .fastpq_transcripts
-                            .iter()
-                            .map(|bundle| bundle.entry_hash)
-                            .collect();
-                        entry_hashes.sort_unstable();
-                        crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied())
-                    }
-                }))
+                None
             };
             let perm_root =
                 if witness.fastpq_transcripts.is_empty() && witness.fastpq_batches.is_empty() {
@@ -59101,9 +59934,14 @@ mod fastpq_tx_set_hash_tests {
         let _ = new_block
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
-        let mut entry_hashes = [tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint()];
-        entry_hashes.sort_unstable();
-        let expected = crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied());
+        let entrypoints = [
+            TransactionEntrypoint::External(tx1),
+            TransactionEntrypoint::External(tx2),
+        ];
+        let expected: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
+                .expect("canonical ordered transaction set")
+                .into();
         assert_eq!(state_block.fastpq_tx_set_hash, Some(expected));
     }
     #[test]
@@ -59171,6 +60009,16 @@ mod fastpq_tx_set_hash_tests {
             .expect("FASTPQ context");
         assert!(witness.fastpq_batches.is_empty());
         assert_eq!(context.tx_set_hash, Some(tx_set_hash));
+        // A second capture with no block-owned commitment must not synthesize
+        // one from the transcript's execution identity.
+        state_block.fastpq_tx_set_hash = None;
+        crate::sumeragi::witness::start_block();
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        state_block.capture_exec_witness();
+        let missing = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert_eq!(missing.tx_set_hash, None);
     }
     #[test]
     fn capture_exec_witness_skips_replay_blocks_and_clears_active_capture() {
@@ -59463,25 +60311,28 @@ fn verify_replay_bootstrap_binding(
     }
     Ok(())
 }
+fn replay_validation_transaction_errors(block: &SignedBlock) -> Vec<String> {
+    // Static validation can fail before execution attaches a BlockResult.
+    // Preserve that original validation error without invoking result accessors.
+    if !block.has_results() {
+        return Vec::new();
+    }
+    block
+        .results()
+        .enumerate()
+        .filter_map(|(index, result)| {
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!("tx#{index}: {error}; details: {error:?}"))
+        })
+        .collect()
+}
 fn ensure_replayed_results_match_committed(
     height: u64,
     committed: &SignedBlock,
     replayed: &SignedBlock,
 ) -> Result<()> {
-    let committed_heartbeat = committed.external_entrypoints_cloned().next().is_none()
-        && committed.results().next().is_none();
-    let replayed_heartbeat = replayed.external_entrypoints_cloned().next().is_none()
-        && replayed.results().next().is_none();
-    if committed_heartbeat && replayed_heartbeat {
-        if committed.header().result_merkle_root() != replayed.header().result_merkle_root() {
-            return Err(eyre!(
-                "replayed heartbeat block #{height} result root mismatch: committed={:?} replayed={:?}",
-                committed.header().result_merkle_root(),
-                replayed.header().result_merkle_root()
-            ));
-        }
-        return Ok(());
-    }
     if !committed.has_results() {
         return Err(eyre!(
             "committed block #{height} does not contain stored execution results"
@@ -60397,16 +61248,7 @@ fn replay_blocks_from_kura_range_inner(
                     .signatures()
                     .map(|sig| u32::try_from(sig.index()).unwrap_or_default())
                     .collect();
-                let transaction_errors = failed_block
-                    .results()
-                    .enumerate()
-                    .filter_map(|(index, result)| {
-                        result
-                            .as_ref()
-                            .err()
-                            .map(|error| format!("tx#{index}: {error}; details: {error:?}"))
-                    })
-                    .collect::<Vec<_>>();
+                let transaction_errors = replay_validation_transaction_errors(&failed_block);
                 iroha_logger::error!(
                     height,
                     hash = %failed_block.hash(),

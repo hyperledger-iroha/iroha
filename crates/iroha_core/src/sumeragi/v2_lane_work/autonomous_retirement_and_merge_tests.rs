@@ -724,30 +724,46 @@ fn losing_pending_autonomous_payload_is_retired_by_fifo_only_replica() {
 fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
     let lane_id = LaneId::SINGLE;
     let dataspace_id = DataSpaceId::UNIVERSAL;
+    let store_on_exact_parent =
+        |adapter: &V2LaneWorkAdapter, proposal: &LaneBlockProposalV1, signer: &KeyPair| {
+            let height = adapter.context.height;
+            assert_eq!(adapter.kura.blocks_count(), (height - 1) as usize);
+            let parent = adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .expect("negative route fixture has authenticated parents")
+                .subject
+                .block_hash;
+            assert_eq!(
+                adapter.kura.get_durable_block_hash(
+                    NonZeroUsize::new((height - 1) as usize).expect("nonzero parent"),
+                ),
+                Some(parent),
+            );
+            let ownership = ownership_from_proposal(proposal);
+            let block = test_block(height, Some(parent), Some(ownership.clone()), signer);
+            let block_hash = block.hash();
+            adapter.kura.store_block(block).ok()?;
+            proposal_from_ownership(&ownership, block_hash)
+        };
     {
-        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 3);
-        let incarnation = adapter
-            .state
-            .lane_incarnation_at_height(lane_id, adapter.context.height)
-            .expect("canonical lane incarnation is active");
-        let proposal = proposal_for_route(
-            &adapter,
-            &keys,
-            lane_id,
-            dataspace_id,
-            incarnation,
-            adapter.context.height,
-            1,
-        );
-        let canonical = store_canonical_anchor(&adapter, &proposal, &keys[0]);
+        let (adapter, _keys, canonical, _successor) =
+            fixture_with_canonical_ordinary_lane_at_height(3);
         assert!(
             adapter.kura.read_lane_block_artifact(lane_id, 1).is_some(),
             "fixture must retain a raw canonical Kura anchor"
         );
-        assert!(adapter.canonical_anchor_for_proposal(&canonical).is_some());
+        assert!(
+            adapter
+                .canonical_anchor_for_proposal(&canonical)
+                .expect("authenticate canonical fixture anchor")
+                .is_some()
+        );
         assert!(
             adapter
                 .canonical_proposal_for_vote_body(&canonical.vote_body(CertPhase::Prepare))
+                .expect("read canonical vote proposal")
                 .is_some()
         );
         mark_lane_reset(&adapter, lane_id, adapter.context.height);
@@ -756,12 +772,16 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
             "reset validation must be tested with the canonical file still present"
         );
         assert!(
-            adapter.canonical_anchor_for_proposal(&canonical).is_none(),
+            adapter
+                .canonical_anchor_for_proposal(&canonical)
+                .expect("authenticate canonical fixture anchor")
+                .is_none(),
             "a canonical file at the reset watermark is not an admissible anchor"
         );
         assert!(
             adapter
                 .canonical_proposal_for_vote_body(&canonical.vote_body(CertPhase::Prepare))
+                .expect("read canonical vote proposal")
                 .is_none(),
             "historical vote recovery must apply the reset guard too"
         );
@@ -771,7 +791,7 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
         );
     }
     {
-        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 2);
+        let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
         let incarnation = adapter
             .state
             .lane_incarnation_at_height(lane_id, adapter.context.height)
@@ -786,14 +806,18 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
             adapter.context.height,
             1,
         );
-        if let Some(canonical) = try_store_canonical_anchor(&adapter, &proposal, &keys[0]) {
+        if let Some(canonical) = store_on_exact_parent(&adapter, &proposal, &keys[0]) {
             assert!(
-                adapter.canonical_anchor_for_proposal(&canonical).is_none(),
+                adapter
+                    .canonical_anchor_for_proposal(&canonical)
+                    .expect("authenticate canonical fixture anchor")
+                    .is_none(),
                 "canonical storage must not make an inactive dataspace route authoritative"
             );
             assert!(
                 adapter
                     .canonical_proposal_for_vote_body(&canonical.vote_body(CertPhase::Prepare))
+                    .expect("read canonical vote proposal")
                     .is_none()
             );
             assert!(!adapter.lane_proposal_authorized(&canonical, None, true, 0));
@@ -805,7 +829,7 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
         }
     }
     {
-        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 2);
+        let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
         let active_incarnation = adapter
             .state
             .lane_incarnation_at_height(lane_id, adapter.context.height)
@@ -821,14 +845,18 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
             adapter.context.height,
             1,
         );
-        if let Some(canonical) = try_store_canonical_anchor(&adapter, &proposal, &keys[0]) {
+        if let Some(canonical) = store_on_exact_parent(&adapter, &proposal, &keys[0]) {
             assert!(
-                adapter.canonical_anchor_for_proposal(&canonical).is_none(),
+                adapter
+                    .canonical_anchor_for_proposal(&canonical)
+                    .expect("authenticate canonical fixture anchor")
+                    .is_none(),
                 "canonical storage must not authorize a retired incarnation"
             );
             assert!(
                 adapter
                     .canonical_proposal_for_vote_body(&canonical.vote_body(CertPhase::Prepare))
+                    .expect("read canonical vote proposal")
                     .is_none()
             );
             assert!(!adapter.lane_proposal_authorized(&canonical, None, true, 0));
@@ -1002,8 +1030,8 @@ fn merge_candidate_for_persistence_retry(
                 crate::state::LaneAuthorityRoute::new(binding.lane_id, binding.dataspace_id),
                 adapter.context.height,
             )
-                .expect("fixture exact lane committee")
-                .into_validators()
+            .expect("fixture exact lane committee")
+            .into_validators()
         })
         .collect::<Vec<_>>();
     let lane_authority_catalog =
@@ -1219,10 +1247,9 @@ fn synthetic_merge_execution_batch_for_test(
 }
 #[test]
 fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let view = remote_merge_leader_view(&adapter);
-    let candidate =
-        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
+    let candidate = single_production_merge_candidate_for_view(&adapter, view);
     let candidate_bytes = candidate.canonical_bytes();
     let leader = adapter.context.leader(view);
     let local = adapter
@@ -1348,10 +1375,9 @@ fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() 
 }
 #[test]
 fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let view = remote_merge_leader_view(&adapter);
-    let candidate =
-        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
+    let candidate = single_production_merge_candidate_for_view(&adapter, view);
     let leader = adapter.context.leader(view);
     let follower = adapter
         .local_validator_index()
@@ -1397,10 +1423,9 @@ fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version() {
 }
 #[test]
 fn merge_leader_candidate_body_is_canonical_under_ambient_layout() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let view = remote_merge_leader_view(&adapter);
-    let candidate =
-        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
+    let candidate = single_production_merge_candidate_for_view(&adapter, view);
     adapter
         .retain_merge_sidecars_for_global_view(view, None, None)
         .expect("install exact unlocked follower directive");
@@ -1445,10 +1470,9 @@ fn merge_leader_candidate_body_is_canonical_under_ambient_layout() {
 }
 #[test]
 fn merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let view = remote_merge_leader_view(&adapter);
-    let candidate =
-        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
+    let candidate = single_production_merge_candidate_for_view(&adapter, view);
     let leader = adapter.context.leader(view);
     adapter
         .retain_merge_sidecars_for_global_view(view, None, None)
@@ -1555,10 +1579,9 @@ fn authenticated_execution_candidate_rejects_noncanonical_carrier_context_header
 }
 #[test]
 fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let view = remote_merge_leader_view(&adapter);
-    let mut candidate =
-        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
+    let mut candidate = single_production_merge_candidate_for_view(&adapter, view);
     let exact_header = adapter
         .merge_carrier_context_header(view)
         .expect("derive exact deterministic carrier context");
@@ -1601,8 +1624,8 @@ fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
 }
 #[test]
 fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -1654,8 +1677,8 @@ fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
 }
 #[test]
 fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -1725,8 +1748,8 @@ fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
 }
 #[test]
 fn locked_later_view_directive_purges_queued_merge_shares_and_disables_retry() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     adapter
         .retain_merge_sidecars_for_global_view(0, None, None)
         .expect("install initial unlocked directive");
@@ -1759,92 +1782,45 @@ fn locked_later_view_directive_purges_queued_merge_shares_and_disables_retry() {
             .all(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_)))
     );
 }
-fn record_production_merge_candidate_for_persistence_retry(
-    adapter: &mut V2LaneWorkAdapter,
-    keys: &[KeyPair],
-    view: wire::View,
-) -> crate::merge::MergeLedgerCandidate {
+/// Construct the relay-bearing finalized parent before freezing its successor.
+/// No already published finality artifact or signed parent QC is rewritten.
+fn fixture_with_durable_relay_parent() -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+    let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 8, true);
     let lane_id = LaneId::SINGLE;
     let dataspace_id = DataSpaceId::UNIVERSAL;
     let lane_height = 1;
-    let global_height = adapter.context.height;
-    let finalized_height = global_height
-        .checked_sub(1)
-        .expect("persistence-retry fixture has a finalized parent height");
-    let finalized_height_index = usize::try_from(finalized_height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .expect("finalized parent height fits Kura indexing");
-    let block = adapter
+    let finalized_height = adapter.context.height;
+    let global_height = finalized_height
+        .checked_add(1)
+        .expect("retry successor height");
+    let finalized_context = adapter.context.clone();
+    let predecessor_finality = adapter
         .kura
-        .get_block(finalized_height_index)
-        .expect("persistence-retry fixture retains its finalized parent block");
-    let mut finalized_context = adapter.context.clone();
-    finalized_context.height = finalized_height;
-    let predecessor_height = finalized_height
-        .checked_sub(1)
-        .expect("fixture finalized parent has a predecessor");
-    let predecessor = adapter
-        .kura
-        .get_block(
-            usize::try_from(predecessor_height)
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .expect("finalized predecessor height fits Kura indexing"),
-        )
-        .expect("persistence-retry fixture retains the finalized predecessor");
-    let predecessor_wire = predecessor
-        .encode_wire()
-        .expect("encode persistence-retry finalized predecessor");
-    let predecessor_qc = finalized_context
-        .parent_commit_qc
-        .as_mut()
-        .expect("non-genesis finalized context has a parent certificate");
-    predecessor_qc.round.height = predecessor_height;
-    predecessor_qc.proposal_round = predecessor_qc.round;
-    predecessor_qc.subject = wire::BlockSubject {
-        parent_block_hash: predecessor.header().prev_block_hash(),
-        block_hash: predecessor.hash(),
-        payload_hash: predecessor
-            .canonical_proposal_wire_hash()
-            .expect("hash persistence-retry finalized predecessor"),
-    };
-    predecessor_qc.execution_commitment =
-        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"persistence-retry predecessor parent state"),
-            Hash::new(b"persistence-retry predecessor post state"),
-            Hash::new(b"persistence-retry predecessor writes"),
-            u64::try_from(predecessor_wire.len()).expect("predecessor wire length fits u64"),
-            Hash::new(&predecessor_wire),
-        );
-    finalized_context
-        .validate()
-        .expect("production-shaped finalized relay context is valid");
-    // Relay admission requires committee members to be present in both
-    // the exact frozen commit topology and World. The v2 adapter fixture
-    // seeds the key registry directly and commits synthetic parent blocks,
-    // so complete that production authority tuple before constructing
-    // authenticated relay evidence.
-    {
-        let mut topology = adapter.state.commit_topology.block();
-        topology.clear();
-        for entry in &adapter.context.roster {
-            topology.push(entry.validator.clone());
-        }
-        topology.commit();
-    }
-    let mut world_block = adapter.state.world.block();
-    {
-        let mut peers = world_block.peers_mut_for_testing().transaction();
-        for key in keys {
-            let peer = PeerId::new(key.public_key().clone());
-            if !peers.iter().any(|existing| existing == &peer) {
-                peers.push(peer);
-            }
-        }
-        peers.apply();
-    }
-    world_block.commit();
+        .v2_finality_artifact(finalized_height - 1)
+        .expect("read the actual retry predecessor authority")
+        .expect("the retry predecessor is finalized");
+    assert_eq!(
+        finalized_context.parent_commit_qc.as_ref(),
+        Some(&predecessor_finality.commit_qc)
+    );
+    assert!(
+        adapter
+            .kura
+            .v2_finality_artifact(finalized_height)
+            .expect("inspect the vacant retry finality slot")
+            .is_none()
+    );
+    let valid = ValidBlock::new_dummy_and_modify_header(
+        keys[0].private_key(),
+        |header: &mut BlockHeader| {
+            header.set_height(NonZeroU64::new(finalized_height).expect("retry height is nonzero"));
+            header.set_prev_block_hash(Some(predecessor_finality.subject.block_hash));
+            header.merkle_root = None;
+        },
+    );
+    let committed =
+        commit_result_bearing_lane_parent(valid, adapter.state.as_ref(), keys[0].private_key());
+    let block: &SignedBlock = committed.as_ref();
     let (beacon_key, beacon_pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         adapter.context.network_id,
         global_height - 1,
@@ -1956,7 +1932,7 @@ fn record_production_merge_candidate_for_persistence_retry(
         .expect("valid persistence-retry execution commitment");
     let finality = signed_finality_artifact(
         &finalized_context,
-        keys,
+        &keys,
         &block,
         execution_commitment,
         (0..crate::sumeragi::network_topology::commit_quorum_from_len(keys.len()).max(1))
@@ -1972,10 +1948,26 @@ fn record_production_merge_candidate_for_persistence_retry(
             "cryptographically valid persistence-retry finality artifact",
         ],
     );
+    adapter
+        .kura
+        .store_block(committed.clone())
+        .expect("persist the complete retry predecessor before its first finality publication");
     let _commit_receipt = adapter
         .kura
         .store_v2_finality_artifact(&finality)
-        .expect("persist persistence-retry finality");
+        .expect("publish the retry predecessor finality exactly once");
+    commit_test_block_to_state(adapter.state.as_ref(), &committed, &finalized_context);
+    assert_eq!(
+        adapter.state.committed_height(),
+        usize::try_from(finalized_height).expect("retry height fits State indexing")
+    );
+    assert_eq!(
+        adapter
+            .kura
+            .v2_finality_artifact(finalized_height)
+            .expect("read the immutable retry predecessor finality"),
+        Some(finality.clone()),
+    );
     envelope.finality_authority = Some(iroha_data_model::nexus::LaneFinalityAuthorityV1 {
         version: 1,
         global_block_height: finality.height,
@@ -2011,15 +2003,48 @@ fn record_production_merge_candidate_for_persistence_retry(
     registration_block
         .commit_world_overlay_for_testing()
         .expect("commit production-verified relay state without advancing the frontier");
-    adapter.context.nexus_amx_context_hash =
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
-    adapter.context.execution_policy_hash =
-        super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
-            .expect("derive persistence-retry execution policy");
     adapter
         .state
         .record_lane_relay(&envelope)
         .expect("production relay admission accepts retry fixture");
+    let mut context = finalized_context;
+    context.height = global_height;
+    context.parent_commit_qc = Some(finality.commit_qc);
+    context.snapshot_bootstrap = None;
+    context.nexus_amx_context_hash =
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+    context.execution_policy_hash =
+        super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
+            .expect("derive successor execution policy after relay registration");
+    context
+        .validate()
+        .expect("freeze the successor against its exact durable parent");
+    let leader = usize::try_from(context.leader(0)).expect("successor leader index");
+    let local_key = keys[leader].clone();
+    let state = Arc::clone(&adapter.state);
+    let kura = Arc::clone(&adapter.kura);
+    let limits = adapter.limits;
+    let output_guard = Arc::clone(&adapter.output_guard);
+    drop(adapter);
+    let successor = V2LaneWorkAdapter::new_with_output_guard(
+        context,
+        PeerId::new(local_key.public_key().clone()),
+        local_key,
+        true,
+        state,
+        kura,
+        limits,
+        None,
+        None,
+        output_guard,
+    )
+    .expect("open the relay fixture only after its durable predecessor is complete");
+    (successor, keys)
+}
+fn single_production_merge_candidate_for_view(
+    adapter: &V2LaneWorkAdapter,
+    view: wire::View,
+) -> crate::merge::MergeLedgerCandidate {
     let candidates = adapter
         .state
         .merge_entry_candidates_from_lane_relays_for_view(view);
@@ -2035,8 +2060,8 @@ fn record_production_merge_candidate_for_persistence_retry(
 }
 #[test]
 fn merge_signing_rejects_wrong_round_context_and_post_apply_state() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -2112,8 +2137,8 @@ fn merge_signing_rejects_wrong_round_context_and_post_apply_state() {
 }
 #[test]
 fn merge_signing_rejects_block_first_kura_ahead_crash_image() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -2160,7 +2185,7 @@ fn merge_signing_rejects_block_first_kura_ahead_crash_image() {
 }
 #[test]
 fn same_round_merge_claims_survive_successful_kura_staging() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let local_index = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -2168,11 +2193,7 @@ fn same_round_merge_claims_survive_successful_kura_staging() {
         .expect("fixture roster length fits u64"))
         .find(|view| adapter.context.leader(*view) == local_index)
         .expect("rotating leader schedule reaches the local validator");
-    let candidate = record_production_merge_candidate_for_persistence_retry(
-        &mut adapter,
-        &keys,
-        local_leader_view,
-    );
+    let candidate = single_production_merge_candidate_for_view(&adapter, local_leader_view);
     let digest = crate::merge::merge_qc_message_digest(
         &adapter.context.network_id,
         &candidate,
@@ -2314,8 +2335,8 @@ fn same_round_merge_claims_survive_successful_kura_staging() {
 }
 #[test]
 fn quorate_merge_persistence_failure_latches_restart_required() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     adapter
         .retain_merge_sidecars_for_global_view(candidate.view, None, None)
         .expect("install exact unlocked reducer directive");

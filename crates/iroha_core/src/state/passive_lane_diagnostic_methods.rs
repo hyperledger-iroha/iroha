@@ -18,7 +18,10 @@ impl State {
         if application_receipt_available {
             return Some(ExecutionStatus::StateAppliedByCanonicalBlock);
         }
-        if self.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session) {
+        if self
+            .certified_lane_block_session_is_applied_or_snapshot_anchored(session)
+            .ok()?
+        {
             // A replicated frontier or hash-only ordinary snapshot cannot prove
             // which receipt format produced the application. Fail closed until
             // exact durable evidence recovers through an explicit recovery gate.
@@ -32,7 +35,10 @@ impl State {
         {
             return Some(ExecutionStatus::ApplicationReceiptConflictsWithPreflight);
         }
-        if !self.certified_lane_block_session_predecessor_is_applied_cached(session) {
+        if !self
+            .certified_lane_block_session_predecessor_is_applied(session)
+            .ok()?
+        {
             return Some(ExecutionStatus::AwaitingPredecessorApplication);
         }
         if self

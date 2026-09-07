@@ -21,8 +21,26 @@ proves membership in the signed active credential root and empty-leaf membership
 in the signed sparse revocation root while keeping the credential id, holder
 commitment, revocation nonce, holder secret, and both authentication paths out
 of the public payload. The verifier also binds eligibility class, verifier
-challenge and context, credential expiry, root/list versions, and a
-replay-resistant nullifier.
+challenge and context, credential expiry, root/list versions, an explicit
+presentation-recipient binding, and a replay-resistant nullifier.
+
+The sole V1 `PopMembershipProofV1` requires a nonzero
+`presentation_binding_digest`. Its dedicated domain-separated scalar is the
+tenth constrained public input (index 9), changing the verifying-key fingerprint.
+The verifier takes the independently expected binding explicitly. Moderation
+derives it from the canonical Norito frame of the authenticated `AccountId` and
+appeal intake digest, independently of configured address-display prefixes;
+it never copies this expectation from the submitted proof. The shared appeal
+challenge/context and nullifier formula remain unchanged, so a copied proof
+cannot enroll another account and one credential still has one appeal nullifier.
+The former proof layout, missing/zero bindings and substituted recipients are
+rejected. Focused native qualification of this security change is in progress.
+
+Both Torii wallet-prove and verify requests require
+`presentation_binding_digest_hex`; their authenticated request digests include
+it. A generic relying party must derive this expected digest from its authenticated
+recipient and action before verification. No absent-field or zero default is
+supported.
 
 `crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment,
 dual-control approval, external-software-signer-backed issuance, durable registry outbox/dead-letter
@@ -211,7 +229,13 @@ registry, juror client, or deployed verifier service.
   schemas and local validators.
 - The local payload layer signs credentials, commitment roots, and revocation
   lists with Ed25519 over domain-separated BLAKE3 digests of canonical Norito
-  bytes, with the signature bytes cleared before hashing.
+  bytes, with the signature bytes cleared before hashing. Signing always uses
+  the canonical V1 layout, including bounded preimage sizing; an enclosing
+  decoder's layout flags cannot change the digest. Borrowed issuer strings use
+  Norito's native `Cow<str>` encoding so owned and borrowed signing views agree
+  even when wire-layout tests exercise packed field bitsets. The committed
+  credential-attribute bytes also use the canonical layout, so the credential
+  leaf cannot change with an enclosing decoder's flags.
 - `issue_pop_credential_bundle_ed25519_v1` signs a credential, commitment-root
   publication, and revocation-list snapshot together, then verifies issuer id,
   issuer public key, commitment root, tree version, revocation-list version,
@@ -252,7 +276,7 @@ registry, juror client, or deployed verifier service.
   signed credential plus fixed-depth private credential and sparse-revocation
   paths. `verify_pop_membership_proof_v1` verifies the signed active root and
   revocation publication, pinned transparent parameter and verifying-key
-  fingerprints, exact expected challenge/context, expiry, replay cache, and
+  fingerprints, exact expected challenge/context and presentation binding, expiry, replay cache, and
   cryptographic proof. The retired transcript-digest proof variant and policy
   verifier have been removed rather than retained as a compatibility surface.
 - The native SoraFS moderation appeal lifecycle snapshots the exact active
@@ -340,13 +364,15 @@ all accept/reject results are deterministic across supported hardware.
 - Public inputs have one canonical order: credential root, credential-tree
   version, eligibility class, challenge digest projection, verifier-context
   projection, expiry, sparse revocation root, current revocation-list version,
-  and nullifier. Reordering any input invalidates the Halo2 transcript.
+  nullifier, and presentation-binding projection. Reordering any input invalidates
+  the Halo2 transcript.
 - The nullifier is derived in-circuit from the holder secret and verifier
-  challenge/context. Verifiers must pass the expected challenge and context and
-  atomically record an accepted nullifier in their replay store.
+  challenge/context, independently of the presentation binding. Verifiers must
+  pass the expected challenge, context and independently derived presentation
+  binding, then atomically record an accepted nullifier in their replay store.
 - Proof payloads contain no credential id, holder commitment, revocation nonce,
   holder secret, credential path, or revocation path. Reference validation emits
-  only public roots/versions, class, challenge/context, nullifier, proof-byte
+  only public roots/versions, class, challenge/context, presentation binding, nullifier, proof-byte
   length, and pinned parameter/verifying-key fingerprints.
 - V1 fixes `k = 14`, credential depth 32, revocation depth 128, verifier context
   at 256 UTF-8 bytes, proof transcripts at 128 KiB, revocation snapshots at

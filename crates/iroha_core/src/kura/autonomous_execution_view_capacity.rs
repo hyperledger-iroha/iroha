@@ -3,13 +3,13 @@ struct LaneBlockExecutionInputPublicationPlan {
     additional_physical_peak_bytes: u64,
 }
 impl Kura {
-    /// Recover every active lane's execution-input append/prepend protocol to
-    /// a durable fixed point before startup can replay historical seals.
+    /// Recover active raw-ownership, application-receipt and execution-input
+    /// pair protocols before strict startup consumers may classify those slots.
     ///
-    /// Live historical replay intentionally performs no recovery mutation
-    /// before its whole-batch capacity gate, so this startup corridor is the
-    /// sole owner of any append intent left by a crashed replay.
-    fn recover_lane_block_execution_input_pairs_on_startup(&self) -> Result<()> {
+    /// This is the explicit owner of interrupted pair publication. Ordinary
+    /// validators and writers reject pending protocol state without promoting
+    /// temporaries or replacing occupied evidence.
+    fn recover_lane_consensus_sidecar_pairs_on_startup(&self) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
@@ -27,21 +27,34 @@ impl Kura {
             if entry != expected_entry {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
-                    "lane geometry changed during execution-input startup recovery",
+                    "lane geometry changed during consensus-sidecar startup recovery",
                 ));
             }
-            let (data_path, index_path) =
-                Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
+            let pairs = [
+                (
+                    "lane block artifact",
+                    Self::lane_artifact_paths_for_entry(&entry, &self.store_root),
+                ),
+                (
+                    "lane block application receipt",
+                    Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root),
+                ),
+                (
+                    LaneBlockExecutionInputArtifact::FORMAT_LABEL,
+                    Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root),
+                ),
+            ];
             let _sidecar_guard = self.sidecar_lock.lock();
-            if !self.recover_bound_progress_sidecar_artifacts(
-                &data_path,
-                &index_path,
-                LaneBlockExecutionInputArtifact::FORMAT_LABEL,
-            ) {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path,
-                    "lane execution-input pair failed startup recovery",
-                ));
+            for (kind, (data_path, index_path)) in pairs {
+                if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+                    continue;
+                }
+                if !self.recover_bound_progress_sidecar_artifacts(&data_path, &index_path, kind) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        data_path,
+                        format!("{kind} pair failed explicit startup recovery"),
+                    ));
+                }
             }
         }
         Ok(())
@@ -58,7 +71,7 @@ impl Kura {
     ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        if self.lane_block_application_receipt_available_under_prune_guard(&recovered.proposal) {
+        if self.lane_block_application_receipt_available_under_prune_guard(&recovered.proposal)? {
             return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
         }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -80,7 +93,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         if self.lane_block_application_receipt_available_under_prune_and_canonical_guards(
             &recovered.proposal,
-        ) {
+        )? {
             return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
         }
         let verified = self
@@ -104,15 +117,12 @@ impl Kura {
         let artifact = LaneBlockExecutionInputArtifact::new(verified);
         let execution_input_authorization = match artifact.source.autonomous_binding() {
             Some((network_id, epoch, payload_hash)) => {
-                let descriptor = &artifact.proposal.descriptor;
                 let autonomous = self
-                    .read_autonomous_lane_block_artifact_with_recovery_policy(
-                        descriptor.lane_id,
-                        descriptor.lane_block_height,
+                    .read_lane_completion_autonomous_artifact_under_guards(
+                        &artifact.proposal,
                         network_id,
                         epoch,
-                        false,
-                    )
+                    )?
                     .ok_or_else(|| {
                         Self::invalid_lane_artifact_error(
                             self.store_root.clone(),
@@ -192,7 +202,19 @@ impl Kura {
             ));
         }
         let observed_existing =
-            self.read_lane_block_execution_input_for_write_observation(lane_id, lane_block_height);
+            self.read_lane_block_execution_input_for_write_observation(lane_id, lane_block_height)?;
+        for input in std::iter::once(artifact).chain(observed_existing.iter()) {
+            if let Some(source) = input.source.global_artifact() {
+                let height = NonZeroUsize::new(usize::try_from(source.ownership.proposal_height)?)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "zero execution-input carrier height",
+                        )
+                    })?;
+                self.read_block_body_under_prune_and_canonical_guards(height)?;
+            }
+        }
         let observed_existing_is_canonical = observed_existing.as_ref().is_some_and(|existing| {
             self.lane_block_execution_input_matches_canonical_payload(existing, false)
         });
@@ -215,14 +237,19 @@ impl Kura {
             &index_path,
             "lane block execution input",
         )?;
-        if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
+        let existing = self.read_lane_block_execution_input_for_write_locked(
+            &entry,
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
-            "lane block execution input",
-            false,
-        ) {
+        )?;
+        if existing != observed_existing {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane execution input changed after canonical authority validation",
+            ));
+        }
+        if let Some(existing) = existing {
             if existing == *artifact {
                 if !Self::sync_indexed_sidecar_barriers(
                     &data_path,
@@ -365,23 +392,75 @@ impl Kura {
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
-    ) -> Option<LaneBlockExecutionInputArtifact> {
+    ) -> Result<Option<LaneBlockExecutionInputArtifact>> {
         let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let entry = self.lane_storage_entry(lane_id)?;
         let (data_path, index_path) =
             Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        Self::read_indexed_sidecar_from_paths_with_recovery(
+        self.read_lane_block_execution_input_for_write_locked(
+            &entry,
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
-            "lane block execution input",
-            false,
         )
+    }
+    /// Authenticate occupied execution input before any capacity or lifecycle
+    /// authority can be consumed. The caller owns geometry and sidecar locks.
+    fn read_lane_block_execution_input_for_write_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<Option<LaneBlockExecutionInputArtifact>> {
+        self.ensure_prune_recovery_not_required()?;
+        self.active_lane_incarnation_marker(entry)?;
+        if self.bound_progress_sidecar_directory_is_absent(data_path, index_path)? {
+            return Ok(None);
+        }
+        let namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            data_path,
+            index_path,
+            "lane execution input writer preflight",
+        )?;
+        let mut pair = self.open_bound_progress_pair(data_path, index_path)?;
+        let artifact = match &mut pair {
+            BoundProgressPair::Absent(_) => None,
+            BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
+                bound,
+                lane_block_height,
+                "lane execution input writer preflight",
+                |bound| {
+                    Self::read_indexed_sidecar_from_open_files(
+                        lane_block_height,
+                        &mut bound.data,
+                        &mut bound.index,
+                        &bound.namespace.data_path,
+                        &bound.namespace.index_path,
+                        norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
+                        "lane execution input",
+                    )
+                },
+            )?,
+        };
+        if let Some(artifact) = &artifact {
+            Self::validate_lane_block_execution_input_artifact(artifact).map_err(|error| {
+                Self::invalid_lane_artifact_error(data_path.to_path_buf(), error.to_string())
+            })?;
+            if artifact.proposal.descriptor.lane_id != entry.lane_id
+                || artifact.proposal.descriptor.lane_block_height != lane_block_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.to_path_buf(),
+                    "occupied execution input names another lane slot",
+                ));
+            }
+            self.require_active_lane_artifact(entry, &artifact.proposal.descriptor)?;
+        }
+        Ok(artifact)
     }
 }
 impl Kura {

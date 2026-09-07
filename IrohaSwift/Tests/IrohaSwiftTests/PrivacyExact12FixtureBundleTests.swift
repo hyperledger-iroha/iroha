@@ -46,6 +46,27 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
         )
     }
 
+    func testAllTwelveRustStatementContextsBindExactFixtureNetwork() throws {
+        let bundle = try PrivacyExact12FixtureCodecV1.decodeCanonicalArchive(Self.fixtureArchive)
+        // Canonical Rust fixture context uses Hash::prehashed([200; 32]),
+        // which sets the final byte's mandatory hash marker bit.
+        var bytes = Data(repeating: 200, count: 32)
+        bytes[31] |= 1
+        let network = try NetworkId(bytes: bytes)
+        var changed = bytes
+        changed[0] ^= 2
+        let other = try NetworkId(bytes: changed)
+        for row in bundle.rows {
+            let frame = try XCTUnwrap(noritoDecodeFrame(row.statementNorito))
+            try PrivacyExact12CapabilityManifestCodecV1.requireStatementNetworkV1(
+                frame.payload, protocolId: row.protocolId, expectedNetworkId: network
+            )
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireStatementNetworkV1(
+                frame.payload, protocolId: row.protocolId, expectedNetworkId: other
+            ))
+        }
+    }
+
     func testArchiveAndBase64ResourceLimitsFailBeforeDecode() {
         XCTAssertThrowsError(
             try PrivacyExact12FixtureCodecV1.decodeCanonicalArchive(Data())
@@ -367,11 +388,14 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
             typeName: "iroha.privacy.proof-envelope.v1",
             payloadAlignment: 16
         ) { payload in
-            // The first two compact fields are the four-byte protocol and
-            // proof-system discriminants. Preserve every field length while
-            // changing the proof system from its canonical row-0 value.
-            precondition(payload[0] == 4 && payload[5] == 4)
-            payload[6] ^= 1
+            // Skip the final marker, catalog and protocol fields before the proof-system tag.
+            var cursor = 0
+            for _ in 0..<3 {
+                let length = try readCompactLength(payload, cursor: &cursor)
+                cursor += length
+            }
+            XCTAssertEqual(try readCompactLength(payload, cursor: &cursor), 4)
+            payload[cursor] ^= 1
         }
         try assertEncodingRejects(canonical, row: 0, replacement: copyRow(row, envelopeNorito: badEnvelope))
 
@@ -380,9 +404,13 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
             typeName: "iroha.privacy.proof-envelope.v1",
             payloadAlignment: 16
         ) { payload in
-            // The third exact four-byte field is the native engine tag.
-            precondition(payload[10] == 4)
-            payload[11] = UInt8.max
+            var cursor = 0
+            for _ in 0..<4 {
+                let length = try readCompactLength(payload, cursor: &cursor)
+                cursor += length
+            }
+            XCTAssertEqual(try readCompactLength(payload, cursor: &cursor), 4)
+            payload[cursor] = UInt8.max
         }
         try assertEncodingRejects(
             canonical,
@@ -433,6 +461,41 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
             row: 0,
             replacement: copyRow(row, signedTransactionHash: badHash)
         )
+    }
+
+    func testFinalEnvelopeMarkerAndAllSixCatalogLanesRejectSubstitution() throws {
+        let canonical = try PrivacyExact12FixtureCodecV1.decodeCanonicalArchive(Self.fixtureArchive)
+        let row = canonical.rows[0]
+        for (fieldIndex, offsets, label) in [
+            (0, [0, 7], "final V1 wire marker"),
+            (1, [0, 8, 16, 24, 32, 40, 47], "Exact12 catalog commitment"),
+        ] {
+            for offset in offsets {
+                let mutated = try reframe(
+                    row.envelopeNorito,
+                    typeName: "iroha.privacy.proof-envelope.v1",
+                    payloadAlignment: 16
+                ) { payload in
+                    var cursor = 0
+                    if fieldIndex == 1 {
+                        let markerLength = try readCompactLength(payload, cursor: &cursor)
+                        XCTAssertEqual(markerLength, 8)
+                        cursor += markerLength
+                    }
+                    let length = try readCompactLength(payload, cursor: &cursor)
+                    XCTAssertEqual(length, fieldIndex == 0 ? 8 : 48)
+                    payload[cursor + offset] ^= 1
+                }
+                let rows = [try copyRow(row, envelopeNorito: mutated)] + Array(canonical.rows.dropFirst())
+                let bundle = try PrivacyExact12FixtureBundleV1(version: 1, rows: rows)
+                XCTAssertThrowsError(try PrivacyExact12FixtureCodecV1.encodeCanonicalArchive(bundle)) {
+                    XCTAssertEqual(
+                        $0 as? PrivacyExact12FixtureCodecErrorV1,
+                        .invalidCrossFieldBinding(row: 0, field: label)
+                    )
+                }
+            }
+        }
     }
 
     func testStaleOpaqueDigestNeedsAndFailsIndependentFixtureIdentityCheck() throws {
@@ -531,11 +594,11 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
         _ archive: Data,
         typeName: String,
         payloadAlignment: Int,
-        mutate: (inout Data) -> Void
+        mutate: (inout Data) throws -> Void
     ) throws -> Data {
         let frame = try XCTUnwrap(noritoDecodeFrame(archive))
         var payload = frame.payload
-        mutate(&payload)
+        try mutate(&payload)
         return noritoEncode(
             typeName: typeName,
             payload: payload,

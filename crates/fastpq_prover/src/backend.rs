@@ -2,18 +2,20 @@ use crate::{
     Error, Result, TransitionBatch,
     fft::Planner,
     field::GoldilocksFp4V1,
+    gadgets::transfer_integer_air,
     overrides,
     proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
     trace::{PoseidonPipelinePolicy, build_trace, derive_polynomial_data},
 };
 use core::convert::TryFrom;
 use fastpq_isi::{
-    FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384V1, GoldilocksDigestDomainV1,
-    StarkParameterSet, hash_bytes_384_v1,
+    FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384DomainPrefixV1,
+    GoldilocksDigest384V1, GoldilocksDigestDomainV1, StarkParameterSet, hash_bytes_384_v1,
 };
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireGoldilocksDigest384V1;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use metal::{Device, MTLDeviceLocation};
+use rayon::prelude::*;
 #[cfg(windows)]
 use std::env;
 #[cfg(unix)]
@@ -27,6 +29,80 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
+#[path = "backend/air_quotient.rs"]
+mod air_quotient;
+pub(crate) use air_quotient::{AirQuotientDomain, AirQuotientWeights};
+#[path = "backend/joint_fri.rs"]
+mod joint_fri;
+pub(crate) use joint_fri::JointFriBatch;
+#[path = "backend/merkle_cache.rs"]
+mod merkle_cache;
+pub(crate) use merkle_cache::MerkleNodeCache;
+#[cfg(test)]
+#[path = "backend/compact_axt_air.rs"]
+mod compact_axt_air;
+#[cfg(test)]
+#[path = "backend/compact_axt_batch.rs"]
+mod compact_axt_batch;
+#[cfg(test)]
+#[path = "backend/compact_axt_bundle_diagnostic.rs"]
+mod compact_axt_bundle_diagnostic;
+#[cfg(test)]
+#[path = "backend/compact_axt_context.rs"]
+mod compact_axt_context;
+#[cfg(test)]
+#[path = "backend/compact_bundle.rs"]
+mod compact_bundle;
+#[cfg(test)]
+#[path = "backend/compact_bundle_diagnostic.rs"]
+mod compact_bundle_diagnostic;
+#[cfg(test)]
+#[path = "backend/compact_hash_quotient.rs"]
+mod compact_hash_quotient;
+#[cfg(test)]
+#[path = "backend/compact_model_statement.rs"]
+mod compact_model_statement;
+#[cfg(test)]
+#[path = "backend/compact_protocol.rs"]
+mod compact_protocol;
+#[cfg(test)]
+#[path = "backend/compact_public_api.rs"]
+mod compact_public_api;
+#[cfg(test)]
+#[path = "backend/compact_public_batch.rs"]
+mod compact_public_batch;
+#[cfg(test)]
+#[path = "backend/compact_public_transfer.rs"]
+mod compact_public_transfer;
+#[cfg(test)]
+#[path = "backend/compact_shake_candidate.rs"]
+mod compact_shake_candidate;
+#[cfg(test)]
+#[path = "backend/compact_smt_quotient.rs"]
+mod compact_smt_quotient;
+#[cfg(test)]
+#[path = "backend/compact_transfer_air.rs"]
+mod compact_transfer_air;
+#[cfg(test)]
+#[path = "backend/extension_trace.rs"]
+mod extension_trace;
+#[cfg(test)]
+#[path = "backend/fixed_domain.rs"]
+mod fixed_domain;
+#[cfg(test)]
+#[path = "backend/fixed_schedule.rs"]
+mod fixed_schedule;
+#[path = "backend/fri_openings.rs"]
+mod fri_openings;
+#[cfg(test)]
+#[path = "backend/merkle_multiproof.rs"]
+mod merkle_multiproof;
+#[cfg(test)]
+#[path = "backend/phased_trace.rs"]
+mod phased_trace;
+#[cfg(test)]
+#[path = "backend/public_table.rs"]
+mod public_table;
 const FIELD_ONE: u64 = 1;
 const TRACE_COMMITMENT_ROLE_V1: &[u8] = b"trace-commitment";
 const LDE_COMMITMENT_ROLE_V1: &[u8] = b"lde-commitment";
@@ -41,7 +117,7 @@ const MERKLE_EMPTY_PHASE_V1: &[u8] = b"empty-root";
 pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
 
 /// Typed native-STARK Merkle role; the role and FRI round are bound into every internal node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MerkleTreeRoleV1 {
     /// Base trace column-commitment tree.
     Trace,
@@ -104,16 +180,19 @@ const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS 
 ///
 /// Every constraint residue receives an independently derived coefficient. Reusing coefficients
 /// lets equal-and-opposite residues at the same reuse offset cancel for every transcript.
-pub const AIR_COMPOSITION_ALPHA_COUNT: usize =
-    AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT + AIR_STABLE_RESIDUE_COUNT;
-/// Maximum algebraic degree of every implemented V1 AIR residue in trace columns.
-pub const AIR_MAX_CONSTRAINT_DEGREE_V1: usize = 2;
+pub const AIR_COMPOSITION_ALPHA_COUNT: usize = AIR_BOOLEAN_RESIDUE_COUNT
+    + AIR_RELATION_RESIDUE_COUNT
+    + AIR_STABLE_RESIDUE_COUNT
+    + transfer_integer_air::CONSTRAINT_COUNT;
+/// Conservative exclusive quotient degree bound as a multiple of the trace length.
+pub const AIR_QUOTIENT_DEGREE_EXPANSION_V1: usize =
+    fastpq_isi::FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1 as usize;
 /// Configuration for the FASTPQ backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
     /// Run the prover using the scalar CPU implementation.
     Cpu,
-    /// Prefer GPU acceleration when available.
+    /// Require GPU execution; final-V1 proof construction rejects this until implemented.
     Gpu,
     /// Detect hardware support at runtime and pick the best available mode.
     Auto,
@@ -165,6 +244,18 @@ impl ExecutionMode {
         log_execution_resolution(self, resolved);
         resolved
     }
+}
+
+/// Check whether the complete final-V1 native proof pipeline can execute on GPU.
+///
+/// The current six-lane commitment and proof FFT/LDE paths execute on CPU.
+/// Standalone scalar permutation or FFT kernel parity cannot qualify this
+/// pipeline. Callers requiring GPU proofs must reject admission when false.
+#[must_use]
+pub const fn preflight_native_v1_gpu_backend() -> bool {
+    // TODO: enable only after lane-aware digest dispatch, complete proof
+    // integration, and fail-closed device parity checks are implemented.
+    false
 }
 fn gpu_workload_mutex() -> &'static Mutex<()> {
     GPU_WORKLOAD_LOCK.get_or_init(|| Mutex::new(()))
@@ -249,6 +340,7 @@ fn notify_execution_mode_observer(
 }
 /// Install a hook invoked whenever an execution mode resolves to the concrete mode used.
 ///
+/// CPU resolutions report no GPU backend, even when an accelerator is available.
 /// The hook runs without holding the registration lock, may replace or clear itself, and its
 /// panics are caught and logged.
 pub fn set_execution_mode_observer<F>(observer: F)
@@ -319,7 +411,12 @@ fn default_batch_execution_mode() -> ExecutionMode {
     }
 }
 fn log_execution_resolution(requested: ExecutionMode, resolved: ExecutionMode) {
-    let backend = current_gpu_backend();
+    // A discovered accelerator does not imply that this resolution uses it.
+    // In particular, CPU-pinned runs must not be counted as GPU backend work.
+    let backend = match resolved {
+        ExecutionMode::Gpu => current_gpu_backend(),
+        ExecutionMode::Cpu | ExecutionMode::Auto => None,
+    };
     let backend_label = backend.map_or("none", GpuBackend::as_str);
     let planner_backend_label = backend.map_or("unknown", GpuBackend::as_str);
     tracing::info!(
@@ -784,6 +881,29 @@ mod observer_tests {
         clear_execution_mode_observer();
     }
     #[test]
+    fn execution_mode_observer_reports_no_gpu_backend_for_cpu_resolution() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        clear_execution_mode_observer();
+        let _observer_guard = ExecutionModeObserverGuard;
+        let (tx, rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
+        set_execution_mode_observer(move |requested, resolved, backend| {
+            if std::thread::current().id() == test_thread {
+                let _ = tx.send((requested, resolved, backend));
+            }
+        });
+
+        for requested in [ExecutionMode::Cpu, ExecutionMode::Auto, ExecutionMode::Gpu] {
+            log_execution_resolution(requested, ExecutionMode::Cpu);
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(2))
+                    .expect("CPU resolution event"),
+                (requested, ExecutionMode::Cpu, None),
+                "CPU resolutions must report the route independently of available hardware"
+            );
+        }
+    }
+    #[test]
     fn execution_mode_observer_panic_does_not_escape_or_block_reregistration() {
         let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
         clear_execution_mode_observer();
@@ -834,7 +954,7 @@ mod observer_tests {
         assert_eq!(observed.load(Ordering::SeqCst), 1);
     }
     #[test]
-    fn backend_prove_uses_configured_execution_and_poseidon_modes() {
+    fn native_v1_proof_auto_reports_cpu_execution_and_poseidon() {
         let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
         let _poseidon_lock = crate::trace::POSEIDON_PIPELINE_OBSERVER_TEST_LOCK
             .lock()
@@ -859,27 +979,42 @@ mod observer_tests {
         });
 
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
-        let backend = StarkBackend::new(
-            BackendConfig::new(params)
-                .with_execution_mode(ExecutionMode::Cpu)
-                .with_poseidon_mode(PoseidonExecutionMode::Auto),
-        );
         let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
-        backend
-            .prove(&batch, &PublicIO::default(), 1)
-            .expect("configured backend proof");
+        for requested_poseidon in [PoseidonExecutionMode::Auto, PoseidonExecutionMode::Cpu] {
+            let backend = StarkBackend::new(
+                BackendConfig::new(params)
+                    .with_execution_mode(ExecutionMode::Cpu)
+                    .with_poseidon_mode(requested_poseidon),
+            );
+            backend
+                .prove(&batch, &PublicIO::default(), 1)
+                .expect("configured backend proof");
 
-        let (requested, resolved, _) = execution_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("execution-mode event");
-        assert_eq!(requested, ExecutionMode::Cpu);
-        assert_eq!(resolved, ExecutionMode::Cpu);
-        let (policy, path, _) = poseidon_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("Poseidon-policy event");
-        assert_eq!(policy.requested(), PoseidonExecutionMode::Auto);
-        assert_eq!(policy.resolved(), ExecutionMode::Cpu);
-        assert_eq!(path, "cpu_fallback");
+            let (requested, resolved, execution_backend) = execution_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("execution-mode event");
+            assert_eq!(requested, ExecutionMode::Cpu);
+            assert_eq!(resolved, ExecutionMode::Cpu);
+            assert_eq!(execution_backend, None);
+            let (policy, path, hashing_backend) = poseidon_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("native-STARK hashing event");
+            assert_eq!(policy.requested(), requested_poseidon);
+            assert_eq!(policy.resolved(), ExecutionMode::Cpu);
+            assert_eq!(hashing_backend, None);
+            assert_eq!(
+                path,
+                if requested_poseidon == PoseidonExecutionMode::Cpu {
+                    "cpu_forced"
+                } else {
+                    "cpu_fallback"
+                }
+            );
+            assert!(
+                poseidon_rx.try_recv().is_err(),
+                "one native hashing event per preparation"
+            );
+        }
     }
     #[test]
     fn canonical_commitment_derivation_forces_cpu_trace_merkle_levels() {
@@ -1063,6 +1198,7 @@ impl BackendConfig {
         self
     }
     /// Return the requested execution mode.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn execution_mode(&self) -> ExecutionMode {
         self.execution_mode
@@ -1072,8 +1208,23 @@ impl BackendConfig {
     pub(crate) fn poseidon_mode(&self) -> PoseidonExecutionMode {
         self.poseidon_mode
     }
+    /// Reject requested proof execution paths that have no native-V1 implementation.
+    pub(crate) fn validate_native_v1_modes(&self) -> Result<()> {
+        if self.execution_mode == ExecutionMode::Gpu
+            || self.poseidon_mode == PoseidonExecutionMode::Gpu
+        {
+            return Err(Error::NativeV1GpuUnavailable);
+        }
+        Ok(())
+    }
+    /// Resolve and report the execution path actually used by native-V1 proofs.
+    fn resolve_native_v1_execution_mode(&self) -> Result<ExecutionMode> {
+        self.validate_native_v1_modes()?;
+        log_execution_resolution(self.execution_mode, ExecutionMode::Cpu);
+        Ok(ExecutionMode::Cpu)
+    }
 }
-/// Deterministic artifact emitted by the production backend.
+/// Deterministic artifact emitted by the native STARK backend.
 ///
 /// This mirrors the minimal data the verifier needs to
 /// reconstruct the Fiat–Shamir transcript and query openings.
@@ -1093,20 +1244,20 @@ pub(crate) struct BackendArtifact {
     pub(crate) lde_root: GoldilocksDigest384V1,
     /// Number of evaluation rows committed under `lde_root`.
     pub(crate) lde_domain_size: u32,
-    /// Lookup grand-product accumulator over the permission witness LDE.
+    /// Permission accumulator over the canonical witness LDE.
     pub(crate) lookup_grand_product: u64,
-    /// Lookup Fiat–Shamir challenge (`γ`).
+    /// Transcript-derived permission accumulator challenge.
     pub(crate) lookup_challenge: u64,
-    /// Composition challenges sampled after `lookup_challenge`.
-    pub(crate) alphas: Vec<u64>,
-    /// Poseidon hash of each FRI layer plus the terminal root.
+    /// Fp4 composition challenges sampled after the trace roots and permission challenge.
+    pub(crate) alphas: Vec<GoldilocksFp4V1>,
+    /// Commitment to each joint FRI layer plus the terminal root.
     pub(crate) fri_layers: Vec<GoldilocksDigest384V1>,
     /// Fiat–Shamir challenges used for each FRI folding round.
     pub(crate) fri_betas: Vec<GoldilocksFp4V1>,
     /// Sampled query openings into the evaluation domain.
-    pub(crate) query_openings: Vec<(u32, u64)>,
+    pub(crate) query_openings: Vec<(u32, GoldilocksFp4V1)>,
     /// Full LDE leaf chunks containing each queried evaluation.
-    pub(crate) query_chunks: Vec<Vec<u64>>,
+    pub(crate) query_chunks: Vec<Vec<GoldilocksFp4V1>>,
     /// Merkle authentication paths for each queried evaluation chunk.
     pub(crate) query_paths: Vec<Vec<GoldilocksDigest384V1>>,
     /// Sampled AIR row/composition openings.
@@ -1133,6 +1284,10 @@ impl StarkBackend {
 
     pub(crate) fn parameter_name(&self) -> &'static str {
         self.config.params.name
+    }
+    /// Validate proof execution before statement or witness preprocessing.
+    pub(crate) fn validate_native_v1_modes(&self) -> Result<()> {
+        self.config.validate_native_v1_modes()
     }
 }
 
@@ -1174,6 +1329,36 @@ fn hash_bytes_v1(
     })
 }
 
+fn digest_domain_prefix_v1<'a>(
+    role: &'a [u8],
+    phase: &'a [u8],
+    level: usize,
+    counter: u64,
+) -> Result<GoldilocksDigest384DomainPrefixV1<'a>> {
+    GoldilocksDigest384DomainPrefixV1::new(digest_domain_v1(role, phase, level, 0, counter)?).ok_or(
+        Error::PayloadLengthOverflow {
+            length: role.len().saturating_add(phase.len()),
+        },
+    )
+}
+
+fn hash_at_prefix_v1(
+    prefix: &GoldilocksDigest384DomainPrefixV1<'_>,
+    index: usize,
+    fields: &[&[u8]],
+) -> Result<GoldilocksDigest384V1> {
+    prefix
+        .hash_at(
+            u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
+            fields,
+        )
+        .ok_or_else(|| Error::PayloadLengthOverflow {
+            length: fields
+                .iter()
+                .fold(0_usize, |total, field| total.saturating_add(field.len())),
+        })
+}
+
 fn hash_u64_values_v1(
     role: &[u8],
     phase: &[u8],
@@ -1203,6 +1388,7 @@ fn hash_u64_values_v1(
 pub fn hash_lde_leaves(evaluations: &[u64], arity: u32) -> Result<Vec<GoldilocksDigest384V1>> {
     hash_lde_leaves_with_mode(evaluations, arity, default_batch_execution_mode())
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_lde_leaves_with_mode(
     evaluations: &[u64],
     arity: u32,
@@ -1232,6 +1418,7 @@ fn hash_lde_leaves_with_mode(
 ///
 /// # Errors
 /// Returns an error if the leaf index cannot be represented as a field limb.
+#[cfg(test)]
 pub fn hash_lde_chunk(leaf_index: usize, values: &[u64]) -> Result<GoldilocksDigest384V1> {
     hash_u64_values_v1(
         LDE_COMMITMENT_ROLE_V1,
@@ -1241,6 +1428,46 @@ pub fn hash_lde_chunk(leaf_index: usize, values: &[u64]) -> Result<GoldilocksDig
         0,
         values,
     )
+}
+/// Hash a complete mixed-trace Fp4 leaf in coefficient order.
+///
+/// # Errors
+/// Returns an error for a noncanonical coefficient or invalid digest framing.
+pub fn hash_lde_chunk_fp4(
+    leaf_index: usize,
+    values: &[GoldilocksFp4V1],
+) -> Result<GoldilocksDigest384V1> {
+    hash_fp4_values_v1(LDE_COMMITMENT_ROLE_V1, 0, leaf_index, values)
+}
+fn hash_fp4_values_v1(
+    role: &[u8],
+    level: usize,
+    index: usize,
+    values: &[GoldilocksFp4V1],
+) -> Result<GoldilocksDigest384V1> {
+    let mut bytes = Vec::with_capacity(values.len().saturating_mul(32));
+    for (value_index, value) in values.iter().enumerate() {
+        for (coefficient_index, coefficient) in value.coefficients().into_iter().enumerate() {
+            if coefficient >= GOLDILOCKS_MODULUS {
+                return Err(Error::NonCanonicalGoldilocksElement {
+                    context: "native_stark_fp4_digest_input",
+                    indices: vec![index, value_index, coefficient_index],
+                });
+            }
+        }
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    hash_bytes_v1(role, MERKLE_LEAF_PHASE_V1, level, index, 0, &[&bytes])
+}
+fn hash_lde_leaves_fp4(
+    evaluations: &[GoldilocksFp4V1],
+    arity: u32,
+) -> Result<Vec<GoldilocksDigest384V1>> {
+    evaluations
+        .chunks(lde_chunk_size(arity)?)
+        .enumerate()
+        .map(|(index, values)| hash_lde_chunk_fp4(index, values))
+        .collect()
 }
 /// Hash one row-major AIR trace opening.
 ///
@@ -1260,24 +1487,22 @@ pub fn hash_air_trace_row(row_index: usize, values: &[u64]) -> Result<Goldilocks
 ///
 /// # Errors
 /// Returns an error if the leaf index cannot be represented as a field limb.
-pub fn hash_air_composition_leaf(index: usize, value: u64) -> Result<GoldilocksDigest384V1> {
-    hash_u64_values_v1(
-        AIR_COMPOSITION_COMMITMENT_ROLE_V1,
-        MERKLE_LEAF_PHASE_V1,
-        0,
-        index,
-        0,
-        &[value],
-    )
+pub fn hash_air_composition_leaf(
+    index: usize,
+    value: GoldilocksFp4V1,
+) -> Result<GoldilocksDigest384V1> {
+    hash_fp4_values_v1(AIR_COMPOSITION_COMMITMENT_ROLE_V1, 0, index, &[value])
 }
 /// Hash all row-major AIR trace leaves.
 ///
 /// # Errors
-/// Returns an error if row hashing fails.
+/// Returns a shape error before hashing, or the first failing row in index order.
 fn hash_air_trace_rows_with_mode(
     columns: &[Vec<u64>],
     mode: ExecutionMode,
 ) -> Result<Vec<GoldilocksDigest384V1>> {
+    // Digest384 remains CPU-only for every requested mode. The caller reports
+    // the requested policy and actual CPU route before building these leaves.
     let _ = mode;
     if columns.is_empty() {
         return Ok(Vec::new());
@@ -1286,28 +1511,88 @@ fn hash_air_trace_rows_with_mode(
     if !columns.iter().all(|column| column.len() == row_count) {
         return Err(Error::AirOpeningMismatch { index: 0 });
     }
-    (0..row_count)
-        .map(|row_index| {
-            let row = air_row_at(columns, row_index)?;
-            hash_air_trace_row(row_index, &row)
-        })
-        .collect()
+    if row_count == 0 {
+        return Ok(Vec::new());
+    }
+    // All rows share the exact typed domain through its tree-level field.
+    // The immutable prefix still binds each full row index and payload; keep
+    // hash_air_trace_row as the independent canonical one-shot oracle.
+    let prefix = digest_domain_prefix_v1(AIR_TRACE_COMMITMENT_ROLE_V1, MERKLE_LEAF_PHASE_V1, 0, 0)?;
+    let row_bytes = columns.len().saturating_mul(8);
+    let hash_row = |bytes: &mut Vec<u8>, row_index: usize| {
+        bytes.clear();
+        for column in columns {
+            let value = column[row_index];
+            if value >= GOLDILOCKS_MODULUS {
+                return Err(Error::NonCanonicalGoldilocksElement {
+                    context: "native_stark_digest_input",
+                    indices: vec![row_index],
+                });
+            }
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        hash_at_prefix_v1(&prefix, row_index, &[bytes.as_slice()])
+    };
+    // Keep fewer than two 16-row jobs sequential. This avoids scheduling tiny
+    // batches and reuses each job's canonical byte buffer across several hashes.
+    const ROWS_PER_JOB: usize = 16;
+    if row_count < 2 * ROWS_PER_JOB {
+        let mut bytes = Vec::with_capacity(row_bytes);
+        return (0..row_count)
+            .map(|row_index| hash_row(&mut bytes, row_index))
+            .collect();
+    }
+    let results: Vec<Result<GoldilocksDigest384V1>> = (0..row_count)
+        .into_par_iter()
+        .with_min_len(ROWS_PER_JOB)
+        .map_init(
+            || Vec::with_capacity(row_bytes),
+            |bytes, row_index| hash_row(bytes, row_index),
+        )
+        .collect();
+    // Indexed collection preserves leaf order. Select errors serially as well:
+    // a parallel Result reduction could report whichever malformed row finishes first.
+    results.into_iter().collect()
 }
 /// Hash all AIR composition leaves.
 ///
 /// # Errors
 /// Returns an error if leaf hashing fails.
 fn hash_air_composition_leaves_with_mode(
-    values: &[u64],
+    values: &[GoldilocksFp4V1],
     mode: ExecutionMode,
 ) -> Result<Vec<GoldilocksDigest384V1>> {
     let _ = mode;
-    values
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, value)| hash_air_composition_leaf(index, value))
-        .collect()
+    hash_fp4_single_leaves_with_role(AIR_COMPOSITION_COMMITMENT_ROLE_V1, values)
+}
+
+// One immutable typed prefix serves an entire natural-order oracle. Each leaf
+// still binds its full index and all four canonical coordinates. Stack payloads
+// avoid a tiny allocation per leaf; indexed jobs preserve deterministic errors.
+fn hash_fp4_single_leaves_with_role(
+    role: &[u8],
+    values: &[GoldilocksFp4V1],
+) -> Result<Vec<GoldilocksDigest384V1>> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let prefix = digest_domain_prefix_v1(role, MERKLE_LEAF_PHASE_V1, 0, 0)?;
+    let hash_leaf = |(index, value): (usize, &GoldilocksFp4V1)| {
+        for (coefficient_index, coefficient) in value.coefficients().into_iter().enumerate() {
+            if coefficient >= GOLDILOCKS_MODULUS {
+                return Err(Error::NonCanonicalGoldilocksElement {
+                    context: "native_stark_fp4_digest_input",
+                    indices: vec![index, 0, coefficient_index],
+                });
+            }
+        }
+        hash_at_prefix_v1(&prefix, index, &[&value.to_le_bytes()])
+    };
+    if values.len() < 32 {
+        return values.iter().enumerate().map(hash_leaf).collect();
+    }
+    let results: Vec<Result<_>> = values.par_iter().enumerate().map(hash_leaf).collect();
+    results.into_iter().collect()
 }
 
 #[derive(Debug)]
@@ -1317,11 +1602,15 @@ struct AirColumnLayout {
     numeric_selectors: [usize; 3],
     permission_selectors: [usize; 2],
     s_active: usize,
+    s_transfer: usize,
     s_perm: usize,
     perm_hash: usize,
     delta: usize,
     value_old_limbs: Vec<usize>,
     value_new_limbs: Vec<usize>,
+    value_old_len: usize,
+    value_new_len: usize,
+    integer_auxiliary: Option<[usize; transfer_integer_air::AUXILIARY_COLUMN_COUNT]>,
     stable_columns: [usize; AIR_STABLE_RESIDUE_COUNT],
 }
 
@@ -1352,6 +1641,19 @@ impl AirColumnLayout {
         }
         stable_columns[crate::trace::METADATA_COMMITMENT_LIMBS] = required("dsid")?;
         stable_columns[crate::trace::METADATA_COMMITMENT_LIMBS + 1] = required("slot")?;
+        let integer_names = transfer_integer_air::auxiliary_column_names();
+        let has_integer_columns = integer_names
+            .iter()
+            .any(|name| column_names.iter().any(|column| column.as_ref() == name));
+        let integer_auxiliary = if has_integer_columns {
+            let mut columns = [0; transfer_integer_air::AUXILIARY_COLUMN_COUNT];
+            for (column, name) in columns.iter_mut().zip(&integer_names) {
+                *column = required(name)?;
+            }
+            Some(columns)
+        } else {
+            None
+        };
         Ok(Self {
             boolean_selectors: [
                 s_active,
@@ -1374,14 +1676,35 @@ impl AirColumnLayout {
             numeric_selectors: [s_transfer, s_mint, s_burn],
             permission_selectors: [s_role_grant, s_role_revoke],
             s_active,
+            s_transfer,
             s_perm,
             perm_hash,
             delta,
             value_old_limbs: contiguous_limb_columns(column_names, "value_old_limb_"),
             value_new_limbs: contiguous_limb_columns(column_names, "value_new_limb_"),
+            value_old_len: required("value_old_len")?,
+            value_new_len: required("value_new_len")?,
+            integer_auxiliary,
             stable_columns,
         })
     }
+
+    fn residue_count(&self) -> usize {
+        AIR_COMPOSITION_ALPHA_COUNT
+            + self.value_old_limbs.len().saturating_sub(2)
+            + self.value_new_limbs.len().saturating_sub(2)
+    }
+}
+
+/// Number of independent coefficients required by the canonical column schema.
+pub(crate) fn air_composition_alpha_count<S: AsRef<str>>(column_names: &[S]) -> usize {
+    AIR_COMPOSITION_ALPHA_COUNT
+        + contiguous_limb_columns(column_names, "value_old_limb_")
+            .len()
+            .saturating_sub(2)
+        + contiguous_limb_columns(column_names, "value_new_limb_")
+            .len()
+            .saturating_sub(2)
 }
 
 fn contiguous_limb_columns<S: AsRef<str>>(column_names: &[S], prefix: &str) -> Vec<usize> {
@@ -1417,12 +1740,12 @@ fn air_constraint_residues_with_layout<C, N>(
     layout: &AirColumnLayout,
     current: C,
     next: N,
-) -> [u64; AIR_COMPOSITION_ALPHA_COUNT]
-where
+    residues: &mut [u64],
+) where
     C: Fn(usize) -> u64,
     N: Fn(usize) -> u64,
 {
-    let mut residues = [0u64; AIR_COMPOSITION_ALPHA_COUNT];
+    debug_assert_eq!(residues.len(), layout.residue_count());
     let mut residue_index = 0;
     for &selector in &layout.boolean_selectors {
         residues[residue_index] = mul_mod(current(selector), sub_mod(current(selector), FIELD_ONE));
@@ -1461,45 +1784,151 @@ where
         residues[residue_index] = sub_mod(current(stable), next(stable));
         residue_index += 1;
     }
-    debug_assert_eq!(residue_index, AIR_COMPOSITION_ALPHA_COUNT);
-    residues
+    // Metadata-only schemas omit the transfer auxiliary columns. Their
+    // canonical transfer witness is the identically-zero polynomial.
+    let auxiliary = layout.integer_auxiliary.map_or(
+        [0; transfer_integer_air::AUXILIARY_COLUMN_COUNT],
+        |columns| columns.map(&current),
+    );
+    let before = core::array::from_fn(|limb| {
+        layout
+            .value_old_limbs
+            .get(limb)
+            .map_or(0, |&column| current(column))
+    });
+    let after = core::array::from_fn(|limb| {
+        layout
+            .value_new_limbs
+            .get(limb)
+            .map_or(0, |&column| current(column))
+    });
+    let witness =
+        transfer_integer_air::TransferIntegerWitness::from_auxiliary(before, after, &auxiliary);
+    let integer_residues = transfer_integer_air::constraint_residues(
+        current(layout.s_transfer),
+        current(layout.value_old_len),
+        current(layout.value_new_len),
+        &witness,
+    );
+    residues[residue_index..residue_index + integer_residues.len()]
+        .copy_from_slice(&integer_residues);
+    residue_index += integer_residues.len();
+    for &column in layout
+        .value_old_limbs
+        .iter()
+        .skip(2)
+        .chain(layout.value_new_limbs.iter().skip(2))
+    {
+        residues[residue_index] = mul_mod(current(layout.s_transfer), current(column));
+        residue_index += 1;
+    }
+    debug_assert_eq!(residue_index, residues.len());
 }
 
 fn air_constraint_residues_for_rows(
     column_names: &[String],
     current: &[u64],
     next: &[u64],
-) -> Result<[u64; AIR_COMPOSITION_ALPHA_COUNT]> {
+) -> Result<Vec<u64>> {
     if current.len() != column_names.len() || next.len() != column_names.len() {
         return Err(Error::AirOpeningMismatch {
             index: current.len(),
         });
     }
     let layout = AirColumnLayout::from_names(column_names)?;
-    Ok(air_constraint_residues_with_layout(
+    let mut residues = vec![0; layout.residue_count()];
+    air_constraint_residues_with_layout(
         &layout,
         |column| current[column],
         |column| next[column],
-    ))
+        &mut residues,
+    );
+    Ok(residues)
 }
 
-fn validate_air_composition_alphas(alphas: &[u64]) -> Result<()> {
-    if alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
+/// Field operations needed to combine base-field AIR residues.
+pub(crate) trait AirCombinationField: Copy {
+    /// Additive identity.
+    const ZERO: Self;
+    /// Add one combined residue.
+    fn add(self, rhs: Self) -> Self;
+    /// Scale by a base-field residue or zerofier weight.
+    fn mul_base(self, rhs: u64) -> Self;
+}
+impl AirCombinationField for u64 {
+    const ZERO: Self = 0;
+    fn add(self, rhs: Self) -> Self {
+        add_mod(self, rhs)
+    }
+    fn mul_base(self, rhs: u64) -> Self {
+        mul_mod(self, rhs)
+    }
+}
+impl AirCombinationField for GoldilocksFp4V1 {
+    const ZERO: Self = Self::ZERO;
+    fn add(self, rhs: Self) -> Self {
+        self.add(rhs)
+    }
+    fn mul_base(self, rhs: u64) -> Self {
+        self.mul_base(rhs)
+    }
+}
+fn validate_air_composition_alphas<F>(alphas: &[F], expected: usize) -> Result<()> {
+    if alphas.len() != expected {
         return Err(Error::AirChallengeCountMismatch {
-            expected: AIR_COMPOSITION_ALPHA_COUNT,
+            expected,
             actual: alphas.len(),
         });
     }
     Ok(())
 }
 
-fn combine_air_constraint_residues(alphas: &[u64], residues: &[u64]) -> u64 {
+#[cfg(test)]
+fn combine_air_constraint_residues<F: AirCombinationField>(alphas: &[F], residues: &[u64]) -> F {
     alphas
         .iter()
         .zip(residues)
-        .fold(0u64, |acc, (&alpha, &residue)| {
-            add_mod(acc, mul_mod(alpha, residue))
+        .fold(F::ZERO, |acc, (&alpha, &residue)| {
+            acc.add(alpha.mul_base(residue))
         })
+}
+
+fn combine_air_quotients<F: AirCombinationField>(
+    alphas: &[F],
+    residues: &[u64],
+    weights: AirQuotientWeights,
+) -> F {
+    let mut rows = F::ZERO;
+    let mut transitions = F::ZERO;
+    for (index, (&alpha, &residue)) in alphas.iter().zip(residues).enumerate() {
+        let weighted = alpha.mul_base(residue);
+        // Prefix shape and stability relate adjacent rows. Their zerofier
+        // excludes the last row; all other constraints hold at every row.
+        if index == AIR_BOOLEAN_RESIDUE_COUNT + 2
+            || (AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT
+                ..AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT + AIR_STABLE_RESIDUE_COUNT)
+                .contains(&index)
+        {
+            transitions = transitions.add(weighted);
+        } else {
+            rows = rows.add(weighted);
+        }
+    }
+    rows.mul_base(weights.all_rows)
+        .add(transitions.mul_base(weights.transitions))
+}
+
+/// Evaluate the quotient relation at a sampled authenticated coset point.
+pub(crate) fn air_quotient_value_for_rows<F: AirCombinationField>(
+    column_names: &[String],
+    current: &[u64],
+    next: &[u64],
+    alphas: &[F],
+    weights: AirQuotientWeights,
+) -> Result<F> {
+    validate_air_composition_alphas(alphas, air_composition_alpha_count(column_names))?;
+    let residues = air_constraint_residues_for_rows(column_names, current, next)?;
+    Ok(combine_air_quotients(alphas, &residues, weights))
 }
 
 /// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
@@ -1507,13 +1936,14 @@ fn combine_air_constraint_residues(alphas: &[u64], residues: &[u64]) -> u64 {
 /// # Errors
 /// Returns an error when the advertised column schema is missing mandatory columns, the
 /// challenge count differs from the residue count, or row widths do not match the schema.
+#[cfg(test)]
 pub fn air_composition_value_for_rows(
     column_names: &[String],
     current: &[u64],
     next: &[u64],
     alphas: &[u64],
 ) -> Result<u64> {
-    validate_air_composition_alphas(alphas)?;
+    validate_air_composition_alphas(alphas, air_composition_alpha_count(column_names))?;
     let residues = air_constraint_residues_for_rows(column_names, current, next)?;
     Ok(combine_air_constraint_residues(alphas, &residues))
 }
@@ -1521,12 +1951,36 @@ pub fn air_composition_value_for_rows(
 ///
 /// # Errors
 /// Returns an error when columns have inconsistent lengths or the schema is malformed.
+#[cfg(test)]
 pub fn air_composition_values(
     column_names: &[String],
     columns: &[Vec<u64>],
     alphas: &[u64],
     next_step: usize,
 ) -> Result<Vec<u64>> {
+    air_values(column_names, columns, alphas, next_step, None)
+}
+
+fn air_quotient_values<F: AirCombinationField>(
+    params: &StarkParameterSet,
+    column_names: &[String],
+    columns: &[Vec<u64>],
+    alphas: &[F],
+) -> Result<Vec<F>> {
+    let row_count = columns.first().map_or(0, Vec::len);
+    let domain = AirQuotientDomain::new(params, row_count)?;
+    let next_step =
+        usize::try_from(params.fri.blowup_factor).expect("FRI blowup factor fits usize");
+    air_values(column_names, columns, alphas, next_step, Some(&domain))
+}
+
+fn air_values<F: AirCombinationField>(
+    column_names: &[String],
+    columns: &[Vec<u64>],
+    alphas: &[F],
+    next_step: usize,
+    quotient: Option<&AirQuotientDomain>,
+) -> Result<Vec<F>> {
     if columns.is_empty() {
         return Ok(Vec::new());
     }
@@ -1543,7 +1997,7 @@ pub fn air_composition_values(
     if row_count == 0 {
         return Ok(Vec::new());
     }
-    validate_air_composition_alphas(alphas)?;
+    validate_air_composition_alphas(alphas, air_composition_alpha_count(column_names))?;
     if columns.len() != column_names.len() {
         return Err(Error::AirOpeningMismatch {
             index: columns.len(),
@@ -1552,14 +2006,24 @@ pub fn air_composition_values(
     let layout = AirColumnLayout::from_names(column_names)?;
     let next_step = next_step % row_count;
     let mut values = Vec::with_capacity(row_count);
+    let mut quotient_weights = quotient.map(AirQuotientDomain::weights);
+    let mut residues = vec![0; layout.residue_count()];
     for index in 0..row_count {
         let next_index = (index + next_step) % row_count;
-        let residues = air_constraint_residues_with_layout(
+        air_constraint_residues_with_layout(
             &layout,
             |column| columns[column][index],
             |column| columns[column][next_index],
+            &mut residues,
         );
-        values.push(combine_air_constraint_residues(alphas, &residues));
+        if let Some(weights) = quotient_weights.as_mut().and_then(Iterator::next) {
+            values.push(combine_air_quotients(alphas, &residues, weights));
+        } else {
+            #[cfg(test)]
+            values.push(combine_air_constraint_residues(alphas, &residues));
+            #[cfg(not(test))]
+            return Err(Error::AirOpeningMismatch { index });
+        }
     }
     Ok(values)
 }
@@ -1588,15 +2052,17 @@ fn ensure_base_trace_constraints(trace: &crate::trace::Trace) -> Result<()> {
         .map(|column| column.name.as_str())
         .collect::<Vec<_>>();
     let layout = AirColumnLayout::from_names(&column_names)?;
+    let mut residues = vec![0; layout.residue_count()];
     for row_index in 0..trace.padded_len {
         let next_index = row_index
             .checked_add(1)
             .filter(|next| *next < trace.padded_len)
             .unwrap_or(row_index);
-        let residues = air_constraint_residues_with_layout(
+        air_constraint_residues_with_layout(
             &layout,
             |column| trace.columns[column].values[row_index],
             |column| trace.columns[column].values[next_index],
+            &mut residues,
         );
         if residues.iter().any(|value| *value != 0) {
             return Err(Error::AirConstraintMismatch { index: row_index });
@@ -1612,7 +2078,7 @@ fn ensure_base_trace_constraints(trace: &crate::trace::Trace) -> Result<()> {
 fn open_air_constraint_openings_with_mode(
     columns: &[Vec<u64>],
     air_trace_leaves: &[GoldilocksDigest384V1],
-    composition_values: &[u64],
+    composition_values: &[GoldilocksFp4V1],
     composition_leaves: &[GoldilocksDigest384V1],
     query_indices: &[usize],
     next_step: usize,
@@ -1734,11 +2200,11 @@ fn fri_chunk_size(arity: u32) -> Result<usize> {
 ///
 /// # Errors
 /// Returns an error when any query index is outside the evaluation domain.
-pub fn open_query_chunks(
-    evaluations: &[u64],
+pub fn open_query_chunks<F: Copy>(
+    evaluations: &[F],
     query_indices: &[usize],
     arity: u32,
-) -> Result<Vec<Vec<u64>>> {
+) -> Result<Vec<Vec<F>>> {
     let chunk_size = lde_chunk_size(arity)?;
     let mut chunks = Vec::with_capacity(query_indices.len());
     for &query_index in query_indices {
@@ -1884,6 +2350,7 @@ fn merkle_paths_for_leaf_indices(
 ///
 /// # Errors
 /// Returns an error if an internal node hash cannot be computed.
+#[cfg(test)]
 #[allow(clippy::unnecessary_wraps)]
 pub fn verify_merkle_path(
     root: GoldilocksDigest384V1,
@@ -1898,6 +2365,7 @@ pub fn verify_merkle_path(
 ///
 /// # Errors
 /// Returns an error when a typed internal-node digest cannot be framed.
+#[cfg(test)]
 pub fn verify_merkle_path_for_role(
     role: MerkleTreeRoleV1,
     root: GoldilocksDigest384V1,
@@ -1927,54 +2395,130 @@ pub fn verify_merkle_path_for_role(
     // left/right branches and therefore accept the same path.
     Ok(index == 0 && current == root)
 }
-#[allow(clippy::unnecessary_wraps)]
+fn merkle_digest_execution_v1(
+    mode: ExecutionMode,
+) -> Result<crate::digest_executor::DigestExecutionV1> {
+    use crate::digest_executor::DigestExecutionV1;
+    match mode {
+        ExecutionMode::Cpu | ExecutionMode::Auto => Ok(DigestExecutionV1::Cpu),
+        ExecutionMode::Gpu => {
+            #[cfg(feature = "fastpq-gpu")]
+            {
+                use crate::digest384_gpu::Digest384GpuBackendV1;
+                let backend = match current_gpu_backend() {
+                    Some(GpuBackend::Metal) => Digest384GpuBackendV1::Metal,
+                    Some(GpuBackend::Cuda) => Digest384GpuBackendV1::Cuda,
+                    _ => {
+                        return Err(Error::NativeDigestExecution {
+                            details: "no supported explicit six-lane device backend".into(),
+                        });
+                    }
+                };
+                Ok(DigestExecutionV1::Device(backend))
+            }
+            #[cfg(not(feature = "fastpq-gpu"))]
+            {
+                Err(Error::NativeDigestExecution {
+                    details: "six-lane device support is not compiled".into(),
+                })
+            }
+        }
+    }
+}
+
 fn build_merkle_levels_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
     mode: ExecutionMode,
 ) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
-    let _ = mode;
+    build_merkle_levels_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
+}
+
+fn build_merkle_levels_with_execution_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execution: crate::digest_executor::DigestExecutionV1,
+) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
+    let levels = build_merkle_levels_with_executor_v1(leaves, role, &mut |frames| {
+        crate::digest_executor::execute_digest384_frames_v1(frames, execution)
+    })?;
+    #[cfg(test)]
+    if !leaves.is_empty() {
+        use crate::digest_executor::DigestExecutionV1;
+        crate::trace::notify_trace_merkle_mode_observer(match execution {
+            DigestExecutionV1::Cpu => ExecutionMode::Cpu,
+            #[cfg(feature = "fastpq-gpu")]
+            DigestExecutionV1::Device(_) => ExecutionMode::Gpu,
+        });
+    }
+    Ok(levels)
+}
+
+fn build_merkle_levels_with_executor_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execute: &mut impl FnMut(
+        &[fastpq_isi::GoldilocksDigest384FrameV1<'_>],
+    ) -> Result<Vec<GoldilocksDigest384V1>>,
+) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
     if leaves.is_empty() {
         return Ok(Vec::new());
     }
     let mut levels = Vec::new();
     let mut current = leaves.to_vec();
     loop {
-        if current.len() % 2 == 1 {
-            let last = *current.last().expect("non-empty Merkle level");
-            current.push(last);
+        if !current.len().is_multiple_of(2) {
+            current.push(*current.last().expect("non-empty Merkle level"));
         }
         levels.push(current.clone());
         let level = levels.len();
-        let next = current
-            .chunks_exact(2)
-            .enumerate()
-            .map(|(index, pair)| merkle_node_hash(role, level, index, pair[0], pair[1]))
-            .collect::<Result<Vec<_>>>()?;
+        let next = crate::digest_executor::hash_digest384_pairs_v1(
+            &current,
+            |index| {
+                digest_domain_v1(
+                    role.role(),
+                    MERKLE_NODE_PHASE_V1,
+                    level,
+                    index,
+                    role.counter(),
+                )
+            },
+            execute,
+        )?;
         if next.len() == 1 {
-            levels.push(next.clone());
+            levels.push(next);
             break;
         }
         current = next;
     }
     Ok(levels)
 }
+
 fn merkle_root_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
     mode: ExecutionMode,
 ) -> Result<GoldilocksDigest384V1> {
-    let levels = build_merkle_levels_with_mode(leaves, role, mode)?;
+    merkle_root_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
+}
+
+fn merkle_root_with_execution_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execution: crate::digest_executor::DigestExecutionV1,
+) -> Result<GoldilocksDigest384V1> {
+    let levels = build_merkle_levels_with_execution_v1(leaves, role, execution)?;
     match levels.last().and_then(|level| level.first()).copied() {
         Some(root) => Ok(root),
-        None => hash_bytes_v1(
-            role.role(),
-            MERKLE_EMPTY_PHASE_V1,
-            0,
-            0,
-            role.counter(),
-            &[],
-        ),
+        None => {
+            let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
+                digest_domain_v1(role.role(), MERKLE_EMPTY_PHASE_V1, 0, 0, role.counter())?,
+                &[],
+            )
+            .ok_or(Error::PayloadLengthOverflow { length: 0 })?;
+            let result = crate::digest_executor::execute_digest384_frames_v1(&[frame], execution)?;
+            Ok(result[0])
+        }
     }
 }
 
@@ -2094,7 +2638,9 @@ pub fn fold_with_fri(
     let mut layers = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-    while current.len() > arity && round < max_rounds {
+    while current.len() > fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize
+        && round < max_rounds
+    {
         let span = tracing::info_span!("fastpq_fri_round", round, layer_len = current.len(), arity);
         let _enter = span.enter();
         let leaves = hash_fri_leaves_with_mode(round, &current, arity as u32, ExecutionMode::Cpu)?;
@@ -2131,15 +2677,14 @@ pub fn fold_with_fri(
         domain = domain.folded(round_arity);
         round += 1;
     }
-    if current.len() > arity {
+    if current.len() > fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize {
         return Err(Error::FriReductionLimit {
             max_reductions,
             remaining: current.len(),
             arity,
         });
     }
-    let final_leaves =
-        hash_fri_leaves_with_mode(round, &current, arity as u32, ExecutionMode::Cpu)?;
+    let final_leaves = hash_fri_terminal_leaves(round, &current)?;
     let final_root = merkle_root_with_mode(
         &final_leaves,
         MerkleTreeRoleV1::Fri(
@@ -2156,10 +2701,30 @@ struct FriOpeningLayers {
     layer_values: Vec<Vec<GoldilocksFp4V1>>,
     roots: Vec<GoldilocksDigest384V1>,
     betas: Vec<GoldilocksFp4V1>,
+    opening_trees: Option<fri_openings::FriOpeningTrees>,
+}
+
+impl FriOpeningLayers {
+    /// Open this exact committed owner without rebuilding any FRI leaves or trees.
+    fn open_query_chains(
+        &mut self,
+        query_indices: &[usize],
+        arity: u32,
+    ) -> Result<Vec<FriQueryOpening>> {
+        let arity_usize = fri_chunk_size(arity)?;
+        if let Some(trees) = &mut self.opening_trees {
+            open_fri_query_chains_with_trees(&self.layer_values, query_indices, arity_usize, trees)
+        } else {
+            // Preserve the legacy empty-input branch and its terminal-shape
+            // error, including when there are no queries. No valid nonempty
+            // commitment takes this fallback.
+            open_fri_query_chains(&self.layer_values, query_indices, arity, ExecutionMode::Cpu)
+        }
+    }
 }
 
 fn fold_with_fri_opening_layers(
-    evaluations: &[u64],
+    evaluations: &[GoldilocksFp4V1],
     params: &StarkParameterSet,
     transcript: &mut Transcript,
     mode: ExecutionMode,
@@ -2175,16 +2740,13 @@ fn fold_with_fri_opening_layers(
             layer_values: vec![Vec::new()],
             roots: vec![root],
             betas: Vec::new(),
+            opening_trees: None,
         });
     }
     let arity_usize = usize::try_from(arity).expect("FRI arity fits usize");
     let max_rounds =
         usize::try_from(params.fri.max_reductions).expect("FRI reduction bound fits usize");
-    let mut current = evaluations
-        .iter()
-        .copied()
-        .map(|value| GoldilocksFp4V1::from_base(value).expect("evaluations are canonical"))
-        .collect::<Vec<_>>();
+    let mut current = evaluations.to_vec();
     let mut domain = FriDomain::from_lde_parameters(
         params.lde_root,
         params.lde_log_size,
@@ -2193,42 +2755,60 @@ fn fold_with_fri_opening_layers(
     )?;
     let mut layer_values = Vec::new();
     let mut roots = Vec::new();
+    let mut opening_levels = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-    while current.len() > arity_usize && round < max_rounds {
+    while current.len() > fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize
+        && round < max_rounds
+    {
         let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
-        let root = merkle_root_with_mode(
+        let levels = build_merkle_levels_with_mode(
             &leaves,
             MerkleTreeRoleV1::Fri(
                 u32::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?,
             ),
             mode,
         )?;
+        let root = levels
+            .last()
+            .and_then(|level| level.first())
+            .copied()
+            .expect("nonempty FRI leaves produce one root");
+        opening_levels.push(levels);
+        drop(leaves); // The first retained level already owns these digests.
         transcript.append_fri_layer(round, root);
         roots.push(root);
-        layer_values.push(current.clone());
         let beta = transcript.challenge_beta(round);
         betas.push(beta);
         let round_arity = fri_round_arity(current.len(), arity_usize)?;
-        current = fold_round(&current, arity_usize, beta, domain)?;
+        let next = fold_round(&current, arity_usize, beta, domain)?;
+        layer_values.push(current);
+        current = next;
         domain = domain.folded(round_arity);
         round += 1;
     }
-    if current.len() > arity_usize {
+    if current.len() > fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize {
         return Err(Error::FriReductionLimit {
             max_reductions: params.fri.max_reductions,
             remaining: current.len(),
             arity: arity_usize,
         });
     }
-    let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
-    let final_root = merkle_root_with_mode(
+    let leaves = hash_fri_terminal_leaves(round, &current)?;
+    let levels = build_merkle_levels_with_mode(
         &leaves,
         MerkleTreeRoleV1::Fri(
             u32::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?,
         ),
         mode,
     )?;
+    let final_root = levels
+        .last()
+        .and_then(|level| level.first())
+        .copied()
+        .expect("the complete terminal leaf produces one duplicated-node root");
+    opening_levels.push(levels);
+    drop(leaves);
     transcript.append_fri_final(final_root);
     roots.push(final_root);
     layer_values.push(current);
@@ -2236,6 +2816,10 @@ fn fold_with_fri_opening_layers(
         layer_values,
         roots,
         betas,
+        opening_trees: Some(fri_openings::FriOpeningTrees::from_levels(
+            opening_levels,
+            mode,
+        )?),
     })
 }
 fn hash_fri_leaves_with_mode(
@@ -2251,15 +2835,38 @@ fn hash_fri_leaves_with_mode(
     }
     let round_arity = fri_round_arity(values.len(), configured_arity)?;
     let output_len = values.len() / round_arity;
-    (0..output_len)
-        .map(|leaf_index| {
-            let group = (0..round_arity)
-                .map(|position| values[leaf_index + position * output_len])
-                .collect::<Vec<_>>();
-            hash_fri_chunk(round, leaf_index, &group)
-        })
-        .collect()
+    let prefix = digest_domain_prefix_v1(FRI_COMMITMENT_ROLE_V1, MERKLE_LEAF_PHASE_V1, round, 0)?;
+    let hash_leaf = |leaf_index: usize| {
+        let mut bytes = [0; 64];
+        for position in 0..round_arity {
+            bytes[position * 32..(position + 1) * 32]
+                .copy_from_slice(&values[leaf_index + position * output_len].to_le_bytes());
+        }
+        hash_at_prefix_v1(&prefix, leaf_index, &[&bytes[..round_arity * 32]])
+    };
+    if output_len < 32 {
+        return (0..output_len).map(hash_leaf).collect();
+    }
+    let results: Vec<Result<_>> = (0..output_len).into_par_iter().map(hash_leaf).collect();
+    results.into_iter().collect()
 }
+// The complete terminal domain is a single ordered leaf. Binary strided leaves
+// are only appropriate while another fold follows: a terminal subset would not
+// suffice to interpolate and check the final polynomial's degree.
+fn hash_fri_terminal_leaves(
+    round: usize,
+    values: &[GoldilocksFp4V1],
+) -> Result<Vec<GoldilocksDigest384V1>> {
+    let terminal_size = fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize;
+    if !values.len().is_power_of_two() || values.len() > terminal_size {
+        return Err(Error::FriDomainSize {
+            length: values.len(),
+            arity: terminal_size,
+        });
+    }
+    Ok(vec![hash_fri_chunk(round, 0, values)?])
+}
+
 fn open_fri_query_chains(
     layer_values: &[Vec<GoldilocksFp4V1>],
     query_indices: &[usize],
@@ -2272,8 +2879,15 @@ fn open_fri_query_chains(
     }
     let mut round_leaves = Vec::with_capacity(layer_values.len());
     for (round, values) in layer_values.iter().enumerate() {
-        round_leaves.push(hash_fri_leaves_with_mode(round, values, arity, mode)?);
+        round_leaves.push(if round + 1 == layer_values.len() {
+            hash_fri_terminal_leaves(round, values)?
+        } else {
+            hash_fri_leaves_with_mode(round, values, arity, mode)?
+        });
     }
+    // Retain each layer's read-only levels across all queries. Building lazily
+    // preserves the existing coordinate checks and avoids work for no queries.
+    let mut trees = fri_openings::FriOpeningTrees::new(round_leaves, mode);
     let mut openings = Vec::with_capacity(query_indices.len());
     for &initial_index in query_indices {
         let initial_index_u32 =
@@ -2296,14 +2910,7 @@ fn open_fri_query_chains(
             let group = (0..round_arity)
                 .map(|position| values[leaf_index + position * output_len])
                 .collect::<Vec<_>>();
-            let paths = merkle_paths_for_leaf_indices(
-                &round_leaves[round],
-                &[leaf_index],
-                MerkleTreeRoleV1::Fri(
-                    u32::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?,
-                ),
-                mode,
-            )?;
+            let path = trees.path(round, leaf_index)?;
             let folded_index = leaf_index;
             let folded_value = layer_values
                 .get(round + 1)
@@ -2319,10 +2926,7 @@ fn open_fri_query_chains(
                 index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
                 values: group,
                 folded_value,
-                merkle_path: paths
-                    .into_iter()
-                    .next()
-                    .unwrap_or_default()
+                merkle_path: path
                     .into_iter()
                     .map(WireGoldilocksDigest384V1::from)
                     .collect(),
@@ -2339,31 +2943,93 @@ fn open_fri_query_chains(
                 len: final_values.len(),
             });
         }
-        let final_arity = fri_round_arity(final_values.len(), arity_usize)?;
-        let final_leaf_count = final_values.len() / final_arity;
-        let final_leaf_index = index % final_leaf_count;
-        let final_group = (0..final_arity)
-            .map(|position| final_values[final_leaf_index + position * final_leaf_count])
-            .collect::<Vec<_>>();
-        let final_paths = merkle_paths_for_leaf_indices(
-            round_leaves.last().expect("final leaves"),
-            &[final_leaf_index],
-            MerkleTreeRoleV1::Fri(u32::try_from(layer_values.len() - 1).map_err(|_| {
-                Error::QueryIndexOverflow {
-                    index: layer_values.len() - 1,
-                }
-            })?),
-            mode,
-        )?;
+        let final_leaf_index = 0;
+        let final_group = final_values.to_vec();
+        let final_path = trees.path(layer_values.len() - 1, final_leaf_index)?;
         openings.push(FriQueryOpening {
             initial_index: initial_index_u32,
             rounds,
             final_index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
             final_values: final_group,
-            final_merkle_path: final_paths
+            final_merkle_path: final_path
                 .into_iter()
-                .next()
-                .unwrap_or_default()
+                .map(WireGoldilocksDigest384V1::from)
+                .collect(),
+        });
+    }
+    Ok(openings)
+}
+
+fn open_fri_query_chains_with_trees(
+    layer_values: &[Vec<GoldilocksFp4V1>],
+    query_indices: &[usize],
+    arity_usize: usize,
+    trees: &mut fri_openings::FriOpeningTrees,
+) -> Result<Vec<FriQueryOpening>> {
+    let mut openings = Vec::with_capacity(query_indices.len());
+    for &initial_index in query_indices {
+        let initial_index_u32 =
+            u32::try_from(initial_index).map_err(|_| Error::QueryIndexOverflow {
+                index: initial_index,
+            })?;
+        let mut index = initial_index;
+        let mut rounds = Vec::with_capacity(layer_values.len().saturating_sub(1));
+        for round in 0..layer_values.len().saturating_sub(1) {
+            let values = &layer_values[round];
+            if index >= values.len() {
+                return Err(Error::QueryIndexOutOfRange {
+                    index,
+                    len: values.len(),
+                });
+            }
+            let round_arity = fri_round_arity(values.len(), arity_usize)?;
+            let output_len = values.len() / round_arity;
+            let leaf_index = index % output_len;
+            let group = (0..round_arity)
+                .map(|position| values[leaf_index + position * output_len])
+                .collect::<Vec<_>>();
+            let path = trees.path(round, leaf_index)?;
+            let folded_index = leaf_index;
+            let folded_value = layer_values
+                .get(round + 1)
+                .and_then(|next| next.get(folded_index))
+                .copied()
+                .ok_or_else(|| Error::QueryIndexOutOfRange {
+                    index: folded_index,
+                    len: layer_values.get(round + 1).map_or(0, Vec::len),
+                })?;
+            rounds.push(FriRoundOpening {
+                round: u32::try_from(round)
+                    .map_err(|_| Error::QueryIndexOverflow { index: round })?,
+                index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
+                values: group,
+                folded_value,
+                merkle_path: path
+                    .into_iter()
+                    .map(WireGoldilocksDigest384V1::from)
+                    .collect(),
+            });
+            index = folded_index;
+        }
+        let final_values = layer_values
+            .last()
+            .expect("non-empty layer values")
+            .as_slice();
+        if index >= final_values.len() {
+            return Err(Error::QueryIndexOutOfRange {
+                index,
+                len: final_values.len(),
+            });
+        }
+        let final_leaf_index = 0;
+        let final_group = final_values.to_vec();
+        let final_path = trees.path(layer_values.len() - 1, final_leaf_index)?;
+        openings.push(FriQueryOpening {
+            initial_index: initial_index_u32,
+            rounds,
+            final_index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
+            final_values: final_group,
+            final_merkle_path: final_path
                 .into_iter()
                 .map(WireGoldilocksDigest384V1::from)
                 .collect(),
@@ -2544,25 +3210,71 @@ fn fold_round(
     }
     Ok(next)
 }
+// Deterministic engineering work limits, not a completion-probability or
+// cryptographic-security claim. They must not vary with operator configuration.
+const QUERY_MIN_DIGEST_DRAWS: u32 = 64;
+const QUERY_DIGEST_DRAWS_PER_INDEX: u32 = 8;
+
+/// Sample sorted unique indices with a deterministic per-attempt draw budget.
+///
+/// Successful transcripts within the budget retain the existing tags, digest
+/// lane order, rejection rule and exact transcript state. Each draw consumes six
+/// canonical field candidates. Exhaustion returns no partial indices; callers
+/// must discard the failed attempt instead of resuming the advanced transcript.
+/// The finite budget bounds work and does not guarantee sampling completion.
+///
+/// # Errors
+/// Returns an error for unsupported nonempty geometry, an unsupported requested
+/// cardinality, an exhausted transcript counter, or an exhausted draw budget.
 pub fn sample_queries(
     domain_size: usize,
     target: usize,
     transcript: &mut Transcript,
-) -> Vec<usize> {
-    if domain_size == 0 || target == 0 {
-        return Vec::new();
-    }
-    let domain = u64::try_from(domain_size).expect("domain size fits u64");
-    let desired = target.min(domain_size);
-    let mut indices = BTreeSet::new();
-    let mut counter: u32 = 0;
-    while indices.len() < desired {
+) -> Result<Vec<usize>> {
+    sample_queries_from(domain_size, target, |counter| {
+        // Preserve a successful final draw that advances MAX-1 to MAX while
+        // preventing the existing challenge implementation's checked-add panic.
+        if transcript.counter == u64::MAX {
+            return Err(Error::QuerySamplingTranscriptCounterExhausted);
+        }
         let tag = format!("{TRANSCRIPT_TAG_QUERY_INDEX}:{counter}");
-        counter = counter
-            .checked_add(1)
-            .expect("query sampler counter overflow");
-        let digest = transcript.challenge_digest(&tag);
-        let rejection_limit = GOLDILOCKS_MODULUS - (GOLDILOCKS_MODULUS % domain);
+        Ok(transcript.challenge_digest(&tag))
+    })
+}
+
+fn sample_queries_from(
+    domain_size: usize,
+    target: usize,
+    mut draw: impl FnMut(u32) -> Result<GoldilocksDigest384V1>,
+) -> Result<Vec<usize>> {
+    if domain_size == 0 || target == 0 {
+        return Ok(Vec::new());
+    }
+    let domain = u64::try_from(domain_size)
+        .map_err(|_| Error::QuerySamplingDomainUnsupported { domain_size })?;
+    if domain > GOLDILOCKS_MODULUS {
+        return Err(Error::QuerySamplingDomainUnsupported { domain_size });
+    }
+    let desired = target.min(domain_size);
+    let max_queries = usize::try_from(fastpq_isi::FASTPQ_MAX_QUERY_COUNT_V1)
+        .map_err(|_| Error::QuerySamplingDomainUnsupported { domain_size })?;
+    if desired > max_queries {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_sampled_queries",
+            actual: desired,
+            max: max_queries,
+        });
+    }
+    let desired_u32 = u32::try_from(desired)
+        .map_err(|_| Error::QuerySamplingDomainUnsupported { domain_size })?;
+    let draw_limit = desired_u32
+        .checked_mul(QUERY_DIGEST_DRAWS_PER_INDEX)
+        .ok_or(Error::QuerySamplingDomainUnsupported { domain_size })?
+        .max(QUERY_MIN_DIGEST_DRAWS);
+    let rejection_limit = GOLDILOCKS_MODULUS - GOLDILOCKS_MODULUS % domain;
+    let mut indices = BTreeSet::new();
+    for counter in 0..draw_limit {
+        let digest = draw(counter)?;
         for candidate in digest.words() {
             if indices.len() == desired {
                 break;
@@ -2570,15 +3282,23 @@ pub fn sample_queries(
             if candidate >= rejection_limit {
                 continue;
             }
-            let remainder = candidate % domain;
-            let index =
-                usize::try_from(remainder).expect("query index derived from transcript fits usize");
+            let index = usize::try_from(candidate % domain)
+                .map_err(|_| Error::QuerySamplingDomainUnsupported { domain_size })?;
             indices.insert(index);
         }
+        if indices.len() == desired {
+            return Ok(indices.into_iter().collect());
+        }
     }
-    indices.into_iter().collect()
+    Err(Error::QuerySamplingExhausted {
+        domain_size,
+        requested: desired,
+        selected: indices.len(),
+        draws: draw_limit,
+    })
 }
-pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, u64)>> {
+
+pub fn open_queries<F: Copy>(evaluations: &[F], indices: &[usize]) -> Result<Vec<(u32, F)>> {
     let mut openings = Vec::with_capacity(indices.len());
     for &index in indices {
         let value = evaluations
@@ -2614,12 +3334,12 @@ struct PreparedBatch {
     lde_domain_size: u32,
     lookup_grand_product: u64,
     lookup_challenge: u64,
-    alphas: Vec<u64>,
+    alphas: Vec<GoldilocksFp4V1>,
     lde_columns: Vec<Vec<u64>>,
-    lde_values: Vec<u64>,
+    lde_values: Vec<GoldilocksFp4V1>,
     lde_hashes: Vec<GoldilocksDigest384V1>,
     air_trace_leaves: Vec<GoldilocksDigest384V1>,
-    air_composition_values: Vec<u64>,
+    air_composition_values: Vec<GoldilocksFp4V1>,
     air_composition_leaves: Vec<GoldilocksDigest384V1>,
     transcript: Transcript,
 }
@@ -2681,7 +3401,10 @@ fn hash_trace_columns_v1(
         .collect()
 }
 
-fn combine_lde_columns_v1(columns: &[Vec<u64>], coefficients: &[u64]) -> Result<Vec<u64>> {
+fn combine_lde_columns_v1(
+    columns: &[Vec<u64>],
+    coefficients: &[GoldilocksFp4V1],
+) -> Result<Vec<GoldilocksFp4V1>> {
     if columns.len() != coefficients.len() || columns.is_empty() {
         return Err(Error::InvalidTraceShape {
             details: "LDE columns and post-commitment coefficients differ".to_owned(),
@@ -2695,12 +3418,12 @@ fn combine_lde_columns_v1(columns: &[Vec<u64>], coefficients: &[u64]) -> Result<
     }
     Ok((0..row_count)
         .map(|row| {
-            columns
-                .iter()
-                .zip(coefficients)
-                .fold(0_u64, |accumulator, (column, coefficient)| {
-                    add_mod(accumulator, mul_mod(column[row], *coefficient))
-                })
+            columns.iter().zip(coefficients).fold(
+                GoldilocksFp4V1::ZERO,
+                |accumulator, (column, coefficient)| {
+                    accumulator.add(coefficient.mul_base(column[row]))
+                },
+            )
         })
         .collect())
 }
@@ -2732,7 +3455,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         .collect::<Vec<_>>();
     let air_layout = AirColumnLayout::from_names(&column_names)?;
     let planner = Planner::new(params);
-    let poseidon_mode = poseidon_policy.resolved();
+    let poseidon_mode = ExecutionMode::Cpu;
     let polynomial_data = derive_polynomial_data(&trace, &planner);
     let transfer_plan = polynomial_data.transfer_plan().clone();
     if transfer_plan.total_deltas() > 0 {
@@ -2744,6 +3467,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
             "transfer gadget witnesses planned"
         );
     }
+    crate::trace::notify_native_stark_cpu_hashing(poseidon_policy);
     let trace_column_leaves = hash_trace_columns_v1(&column_names, &polynomial_data.coefficients)?;
     let derived_trace_root =
         merkle_root_with_mode(&trace_column_leaves, MerkleTreeRoleV1::Trace, poseidon_mode)?;
@@ -2756,22 +3480,26 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         protocol_version,
         TRANSCRIPT_TAG_INIT,
     )?;
-    transcript.append_message(TRANSCRIPT_TAG_TRACE_ROOT, &trace_root.to_le_bytes());
-    let column_mix = (0..lde_columns.len())
-        .map(|index| {
-            transcript.challenge_field(&format!("{TRANSCRIPT_TAG_COLUMN_MIX_PREFIX}:{index}"))
-        })
-        .collect::<Vec<_>>();
-    let lde_values = combine_lde_columns_v1(&lde_columns, &column_mix)?;
-    let lde_domain_size =
-        u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
-            rows: lde_values.len(),
-        })?;
-    let lde_hashes = hash_lde_leaves_with_mode(&lde_values, params.fri.arity, poseidon_mode)?;
-    let lde_root = merkle_root_with_mode(&lde_hashes, MerkleTreeRoleV1::Lde, poseidon_mode)?;
     let air_trace_leaves = hash_air_trace_rows_with_mode(&lde_columns, poseidon_mode)?;
     let air_trace_root =
         merkle_root_with_mode(&air_trace_leaves, MerkleTreeRoleV1::AirTrace, poseidon_mode)?;
+    let lde_domain_size = u32::try_from(lde_columns.first().map_or(0, Vec::len))
+        .map_err(|_| Error::TraceLengthOverflow { rows: usize::MAX })?;
+    transcript.append_trace_oracles(
+        trace_root,
+        air_trace_root,
+        lde_domain_size,
+        column_names.len(),
+    )?;
+    let column_mix = (0..lde_columns.len())
+        .map(|index| {
+            transcript.challenge_extension(&format!("{TRANSCRIPT_TAG_COLUMN_MIX_PREFIX}:{index}"))
+        })
+        .collect::<Vec<_>>();
+    let lde_values = combine_lde_columns_v1(&lde_columns, &column_mix)?;
+    let lde_hashes = hash_lde_leaves_fp4(&lde_values, params.fri.arity)?;
+    let lde_root = merkle_root_with_mode(&lde_hashes, MerkleTreeRoleV1::Lde, poseidon_mode)?;
+
     transcript.append_message(
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
@@ -2782,16 +3510,13 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         &lde_columns[air_layout.perm_hash],
         lookup_challenge,
     )?;
-    let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
-    for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
+    let alpha_count = air_composition_alpha_count(&column_names);
+    let mut alphas = Vec::with_capacity(alpha_count);
+    for idx in 0..alpha_count {
         let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
-        alphas.push(transcript.challenge_field(&tag));
+        alphas.push(transcript.challenge_extension(&tag));
     }
-    let next_step = usize::try_from(params.fri.blowup_factor)
-        .expect("FRI blowup factor fits usize")
-        .max(1);
-    let air_composition_values =
-        air_composition_values(&column_names, &lde_columns, &alphas, next_step)?;
+    let air_composition_values = air_quotient_values(params, &column_names, &lde_columns, &alphas)?;
     let air_composition_leaves =
         hash_air_composition_leaves_with_mode(&air_composition_values, poseidon_mode)?;
     let air_composition_root = merkle_root_with_mode(
@@ -2874,10 +3599,12 @@ impl StarkBackend {
         protocol_version: u16,
         transcript_trace_root: Option<GoldilocksDigest384V1>,
     ) -> Result<BackendArtifact> {
-        let execution_mode = self.config.execution_mode().resolve();
+        let execution_mode = self.config.resolve_native_v1_execution_mode()?;
         let poseidon_policy =
             PoseidonPipelinePolicy::new(self.config.poseidon_mode(), execution_mode);
-        let poseidon_mode = poseidon_policy.resolved();
+        // Native Digest384 commitments and opening paths currently run on CPU.
+        // prepare_batch reports this actual route with the requested policy.
+        let poseidon_mode = ExecutionMode::Cpu;
         let PreparedBatch {
             trace_commitment,
             trace_root,
@@ -2906,21 +3633,21 @@ impl StarkBackend {
         let next_step = usize::try_from(self.config.params.fri.blowup_factor)
             .expect("FRI blowup factor fits usize")
             .max(1);
-        let FriOpeningLayers {
-            layer_values: fri_layer_values,
-            roots: fri_layers,
-            betas: fri_betas,
-        } = fold_with_fri_opening_layers(
-            &air_composition_values,
+        let joint_fri =
+            JointFriBatch::from_transcript(&self.config.params, lde_values.len(), &mut transcript)?;
+        let joint_values = joint_fri.values(&air_composition_values, &lde_values)?;
+        let mut fri = fold_with_fri_opening_layers(
+            &joint_values,
             &self.config.params,
             &mut transcript,
             poseidon_mode,
         )?;
+        drop(joint_values); // The retained FRI owner has its own first layer.
         let query_indices = sample_queries(
             lde_values.len(),
             usize::try_from(self.config.params.fri.queries).expect("query count fits usize"),
             &mut transcript,
-        );
+        )?;
         let query_openings = open_queries(&lde_values, &query_indices)?;
         let query_chunks =
             open_query_chunks(&lde_values, &query_indices, self.config.params.fri.arity)?;
@@ -2941,12 +3668,13 @@ impl StarkBackend {
             next_step,
             poseidon_mode,
         )?;
-        let fri_query_openings = open_fri_query_chains(
-            &fri_layer_values,
-            &query_indices,
-            self.config.params.fri.arity,
-            poseidon_mode,
-        )?;
+        let fri_query_openings =
+            fri.open_query_chains(&query_indices, self.config.params.fri.arity)?;
+        let FriOpeningLayers {
+            roots: fri_layers,
+            betas: fri_betas,
+            ..
+        } = fri;
         Ok(BackendArtifact {
             parameter: self.config.params.name.to_string(),
             trace_commitment,
@@ -2991,13 +3719,46 @@ impl Transcript {
         protocol_version: u16,
         tag: &str,
     ) -> Result<Self> {
-        // Transcript identity must not inherit the layout of an unrelated
-        // Norito frame being decoded on this thread.
-        let payload = {
-            let _canonical =
-                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            norito::core::to_bytes(&(protocol_version, parameter, *public_io))?
-        };
+        // This first-release schema binds the quotient and exact-u64 AIR layout,
+        // Fp4 aggregation, joint trace degree check and complete terminal opening. It is not a security-review
+        // or production-qualification identifier.
+        const SCHEMA: &str = "fastpq:v1:balance-key-v1:six-operation-air:air-quotient-exact-u64:fp4-oracles:joint-trace-degree:fri-terminal4";
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        let field_and_hash = (
+            params.field.name,
+            params.field.modulus_decimal,
+            params.field.extension_degree,
+            params.field.extension_polynomial,
+            params.hash.trace_commitment,
+            params.hash.transcript,
+            params.hash.digest_bytes,
+        );
+        let polynomial_profile = (
+            params.trace_log_size,
+            params.trace_root,
+            params.lde_log_size,
+            params.lde_root,
+            params.omega_coset,
+            params.fri.arity,
+            params.fri.blowup_factor,
+            params.fri.max_reductions,
+            params.fri.queries,
+            fastpq_isi::FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1,
+            fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1,
+        );
+        // Transcript bytes cannot inherit an unrelated caller's Norito layout.
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let payload = norito::core::to_bytes(&(
+            protocol_version,
+            parameter,
+            SCHEMA,
+            params.name,
+            params.grinding_bits,
+            field_and_hash,
+            polynomial_profile,
+            public_io.clone(),
+        ))?;
         let state = hash_bytes_v1(
             TRANSCRIPT_ROLE_V1,
             b"initialise",
@@ -3007,6 +3768,32 @@ impl Transcript {
             &[tag.as_bytes(), &payload],
         )?;
         Ok(Self { state, counter: 1 })
+    }
+    /// Bind both trace commitments and their exact geometry before aggregation challenges.
+    pub(crate) fn append_trace_oracles(
+        &mut self,
+        trace_root: GoldilocksDigest384V1,
+        air_trace_root: GoldilocksDigest384V1,
+        domain_size: u32,
+        columns: usize,
+    ) -> Result<()> {
+        let columns =
+            u32::try_from(columns).map_err(|_| Error::TraceLengthOverflow { rows: columns })?;
+        // Transcript bytes cannot inherit an unrelated caller's Norito layout.
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let payload = norito::core::to_bytes(&(
+            trace_root.to_le_bytes(),
+            air_trace_root.to_le_bytes(),
+            domain_size,
+            columns,
+        ))?;
+        self.append_message(TRANSCRIPT_TAG_TRACE_ROOT, &payload);
+        Ok(())
+    }
+    /// Sample one full extension-field aggregation coefficient.
+    pub(crate) fn challenge_extension(&mut self, tag: &str) -> GoldilocksFp4V1 {
+        GoldilocksFp4V1::from_digest(self.challenge_digest(tag))
     }
     pub fn append_message(&mut self, tag: &str, message: &[u8]) {
         self.state = hash_bytes_v1(
@@ -3034,9 +3821,6 @@ impl Transcript {
         let tag = format!("{TRANSCRIPT_TAG_BETA_PREFIX}:{round}");
         GoldilocksFp4V1::from_digest(self.challenge_digest(&tag))
     }
-    pub fn challenge_bytes(&mut self, tag: &str) -> [u8; 48] {
-        self.challenge_digest(tag).to_le_bytes()
-    }
     pub fn challenge_field(&mut self, tag: &str) -> u64 {
         self.challenge_digest(tag).words()[0]
     }
@@ -3059,19 +3843,17 @@ impl Transcript {
         digest
     }
 }
+#[inline]
 fn add_mod(a: u64, b: u64) -> u64 {
-    let sum = u128::from(a) + u128::from(b);
-    u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
+    crate::field::add_base(a, b)
 }
+#[inline]
 fn sub_mod(a: u64, b: u64) -> u64 {
-    let reduced = (u128::from(a) + u128::from(GOLDILOCKS_MODULUS) - u128::from(b))
-        % u128::from(GOLDILOCKS_MODULUS);
-    u64::try_from(reduced).expect("modulus reduction fits in u64")
+    crate::field::sub_base(a, b)
 }
+#[inline]
 fn mul_mod(a: u64, b: u64) -> u64 {
-    let product = u128::from(a) * u128::from(b);
-    let reduced = product % u128::from(GOLDILOCKS_MODULUS);
-    u64::try_from(reduced).expect("modulus reduction fits in u64")
+    crate::field::mul_base(a, b)
 }
 fn field_pow(mut base: u64, mut exponent: u64) -> u64 {
     let mut result = FIELD_ONE;
@@ -3138,100 +3920,332 @@ mod tests {
         assert_ne!(a, b);
     }
     #[test]
-    fn transcript_is_independent_of_ambient_norito_layout() {
+    fn transcript_encoding_ignores_and_restores_ambient_norito_layout() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
         let public_io = PublicIO {
-            slot: u64::MAX,
-            dsid: [0xA5; 16],
-            old_root: [0x11; 32],
-            new_root: [0x22; 32],
-            perm_root: [0x33; 32],
-            tx_set_hash: [0x44; 32],
-            ordering_hash: [0x55; 32],
+            slot: 0x1234_5678_90ab_cdef,
+            ..PublicIO::default()
         };
-        let mut canonical =
-            Transcript::initialise(&public_io, FASTPQ_FINAL_V1_ID, 1, TRANSCRIPT_TAG_INIT)
-                .expect("canonical transcript");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        let mut alternate =
-            Transcript::initialise(&public_io, FASTPQ_FINAL_V1_ID, 1, TRANSCRIPT_TAG_INIT)
-                .expect("transcript in another decode context");
-        assert_eq!(
-            norito::core::effective_decode_flags(),
-            Some(alternate_flags),
-            "initialization must restore its caller's layout"
-        );
-        for transcript in [&mut canonical, &mut alternate] {
-            transcript.append_message(TRANSCRIPT_TAG_TRACE_ROOT, &[0x66; 48]);
+        let baseline =
+            Transcript::initialise(&public_io, params.name, 1, TRANSCRIPT_TAG_INIT).unwrap();
+        let trace_root = GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).unwrap();
+        let air_root = GoldilocksDigest384V1::new([7, 8, 9, 10, 11, 12]).unwrap();
+        let mut expected = baseline.clone();
+        expected
+            .append_trace_oracles(trace_root, air_root, 64, 17)
+            .unwrap();
+        let expected_challenge = expected.challenge_extension(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX);
+        let probe = ("layout restoration", vec![1_u64, 2, 3]);
+        let canonical_probe = norito::core::to_bytes(&probe).unwrap();
+        for flags in [
+            0,
+            norito::core::header_flags::PACKED_SEQ,
+            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
+        ] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let before = norito::core::to_bytes(&probe).unwrap();
+            let actual =
+                Transcript::initialise(&public_io, params.name, 1, TRANSCRIPT_TAG_INIT).unwrap();
+            assert_eq!(actual.state, baseline.state);
+            assert_eq!(actual.counter, baseline.counter);
+            let mut appended = baseline.clone();
+            appended
+                .append_trace_oracles(trace_root, air_root, 64, 17)
+                .unwrap();
+            assert_eq!(
+                appended.challenge_extension(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX),
+                expected_challenge
+            );
+            assert_eq!(
+                norito::core::to_bytes(&probe).unwrap(),
+                before,
+                "transcript helpers must restore the caller's layout flags"
+            );
+            if flags == 0 {
+                assert_ne!(
+                    before, canonical_probe,
+                    "the control must exercise an alternate layout"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn aggregation_challenges_bind_both_trace_roots_and_geometry() {
+        let challenge = |trace, air_trace, domain_size, columns| {
+            let mut transcript = Transcript::initialise(
+                &PublicIO::default(),
+                fastpq_isi::FASTPQ_FINAL_V1.name,
+                1,
+                TRANSCRIPT_TAG_INIT,
+            )
+            .unwrap();
+            transcript
+                .append_trace_oracles(trace, air_trace, domain_size, columns)
+                .unwrap();
+            transcript.challenge_extension(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX)
+        };
+        let digest = |word| GoldilocksDigest384V1::new([word; 6]).unwrap();
+        let baseline = challenge(digest(1), digest(2), 64, 10);
+        assert_eq!(baseline, challenge(digest(1), digest(2), 64, 10));
+        assert_ne!(baseline, challenge(digest(3), digest(2), 64, 10));
+        assert_ne!(baseline, challenge(digest(1), digest(3), 64, 10));
+        assert_ne!(baseline, challenge(digest(1), digest(2), 128, 10));
+        assert_ne!(baseline, challenge(digest(1), digest(2), 64, 11));
+        assert!(baseline.coefficients()[1..].iter().any(|value| *value != 0));
+    }
+
+    #[test]
+    fn mixed_trace_uses_all_extension_coefficients_and_checks_column_shape() {
+        let columns = vec![vec![2, 3], vec![5, 7]];
+        let coefficients = [
+            GoldilocksFp4V1::new([11, 13, 17, 19]).unwrap(),
+            GoldilocksFp4V1::new([23, 29, 31, 37]).unwrap(),
+        ];
+        let actual = combine_lde_columns_v1(&columns, &coefficients).unwrap();
+        for index in 0..2 {
+            let expected = core::array::from_fn(|lane| {
+                add_mod(
+                    mul_mod(columns[0][index], coefficients[0].coefficients()[lane]),
+                    mul_mod(columns[1][index], coefficients[1].coefficients()[lane]),
+                )
+            });
+            assert_eq!(actual[index].coefficients(), expected);
+        }
+        assert!(combine_lde_columns_v1(&[], &[]).is_err());
+        assert!(combine_lde_columns_v1(&columns, &coefficients[..1]).is_err());
+        assert!(combine_lde_columns_v1(&[vec![1], vec![2, 3]], &coefficients).is_err());
+    }
+
+    #[test]
+    fn extension_oracle_hashes_bind_every_coefficient_and_reject_noncanonical_values() {
+        let value = GoldilocksFp4V1::new([1, 2, 3, 4]).unwrap();
+        let leaf = hash_lde_chunk_fp4(0, &[value]).unwrap();
+        assert_eq!(hash_lde_leaves_fp4(&[value], 2).unwrap(), vec![leaf]);
+        assert_ne!(leaf, hash_lde_chunk_fp4(1, &[value]).unwrap());
+        assert_ne!(leaf, hash_air_composition_leaf(0, value).unwrap());
+        for lane in 0..4 {
+            let mut coefficients = value.coefficients();
+            coefficients[lane] += 1;
+            assert_ne!(
+                leaf,
+                hash_lde_chunk_fp4(0, &[GoldilocksFp4V1::new(coefficients).unwrap()]).unwrap()
+            );
+            coefficients[lane] = GOLDILOCKS_MODULUS;
+            let malformed = GoldilocksFp4V1::from_coefficients_unchecked_for_test(coefficients);
+            assert!(matches!(
+                hash_lde_chunk_fp4(0, &[malformed]),
+                Err(Error::NonCanonicalGoldilocksElement { .. })
+            ));
+            assert!(hash_air_composition_leaf(0, malformed).is_err());
+        }
+        assert!(hash_lde_leaves_fp4(&[value], 8).is_err());
+    }
+
+    #[test]
+    fn air_row_hash_batches_match_scalar_rows_indices_and_domains() {
+        for row_count in [1, 31, 32, 33, 65] {
+            let columns: Vec<Vec<u64>> = (0..5)
+                .map(|column| {
+                    (0..row_count)
+                        .map(|row| {
+                            if column == 0 && row % 7 == 0 {
+                                GOLDILOCKS_MODULUS - 1
+                            } else {
+                                (column * 100 + row) as u64
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let expected: Vec<_> = (0..row_count)
+                .map(|index| {
+                    let row: Vec<_> = columns.iter().map(|column| column[index]).collect();
+                    let digest = hash_air_trace_row(index, &row).unwrap();
+                    assert_ne!(digest, hash_air_trace_row(index + 1, &row).unwrap());
+                    assert_ne!(digest, hash_lde_chunk(index, &row).unwrap());
+                    digest
+                })
+                .collect();
+            for mode in [ExecutionMode::Cpu, ExecutionMode::Gpu] {
+                assert_eq!(
+                    hash_air_trace_rows_with_mode(&columns, mode).unwrap(),
+                    expected,
+                    "row count {row_count}, requested mode {mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn air_row_hash_batches_check_shapes_before_hashing() {
+        for mode in [ExecutionMode::Cpu, ExecutionMode::Gpu] {
+            assert!(hash_air_trace_rows_with_mode(&[], mode).unwrap().is_empty());
+            assert!(
+                hash_air_trace_rows_with_mode(&[vec![], vec![]], mode)
+                    .unwrap()
+                    .is_empty()
+            );
+            for columns in [
+                vec![vec![GOLDILOCKS_MODULUS], vec![]],
+                vec![vec![], vec![GOLDILOCKS_MODULUS]],
+                vec![vec![0; 64], vec![GOLDILOCKS_MODULUS; 63]],
+            ] {
+                assert!(matches!(
+                    hash_air_trace_rows_with_mode(&columns, mode),
+                    Err(Error::AirOpeningMismatch { index: 0 })
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn air_row_hash_batches_return_lowest_error_row_across_worker_schedules() {
+        let mut columns = vec![vec![7; 65], vec![11; 65], vec![13; 65]];
+        columns[2][17] = GOLDILOCKS_MODULUS;
+        columns[0][31] = u64::MAX;
+        columns[1][64] = GOLDILOCKS_MODULUS;
+        let sequential: Vec<_> = columns.iter().map(|column| column[..31].to_vec()).collect();
+        assert!(matches!(
+            hash_air_trace_rows_with_mode(&sequential, ExecutionMode::Cpu),
+            Err(Error::NonCanonicalGoldilocksElement {
+                context: "native_stark_digest_input",
+                indices,
+            }) if indices == vec![17]
+        ));
+        for workers in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .expect("bounded hash regression worker pool");
+            for iteration in 0..4 {
+                let result =
+                    pool.install(|| hash_air_trace_rows_with_mode(&columns, ExecutionMode::Cpu));
+                assert!(
+                    matches!(result, Err(Error::NonCanonicalGoldilocksElement {
+                        context: "native_stark_digest_input",
+                        indices,
+                    }) if indices == vec![17]),
+                    "lowest row must win with {workers} workers on iteration {iteration}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn air_row_prefix_batches_preserve_wide_rows_across_worker_counts() {
+        let pools = [1, 2, 4].map(|workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .expect("bounded AIR row prefix worker pool")
+        });
+        for width in [1, 7, 342] {
+            for row_count in [1, 15, 16, 31, 32, 33, 65] {
+                let columns: Vec<Vec<u64>> = (0..width)
+                    .map(|column| {
+                        (0..row_count)
+                            .map(|row| match (column + row) % 7 {
+                                0 => 0,
+                                1 => GOLDILOCKS_MODULUS - 1,
+                                2 => GOLDILOCKS_MODULUS - 2,
+                                _ => (column * 71 + row * 37) as u64,
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let expected: Vec<_> = (0..row_count)
+                    .map(|index| {
+                        let row: Vec<_> = columns.iter().map(|column| column[index]).collect();
+                        hash_air_trace_row(index, &row).unwrap()
+                    })
+                    .collect();
+                for pool in &pools {
+                    for mode in [ExecutionMode::Cpu, ExecutionMode::Gpu] {
+                        assert_eq!(
+                            pool.install(|| hash_air_trace_rows_with_mode(&columns, mode))
+                                .unwrap(),
+                            expected,
+                            "width {width}, rows {row_count}, workers {}, requested mode {mode:?}",
+                            pool.current_num_threads()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn air_row_prefix_batches_reject_every_noncanonical_wide_column_like_scalar() {
+        let mut columns = vec![vec![7]; 342];
+        let mut row = vec![7; 342];
+        for column in 0..columns.len() {
+            for invalid in [GOLDILOCKS_MODULUS, u64::MAX] {
+                columns[column][0] = invalid;
+                row[column] = invalid;
+                for result in [
+                    hash_air_trace_row(0, &row),
+                    hash_air_trace_rows_with_mode(&columns, ExecutionMode::Cpu)
+                        .map(|leaves| leaves[0]),
+                ] {
+                    assert!(matches!(
+                        result,
+                        Err(Error::NonCanonicalGoldilocksElement {
+                            context: "native_stark_digest_input",
+                            indices,
+                        }) if indices == vec![0]
+                    ));
+                }
+            }
+            columns[column][0] = 7;
+            row[column] = 7;
         }
         assert_eq!(
-            canonical.challenge_field(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX),
-            alternate.challenge_field(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX)
-        );
-        assert_eq!(canonical.challenge_beta(0), alternate.challenge_beta(0));
-        assert_eq!(
-            canonical.challenge_bytes(TRANSCRIPT_TAG_QUERY_INDEX),
-            alternate.challenge_bytes(TRANSCRIPT_TAG_QUERY_INDEX)
-        );
-        assert_eq!(canonical.counter, alternate.counter);
-    }
-    #[test]
-    fn lookup_grand_product_consumes_only_selected_witnesses() {
-        let gamma = 3;
-        let product = compute_lookup_grand_product(&[1, 0, 2], &[7, 9, 11], gamma)
-            .expect("canonical equal-length lookup columns");
-        assert_eq!(product, mul_mod(7 + gamma, 11 + gamma));
-        assert_eq!(
-            compute_lookup_grand_product(&[0, 0], &[7, 11], gamma)
-                .expect("unselected canonical witnesses"),
-            FIELD_ONE
+            hash_air_trace_rows_with_mode(&columns, ExecutionMode::Cpu).unwrap(),
+            vec![hash_air_trace_row(0, &row).unwrap()]
         );
     }
-    #[test]
-    fn lookup_grand_product_rejects_mismatched_column_lengths() {
-        let error = compute_lookup_grand_product(&[1, 0], &[7], 3)
-            .expect_err("different lookup column lengths must fail");
-        assert!(matches!(
-            error,
-            Error::LookupColumnLengthMismatch {
-                selector_len: 2,
-                witness_len: 1
-            }
-        ));
-    }
-    #[test]
-    fn lookup_grand_product_rejects_noncanonical_inputs() {
-        let gamma_error = compute_lookup_grand_product(&[], &[], GOLDILOCKS_MODULUS)
-            .expect_err("non-canonical gamma must fail");
-        assert!(matches!(
-            gamma_error,
-            Error::NonCanonicalGoldilocksElement {
-                context: "lookup_challenge",
-                indices
-            } if indices.is_empty()
-        ));
 
-        let selector_error = compute_lookup_grand_product(&[GOLDILOCKS_MODULUS], &[0], 0)
-            .expect_err("non-canonical selector must fail");
-        assert!(matches!(
-            selector_error,
-            Error::NonCanonicalGoldilocksElement {
-                context: "lookup_selector",
-                indices
-            } if indices == [0]
-        ));
-
-        let witness_error = compute_lookup_grand_product(&[1], &[GOLDILOCKS_MODULUS], 0)
-            .expect_err("non-canonical witness must fail");
-        assert!(matches!(
-            witness_error,
-            Error::NonCanonicalGoldilocksElement {
-                context: "lookup_witness",
-                indices
-            } if indices == [0]
-        ));
+    #[test]
+    #[ignore = "bounded CPU timing diagnostic; no production speed assertion"]
+    fn air_row_prefix_microdiagnostic() {
+        const ROWS: usize = 512;
+        const WIDTH: usize = 342;
+        let columns: Vec<Vec<u64>> = (0..WIDTH)
+            .map(|column| {
+                (0..ROWS)
+                    .map(|row| (column * 71 + row * 37) as u64)
+                    .collect()
+            })
+            .collect();
+        let mut row = vec![0; WIDTH];
+        let started = std::time::Instant::now();
+        let expected: Vec<_> = (0..ROWS)
+            .map(|index| {
+                for (value, column) in row.iter_mut().zip(&columns) {
+                    *value = column[index];
+                }
+                hash_air_trace_row(index, &row).unwrap()
+            })
+            .collect();
+        let canonical_elapsed = started.elapsed();
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .expect("bounded AIR row prefix diagnostic pool");
+            let started = std::time::Instant::now();
+            let actual = pool
+                .install(|| hash_air_trace_rows_with_mode(&columns, ExecutionMode::Cpu))
+                .unwrap();
+            let prefix_elapsed = started.elapsed();
+            assert_eq!(actual, expected);
+            eprintln!(
+                "air_row_prefix_rows={ROWS}; width={WIDTH}; workers={workers}; canonical_scalar={canonical_elapsed:?}; prefix_batch={prefix_elapsed:?}; canonical_leaf_parity=true"
+            );
+        }
     }
+
     #[test]
     fn open_queries_rejects_out_of_range() {
         let err = open_queries(&[10u64, 11u64], &[2]).expect_err("out-of-range query");
@@ -3351,6 +4365,235 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn integer_air_binding_rejects_lengths_auxiliary_and_trailing_limb_mutations() {
+        let mut trace = build_trace(&sample_batch(2)).unwrap();
+        let witness = transfer_integer_air::TransferIntegerWitness::from_balances(1, 2);
+        for (name, value) in transfer_integer_air::auxiliary_column_names()
+            .into_iter()
+            .zip(witness.auxiliary_values())
+        {
+            trace.columns.push(crate::TraceColumn {
+                name,
+                values: vec![value, 0],
+            });
+        }
+        trace.columns.push(crate::TraceColumn {
+            name: "value_old_limb_2".into(),
+            values: vec![0, 0],
+        });
+        for (name, value) in [
+            ("s_transfer", 1),
+            ("s_meta_set", 0),
+            ("value_old_limb_0", 1),
+            ("value_new_limb_0", 2),
+            ("delta", 1),
+        ] {
+            trace
+                .columns
+                .iter_mut()
+                .find(|column| column.name == name)
+                .unwrap()
+                .values[0] = value;
+        }
+        ensure_base_trace_constraints(&trace).expect("exact integer trace relation");
+        let names: Vec<_> = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
+        assert_eq!(
+            air_composition_alpha_count(&names),
+            AIR_COMPOSITION_ALPHA_COUNT + 1
+        );
+        for (name, bad_value) in [
+            ("value_old_len", 7),
+            ("value_new_len", 9),
+            ("value_old_limb_2", 1),
+            ("transfer_old_bit_0", 2),
+            ("transfer_carry_32", 1),
+            ("transfer_is_debit", 2),
+        ] {
+            let mut invalid = trace.clone();
+            invalid
+                .columns
+                .iter_mut()
+                .find(|column| column.name == name)
+                .unwrap()
+                .values[0] = bad_value;
+            assert!(
+                matches!(
+                    ensure_base_trace_constraints(&invalid),
+                    Err(Error::AirConstraintMismatch { index: 0 })
+                ),
+                "{name}"
+            );
+        }
+        trace
+            .columns
+            .retain(|column| column.name != "transfer_old_bit_0");
+        assert!(
+            matches!(ensure_base_trace_constraints(&trace), Err(Error::MissingColumn(name)) if name == "transfer_old_bit_0")
+        );
+    }
+
+    #[test]
+    fn extension_quotient_combination_matches_each_base_coefficient() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        let trace = build_trace(&sample_batch(3)).unwrap();
+        let names = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        let mut columns = derive_polynomial_data(&trace, &Planner::new(&params)).into_lde_columns();
+        // Activate multiple otherwise valid residues at one coset point, so this
+        // comparison cannot pass merely because every tested quotient is zero.
+        columns[0][3] = add_mod(columns[0][3], 7);
+        let alphas = (0..air_composition_alpha_count(&names))
+            .map(|index| {
+                GoldilocksFp4V1::new(core::array::from_fn(|lane| 1 + (index * 4 + lane) as u64))
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let combined = air_quotient_values(&params, &names, &columns, &alphas).unwrap();
+        let domain = AirQuotientDomain::new(&params, columns[0].len()).unwrap();
+        for lane in 0..4 {
+            let base_alphas = alphas
+                .iter()
+                .map(|alpha| alpha.coefficients()[lane])
+                .collect::<Vec<_>>();
+            let base_values = air_quotient_values(&params, &names, &columns, &base_alphas).unwrap();
+            assert!(base_values.iter().any(|value| *value != 0));
+            for (index, &value) in combined.iter().enumerate() {
+                assert_eq!(value.coefficients()[lane], base_values[index]);
+                let next = (index + params.fri.blowup_factor as usize) % combined.len();
+                assert_eq!(
+                    value,
+                    air_quotient_value_for_rows(
+                        &names,
+                        &air_row_at(&columns, index).unwrap(),
+                        &air_row_at(&columns, next).unwrap(),
+                        &alphas,
+                        domain.weights_at(index).unwrap()
+                    )
+                    .unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn quotient_composition_matches_sampled_rows_and_excludes_only_the_final_transition() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        let trace = build_trace(&sample_batch(3)).expect("padded trace");
+        assert_eq!(trace.padded_len, 4);
+        let names: Vec<_> = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
+        let columns = derive_polynomial_data(&trace, &Planner::new(&params)).into_lde_columns();
+        let mut alphas = vec![0; AIR_COMPOSITION_ALPHA_COUNT];
+        alphas[AIR_BOOLEAN_RESIDUE_COUNT + 2] = 1;
+        let domain = AirQuotientDomain::new(&params, columns[0].len()).expect("disjoint coset");
+        let values = air_quotient_values(&params, &names, &columns, &alphas).expect("quotients");
+        let next_step = params.fri.blowup_factor as usize;
+        for (index, value) in values.iter().enumerate() {
+            let next = (index + next_step) % values.len();
+            assert_eq!(
+                *value,
+                air_quotient_value_for_rows(
+                    &names,
+                    &air_row_at(&columns, index).unwrap(),
+                    &air_row_at(&columns, next).unwrap(),
+                    &alphas,
+                    domain.weights_at(index).unwrap(),
+                )
+                .unwrap()
+            );
+        }
+        let fri_domain = FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            values.len(),
+            params.omega_coset,
+        )
+        .unwrap();
+        let embedded: Vec<_> = values
+            .into_iter()
+            .map(|value| GoldilocksFp4V1::from_base(value).unwrap())
+            .collect();
+        assert!(
+            fri_domain
+                .evaluations_have_degree_below(&embedded, trace.padded_len)
+                .unwrap()
+        );
+
+        // The padded final row is excluded, but an inactive interior row followed
+        // by an active row must still produce a quotient above the allowed degree.
+        let mut invalid = trace.clone();
+        invalid
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "s_active")
+            .unwrap()
+            .values[1] = 0;
+        let columns = derive_polynomial_data(&invalid, &Planner::new(&params)).into_lde_columns();
+        let values = air_quotient_values(&params, &names, &columns, &alphas).unwrap();
+        let embedded: Vec<_> = values
+            .into_iter()
+            .map(|value| GoldilocksFp4V1::from_base(value).unwrap())
+            .collect();
+        assert!(
+            !fri_domain
+                .evaluations_have_degree_below(&embedded, 2 * trace.padded_len)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn all_row_quotient_rejects_non_boolean_selector_degree() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        let mut trace = build_trace(&sample_batch(3)).unwrap();
+        let names: Vec<_> = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
+        let mut alphas = vec![0; AIR_COMPOSITION_ALPHA_COUNT];
+        alphas[0] = 1;
+        for valid in [true, false] {
+            if !valid {
+                trace
+                    .columns
+                    .iter_mut()
+                    .find(|column| column.name == "s_active")
+                    .unwrap()
+                    .values[0] = 2;
+            }
+            let columns = derive_polynomial_data(&trace, &Planner::new(&params)).into_lde_columns();
+            let values = air_quotient_values(&params, &names, &columns, &alphas).unwrap();
+            let domain = FriDomain::from_lde_parameters(
+                params.lde_root,
+                params.lde_log_size,
+                values.len(),
+                params.omega_coset,
+            )
+            .unwrap();
+            let values: Vec<_> = values
+                .into_iter()
+                .map(|value| GoldilocksFp4V1::from_base(value).unwrap())
+                .collect();
+            assert_eq!(
+                domain
+                    .evaluations_have_degree_below(&values, 2 * trace.padded_len)
+                    .unwrap(),
+                valid
+            );
+        }
+    }
+
     #[test]
     fn air_composition_columnar_pass_matches_row_helper() {
         let trace = build_trace(&sample_batch(5)).expect("trace");
@@ -3508,6 +4751,16 @@ mod tests {
             .find(|column| column.name == "delta")
             .expect("delta column")
             .values[0] = sub_mod(after, before);
+        let witness = transfer_integer_air::TransferIntegerWitness::from_balances(before, after);
+        for (name, value) in transfer_integer_air::auxiliary_column_names()
+            .into_iter()
+            .zip(witness.auxiliary_values())
+        {
+            trace.columns.push(crate::TraceColumn {
+                name,
+                values: vec![value],
+            });
+        }
         ensure_base_trace_constraints(&trace).expect("multi-limb delta must satisfy the AIR");
     }
     #[test]
@@ -3581,17 +4834,309 @@ mod tests {
             assert_eq!(accelerated, scalar, "FRI layer length {length}");
         }
     }
-    #[cfg(feature = "fastpq-gpu")]
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
-    fn native_stark_merkle_roots_are_byte_identical_across_execution_modes() {
+    #[ignore = "requires actual Metal execution; no device skip is accepted"]
+    fn native_merkle_metal_levels_roots_and_chunk_boundaries_match_cpu() {
+        use crate::digest_executor::{
+            DigestExecutionV1, execute_bounded_digest384_frames_v1, execute_digest384_frames_v1,
+        };
+        let device = DigestExecutionV1::Device(crate::digest384_gpu::Digest384GpuBackendV1::Metal);
+        for role in [
+            MerkleTreeRoleV1::Trace,
+            MerkleTreeRoleV1::Lde,
+            MerkleTreeRoleV1::AirTrace,
+            MerkleTreeRoleV1::AirComposition,
+            MerkleTreeRoleV1::Fri(0),
+            MerkleTreeRoleV1::Fri(7),
+        ] {
+            for len in [0, 1, 3, 5, 17] {
+                let leaves: Vec<_> = (0..len)
+                    .map(|i| GoldilocksDigest384V1::new([i; 6]).unwrap())
+                    .collect();
+                let cpu =
+                    build_merkle_levels_with_execution_v1(&leaves, role, DigestExecutionV1::Cpu)
+                        .unwrap();
+                let mut dispatch_sizes = Vec::new();
+                let metal = build_merkle_levels_with_executor_v1(&leaves, role, &mut |frames| {
+                    execute_bounded_digest384_frames_v1(
+                        frames,
+                        2,
+                        frames[0].word_count() * 2,
+                        &mut |chunk| {
+                            dispatch_sizes.push(chunk.len());
+                            execute_digest384_frames_v1(chunk, device)
+                        },
+                    )
+                })
+                .expect("actual bounded Metal node dispatch");
+                assert_eq!(metal, cpu, "role {role:?}, leaves {len}");
+                if len == 17 {
+                    assert!(dispatch_sizes.len() > cpu.len());
+                    assert!(dispatch_sizes.contains(&1));
+                }
+                assert_eq!(
+                    merkle_root_with_execution_v1(&leaves, role, device).unwrap(),
+                    merkle_root_with_execution_v1(&leaves, role, DigestExecutionV1::Cpu).unwrap()
+                );
+            }
+        }
         let leaves =
             hash_lde_leaves_with_mode(&(0_u64..513).collect::<Vec<_>>(), 2, ExecutionMode::Cpu)
-                .expect("native-STARK LDE leaves");
-        let scalar = merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Cpu)
-            .expect("scalar native-STARK Merkle root");
-        let accelerated = merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Gpu)
-            .expect("accelerated native-STARK Merkle root");
-        assert_eq!(accelerated, scalar);
+                .unwrap();
+        assert_eq!(
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Lde, device).unwrap(),
+            merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Cpu).unwrap()
+        );
+        assert_ne!(
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Fri(0), device).unwrap(),
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Fri(7), device).unwrap()
+        );
+        assert!(!preflight_native_v1_gpu_backend());
+    }
+
+    #[test]
+    fn native_merkle_device_failure_aborts_tree_without_cpu_substitution() {
+        use crate::digest_executor::{
+            DigestExecutionV1, execute_bounded_digest384_frames_v1, execute_digest384_frames_v1,
+        };
+        let leaves: Vec<_> = (0..17)
+            .map(|i| GoldilocksDigest384V1::new([i; 6]).unwrap())
+            .collect();
+        let mut calls = 0;
+        let result = build_merkle_levels_with_executor_v1(
+            &leaves,
+            MerkleTreeRoleV1::Fri(7),
+            &mut |frames| {
+                execute_bounded_digest384_frames_v1(frames, 2, 1000, &mut |chunk| {
+                    calls += 1;
+                    if calls == 2 {
+                        Err(Error::NativeDigestExecution {
+                            details: "injected Merkle device failure".into(),
+                        })
+                    } else {
+                        execute_digest384_frames_v1(chunk, DigestExecutionV1::Cpu)
+                    }
+                })
+            },
+        );
+        assert!(
+            matches!(result, Err(Error::NativeDigestExecution { details }) if details == "injected Merkle device failure")
+        );
+        assert_eq!(calls, 2);
+    }
+    #[test]
+    fn indexed_prefix_hashes_preserve_all_domain_coordinates_and_payload_framing() {
+        for role in [
+            MerkleTreeRoleV1::Trace,
+            MerkleTreeRoleV1::Lde,
+            MerkleTreeRoleV1::AirTrace,
+            MerkleTreeRoleV1::AirComposition,
+            MerkleTreeRoleV1::Fri(17),
+        ] {
+            for phase in [MERKLE_LEAF_PHASE_V1, MERKLE_NODE_PHASE_V1] {
+                for level in [0, 1, 19] {
+                    let prefix =
+                        digest_domain_prefix_v1(role.role(), phase, level, role.counter()).unwrap();
+                    for index in [0, 1, 7, 1 << 20, usize::MAX] {
+                        for fields in [vec![], vec![&[][..]], vec![&[11; 48][..], &[29; 48][..]]] {
+                            assert_eq!(
+                                hash_at_prefix_v1(&prefix, index, &fields).unwrap(),
+                                hash_bytes_v1(
+                                    role.role(),
+                                    phase,
+                                    level,
+                                    index,
+                                    role.counter(),
+                                    &fields
+                                )
+                                .unwrap(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_fri_prefix_leaves_match_scalar_strided_groups() {
+        let pools = [1, 4].map(|workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+        });
+        for round in [0, 1, 17] {
+            for count in [0, 1, 2, 62, 64, 128, 256] {
+                let values: Vec<_> = (0..count)
+                    .map(|index| {
+                        GoldilocksFp4V1::new(core::array::from_fn(|lane| {
+                            (index * 43 + lane * 17) as u64
+                        }))
+                        .unwrap()
+                    })
+                    .collect();
+                let expected = if count == 0 {
+                    Vec::new()
+                } else {
+                    let arity = 2.min(count);
+                    let output = count / arity;
+                    (0..output)
+                        .map(|index| {
+                            let group: Vec<_> = (0..arity)
+                                .map(|position| values[index + position * output])
+                                .collect();
+                            hash_fri_chunk(round, index, &group).unwrap()
+                        })
+                        .collect()
+                };
+                for pool in &pools {
+                    for mode in [ExecutionMode::Cpu, ExecutionMode::Gpu] {
+                        assert_eq!(
+                            pool.install(|| hash_fri_leaves_with_mode(round, &values, 2, mode))
+                                .unwrap(),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+        assert!(matches!(
+            hash_fri_leaves_with_mode(0, &[GoldilocksFp4V1::ZERO; 3], 2, ExecutionMode::Cpu),
+            Err(Error::FriDomainSize {
+                length: 3,
+                arity: 2
+            })
+        ));
+        assert!(matches!(
+            hash_fri_leaves_with_mode(0, &[], 4, ExecutionMode::Cpu),
+            Err(Error::FriArity(4))
+        ));
+    }
+
+    #[test]
+    fn parallel_single_fp4_leaves_match_canonical_hashes_and_first_error() {
+        let pools = [1, 4].map(|workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+        });
+        for role in [LDE_COMMITMENT_ROLE_V1, AIR_COMPOSITION_COMMITMENT_ROLE_V1] {
+            for count in [0, 1, 31, 32, 65, 129] {
+                let values: Vec<_> = (0..count)
+                    .map(|index| {
+                        GoldilocksFp4V1::new(core::array::from_fn(|lane| {
+                            (index * 73 + lane * 11) as u64
+                        }))
+                        .unwrap()
+                    })
+                    .collect();
+                let expected: Vec<_> = values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| hash_fp4_values_v1(role, 0, index, &[*value]).unwrap())
+                    .collect();
+                for pool in &pools {
+                    assert_eq!(
+                        pool.install(|| hash_fp4_single_leaves_with_role(role, &values))
+                            .unwrap(),
+                        expected
+                    );
+                }
+            }
+        }
+        for lane in 0..4 {
+            let mut coefficients = [0; 4];
+            coefficients[lane] = GOLDILOCKS_MODULUS;
+            let malformed = GoldilocksFp4V1::from_coefficients_unchecked_for_test(coefficients);
+            let mut values = vec![GoldilocksFp4V1::ZERO; 65];
+            values[3] = malformed;
+            values[47] = malformed;
+            for pool in &pools {
+                assert!(matches!(
+                    pool.install(|| hash_fp4_single_leaves_with_role(LDE_COMMITMENT_ROLE_V1, &values)),
+                    Err(Error::NonCanonicalGoldilocksElement { context: "native_stark_fp4_digest_input", indices })
+                        if indices == vec![3, 0, lane]
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_merkle_levels_match_scalar_trees_across_roles_padding_and_worker_counts() {
+        fn scalar_levels(
+            leaves: &[GoldilocksDigest384V1],
+            role: MerkleTreeRoleV1,
+        ) -> Vec<Vec<GoldilocksDigest384V1>> {
+            if leaves.is_empty() {
+                return Vec::new();
+            }
+            let mut current = leaves.to_vec();
+            let mut levels = Vec::new();
+            loop {
+                if current.len() % 2 == 1 {
+                    current.push(*current.last().unwrap());
+                }
+                levels.push(current.clone());
+                let mut next = Vec::with_capacity(current.len() / 2);
+                for parent in 0..current.len() / 2 {
+                    next.push(
+                        merkle_node_hash(
+                            role,
+                            levels.len(),
+                            parent,
+                            current[2 * parent],
+                            current[2 * parent + 1],
+                        )
+                        .unwrap(),
+                    );
+                }
+                if next.len() == 1 {
+                    levels.push(next);
+                    return levels;
+                }
+                current = next;
+            }
+        }
+        let pools = [1, 4].map(|workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+        });
+        for role in [
+            MerkleTreeRoleV1::Trace,
+            MerkleTreeRoleV1::Lde,
+            MerkleTreeRoleV1::AirTrace,
+            MerkleTreeRoleV1::AirComposition,
+            MerkleTreeRoleV1::Fri(0),
+            MerkleTreeRoleV1::Fri(17),
+        ] {
+            for count in [0, 1, 3, 31, 63, 64, 65, 129] {
+                let leaves = (0..count)
+                    .map(|index| {
+                        GoldilocksDigest384V1::new(core::array::from_fn(|lane| {
+                            1 + 7 * index as u64 + 13 * lane as u64
+                        }))
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let expected = scalar_levels(&leaves, role);
+                for pool in &pools {
+                    for mode in [ExecutionMode::Cpu, ExecutionMode::Auto] {
+                        let actual = pool
+                            .install(|| build_merkle_levels_with_mode(&leaves, role, mode))
+                            .unwrap();
+                        assert_eq!(
+                            actual, expected,
+                            "role={role:?}; leaves={count}; mode={mode:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn fold_with_fri_emits_layers_and_betas() {
@@ -3648,6 +5193,223 @@ mod tests {
         .expect_err("invalid arity");
         assert!(matches!(err, super::Error::FriArity(4)));
     }
+    fn sampler_test_transcript() -> Transcript {
+        Transcript::initialise(
+            &crate::proof::PublicIO::default(),
+            fastpq_isi::FASTPQ_FINAL_V1_ID,
+            1,
+            TRANSCRIPT_TAG_INIT,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn query_sampler_empty_and_unsupported_shapes_do_not_draw() {
+        for (domain_size, target) in [(0, 0), (0, usize::MAX), (usize::MAX, 0)] {
+            assert!(
+                sample_queries_from(domain_size, target, |_| panic!("empty sampler drew"))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let error =
+            sample_queries_from(1024, 513, |_| panic!("oversized sampler drew")).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::VerifierLimitExceeded {
+                limit: "max_sampled_queries",
+                actual: 513,
+                max: 512
+            }
+        ));
+        if let Ok(domain) = usize::try_from(GOLDILOCKS_MODULUS) {
+            if let Some(unsupported) = domain.checked_add(1) {
+                assert!(matches!(
+                    sample_queries_from(unsupported, 1, |_| panic!("invalid domain drew")),
+                    Err(Error::QuerySamplingDomainUnsupported { domain_size }) if domain_size == unsupported
+                ));
+            }
+            // Domain p accepts the entire canonical field, including p-1.
+            let mut draws = 0;
+            let selected = sample_queries_from(domain, 1, |counter| {
+                assert_eq!(counter, 0);
+                draws += 1;
+                Ok(GoldilocksDigest384V1::new([GOLDILOCKS_MODULUS - 1; 6]).unwrap())
+            })
+            .unwrap();
+            assert_eq!(selected, [domain - 1]);
+            assert_eq!(draws, 1);
+        }
+    }
+
+    #[test]
+    fn query_sampler_rejected_and_duplicate_sources_exhaust_exactly() {
+        for (desired, words, expected_selected) in
+            [(1, [GOLDILOCKS_MODULUS - 1; 6], 0), (2, [0; 6], 1)]
+        {
+            let mut calls = 0_u32;
+            let error = sample_queries_from(32, desired, |counter| {
+                assert_eq!(counter, calls);
+                calls += 1;
+                Ok(GoldilocksDigest384V1::new(words).unwrap())
+            })
+            .unwrap_err();
+            assert!(matches!(error, Error::QuerySamplingExhausted {
+                domain_size: 32, requested, selected, draws: 64
+            } if requested == desired && selected == expected_selected));
+            assert_eq!(calls, 64);
+        }
+    }
+
+    #[test]
+    fn query_sampler_accepts_the_last_allowed_draw_and_never_draws_one_more() {
+        for first_new_index_draw in [63, 64] {
+            let mut calls = 0_u32;
+            let result = sample_queries_from(32, 2, |counter| {
+                assert_eq!(counter, calls);
+                calls += 1;
+                let word = u64::from(counter >= first_new_index_draw);
+                Ok(GoldilocksDigest384V1::new([word; 6]).unwrap())
+            });
+            assert_eq!(calls, 64);
+            if first_new_index_draw == 63 {
+                assert_eq!(result.unwrap(), [0, 1]);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(Error::QuerySamplingExhausted {
+                        domain_size: 32,
+                        requested: 2,
+                        selected: 1,
+                        draws: 64
+                    })
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn query_sampler_preserves_rejection_lane_order_clamping_and_source_errors() {
+        let mut calls = 0;
+        // p-1 is rejected for domain 32; 33 and 1 have the same accepted index.
+        let selected = sample_queries_from(32, 2, |counter| {
+            assert_eq!(counter, 0, "sampler made an unnecessary second draw");
+            calls += 1;
+            Ok(GoldilocksDigest384V1::new([GOLDILOCKS_MODULUS - 1, 33, 1, 2, 7, 9]).unwrap())
+        })
+        .unwrap();
+        assert_eq!(selected, [1, 2]);
+        assert_eq!(calls, 1);
+        // Large raw targets retain the old min(target, domain) behavior before
+        // applying the supported desired-cardinality bound.
+        assert_eq!(
+            sample_queries_from(5, usize::MAX, |_| {
+                Ok(GoldilocksDigest384V1::new([4, 3, 2, 1, 0, 0]).unwrap())
+            })
+            .unwrap(),
+            [0, 1, 2, 3, 4]
+        );
+        let mut calls = 0;
+        let error = sample_queries_from(32, 2, |counter| {
+            calls += 1;
+            if counter == 2 {
+                Err(Error::QuerySamplingTranscriptCounterExhausted)
+            } else {
+                Ok(GoldilocksDigest384V1::new([0; 6]).unwrap())
+            }
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::QuerySamplingTranscriptCounterExhausted
+        ));
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn query_sampler_engineering_caps_are_fixed_at_supported_cardinalities() {
+        for (desired, expected_draws) in [(1, 64), (8, 64), (136, 1088), (200, 1600), (512, 4096)] {
+            let mut calls = 0;
+            let error = sample_queries_from(1024, desired, |counter| {
+                assert_eq!(counter, calls);
+                calls += 1;
+                Ok(GoldilocksDigest384V1::new([GOLDILOCKS_MODULUS - 1; 6]).unwrap())
+            })
+            .unwrap_err();
+            assert!(matches!(error, Error::QuerySamplingExhausted {
+                domain_size: 1024, requested, selected: 0, draws
+            } if requested == desired && draws == expected_draws));
+            assert_eq!(calls, expected_draws);
+        }
+    }
+
+    #[test]
+    fn query_sampler_matches_legacy_success_and_exact_transcript_state() {
+        // A bounded test-only copy of the former algorithm is an independent
+        // compatibility oracle. It intentionally has no dependency on the new
+        // sampler core/cap and is used only on fixed successful transcripts.
+        fn legacy(domain_size: usize, target: usize, transcript: &mut Transcript) -> Vec<usize> {
+            let desired = target.min(domain_size);
+            let domain = u64::try_from(domain_size).unwrap();
+            let mut indices = BTreeSet::new();
+            for counter in 0_u32..4096 {
+                let tag = format!("{TRANSCRIPT_TAG_QUERY_INDEX}:{counter}");
+                let digest = transcript.challenge_digest(&tag);
+                let rejection_limit = GOLDILOCKS_MODULUS - GOLDILOCKS_MODULUS % domain;
+                for candidate in digest.words() {
+                    if indices.len() == desired {
+                        break;
+                    }
+                    if candidate >= rejection_limit {
+                        continue;
+                    }
+                    indices.insert(usize::try_from(candidate % domain).unwrap());
+                }
+                if indices.len() == desired {
+                    return indices.into_iter().collect();
+                }
+            }
+            panic!("fixed legacy sampler fixture exceeded its test budget");
+        }
+        for (domain, desired) in [(5, 10), (128, 16), (4096, 136), (524_288, 136)] {
+            let mut actual_transcript = sampler_test_transcript();
+            let mut legacy_transcript = actual_transcript.clone();
+            let expected = legacy(domain, desired, &mut legacy_transcript);
+            assert_eq!(
+                sample_queries(domain, desired, &mut actual_transcript).unwrap(),
+                expected
+            );
+            assert_eq!(actual_transcript.state, legacy_transcript.state);
+            assert_eq!(actual_transcript.counter, legacy_transcript.counter);
+        }
+    }
+
+    #[test]
+    fn query_sampler_transcript_counter_errors_without_panic_or_extra_draw() {
+        let mut transcript = sampler_test_transcript();
+        transcript.counter = u64::MAX;
+        let state = transcript.state;
+        for (domain, desired) in [(0, 1), (1, 0)] {
+            assert!(
+                sample_queries(domain, desired, &mut transcript)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(transcript.state, state);
+            assert_eq!(transcript.counter, u64::MAX);
+        }
+        assert!(matches!(
+            sample_queries(1, 1, &mut transcript),
+            Err(Error::QuerySamplingTranscriptCounterExhausted)
+        ));
+        assert_eq!(transcript.state, state);
+        assert_eq!(transcript.counter, u64::MAX);
+        transcript.counter = u64::MAX - 1;
+        // Domain one guarantees that every canonical digest lane selects zero.
+        assert_eq!(sample_queries(1, 1, &mut transcript).unwrap(), [0]);
+        assert_eq!(transcript.counter, u64::MAX);
+    }
+
     #[test]
     fn sampled_queries_are_sorted_and_unique() {
         let mut transcript = Transcript::initialise(
@@ -3657,7 +5419,7 @@ mod tests {
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
-        let indices = super::sample_queries(128, 16, &mut transcript);
+        let indices = super::sample_queries(128, 16, &mut transcript).unwrap();
         assert_eq!(indices.len(), 16);
         assert!(indices.windows(2).all(|window| window[0] < window[1]));
     }
@@ -3670,7 +5432,7 @@ mod tests {
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
-        let indices = super::sample_queries(5, 10, &mut transcript);
+        let indices = super::sample_queries(5, 10, &mut transcript).unwrap();
         assert_eq!(indices.len(), 5);
         let unique: BTreeSet<_> = indices.iter().copied().collect();
         assert_eq!(unique.len(), indices.len());
@@ -3803,7 +5565,7 @@ mod tests {
             params.omega_coset,
             &mut transcript,
         )
-        .expect_err("zero reductions cannot expose an arity-sized terminal layer");
+        .expect_err("zero reductions cannot expose the complete terminal layer");
         assert!(matches!(error, super::Error::FriReductionLimit { .. }));
     }
     #[test]
@@ -3827,28 +5589,259 @@ mod tests {
         );
     }
     #[test]
-    fn fri_layer_commitment_changes_when_values_change() {
-        let commitment = |round, values: &[GoldilocksFp4V1]| {
-            let leaves = hash_fri_leaves_with_mode(round, values, 2, ExecutionMode::Cpu)
-                .expect("canonical FRI leaves");
-            merkle_root_with_mode(
-                &leaves,
-                MerkleTreeRoleV1::Fri(u32::try_from(round).unwrap()),
+    fn fri_terminal_leaf_commits_every_value_in_domain_order() {
+        let values = fp4_values(&[1, 2, 3, 4]);
+        let leaves = hash_fri_terminal_leaves(7, &values).expect("complete terminal leaf");
+        assert_eq!(leaves, [hash_fri_chunk(7, 0, &values).unwrap()]);
+        for index in 0..values.len() {
+            let mut mutated = values.clone();
+            mutated[index] = mutated[index].add(fp4(1));
+            assert_ne!(leaves, hash_fri_terminal_leaves(7, &mutated).unwrap());
+        }
+        let mut reordered = values.clone();
+        reordered.swap(0, 1);
+        assert_ne!(leaves, hash_fri_terminal_leaves(7, &reordered).unwrap());
+        for length in [0, 3, 8] {
+            assert!(matches!(
+                hash_fri_terminal_leaves(7, &vec![fp4(0); length]),
+                Err(Error::FriDomainSize { .. })
+            ));
+        }
+    }
+    #[test]
+    fn retained_fri_layers_preserve_full_field_roots_transcript_and_opening_bytes() {
+        for (length, offset, mode) in [
+            (1, 7, ExecutionMode::Cpu),
+            (2, 11, ExecutionMode::Auto),
+            (4, 7, ExecutionMode::Cpu),
+            (32, 11, ExecutionMode::Auto),
+            (128, 7, ExecutionMode::Cpu),
+        ] {
+            let mut params = fastpq_isi::FASTPQ_FINAL_V1;
+            params.omega_coset = offset;
+            let mut transcript =
+                Transcript::initialise(&PublicIO::default(), params.name, 1, TRANSCRIPT_TAG_INIT)
+                    .unwrap();
+            let mut reference = transcript.clone();
+            let values = (0..length)
+                .map(|index| {
+                    let value = index as u64;
+                    GoldilocksFp4V1::new([value + 1, value + 2, value + 3, value + 4]).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut retained =
+                fold_with_fri_opening_layers(&values, &params, &mut transcript, mode).unwrap();
+            assert_eq!(retained.layer_values[0], values);
+            let mut domain = FriDomain::from_lde_parameters(
+                params.lde_root,
+                params.lde_log_size,
+                length,
+                offset,
+            )
+            .unwrap();
+            // Rebuild every commitment independently and replay the original
+            // root/beta schedule, including all four extension-field lanes.
+            for (round, layer) in retained.layer_values.iter().enumerate() {
+                let terminal = round + 1 == retained.layer_values.len();
+                let leaves = if terminal {
+                    hash_fri_terminal_leaves(round, layer).unwrap()
+                } else {
+                    hash_fri_leaves_with_mode(round, layer, 2, ExecutionMode::Cpu).unwrap()
+                };
+                let root = merkle_root_with_mode(
+                    &leaves,
+                    MerkleTreeRoleV1::Fri(round as u32),
+                    ExecutionMode::Cpu,
+                )
+                .unwrap();
+                assert_eq!(retained.roots[round], root);
+                if terminal {
+                    reference.append_fri_final(root);
+                } else {
+                    reference.append_fri_layer(round, root);
+                    let beta = reference.challenge_beta(round);
+                    assert_eq!(retained.betas[round], beta);
+                    assert_eq!(
+                        retained.layer_values[round + 1],
+                        fold_round(layer, 2, beta, domain).unwrap(),
+                    );
+                    domain = domain.folded(2);
+                }
+            }
+            assert_eq!(transcript.state, reference.state);
+            let sampled = sample_queries(length, 136, &mut transcript).unwrap();
+            assert_eq!(
+                sampled,
+                sample_queries(length, 136, &mut reference).unwrap()
+            );
+            assert_eq!(transcript.state, reference.state);
+            assert_eq!(transcript.counter, reference.counter);
+            assert_eq!(
+                retained.opening_trees.as_ref().unwrap().tree_build_count(),
+                0
+            );
+            for count in [0, 1, 7, 136] {
+                let indices = sampled
+                    .iter()
+                    .copied()
+                    .cycle()
+                    .take(count)
+                    .collect::<Vec<_>>();
+                let expected =
+                    open_fri_query_chains(&retained.layer_values, &indices, 2, ExecutionMode::Cpu)
+                        .unwrap();
+                let actual = retained.open_query_chains(&indices, 2).unwrap();
+                assert_eq!(actual, expected);
+                assert_eq!(
+                    norito::core::to_bytes(&actual).unwrap(),
+                    norito::core::to_bytes(&expected).unwrap(),
+                );
+                assert_eq!(
+                    retained.opening_trees.as_ref().unwrap().tree_build_count(),
+                    0
+                );
+                for opening in actual {
+                    assert_eq!(opening.final_values, *retained.layer_values.last().unwrap());
+                    assert_eq!(opening.final_merkle_path.len(), 1);
+                    let round = retained.layer_values.len() - 1;
+                    let terminal = hash_fri_chunk(round, 0, &opening.final_values).unwrap();
+                    assert_eq!(opening.final_merkle_path[0].as_fastpq(), terminal);
+                    assert_eq!(
+                        retained.roots[round],
+                        merkle_node_hash(
+                            MerkleTreeRoleV1::Fri(round as u32),
+                            1,
+                            0,
+                            terminal,
+                            terminal
+                        )
+                        .unwrap(),
+                    );
+                }
+            }
+            // Explicit duplicate and upper-half indices exercise occurrence
+            // order even when the transcript happens to sample another set.
+            let indices = [length - 1, length / 2, 0, length - 1];
+            assert_eq!(
+                retained.open_query_chains(&indices, 2).unwrap(),
+                open_fri_query_chains(&retained.layer_values, &indices, 2, mode).unwrap(),
+            );
+            assert_eq!(
+                retained.opening_trees.as_ref().unwrap().tree_build_count(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn retained_fri_opening_errors_match_legacy_empty_arity_and_index_priority() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        for length in [0, 1, 4, 32] {
+            let mut transcript =
+                Transcript::initialise(&PublicIO::default(), params.name, 1, TRANSCRIPT_TAG_INIT)
+                    .unwrap();
+            let mut retained = fold_with_fri_opening_layers(
+                &vec![fp4(42); length],
+                &params,
+                &mut transcript,
                 ExecutionMode::Cpu,
             )
-            .expect("canonical FRI layer commitment")
-        };
-        let values = fp4_values(&[1, 2, 3, 4]);
-        let original = commitment(0, &values);
-        assert_eq!(original, commitment(0, &values));
-        assert_ne!(original, commitment(1, &values));
-        for coefficient in 0..4 {
-            let mut changed = values.clone();
-            let mut coefficients = changed[3].coefficients();
-            coefficients[coefficient] += 1;
-            changed[3] = GoldilocksFp4V1::new(coefficients).unwrap();
-            assert_ne!(original, commitment(0, &changed));
+            .unwrap();
+            for arity in [2, 4] {
+                for indices in [
+                    vec![],
+                    vec![length, 0],
+                    vec![usize::MAX, length],
+                    vec![0, length],
+                ] {
+                    let expected = open_fri_query_chains(
+                        &retained.layer_values,
+                        &indices,
+                        arity,
+                        ExecutionMode::Cpu,
+                    );
+                    let actual = retained.open_query_chains(&indices, arity);
+                    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+                }
+            }
+            if length == 0 {
+                assert!(retained.opening_trees.is_none());
+                assert!(matches!(
+                    retained.open_query_chains(&[], 2),
+                    Err(Error::FriDomainSize { length: 0, .. }),
+                ));
+            } else {
+                assert_eq!(
+                    retained.opening_trees.as_ref().unwrap().tree_build_count(),
+                    0
+                );
+            }
         }
+    }
+
+    #[test]
+    fn fri_terminal_query_opens_the_complete_four_point_domain() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        let mut transcript =
+            Transcript::initialise(&PublicIO::default(), params.name, 1, TRANSCRIPT_TAG_INIT)
+                .unwrap();
+        let result = fold_with_fri_opening_layers(
+            &[fp4(42); 8],
+            &params,
+            &mut transcript,
+            ExecutionMode::Cpu,
+        )
+        .expect("binary fold to four terminal points");
+        assert_eq!(
+            result.layer_values.iter().map(Vec::len).collect::<Vec<_>>(),
+            [8, 4]
+        );
+        assert_eq!(result.betas.len(), 1);
+        let queries =
+            open_fri_query_chains(&result.layer_values, &[0, 3, 4, 7], 2, ExecutionMode::Cpu)
+                .expect("complete terminal openings");
+        let terminal_values = result.layer_values.last().unwrap();
+        for query in queries {
+            assert_eq!(query.final_values, *terminal_values);
+            assert_eq!(query.final_merkle_path.len(), 1);
+            assert_eq!(query.final_index, query.initial_index % 4);
+            let leaf = hash_fri_chunk(1, 0, &query.final_values).unwrap();
+            assert!(
+                verify_merkle_path_for_role(
+                    MerkleTreeRoleV1::Fri(1),
+                    result.roots[1],
+                    leaf,
+                    0,
+                    &query
+                        .final_merkle_path
+                        .iter()
+                        .map(|digest| digest.as_fastpq())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap()
+            );
+        }
+    }
+    #[test]
+    fn transcript_initialisation_separates_the_quotient_integer_and_terminal_schema() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        let public_io = PublicIO::default();
+        let transcript =
+            Transcript::initialise(&public_io, params.name, 1, TRANSCRIPT_TAG_INIT).unwrap();
+        let old_payload = norito::core::to_bytes(&(1_u16, params.name, public_io.clone())).unwrap();
+        let old_state = hash_bytes_v1(
+            TRANSCRIPT_ROLE_V1,
+            b"initialise",
+            0,
+            0,
+            0,
+            &[TRANSCRIPT_TAG_INIT.as_bytes(), &old_payload],
+        )
+        .unwrap();
+        assert_ne!(transcript.state, old_state);
+        let repeated =
+            Transcript::initialise(&public_io, params.name, 1, TRANSCRIPT_TAG_INIT).unwrap();
+        assert_eq!(transcript.state, repeated.state);
     }
     #[test]
     fn fri_folding_reduces_layer_length() {
@@ -3872,7 +5865,7 @@ mod tests {
         )
         .expect("fri folding");
         assert_eq!(layers.len(), betas.len() + 1);
-        assert_eq!(betas.len(), 3);
+        assert_eq!(betas.len(), 2);
         let mut transcript_again = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
@@ -3982,7 +5975,7 @@ mod tests {
         let (layers, betas) = super::fold_with_fri(
             &evaluations,
             params.fri.arity,
-            3,
+            4,
             params.lde_root,
             params.lde_log_size,
             params.omega_coset,
@@ -4007,7 +6000,7 @@ mod tests {
         )
         .expect("reference FRI domain");
         let mut round = 0usize;
-        while current.len() > arity && round < 3 {
+        while current.len() > 4 && round < 4 {
             let root = reference_fri_layer_commitment(round, &current);
             reference_transcript.append_fri_layer(round, root);
             reference_layers.push(root);
@@ -4018,7 +6011,13 @@ mod tests {
             domain = domain.folded(round_arity);
             round += 1;
         }
-        let final_root = reference_fri_layer_commitment(round, &current);
+        let terminal_leaf = hash_fri_chunk(round, 0, &current).expect("complete terminal leaf");
+        let final_root = merkle_root_with_mode(
+            &[terminal_leaf],
+            MerkleTreeRoleV1::Fri(round as u32),
+            ExecutionMode::Cpu,
+        )
+        .expect("complete terminal root");
         reference_transcript.append_fri_final(final_root);
         reference_layers.push(final_root);
         assert_eq!(layers, reference_layers);
@@ -4041,7 +6040,7 @@ mod tests {
         let (baseline_layers, _) = super::fold_with_fri(
             &evaluations,
             params.fri.arity,
-            3,
+            4,
             params.lde_root,
             params.lde_log_size,
             params.omega_coset,
@@ -4067,7 +6066,7 @@ mod tests {
         )
         .expect("reference FRI domain");
         let mut round = 0usize;
-        while current.len() > arity && round < 3 {
+        while current.len() > 4 && round < 4 {
             let root = reference_fri_layer_commitment(round, &current);
             reference_transcript.append_fri_layer(round, root);
             mutated_layers.push(root);
@@ -4077,7 +6076,13 @@ mod tests {
             domain = domain.folded(round_arity);
             round += 1;
         }
-        let final_root = reference_fri_layer_commitment(round, &current);
+        let terminal_leaf = hash_fri_chunk(round, 0, &current).expect("complete terminal leaf");
+        let final_root = merkle_root_with_mode(
+            &[terminal_leaf],
+            MerkleTreeRoleV1::Fri(round as u32),
+            ExecutionMode::Cpu,
+        )
+        .expect("complete terminal root");
         reference_transcript.append_fri_final(final_root);
         mutated_layers.push(final_root);
         assert_ne!(baseline_layers, mutated_layers);

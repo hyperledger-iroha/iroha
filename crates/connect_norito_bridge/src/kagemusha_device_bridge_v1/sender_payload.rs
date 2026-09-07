@@ -9,21 +9,19 @@
 //! native operation index and hardware service; never substitute a host map.
 
 use iroha_core::zk::kagemusha_v1_state::{
-    DevicePolicyBindingV1, DigestV1, DurableOutgoingEnvelopeV1, HardwareEpochV1,
-    HardwareTransitionStatementV1, KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1, KagemushaLaneIdV1,
-    KagemushaRedemptionTerminalReceiptV1, KagemushaStateContextV1, KagemushaTransitionKindV1,
-    PreparedOutgoingCandidateV1, PreparedOutgoingRecoveryViewV1,
+    DigestV1, DurableOutgoingEnvelopeV1, HardwareTransitionStatementV1,
+    KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1, KagemushaRedemptionTerminalReceiptV1,
+    KagemushaTransitionKindV1, PreparedOutgoingCandidateV1, PreparedOutgoingRecoveryViewV1,
     VerifiedKagemushaRedemptionReleaseV1,
 };
 use iroha_data_model::{
     account::AccountId,
     kagemusha::{
-        KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_ASSET_SCALE_MAX_V1,
-        KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
-        KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1, KagemushaAcknowledgementV1,
-        KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaLifecycleBindingV1,
-        KagemushaOperationKindV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
-        KagemushaRedemptionVoucherV1, kagemusha_ciphertext_digest_v1,
+        KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+        KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1,
+        KagemushaAcknowledgementV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+        KagemushaLifecycleBindingV1, KagemushaOperationKindV1, KagemushaPaymentRequestV1,
+        KagemushaPaymentV1, KagemushaRedemptionVoucherV1, kagemusha_ciphertext_digest_v1,
         kagemusha_liability_pool_id_v1,
     },
 };
@@ -33,6 +31,10 @@ use norito::{
 };
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
+use iroha_core::zk::kagemusha_v1_state::{
+    DevicePolicyBindingV1, HardwareEpochV1, KagemushaLaneIdV1, KagemushaStateContextV1,
+};
 #[cfg(test)]
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
@@ -73,113 +75,42 @@ pub enum SenderErrorV1 {
 }
 type Result<T> = std::result::Result<T, SenderErrorV1>;
 
-/// Identity selectors authenticated by the native wallet session.
+/// Core-owned sender creation context shared byte-for-byte with the guarded operation index.
 ///
-/// The receiver credential in a payment request is a different device's
-/// credential. It must not be mistaken for this sender credential/epoch.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-wallet-context")]
-pub struct SenderWalletContextV1 {
-    /// Stable network, device-lane, asset and scale identity.
-    pub lane: KagemushaLaneIdV1,
-    /// Authenticated proof release, asset incarnation and hardware policy scope.
-    pub release: KagemushaStateContextV1,
-    /// Native-authenticated sender credential identity.
-    pub credential_id: DigestV1,
-    /// Full-width hardware generation and its exact epoch identity.
-    pub hardware_epoch: HardwareEpochV1,
-    /// Native key-reference and policy identity bound to this epoch.
-    pub device_policy_binding: DevicePolicyBindingV1,
-    /// Release/profile-governed verifier key for Core-to-hardware monetary authorizations.
-    pub core_authorization_key_reference: DigestV1,
+/// These are public selectors. The native session must authenticate the sender credential and
+/// Core authorization key; receiver credentials and caller-supplied key references cannot do so.
+pub use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingOperationContextV1 as SenderWalletContextV1;
+
+fn context_error(
+    error: iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingOperationIndexErrorV1,
+) -> SenderErrorV1 {
+    use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingOperationIndexErrorV1 as Error;
+    match error {
+        Error::CanonicalEncoding => SenderErrorV1::CanonicalEncoding,
+        Error::Conflict => SenderErrorV1::Conflict,
+        Error::InvalidStage | Error::RevisionOverflow => SenderErrorV1::StateRegression,
+        Error::StalePage | Error::SnapshotIntegrity => SenderErrorV1::Snapshot,
+        Error::InvalidBinding => SenderErrorV1::Binding,
+    }
 }
 
-impl SenderWalletContextV1 {
-    /// Check canonical public shape and bindings without granting native authority.
-    pub fn validate_shape(&self) -> Result<()> {
-        for value in [
-            self.lane.network_id.as_bytes(),
-            &self.lane.device_lane_id,
-            &self.release.suite_id,
-            &self.release.vk_digest,
-            &self.release.release_id,
-            &self.release.hardware_profile_id,
-            &self.credential_id,
-            &self.hardware_epoch.epoch_id,
-            &self.device_policy_binding.device_key_reference,
-            &self.device_policy_binding.hardware_policy_id,
-            &self.core_authorization_key_reference,
-        ] {
-            nonzero(value)?;
-        }
-        ensure(
-            self.release.protocol_version == VERSION
-                && self.release.policy_epoch != 0
-                && self.hardware_epoch.generation != 0
-                && self.lane.scale <= KAGEMUSHA_ASSET_SCALE_MAX_V1,
-        )?;
-        self.release
-            .asset_incarnation
-            .validate()
-            .map_err(|_| SenderErrorV1::Binding)?;
-        self.lane
-            .normalized_asset_id()
-            .map_err(|_| SenderErrorV1::Binding)?;
-        Ok(())
-    }
+fn context_pool_id(context: &SenderWalletContextV1) -> Result<[u8; 32]> {
+    kagemusha_liability_pool_id_v1(
+        &context.lane.network_id,
+        &context.lane.asset,
+        context.release.asset_incarnation,
+    )
+    .map_err(|_| SenderErrorV1::Binding)
+}
 
-    /// Compare against a context obtained from authenticated native state.
-    /// Passing another host-decoded context does not authenticate either value.
-    pub fn validate_against_native(&self, native: &Self) -> Result<()> {
-        self.validate_shape()?;
-        native.validate_shape()?;
-        ensure(self == native)
-    }
-
-    /// Check an authenticated retained creation context against the current native
-    /// wallet. This establishes scope and ordering only; the native session must
-    /// independently authenticate the retained record and its historical authority.
-    /// Stable lane and asset incarnation survive ordinary credential/suite rotation.
-    pub fn validate_retained_against_native(&self, native: &Self) -> Result<()> {
-        self.validate_shape()?;
-        native.validate_shape()?;
-        ensure(
-            self.lane == native.lane
-                && self.release.asset_incarnation == native.release.asset_incarnation
-                && self.hardware_epoch.generation <= native.hardware_epoch.generation
-                && (self.hardware_epoch.generation != native.hardware_epoch.generation
-                    || self.hardware_epoch.epoch_id == native.hardware_epoch.epoch_id),
-        )
-    }
-
-    fn pool_id(&self) -> Result<[u8; 32]> {
-        kagemusha_liability_pool_id_v1(
-            &self.lane.network_id,
-            &self.lane.asset,
-            self.release.asset_incarnation,
-        )
-        .map_err(|_| SenderErrorV1::Binding)
-    }
-
-    fn validate_lifecycle(&self, lifecycle: &KagemushaLifecycleBindingV1) -> Result<()> {
-        lifecycle
-            .validate()
-            .map_err(|_| SenderErrorV1::PublicShape)?;
-        ensure(
-            lifecycle.version == VERSION
-                && lifecycle.network_id == self.lane.network_id
-                && lifecycle.protocol_version == self.release.protocol_version
-                && lifecycle.suite_id == self.release.suite_id
-                && lifecycle.vk_digest == self.release.vk_digest
-                && lifecycle.release_id == self.release.release_id
-                && lifecycle.asset == self.lane.asset
-                && lifecycle.asset_incarnation == self.release.asset_incarnation
-                && lifecycle.scale == self.lane.scale
-                && lifecycle.liability_pool_id == self.pool_id()?
-                && lifecycle.hardware_profile_id == self.release.hardware_profile_id
-                && lifecycle.policy_epoch == self.release.policy_epoch,
-        )
-    }
+fn validate_context_lifecycle(
+    context: &SenderWalletContextV1,
+    lifecycle: &KagemushaLifecycleBindingV1,
+) -> Result<()> {
+    lifecycle
+        .validate()
+        .map_err(|_| SenderErrorV1::PublicShape)?;
+    context.validate_lifecycle(lifecycle).map_err(context_error)
 }
 
 /// Only public inputs fixed before outgoing preparation. Variant order is wire order.
@@ -211,7 +142,7 @@ impl SenderPublicInputsV1 {
 
     /// Check canonical public shape and bindings without granting native authority.
     pub fn validate_shape(&self, context: &SenderWalletContextV1) -> Result<()> {
-        context.validate_shape()?;
+        context.validate_shape().map_err(context_error)?;
         match self {
             Self::SendSplit { .. } => {
                 let request = self.send_request()?;
@@ -221,7 +152,7 @@ impl SenderPublicInputsV1 {
                         && request.asset == context.lane.asset
                         && request.asset_incarnation == context.release.asset_incarnation
                         && request.scale == context.lane.scale
-                        && request.liability_pool_id == context.pool_id()?,
+                        && request.liability_pool_id == context_pool_id(context)?,
                 )
             }
             Self::RedeemSplit { amount, .. } => ensure(*amount != 0),
@@ -482,6 +413,7 @@ fn validate_hardware_authorization_statement(
     let statement = &authorization.hardware_transition_statement;
     ensure(
         statement.version == VERSION
+            && statement.amount != 0
             && statement.lane == context.lane
             && statement.predecessor_epoch == context.hardware_epoch
             && statement.successor_epoch == context.hardware_epoch
@@ -672,7 +604,7 @@ impl SenderCommandV1 {
     pub fn validate_shape(&self) -> Result<()> {
         ensure(self.version == VERSION && self.operation == self.body.operation())?;
         nonzero(&self.operation_id)?;
-        self.context.validate_shape()?;
+        self.context.validate_shape().map_err(context_error)?;
         if let Some(digest) = self.expected_inputs_digest()? {
             nonzero(&digest)?;
         }
@@ -739,6 +671,7 @@ impl SenderCommandV1 {
                         && authorization.operation_id == self.operation_id
                         && authorization.inputs_digest == *inputs_digest
                         && authorization.release_id == self.context.release.release_id
+                        && authorization.candidate_digest == metadata.candidate_digest
                         && authorization.outcome_id == metadata.outcome_id
                         && authorization.transition_nullifier == metadata.terminal_nullifier
                         && authorization.envelope_digest == Some(*envelope_digest)
@@ -821,7 +754,8 @@ impl SenderRecordV1 {
     /// Check canonical public shape and bindings without granting native authority.
     pub fn validate_shape(&self, native_context: &SenderWalletContextV1) -> Result<()> {
         self.context
-            .validate_retained_against_native(native_context)?;
+            .validate_retained_against_native(native_context)
+            .map_err(context_error)?;
         for value in [
             &self.operation_id,
             &self.inputs_digest,
@@ -959,13 +893,19 @@ impl SenderReplyV1 {
                 }
         ) {
             // A historical selector can recover existing work, never prepare new work.
-            command.context.validate_against_native(native_context)?;
+            command
+                .context
+                .validate_against_native(native_context)
+                .map_err(context_error)?;
         } else {
             command
                 .context
-                .validate_retained_against_native(native_context)?;
+                .validate_retained_against_native(native_context)
+                .map_err(context_error)?;
         }
-        self.context.validate_against_native(native_context)?;
+        self.context
+            .validate_against_native(native_context)
+            .map_err(context_error)?;
         ensure(
             self.version == VERSION
                 && self.operation == command.operation
@@ -1244,7 +1184,9 @@ pub fn validate_index_progress_v1(
     next_context: &SenderWalletContextV1,
     next_revision: u128,
 ) -> Result<()> {
-    previous_context.validate_retained_against_native(next_context)?;
+    previous_context
+        .validate_retained_against_native(next_context)
+        .map_err(context_error)?;
     if next_revision < previous_revision {
         return Err(SenderErrorV1::StateRegression);
     }
@@ -1426,7 +1368,7 @@ pub fn validate_core_recovery_view_v1(
             },
         ) => {
             let r = inputs.send_request()?;
-            record.context.validate_lifecycle(lifecycle)?;
+            validate_context_lifecycle(&record.context, lifecycle)?;
             output
                 .validate_shape_against(&r)
                 .map_err(|_| SenderErrorV1::PublicShape)?;
@@ -1450,7 +1392,7 @@ pub fn validate_core_recovery_view_v1(
             },
             PreparedOutgoingRecoveryViewV1::Redemption { statement, .. },
         ) => {
-            record.context.validate_lifecycle(&statement.lifecycle)?;
+            validate_context_lifecycle(&record.context, &statement.lifecycle)?;
             statement
                 .validate_shape()
                 .map_err(|_| SenderErrorV1::PublicShape)?;
@@ -1565,7 +1507,7 @@ fn envelope_metadata(
             bound(bytes, KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1)?;
             let voucher = KagemushaRedemptionVoucherV1::decode_canonical_shape_exact(bytes)
                 .map_err(|_| SenderErrorV1::PublicShape)?;
-            context.validate_lifecycle(&voucher.statement.lifecycle)?;
+            validate_context_lifecycle(context, &voucher.statement.lifecycle)?;
             ensure(
                 voucher.statement.amount == *amount
                     && &voucher.statement.beneficiary == beneficiary,
@@ -1718,7 +1660,7 @@ fn hardware_authorization_test_key() -> Option<(SigningKey, KagemushaDevicePubli
 }
 
 #[cfg(test)]
-fn canonical_hardware_authorization_for_tests(
+pub(crate) fn canonical_hardware_authorization_for_tests(
     purpose: SenderHardwareAuthorizationPurposeV1,
     operation_id: [u8; 32],
     inputs_digest: [u8; 32],
@@ -1955,6 +1897,230 @@ pub(crate) fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sender_context_and_preimages_match_core_and_shared_archive() {
+        use crate::kagemusha_core_coordinator_v1::KagemushaCoreSenderPreparationArchiveV1;
+        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputPreimageV1;
+
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/offline/kagemusha_core_coordinator_archives_v1.json"
+        )))
+        .unwrap();
+        let bytes = hex::decode(fixture["preparation"]["norito_hex"].as_str().unwrap()).unwrap();
+        let preparation =
+            KagemushaCoreSenderPreparationArchiveV1::decode_canonical_exact(&bytes).unwrap();
+        assert_eq!(preparation.encode_canonical().unwrap(), bytes);
+        let command = SenderCommandV1::decode_canonical_exact(
+            5,
+            preparation.operation_id,
+            &canonical_command_body_for_tests(5).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(command.context, preparation.context);
+        assert_eq!(
+            norito::encode_canonical(&command.context).unwrap(),
+            norito::encode_canonical(&preparation.context).unwrap(),
+        );
+        let SenderCommandBodyV1::Prepare { inputs: send } = command.body else {
+            panic!("prepare fixture body")
+        };
+        let beneficiary = send.send_request().unwrap().recipient;
+        let redemption = SenderPublicInputsV1::RedeemSplit {
+            amount: 7,
+            beneficiary,
+        };
+        for inputs in [send, redemption] {
+            let bridge = SenderPublicInputPreimageV1 {
+                version: VERSION,
+                operation_id: preparation.operation_id,
+                context: preparation.context.clone(),
+                inputs,
+            };
+            let encoded = norito::encode_canonical(&bridge).unwrap();
+            let core: KagemushaOutgoingPublicInputPreimageV1 =
+                norito::decode_canonical(&encoded).unwrap();
+            assert_eq!(core.context, bridge.context);
+            assert_eq!(norito::encode_canonical(&core).unwrap(), encoded);
+            let digest = core.canonical_digest().unwrap();
+            assert_eq!(digest, bridge.canonical_digest().unwrap());
+            if matches!(bridge.inputs, SenderPublicInputsV1::SendSplit { .. }) {
+                assert_eq!(digest, preparation.inputs_digest);
+            }
+            let mut substituted = core.clone();
+            substituted.context.core_authorization_key_reference[0] ^= 1;
+            assert!(substituted.context.validate_shape().is_ok());
+            assert!(
+                substituted
+                    .context
+                    .validate_against_native(&core.context)
+                    .is_err()
+            );
+            assert_ne!(substituted.canonical_digest().unwrap(), digest);
+            substituted.context.core_authorization_key_reference = [0; 32];
+            assert!(substituted.canonical_digest().is_err());
+        }
+    }
+
+    #[test]
+    fn sender_reservation_binding_matches_core_and_both_mobile_sdks() {
+        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/offline/kagemusha_sender_reservation_v1.json"
+        )))
+        .unwrap();
+        let bytes = |field: &str| hex::decode(fixture[field].as_str().unwrap()).unwrap();
+        let request_bytes = bytes("send_request_hex");
+        KagemushaPaymentRequestV1::decode_canonical_exact(&request_bytes).unwrap();
+        let beneficiary_bytes = bytes("redeem_beneficiary_payload_hex");
+        let beneficiary = AccountId::decode(&mut beneficiary_bytes.as_slice()).unwrap();
+        assert_eq!(beneficiary.encode(), beneficiary_bytes);
+        let cases = [
+            (
+                "send_binding_hex",
+                SenderPublicInputsV1::SendSplit {
+                    request: request_bytes.clone(),
+                },
+                KagemushaOutgoingPublicInputsV1::SendSplit {
+                    request: request_bytes.clone(),
+                },
+            ),
+            (
+                "redeem_binding_hex",
+                SenderPublicInputsV1::RedeemSplit {
+                    amount: fixture["redeem_amount_decimal"]
+                        .as_str()
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                    beneficiary: beneficiary.clone(),
+                },
+                KagemushaOutgoingPublicInputsV1::RedeemSplit {
+                    amount: fixture["redeem_amount_decimal"]
+                        .as_str()
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                    beneficiary,
+                },
+            ),
+        ];
+        for (field, bridge, core) in cases {
+            let shared = bytes(field);
+            assert_eq!(norito::encode_canonical(&bridge).unwrap(), shared);
+            assert_eq!(norito::encode_canonical(&core).unwrap(), shared);
+            assert_eq!(
+                norito::decode_canonical::<SenderPublicInputsV1>(&shared).unwrap(),
+                bridge
+            );
+            assert_eq!(
+                norito::decode_canonical::<KagemushaOutgoingPublicInputsV1>(&shared).unwrap(),
+                core
+            );
+            let mut trailing = shared.clone();
+            trailing.push(0);
+            assert!(norito::decode_canonical::<SenderPublicInputsV1>(&trailing).is_err());
+        }
+        // A reservation is a tagged input, never the old untyped request/amount concatenation.
+        assert!(norito::decode_canonical::<SenderPublicInputsV1>(&request_bytes).is_err());
+        let mut retired_redemption = 7_u128.to_le_bytes().to_vec();
+        retired_redemption.extend(bytes("redeem_beneficiary_payload_hex"));
+        assert!(norito::decode_canonical::<SenderPublicInputsV1>(&retired_redemption).is_err());
+    }
+
+    #[test]
+    fn sender_commit_rejects_resigned_zero_amount_for_both_monetary_kinds() {
+        use crate::kagemusha_core_coordinator_v1::{
+            KagemushaCoreSenderCandidateArchiveV1, KagemushaCoreSenderPreparationArchiveV1,
+        };
+
+        let bytes = canonical_command_body_for_tests(7).expect("signed commit fixture");
+        let original = SenderCommandV1::decode_canonical_exact(7, [7; 32], &bytes)
+            .expect("canonical commit fixture");
+        let SenderCommandBodyV1::Commit {
+            selector,
+            candidate_digest,
+            hardware_authorization,
+        } = &original.body
+        else {
+            panic!("commit fixture body")
+        };
+        let original_authorization =
+            SenderHardwareAuthorizationV1::decode_canonical_exact(hardware_authorization)
+                .expect("canonical signed authorization");
+        let (signing_key, _) = hardware_authorization_test_key().expect("fixture signing key");
+
+        for kind in [
+            KagemushaTransitionKindV1::SendSplit,
+            KagemushaTransitionKindV1::RedeemSplit,
+        ] {
+            for amount in [1, 0] {
+                let mut authorization = original_authorization.clone();
+                authorization.hardware_transition_statement.kind = kind;
+                authorization.hardware_transition_statement.amount = amount;
+                authorization.authorization_id = authorization
+                    .expected_authorization_id()
+                    .expect("mutated authorization preimage");
+                let signature: P256Signature = signing_key.sign(&authorization.authorization_id);
+                let signature = signature.normalize_s().unwrap_or(signature);
+                authorization.authenticator =
+                    KagemushaDeviceSignatureV1::from_raw_bytes(signature.to_bytes().as_ref())
+                        .expect("canonical low-S signature");
+                let authorization_bytes = norito::encode_canonical(&authorization)
+                    .expect("canonical mutated authorization");
+                // The zero case must fail monetary validation, not signature or codec checks.
+                SenderHardwareAuthorizationV1::decode_canonical_exact(&authorization_bytes)
+                    .expect("re-signed authorization must authenticate for either amount");
+
+                let mut command = original.clone();
+                command.body = SenderCommandBodyV1::Commit {
+                    selector: selector.clone(),
+                    candidate_digest: *candidate_digest,
+                    hardware_authorization: authorization_bytes.clone(),
+                };
+                let candidate = KagemushaCoreSenderCandidateArchiveV1 {
+                    version: VERSION,
+                    preparation: KagemushaCoreSenderPreparationArchiveV1 {
+                        version: VERSION,
+                        operation_id: command.operation_id,
+                        context: command.context.clone(),
+                        inputs_digest: selector.inputs_digest,
+                    },
+                    selector: selector.clone(),
+                    candidate_digest: *candidate_digest,
+                    hardware_commit_authorization: authorization_bytes,
+                };
+                let expected_valid = amount != 0;
+                assert_eq!(
+                    validate_hardware_authorization_statement(
+                        &authorization,
+                        &command.context,
+                        None,
+                    )
+                    .is_ok(),
+                    expected_valid,
+                );
+                assert_eq!(command.validate_shape().is_ok(), expected_valid);
+                assert_eq!(command.encode_canonical().is_ok(), expected_valid);
+                let raw_command = norito::encode_canonical(&command).unwrap();
+                assert_eq!(
+                    SenderCommandV1::decode_canonical_exact(7, [7; 32], &raw_command).is_ok(),
+                    expected_valid,
+                );
+                assert_eq!(candidate.validate_shape().is_ok(), expected_valid);
+                assert_eq!(candidate.encode_canonical().is_ok(), expected_valid);
+                let raw_candidate = norito::encode_canonical(&candidate).unwrap();
+                assert_eq!(
+                    KagemushaCoreSenderCandidateArchiveV1::decode_canonical_exact(&raw_candidate)
+                        .is_ok(),
+                    expected_valid,
+                );
+            }
+        }
+    }
 
     fn fixture_bytes(name: &str) -> Vec<u8> {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(

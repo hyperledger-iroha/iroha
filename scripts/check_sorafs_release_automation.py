@@ -227,9 +227,8 @@ REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "--provenance-certificate-identity",
         "--provenance-oidc-issuer",
         "--provenance-verification-public-key-hex",
-        REQUIRED_RELEASE_SIGNING_PROVIDER,
-        REQUIRED_RELEASE_SIGNING_BACKEND,
-        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
+        "--signed-manifest-source-context",
+        "--signed-manifest-source-context-sha256",
     ),
     "scripts/examples/sorafs_reference_sdk_release_evidence.args.example": (
         "--require-kind release_archive,signed_manifest,supply_chain,"
@@ -239,12 +238,29 @@ REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "--provenance-certificate-identity",
         "--provenance-oidc-issuer",
         "--provenance-verification-public-key-hex",
-        REQUIRED_RELEASE_SIGNING_PROVIDER,
-        REQUIRED_RELEASE_SIGNING_BACKEND,
-        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
+        "--signed-manifest-source-context",
+        "--signed-manifest-source-context-sha256",
+    ),
+    "scripts/examples/sorafs_reference_sdk_release_signed_manifest_canary.args.example": (
+        "--kind\nsigned_manifest", "--signed-manifest-source-context",
+        "--signed-manifest-source-context-sha256",
+    ),
+    "scripts/examples/sorafs_reference_sdk_signed_manifest_canary.args.example": (
+        "--kind\nsigned_manifest", "--signed-manifest-source-context",
+        "--signed-manifest-source-context-sha256",
     ),
 }
 REFERENCE_SDK_RELEASE_EXAMPLE_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
+    **{
+        f"scripts/examples/{name}": (
+            "--manifest-digest-hex", "--policy-digest-hex", "--public-key-fingerprint-hex",
+            "--signature-algorithm", "--signing-provider", "--signing-backend",
+        )
+        for name in (
+            "sorafs_reference_sdk_release_signed_manifest_canary.args.example",
+            "sorafs_reference_sdk_signed_manifest_canary.args.example",
+        )
+    },
     "scripts/examples/sorafs_reference_sdk_release_supply_chain_canary.args.example": (
         "--target",
         "--sbom-index-digest-hex",
@@ -734,6 +750,8 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/check_sorafs_production_promotion_bundle.py"',
         '- "scripts/sorafs_software_signer_receipt.py"',
         '- "scripts/sorafs_reference_sdk_supply_chain.py"',
+        '- "scripts/sorafs_reference_sdk_signed_manifest.py"',
+        '- "scripts/tests/sorafs_reference_sdk_signed_manifest_test.py"',
         '- "scripts/sorafs_topology_qualification.py"',
         '- "scripts/sorafs_evidence_json.py"',
         '- "scripts/sorafs_response_args.py"',
@@ -1246,7 +1264,7 @@ def _validate_reference_sdk_release_examples(root: Path) -> list[str]:
         ):
             if marker in source:
                 errors.append(
-                    f"{relative}: retired manual supply-chain marker `{marker}`"
+                    f"{relative}: retired manual release marker `{marker}`"
                 )
     return errors
 

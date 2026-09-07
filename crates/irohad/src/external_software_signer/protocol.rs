@@ -1,7 +1,7 @@
 //! Canonical public identities and wire containers for the signer service.
-use iroha_crypto::{Algorithm, PublicKey};
+use iroha_crypto::PublicKey;
 use norito::codec::{Decode, Encode};
-use std::{fmt, str::FromStr};
+use std::fmt;
 pub(super) const SIGNER_PROTOCOL_MAGIC_V1: [u8; 8] = *b"IRSGNR01";
 pub(super) const SIGNER_PROTOCOL_VERSION_V1: u16 = 1;
 pub(super) const SIGNER_KEY_MAGIC_V1: [u8; 8] = *b"IRSGKY01";
@@ -36,279 +36,23 @@ pub enum ExternalSignerBackendV1 {
     /// Isolated software key service with an encrypted key envelope.
     Software = 1,
 }
-/// Signature algorithms admitted by the external signer V1 protocol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-#[repr(u8)]
-pub enum SoftwareSignerKeyAlgorithmV1 {
-    /// Ed25519.
-    Ed25519 = 1,
-    /// FIPS 204 ML-DSA-65.
-    MlDsa = 2,
-}
-/// Error returned when a signer algorithm or role label is not canonical.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SoftwareSignerValueParseErrorV1;
-impl fmt::Display for SoftwareSignerValueParseErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("invalid external software signer value")
-    }
-}
-impl std::error::Error for SoftwareSignerValueParseErrorV1 {}
-impl SoftwareSignerKeyAlgorithmV1 {
-    /// Convert to the workspace cryptography algorithm.
-    #[must_use]
-    pub const fn algorithm(self) -> Algorithm {
-        match self {
-            Self::Ed25519 => Algorithm::Ed25519,
-            Self::MlDsa => Algorithm::MlDsa,
+pub use sorafs_manifest::signer::protocol::{
+    SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, SignerValueParseErrorV1,
+};
+/// Convert a canonical role to the daemon-owned native transaction provider role.
+pub(super) const fn native_role(
+    role: SignerRoleV1,
+) -> Option<iroha_torii::SorafsNativeTransactionSignerRoleV1> {
+    match role {
+        SignerRoleV1::ProofOutcome => {
+            Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome)
         }
-    }
-}
-impl TryFrom<Algorithm> for SoftwareSignerKeyAlgorithmV1 {
-    type Error = ();
-    fn try_from(value: Algorithm) -> Result<Self, Self::Error> {
-        match value {
-            Algorithm::Ed25519 => Ok(Self::Ed25519),
-            Algorithm::MlDsa => Ok(Self::MlDsa),
-            _ => Err(()),
+        SignerRoleV1::Repair => Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair),
+        SignerRoleV1::Reserve => Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve),
+        SignerRoleV1::Orderbook => {
+            Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook)
         }
-    }
-}
-impl FromStr for SoftwareSignerKeyAlgorithmV1 {
-    type Err = SoftwareSignerValueParseErrorV1;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "ed25519" => Ok(Self::Ed25519),
-            "ml-dsa-65" => Ok(Self::MlDsa),
-            _ => Err(SoftwareSignerValueParseErrorV1),
-        }
-    }
-}
-impl fmt::Display for SoftwareSignerKeyAlgorithmV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Ed25519 => "ed25519",
-            Self::MlDsa => "ml-dsa-65",
-        })
-    }
-}
-/// Least-privilege signing domains served by the first software-signer slice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-#[repr(u8)]
-pub enum SoftwareSignerRoleV1 {
-    /// Finalized proof-outcome transaction signing.
-    ProofOutcome = 1,
-    /// Native repair transaction signing.
-    Repair = 2,
-    /// Native reserve/rent transaction signing.
-    Reserve = 3,
-    /// Native orderbook transaction signing.
-    Orderbook = 4,
-    /// `SoraFS` V1 foundational promotion-envelope signing.
-    Promotion = 5,
-    /// Governance DAG publisher signing.
-    GovernanceDag = 6,
-    /// `PoTR` gateway receipt signing.
-    PotrGateway = 7,
-    /// `PoTR` provider receipt signing.
-    PotrProvider = 8,
-    /// Governed billing-statement digest signing.
-    BillingStatement = 9,
-    /// Evidence-viewer receipt, checkpoint, and archive signing.
-    EvidenceViewer = 10,
-    /// Stream-token issuance signing.
-    StreamToken = 11,
-    /// `PoP` credential, commitment-root, and revocation signing.
-    PopCredentials = 12,
-}
-impl SoftwareSignerRoleV1 {
-    /// Stable role label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ProofOutcome => "proof_outcome",
-            Self::Repair => "repair",
-            Self::Reserve => "reserve",
-            Self::Orderbook => "orderbook",
-            Self::Promotion => "promotion",
-            Self::GovernanceDag => "governance_dag",
-            Self::PotrGateway => "potr_gateway",
-            Self::PotrProvider => "potr_provider",
-            Self::BillingStatement => "billing_statement",
-            Self::EvidenceViewer => "evidence_viewer",
-            Self::StreamToken => "stream_token",
-            Self::PopCredentials => "pop_credentials",
-        }
-    }
-    /// Exact signing domain enforced before any key operation.
-    #[must_use]
-    pub const fn domain(self) -> &'static str {
-        match self {
-            Self::ProofOutcome => "sorafs.native-transaction.proof-outcome.v1",
-            Self::Repair => "sorafs.native-transaction.repair.v1",
-            Self::Reserve => "sorafs.native-transaction.reserve-rent.v1",
-            Self::Orderbook => "sorafs.native-transaction.orderbook.v1",
-            Self::Promotion => "sorafs.production-readiness.foundational-prerequisites.v1",
-            Self::GovernanceDag => "sorafs.governance-dag.publisher.v1",
-            Self::PotrGateway => "sorafs.potr.gateway-receipt.v1",
-            Self::PotrProvider => "sorafs.potr.provider-receipt.v1",
-            Self::BillingStatement => "sorafs.billing.statement-signature.v1",
-            Self::EvidenceViewer => "sorafs.evidence-viewer.signing.v1",
-            Self::StreamToken => "sorafs.stream-token.signature.v1",
-            Self::PopCredentials => "sorafs.pop.issuer-signature.v1",
-        }
-    }
-    /// Whether this isolated role admits the requested key algorithm.
-    #[must_use]
-    pub const fn allows_algorithm(self, algorithm: SoftwareSignerKeyAlgorithmV1) -> bool {
-        match self {
-            Self::ProofOutcome | Self::Repair | Self::Reserve | Self::Orderbook => true,
-            Self::PotrProvider => matches!(algorithm, SoftwareSignerKeyAlgorithmV1::MlDsa),
-            Self::Promotion
-            | Self::GovernanceDag
-            | Self::PotrGateway
-            | Self::BillingStatement
-            | Self::EvidenceViewer
-            | Self::StreamToken
-            | Self::PopCredentials => {
-                matches!(algorithm, SoftwareSignerKeyAlgorithmV1::Ed25519)
-            }
-        }
-    }
-    /// Convert a native-transaction role to the existing Torii runtime role.
-    #[must_use]
-    pub const fn native_role(self) -> Option<iroha_torii::SorafsNativeTransactionSignerRoleV1> {
-        match self {
-            Self::ProofOutcome => {
-                Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome)
-            }
-            Self::Repair => Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair),
-            Self::Reserve => Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve),
-            Self::Orderbook => Some(iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook),
-            Self::Promotion
-            | Self::GovernanceDag
-            | Self::PotrGateway
-            | Self::PotrProvider
-            | Self::BillingStatement
-            | Self::EvidenceViewer
-            | Self::StreamToken
-            | Self::PopCredentials => None,
-        }
-    }
-}
-impl From<iroha_torii::SorafsNativeTransactionSignerRoleV1> for SoftwareSignerRoleV1 {
-    fn from(value: iroha_torii::SorafsNativeTransactionSignerRoleV1) -> Self {
-        match value {
-            iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => Self::ProofOutcome,
-            iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair => Self::Repair,
-            iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve => Self::Reserve,
-            iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => Self::Orderbook,
-        }
-    }
-}
-impl FromStr for SoftwareSignerRoleV1 {
-    type Err = SoftwareSignerValueParseErrorV1;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "proof_outcome" => Ok(Self::ProofOutcome),
-            "repair" => Ok(Self::Repair),
-            "reserve" => Ok(Self::Reserve),
-            "orderbook" => Ok(Self::Orderbook),
-            "promotion" => Ok(Self::Promotion),
-            "governance_dag" => Ok(Self::GovernanceDag),
-            "potr_gateway" => Ok(Self::PotrGateway),
-            "potr_provider" => Ok(Self::PotrProvider),
-            "billing_statement" => Ok(Self::BillingStatement),
-            "evidence_viewer" => Ok(Self::EvidenceViewer),
-            "stream_token" => Ok(Self::StreamToken),
-            "pop_credentials" => Ok(Self::PopCredentials),
-            _ => Err(SoftwareSignerValueParseErrorV1),
-        }
-    }
-}
-impl fmt::Display for SoftwareSignerRoleV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-/// Public role-specific authority pinned into the encrypted key envelope.
-///
-/// The signer service validates this value itself, so an authenticated client
-/// cannot bypass the deployment adapter by submitting a structurally valid
-/// payload for a substituted publisher, provider, or issuer identity.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub enum SoftwareSignerPurposeBindingV1 {
-    /// Native transaction and promotion roles carry their authority in the
-    /// signed payload or the public key itself.
-    NativeOrPromotion,
-    /// Exact Governance DAG publisher peer identity.
-    GovernanceDag {
-        /// Canonical publisher peer identifier bytes.
-        publisher_peer_id: Vec<u8>,
-    },
-    /// Exact independently administered `PoTR` gateway signer identity.
-    PotrGateway {
-        /// Public gateway signer identifier.
-        signer_id: [u8; 32],
-    },
-    /// Exact independently administered `PoTR` provider signer and provider.
-    PotrProvider {
-        /// Public provider-side signer identifier.
-        signer_id: [u8; 32],
-        /// Provider identifier authorized for signed receipts.
-        provider_id: [u8; 32],
-    },
-    /// Exact governed billing statement signer identity.
-    BillingStatement {
-        /// Stable public billing signer identity.
-        signer_id: String,
-    },
-    /// Evidence-viewer authority is the binding handle and Ed25519 key.
-    EvidenceViewer,
-    /// Stream-token authority is the binding handle and Ed25519 key.
-    StreamToken,
-    /// Exact governed `PoP` issuer identity.
-    PopCredentials {
-        /// Stable public `PoP` credential issuer identity.
-        issuer_id: String,
-    },
-}
-impl SoftwareSignerPurposeBindingV1 {
-    pub(super) fn validates_role(&self, role: SoftwareSignerRoleV1) -> bool {
-        match (role, self) {
-            (
-                SoftwareSignerRoleV1::ProofOutcome
-                | SoftwareSignerRoleV1::Repair
-                | SoftwareSignerRoleV1::Reserve
-                | SoftwareSignerRoleV1::Orderbook
-                | SoftwareSignerRoleV1::Promotion,
-                Self::NativeOrPromotion,
-            )
-            | (SoftwareSignerRoleV1::EvidenceViewer, Self::EvidenceViewer)
-            | (SoftwareSignerRoleV1::StreamToken, Self::StreamToken) => true,
-            (SoftwareSignerRoleV1::GovernanceDag, Self::GovernanceDag { publisher_peer_id }) => {
-                !publisher_peer_id.is_empty()
-                    && publisher_peer_id.len()
-                        <= sorafs_manifest::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1
-            }
-            (SoftwareSignerRoleV1::PotrGateway, Self::PotrGateway { signer_id }) => {
-                *signer_id != [0; 32]
-            }
-            (
-                SoftwareSignerRoleV1::PotrProvider,
-                Self::PotrProvider {
-                    signer_id,
-                    provider_id,
-                },
-            ) => *signer_id != [0; 32] && *provider_id != [0; 32] && signer_id != provider_id,
-            (SoftwareSignerRoleV1::BillingStatement, Self::BillingStatement { signer_id }) => {
-                valid_identity(signer_id)
-            }
-            (SoftwareSignerRoleV1::PopCredentials, Self::PopCredentials { issuer_id }) => {
-                valid_identity(issuer_id)
-            }
-            _ => false,
-        }
+        _ => None,
     }
 }
 /// Immutable public identity expected from one software signer service.
@@ -333,13 +77,13 @@ pub struct SoftwareSignerPublicBindingV1 {
     /// Exact operating-system UID allowed to administer the service.
     pub administrator_uid: u32,
     /// Isolated signing role.
-    pub role: SoftwareSignerRoleV1,
+    pub role: SignerRoleV1,
     /// Exact public authority for the role's purpose-separated payloads.
-    pub purpose_binding: SoftwareSignerPurposeBindingV1,
+    pub purpose_binding: SignerPurposeBindingV1,
     /// Exact role-specific signing domain.
     pub domain: String,
     /// Active signature algorithm.
-    pub key_algorithm: SoftwareSignerKeyAlgorithmV1,
+    pub key_algorithm: SignerKeyAlgorithmV1,
     /// Monotonic key generation.
     pub key_revision: u64,
     /// Monotonic public-policy generation.
@@ -526,7 +270,7 @@ pub(super) enum AdminCommandV1 {
         new_key_revision: u64,
         new_policy_revision: u64,
         new_policy_digest: [u8; 32],
-        algorithm: SoftwareSignerKeyAlgorithmV1,
+        algorithm: SignerKeyAlgorithmV1,
     },
     Revoke {
         operation_id: [u8; 32],
@@ -567,20 +311,21 @@ pub(super) fn valid_identity(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
         && !value.to_ascii_lowercase().contains("test")
 }
-pub(super) fn valid_software_signer_handle(role: SoftwareSignerRoleV1, value: &str) -> bool {
+pub(super) fn valid_software_signer_handle(role: SignerRoleV1, value: &str) -> bool {
     let (role_segment, instance_prefix) = match role {
-        SoftwareSignerRoleV1::ProofOutcome => ("proof-outcome", None),
-        SoftwareSignerRoleV1::Repair => ("repair", None),
-        SoftwareSignerRoleV1::Reserve => ("reserve", None),
-        SoftwareSignerRoleV1::Orderbook => ("orderbook", None),
-        SoftwareSignerRoleV1::Promotion => ("promotion", None),
-        SoftwareSignerRoleV1::GovernanceDag => ("governance-dag", None),
-        SoftwareSignerRoleV1::PotrGateway => ("potr", Some("gateway-")),
-        SoftwareSignerRoleV1::PotrProvider => ("potr", Some("provider-")),
-        SoftwareSignerRoleV1::BillingStatement => ("billing", None),
-        SoftwareSignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
-        SoftwareSignerRoleV1::StreamToken => ("stream-token", None),
-        SoftwareSignerRoleV1::PopCredentials => ("pop-credentials", None),
+        SignerRoleV1::ProofOutcome => ("proof-outcome", None),
+        SignerRoleV1::Repair => ("repair", None),
+        SignerRoleV1::Reserve => ("reserve", None),
+        SignerRoleV1::Orderbook => ("orderbook", None),
+        SignerRoleV1::Promotion => ("promotion", None),
+        SignerRoleV1::GovernanceDag => ("governance-dag", None),
+        SignerRoleV1::PotrGateway => ("potr", Some("gateway-")),
+        SignerRoleV1::PotrProvider => ("potr", Some("provider-")),
+        SignerRoleV1::BillingStatement => ("billing", None),
+        SignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
+        SignerRoleV1::StreamToken => ("stream-token", None),
+        SignerRoleV1::PopCredentials => ("pop-credentials", None),
+        SignerRoleV1::ReleaseManifest => return false,
     };
     let prefix = format!("software://sorafs/{role_segment}/");
     iroha_config::parameters::validate_production_runtime_handle(value).is_ok()

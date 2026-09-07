@@ -55,10 +55,11 @@ use std::{
 };
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
-// The valid v2 timeout-vote envelope has at most 31 signers and two bounded signatures.
-// Keep this conservative ceiling aligned with the formal refinement and maximal fixture below;
-// the production byte reserve is intentionally much larger.
-const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
+// The timeout-vote envelope contains its own signature plus the highest
+// PrepareQC aggregate. Reserve both current signature ceilings separately from
+// the bounded structural fields (including at most 31 signer indexes).
+const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize =
+    2 * iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES + 4 * 1024;
 // Lane-owned completions fit the independently reviewed source bundle from
 // which they are reconstructed. Canonical historical-body recovery is instead
 // charged to the configured global transport-completion partition below.
@@ -3667,7 +3668,14 @@ fn fair_v2_ingress_required_transport_completion_bytes_for_key(
                 signature_bytes.checked_add(8)?,
             )?)?;
         let encoded_chunk_bytes = chunk_bytes.checked_add(8)?;
-        let chunk_bytes = fair_v2_ingress_framed_bytes(encoded_chunk_bytes)?.checked_add(309)?;
+        // Framed manifest hash (33), chunk index (5), and sender index (5).
+        // Frame the bounded signature vector independently: its compact length
+        // prefix can grow when the consensus signature ceiling changes.
+        let chunk_bytes = fair_v2_ingress_framed_bytes(encoded_chunk_bytes)?
+            .checked_add(43)?
+            .checked_add(fair_v2_ingress_framed_bytes(
+                signature_bytes.checked_add(8)?,
+            )?)?;
         let response_payload = fair_v2_ingress_framed_bytes(response_bytes)?.checked_add(4)?;
         let response_envelope = fair_v2_ingress_framed_bytes(response_payload)?.checked_add(3)?;
         let chunk_payload = fair_v2_ingress_framed_bytes(chunk_bytes)?.checked_add(4)?;
@@ -4653,7 +4661,7 @@ impl FairV2Ingress {
     /// Apply a live safety-WAL recovery cut to carrierless leader-wire owners.
     ///
     /// Production ingress holds this mirror lock while the durable gate
-    /// publishes first. Only restart-restored Dormant records can disappear;
+    /// publishes first. Carrierless records retire or reopen for a new consumer;
     /// Ingress and Runtime records retain their physical/consumer ownership
     /// until their ordinary terminal path completes.
     pub(crate) fn advance_leader_wire_recovery_cut(

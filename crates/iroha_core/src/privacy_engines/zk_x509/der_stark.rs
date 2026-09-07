@@ -29,8 +29,7 @@ use super::{
     der_limits::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
@@ -4122,6 +4121,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
     use sha2::{Digest as _, Sha256};
     fn challenges() -> ZkX509DerStarkChallengesV1 {
         ZkX509DerStarkChallengesV1 {

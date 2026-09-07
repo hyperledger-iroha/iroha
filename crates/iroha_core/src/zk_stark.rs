@@ -53,7 +53,8 @@ const MAX_FRI_QUERIES: usize = 64;
 const MAX_MERKLE_DEPTH: usize = 32;
 const MAX_AUX_TERMS: usize = 64;
 const MAX_AIR_WIDTH: usize = 64;
-const MAX_DOMAIN_TAG_LEN: usize = 64;
+// Statement-bound domain tags retain every byte of the six-lane digest as hex.
+const MAX_DOMAIN_TAG_LEN: usize = GoldilocksDigest384V1::BYTES * 2;
 const MAX_TRANSCRIPT_LABEL_LEN: usize = 128;
 const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
 pub(crate) const STARK_FRI_QUERY_INDEX_REPEATED_ERROR: &str = "FRI query index repeated";
@@ -1599,7 +1600,7 @@ fn merkle_verify_hash(
     }
     &acc == root
 }
-/// Build a v1 STARK Merkle root from canonical field values.
+/// Build the V1 AIR composition Merkle root from canonical field values.
 pub(crate) fn stark_merkle_root_from_field_values_v1(
     params: &StarkFriParamsV1,
     values: &[u64],
@@ -1609,11 +1610,8 @@ pub(crate) fn stark_merkle_root_from_field_values_v1(
         .copied()
         .map(Fq::from_canonical_u64)
         .collect::<Option<Vec<_>>>()?;
-    let levels = merkle_levels_from_values(
-        params,
-        &values,
-        StarkMerkleDomainV1::auxiliary_composition(),
-    )?;
+    let levels =
+        merkle_levels_from_values(params, &values, StarkMerkleDomainV1::air_composition())?;
     merkle_root_from_levels(&levels)
 }
 /// Build a v1 STARK AIR trace Merkle root from row-major trace values.
@@ -1629,7 +1627,7 @@ pub(crate) fn stark_air_trace_root_from_rows_v1(
     let levels = merkle_levels_from_hashes(params, trace_leaves, StarkMerkleDomainV1::air_trace())?;
     merkle_root_from_levels(&levels)
 }
-/// Build a v1 STARK Merkle root and path from canonical field values.
+/// Build a V1 auxiliary-composition Merkle root and path from canonical field values.
 #[cfg(test)]
 pub(crate) fn stark_merkle_root_and_path_from_field_values_v1(
     params: &StarkFriParamsV1,

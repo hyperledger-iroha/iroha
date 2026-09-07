@@ -1,0 +1,707 @@
+{
+  "invalid": [
+    {
+      "error": "PlayerCount",
+      "name": "empty_grid",
+      "state": {
+        "cars": [],
+        "tick": 0,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "error": "StateBounds",
+      "name": "tick_overflow",
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 5401,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "error": "StateBounds",
+      "name": "speed_overflow",
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 3001
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 0,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "error": "StateBounds",
+      "name": "zero_finish_tick",
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": 0,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 0,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "error": "StateBounds",
+      "name": "future_forfeit",
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 1,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 0,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    }
+  ],
+  "valid": [
+    {
+      "name": "late_forfeit_prior_finisher",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": -4000,
+            "slot": 3
+          },
+          {
+            "dnf_tick": 12,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 1
+          },
+          {
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "progress_mm": -4000,
+            "slot": 2
+          }
+        ],
+        "ticks": 24,
+        "winners": [
+          3
+        ]
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 12,
+            "finish_tick": 6,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": -4000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": -4000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 24,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "all_forfeit_after_one_finish",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": 12,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 1
+          },
+          {
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "progress_mm": -4000,
+            "slot": 2
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": null,
+            "progress_mm": -4000,
+            "slot": 3
+          }
+        ],
+        "ticks": 24,
+        "winners": []
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 12,
+            "finish_tick": 6,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 18,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": -4000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": -4000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 24,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "all_forfeit_after_every_finish",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 1
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 2
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 3
+          }
+        ],
+        "ticks": 24,
+        "winners": []
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 24,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "eligible_finish_ties_after_earlier_forfeit",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": 12,
+            "progress_mm": 7200000,
+            "slot": 1
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": 12,
+            "progress_mm": 7200000,
+            "slot": 2
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 3
+          }
+        ],
+        "ticks": 24,
+        "winners": [
+          1,
+          2
+        ]
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": 12,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": 12,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 24,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "timeout_eligible_distance_ties",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 400000,
+            "slot": 1
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 400000,
+            "slot": 2
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "progress_mm": 7200000,
+            "slot": 3
+          }
+        ],
+        "ticks": 5400,
+        "winners": [
+          1,
+          2
+        ]
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 400000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 400000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 24,
+            "finish_tick": 6,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 7200000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 5400,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "solo_practice_genesis",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 0
+          }
+        ],
+        "ticks": 0,
+        "winners": []
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 0,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "sole_eligible_before_batch_boundary",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 1
+          },
+          {
+            "dnf_tick": 0,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 0
+          }
+        ],
+        "ticks": 5,
+        "winners": []
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 0,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 5,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "sole_eligible_at_batch_boundary",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 1
+          },
+          {
+            "dnf_tick": 0,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 0
+          }
+        ],
+        "ticks": 6,
+        "winners": [
+          1
+        ]
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 0,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "name": "solo_practice_finished",
+      "result": {
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": 4,
+            "progress_mm": 6000000,
+            "slot": 0
+          }
+        ],
+        "ticks": 6,
+        "winners": [
+          0
+        ]
+      },
+      "state": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": 4,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 6000000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "tick": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    }
+  ],
+  "version": 1
+}

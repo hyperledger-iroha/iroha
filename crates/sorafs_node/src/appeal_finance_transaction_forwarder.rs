@@ -3150,8 +3150,12 @@ mod tests {
         let mut empty_multisig = transaction_builder()
             .try_sign(signer.private_key())
             .unwrap();
-        empty_multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
         assert!(empty_multisig.verify_signature().is_ok());
+        empty_multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
+        assert_eq!(
+            empty_multisig.verify_signature(),
+            Err(iroha_data_model::transaction::TransactionSignatureError::UnexpectedMultisigSignatures)
+        );
         assert!(matches!(
             forwarder.store_signed_transaction(
                 operation_id,

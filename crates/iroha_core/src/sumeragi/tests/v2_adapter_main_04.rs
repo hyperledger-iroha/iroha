@@ -1281,6 +1281,824 @@ fn authenticated_ingress_verifies_individual_and_aggregate_bls() {
     .expect("verify aggregate QC");
 }
 #[cfg(feature = "bls")]
+mod kagemusha_finality_boundary {
+    //! Verify the canonical paired seal and its enclosing BLS-authenticated message together.
+
+    use super::*;
+    use crate::zk::kagemusha_v1_recursion as mint;
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalitySealBundleV1,
+        KagemushaMintFinalitySealMessageV1, KagemushaMintFinalitySealShareV1,
+        KagemushaMintFinalityValidatorSealV1, KagemushaTopUpLeafV1,
+        kagemusha_mint_finality_root_v1,
+    };
+
+    struct Fixture {
+        context: wire::HeightContext,
+        keys: Vec<KeyPair>,
+        pops: Vec<Vec<u8>>,
+        vote: wire::Vote,
+        share: KagemushaMintFinalitySealShareV1,
+        certificate: wire::QuorumCertificate,
+        bundle: KagemushaMintFinalitySealBundleV1,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let (mut context, keys, pops) = authenticated_context();
+            context.epoch_end_height = context.height;
+            let next_roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+                context.network_id,
+                context.epoch + 1,
+                &context.roster,
+            );
+            context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+                epoch: context.epoch + 1,
+                kagemusha_mint_finality_epoch_id: next_roster
+                    .finality_epoch_id()
+                    .expect("next Pasta epoch identity"),
+                kagemusha_mint_finality_epoch_roster: next_roster,
+                epoch_end_height: context.height + 100,
+                mode: context.mode,
+                roster: context.roster.clone(),
+                validator_set_pops: pops.clone(),
+                quorum: context.quorum,
+                leader_seed: [0xCA; 32],
+            });
+            VerifiedHeightContext::genesis(context.clone(), pops.clone())
+                .expect("real four-validator context and both epoch rosters");
+            let tree = mint::KagemushaMintFinalityTreeV1::new(vec![KagemushaTopUpLeafV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                operation_id: [0x31; 32],
+                reserve_receipt_digest: [0x32; 32],
+                statement_digest: [0x33; 32],
+                amount: 7,
+            }])
+            .expect("canonical non-empty top-up tree");
+            let mut commitment = execution_commitment(0xC1);
+            commitment.kagemusha_top_up_root = Some(kagemusha_mint_finality_root_v1(tree.root()));
+            commitment.kagemusha_top_up_count = tree.leaf_count();
+            rebind_post_state_root(&mut commitment);
+            commitment.validate().expect("canonical top-up commitment");
+            let round = wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 3,
+            };
+            let vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Commit,
+                subject: subject(0xC1),
+                execution_commitment: commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let message = mint::build_kagemusha_mint_finality_seal_message_v1(
+                &context.kagemusha_mint_finality_epoch_roster,
+                &context,
+                &vote,
+            )
+            .expect("build exact top-up and epoch-boundary statement")
+            .expect("top-up Commit requires a seal");
+            let seals = (0..3)
+                .map(|index| sign_seal(&context, index, &message))
+                .collect::<Vec<_>>();
+            let share = KagemushaMintFinalitySealShareV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                message: message.clone(),
+                seal: seals[0],
+            };
+            let bundle = KagemushaMintFinalitySealBundleV1 { message, seals };
+            let certificate = certificate_for_vote(&vote);
+            let mut fixture = Self {
+                context,
+                keys,
+                pops,
+                vote,
+                share,
+                certificate,
+                bundle,
+            };
+            fixture.vote = fixture.signed_vote(fixture.vote.clone(), &fixture.share);
+            fixture.certificate =
+                fixture.signed_certificate(fixture.certificate.clone(), &fixture.bundle);
+            fixture
+        }
+
+        fn signed_vote(
+            &self,
+            mut vote: wire::Vote,
+            share: &KagemushaMintFinalitySealShareV1,
+        ) -> wire::Vote {
+            let index = usize::try_from(vote.signer).expect("fixture signer fits usize");
+            let bls = Signature::new(self.keys[index].private_key(), &vote.signature_preimage());
+            vote.signature = wire::encode_kagemusha_consensus_signature_envelope_v1(
+                wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+                bls.payload(),
+                &share.encode(),
+            )
+            .expect("canonical share envelope");
+            vote
+        }
+
+        fn signed_certificate(
+            &self,
+            mut certificate: wire::QuorumCertificate,
+            bundle: &KagemushaMintFinalitySealBundleV1,
+        ) -> wire::QuorumCertificate {
+            let preimage = wire::Vote {
+                round: certificate.round,
+                proposal_round: certificate.proposal_round,
+                phase: certificate.phase,
+                subject: certificate.subject,
+                execution_commitment: certificate.execution_commitment,
+                signer: certificate.signers[0],
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let signatures = certificate
+                .signers
+                .iter()
+                .map(|index| {
+                    Signature::new(
+                        self.keys[usize::try_from(*index).expect("fixture index")].private_key(),
+                        &preimage,
+                    )
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let aggregate = iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate exact fixture signer set");
+            certificate.aggregate_signature =
+                wire::encode_kagemusha_consensus_signature_envelope_v1(
+                    wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+                    &aggregate,
+                    &bundle.encode(),
+                )
+                .expect("canonical bundle envelope");
+            certificate
+        }
+
+        fn verify_vote(&self, vote: &wire::Vote) -> Result<(), AdapterError> {
+            verify_authenticated_message(
+                &self.context,
+                None,
+                &wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote.clone())),
+                &self.pops,
+            )
+        }
+
+        fn verify_certificate(
+            &self,
+            certificate: &wire::QuorumCertificate,
+        ) -> Result<(), AdapterError> {
+            verify_authenticated_message(
+                &self.context,
+                None,
+                &wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    certificate.clone(),
+                )),
+                &self.pops,
+            )
+        }
+
+        fn verify_share(
+            &self,
+            vote: &wire::Vote,
+            share: &KagemushaMintFinalitySealShareV1,
+        ) -> Result<(), mint::KagemushaMintFinalityErrorV1> {
+            mint::verify_kagemusha_mint_finality_seal_share_v1(
+                &self.context.kagemusha_mint_finality_epoch_roster,
+                &self.context,
+                vote,
+                share,
+            )
+        }
+
+        fn verify_bundle(
+            &self,
+            certificate: &wire::QuorumCertificate,
+            bundle: &KagemushaMintFinalitySealBundleV1,
+        ) -> Result<(), mint::KagemushaMintFinalityErrorV1> {
+            mint::verify_kagemusha_mint_finality_seal_bundle_v1(
+                &self.context.kagemusha_mint_finality_epoch_roster,
+                &self.context,
+                certificate,
+                bundle,
+            )
+        }
+    }
+
+    fn sign_seal(
+        context: &wire::HeightContext,
+        index: u32,
+        message: &KagemushaMintFinalitySealMessageV1,
+    ) -> KagemushaMintFinalityValidatorSealV1 {
+        let signer = mint::KagemushaMintFinalitySignerV1::from_seed(
+            zeroize::Zeroizing::new([0xA0 + u8::try_from(index).expect("small index"); 32]),
+            index,
+            &context.kagemusha_mint_finality_epoch_roster,
+        )
+        .expect("independently provisioned fixture Pasta signer");
+        mint::sign_kagemusha_mint_finality_seal_v1(&signer, message)
+            .expect("paired Pasta signatures")
+    }
+
+    fn certificate_for_vote(vote: &wire::Vote) -> wire::QuorumCertificate {
+        wire::QuorumCertificate {
+            round: vote.round,
+            proposal_round: vote.proposal_round,
+            phase: vote.phase,
+            subject: vote.subject,
+            execution_commitment: vote.execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        }
+    }
+
+    fn rebind_post_state_root(commitment: &mut wire::ExecutionCommitment) {
+        commitment.post_state_root = wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+            commitment.kagemusha_top_up_count,
+            commitment.ordinary_writes_root,
+            commitment
+                .kagemusha_top_up_root
+                .expect("non-empty top-up root"),
+        );
+    }
+
+    fn zero_top_up_boundary(fixture: &Fixture) -> (wire::Vote, KagemushaMintFinalitySealMessageV1) {
+        let mut vote = fixture.vote.clone();
+        vote.execution_commitment = execution_commitment(0xC2);
+        let message = mint::build_kagemusha_mint_finality_seal_message_v1(
+            &fixture.context.kagemusha_mint_finality_epoch_roster,
+            &fixture.context,
+            &vote,
+        )
+        .expect("build zero-top-up epoch rotation")
+        .expect("boundary still requires a seal");
+        assert_eq!(message.kagemusha_top_up_count, 0);
+        assert_eq!(
+            message.next_finality_epoch_id,
+            fixture.share.message.next_finality_epoch_id
+        );
+        assert!(message.next_finality_epoch_id.is_some());
+        (vote, message)
+    }
+
+    fn enclosing_vote_substitutions(vote: &wire::Vote) -> Vec<(&'static str, wire::Vote)> {
+        let changes: [(&str, fn(&mut wire::Vote)); 14] = [
+            ("older proposal view", |v| v.proposal_round.view -= 1),
+            ("newer proposal view", |v| v.proposal_round.view += 1),
+            ("foreign proposal context", |v| {
+                v.proposal_round.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
+                    Hash::new(b"foreign proposal context"),
+                ))
+            }),
+            ("foreign proposal height", |v| v.proposal_round.height += 1),
+            ("coherent foreign context", |v| {
+                v.round.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
+                    Hash::new(b"foreign context"),
+                ));
+                v.proposal_round = v.round;
+            }),
+            ("coherent foreign height", |v| {
+                v.round.height += 1;
+                v.proposal_round = v.round;
+            }),
+            ("parent subject", |v| v.subject.parent_block_hash = None),
+            ("block subject", |v| {
+                v.subject.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"other block"))
+            }),
+            ("payload subject", |v| {
+                v.subject.payload_hash = Hash::new(b"other payload")
+            }),
+            ("execution parent root", |v| {
+                v.execution_commitment.parent_state_root = Hash::new(b"other parent state")
+            }),
+            ("execution writes root", |v| {
+                v.execution_commitment.ordinary_writes_root = Hash::new(b"other writes");
+                rebind_post_state_root(&mut v.execution_commitment);
+            }),
+            ("execution wire hash", |v| {
+                v.execution_commitment.executed_block_wire_hash = Hash::new(b"other executed bytes")
+            }),
+            ("top-up root", |v| {
+                v.execution_commitment.kagemusha_top_up_root =
+                    Some(Hash::new(b"other top-up root"));
+                rebind_post_state_root(&mut v.execution_commitment);
+            }),
+            ("top-up count", |v| {
+                v.execution_commitment.kagemusha_top_up_count += 1;
+                rebind_post_state_root(&mut v.execution_commitment);
+            }),
+        ];
+        changes
+            .into_iter()
+            .map(|(label, change)| {
+                let mut changed = vote.clone();
+                change(&mut changed);
+                changed
+                    .execution_commitment
+                    .validate()
+                    .expect("negative keeps a valid execution commitment");
+                (label, changed)
+            })
+            .collect()
+    }
+
+    fn statement_substitutions(
+        message: &KagemushaMintFinalitySealMessageV1,
+    ) -> Vec<(&'static str, KagemushaMintFinalitySealMessageV1)> {
+        let changes: [(&str, fn(&mut KagemushaMintFinalitySealMessageV1)); 11] = [
+            ("finality epoch", |m| m.finality_epoch_id[0] ^= 1),
+            ("validator count", |m| m.validator_count = 7),
+            ("network", |m| m.network_id = test_network_id(0xD3)),
+            ("height", |m| m.block_height += 1),
+            ("context", |m| {
+                m.height_context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
+                    Hash::new(b"other seal context"),
+                ))
+            }),
+            ("subject digest", |m| m.subject_digest[0] ^= 1),
+            ("execution digest", |m| {
+                m.execution_commitment_digest[0] ^= 1
+            }),
+            ("top-up root", |m| {
+                m.kagemusha_top_up_root = Hash::new(b"other seal root")
+            }),
+            ("top-up count", |m| m.kagemusha_top_up_count += 1),
+            ("next epoch", |m| {
+                m.next_finality_epoch_id = Some([0xD4; 32])
+            }),
+            ("missing next epoch", |m| m.next_finality_epoch_id = None),
+        ];
+        changes
+            .into_iter()
+            .map(|(label, change)| {
+                let mut changed = message.clone();
+                change(&mut changed);
+                changed
+                    .validate()
+                    .expect("negative keeps a structurally valid statement");
+                (label, changed)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn commit_vote_binds_round_statement_signer_and_both_signatures() {
+        let fixture = Fixture::new();
+        fixture
+            .verify_share(&fixture.vote, &fixture.share)
+            .expect("real paired share verifies");
+        fixture
+            .verify_vote(&fixture.vote)
+            .expect("BLS and both Pasta signatures verify at ingress");
+        let decoded = mint::decode_kagemusha_mint_finality_seal_share_v1(
+            fixture
+                .vote
+                .kagemusha_finality_seal_payload()
+                .expect("share envelope")
+                .expect("mandatory share"),
+        )
+        .expect("decode exact canonical share");
+        assert_eq!(decoded, fixture.share);
+
+        for (label, vote) in enclosing_vote_substitutions(&fixture.vote) {
+            let vote = fixture.signed_vote(vote, &fixture.share);
+            assert!(
+                matches!(
+                    fixture.verify_share(&vote, &fixture.share),
+                    Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+                ),
+                "{label}"
+            );
+            assert!(
+                fixture.verify_vote(&vote).is_err(),
+                "fresh BLS must not authorize a substituted {label}"
+            );
+        }
+        for (label, message) in statement_substitutions(&fixture.share.message) {
+            let mut share = fixture.share.clone();
+            share.message = message;
+            assert!(
+                matches!(
+                    fixture.verify_share(&fixture.vote, &share),
+                    Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+                ),
+                "{label} must fail statement equality before signature verification"
+            );
+            let vote = fixture.signed_vote(fixture.vote.clone(), &share);
+            assert!(
+                fixture.verify_vote(&vote).is_err(),
+                "BLS-authenticated vote rejects a substituted seal {label}"
+            );
+        }
+        let mut signed_other_statement = fixture.share.clone();
+        signed_other_statement.message.subject_digest[0] ^= 1;
+        signed_other_statement.seal =
+            sign_seal(&fixture.context, 0, &signed_other_statement.message);
+        assert!(matches!(
+            fixture.verify_share(&fixture.vote, &signed_other_statement),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(
+            fixture
+                .verify_vote(&fixture.signed_vote(fixture.vote.clone(), &signed_other_statement))
+                .is_err(),
+            "valid signatures on a different statement do not authorize this vote"
+        );
+
+        let mut other_signer = fixture.share.clone();
+        other_signer.seal = sign_seal(&fixture.context, 1, &other_signer.message);
+        assert!(matches!(
+            fixture.verify_share(&fixture.vote, &other_signer),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(
+            fixture
+                .verify_vote(&fixture.signed_vote(fixture.vote.clone(), &other_signer))
+                .is_err()
+        );
+        let mut vote_by_other_signer = fixture.vote.clone();
+        vote_by_other_signer.signer = 1;
+        let vote_by_other_signer = fixture.signed_vote(vote_by_other_signer, &fixture.share);
+        assert!(matches!(
+            fixture.verify_share(&vote_by_other_signer, &fixture.share),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(fixture.verify_vote(&vote_by_other_signer).is_err());
+        fixture
+            .verify_vote(&fixture.signed_vote(vote_by_other_signer, &other_signer))
+            .expect(
+                "coherent signer replacement with that validator's BLS and Pasta keys is valid",
+            );
+
+        for eq in [true, false] {
+            let mut corrupt = fixture.share.clone();
+            if eq {
+                corrupt.seal.eq_proof_signature = signed_other_statement.seal.eq_proof_signature;
+            } else {
+                corrupt.seal.ep_proof_signature = signed_other_statement.seal.ep_proof_signature;
+            }
+            corrupt
+                .validate()
+                .expect("signature corruption preserves canonical point/scalar encoding");
+            let error = fixture
+                .verify_share(&fixture.vote, &corrupt)
+                .expect_err("each Pasta equation is mandatory");
+            assert!(matches!(
+                error,
+                mint::KagemushaMintFinalityErrorV1::InvalidSignature(_)
+            ));
+            assert!(error.to_string().contains("Schnorr equation failed"));
+            let vote = fixture.signed_vote(fixture.vote.clone(), &corrupt);
+            verify_individual_signature(
+                &fixture.context,
+                vote.signer,
+                vote.bls_signature().expect("valid framing"),
+                &vote.signature_preimage(),
+            )
+            .expect("ordinary BLS remains independently valid");
+            assert!(
+                fixture.verify_vote(&vote).is_err(),
+                "ingress must execute both Pasta verifiers; Eq mutation = {eq}"
+            );
+        }
+        let bls = fixture.vote.bls_signature().expect("valid BLS framing");
+        let mut missing = fixture.vote.clone();
+        missing.signature = bls.to_vec();
+        assert!(missing.kagemusha_finality_seal_payload().is_err());
+        assert!(fixture.verify_vote(&missing).is_err());
+        let mut wrong_kind = fixture.vote.clone();
+        wrong_kind.signature = wire::encode_kagemusha_consensus_signature_envelope_v1(
+            wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+            bls,
+            &fixture.share.encode(),
+        )
+        .expect("well-framed wrong envelope kind");
+        assert!(wrong_kind.kagemusha_finality_seal_payload().is_err());
+        assert!(fixture.verify_vote(&wrong_kind).is_err());
+        let mut bad_bls = fixture.vote.clone();
+        let wrong_bls = Signature::new(fixture.keys[0].private_key(), b"another BLS statement");
+        bad_bls.signature = wire::encode_kagemusha_consensus_signature_envelope_v1(
+            wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+            wrong_bls.payload(),
+            &fixture.share.encode(),
+        )
+        .expect("valid envelope with wrong BLS signature");
+        fixture
+            .verify_share(&bad_bls, &fixture.share)
+            .expect("Pasta authority remains independently valid");
+        assert!(
+            fixture.verify_vote(&bad_bls).is_err(),
+            "Pasta signatures cannot replace ordinary BLS verification"
+        );
+
+        let mut out_of_range = fixture.vote.clone();
+        out_of_range.signer = 4;
+        assert!(matches!(
+            fixture.verify_share(&out_of_range, &fixture.share),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(fixture.verify_vote(&out_of_range).is_err());
+        let mut prepare = fixture.vote.clone();
+        prepare.phase = wire::GlobalPhase::Prepare;
+        let prepare = fixture.signed_vote(prepare, &fixture.share);
+        assert!(matches!(
+            fixture.verify_share(&prepare, &fixture.share),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(fixture.verify_vote(&prepare).is_err());
+
+        // A zero-top-up epoch boundary requires a seal in the production verifier even
+        // though its ordinary wire framing alone permits a raw BLS signature.
+        let (boundary_vote, boundary_message) = zero_top_up_boundary(&fixture);
+        let boundary_share = KagemushaMintFinalitySealShareV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            seal: sign_seal(&fixture.context, 0, &boundary_message),
+            message: boundary_message,
+        };
+        let mut boundary_vote = fixture.signed_vote(boundary_vote, &boundary_share);
+        fixture
+            .verify_share(&boundary_vote, &boundary_share)
+            .expect("zero-top-up paired share");
+        fixture
+            .verify_vote(&boundary_vote)
+            .expect("sealed zero-top-up boundary vote");
+        boundary_vote.signature = boundary_vote
+            .bls_signature()
+            .expect("boundary BLS")
+            .to_vec();
+        assert_eq!(boundary_vote.kagemusha_finality_seal_payload(), Ok(None));
+        verify_individual_signature(
+            &fixture.context,
+            boundary_vote.signer,
+            &boundary_vote.signature,
+            &boundary_vote.signature_preimage(),
+        )
+        .expect("unsealed boundary BLS is still valid");
+        assert!(
+            fixture.verify_vote(&boundary_vote).is_err(),
+            "epoch rotation cannot omit its Pasta share"
+        );
+    }
+
+    #[test]
+    fn commit_qc_binds_round_statement_exact_quorum_and_both_signatures() {
+        let fixture = Fixture::new();
+        fixture
+            .verify_bundle(&fixture.certificate, &fixture.bundle)
+            .expect("exact three-of-four paired seals verify");
+        fixture
+            .verify_certificate(&fixture.certificate)
+            .expect("aggregate BLS and every Pasta signature verify at ingress");
+        let decoded = mint::decode_kagemusha_mint_finality_seal_bundle_v1(
+            fixture
+                .certificate
+                .kagemusha_finality_seal_payload()
+                .expect("bundle envelope")
+                .expect("mandatory bundle"),
+        )
+        .expect("decode exact canonical bundle");
+        assert_eq!(decoded, fixture.bundle);
+
+        for (label, vote) in enclosing_vote_substitutions(&fixture.vote) {
+            let certificate =
+                fixture.signed_certificate(certificate_for_vote(&vote), &fixture.bundle);
+            assert!(
+                matches!(
+                    fixture.verify_bundle(&certificate, &fixture.bundle),
+                    Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+                ),
+                "{label}"
+            );
+            assert!(
+                fixture.verify_certificate(&certificate).is_err(),
+                "fresh aggregate BLS must not authorize a substituted {label}"
+            );
+        }
+        for (label, message) in statement_substitutions(&fixture.bundle.message) {
+            let mut bundle = fixture.bundle.clone();
+            bundle.message = message;
+            assert!(
+                matches!(
+                    fixture.verify_bundle(&fixture.certificate, &bundle),
+                    Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+                ),
+                "{label}"
+            );
+            let certificate = fixture.signed_certificate(fixture.certificate.clone(), &bundle);
+            assert!(
+                fixture.verify_certificate(&certificate).is_err(),
+                "BLS-authenticated QC rejects a substituted seal {label}"
+            );
+        }
+        let mut signed_other_statement = fixture.bundle.clone();
+        signed_other_statement.message.subject_digest[0] ^= 1;
+        signed_other_statement.seals = (0..3)
+            .map(|index| sign_seal(&fixture.context, index, &signed_other_statement.message))
+            .collect();
+        assert!(matches!(
+            fixture.verify_bundle(&fixture.certificate, &signed_other_statement),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(
+            fixture
+                .verify_certificate(
+                    &fixture
+                        .signed_certificate(fixture.certificate.clone(), &signed_other_statement)
+                )
+                .is_err()
+        );
+
+        let mut different_signers = fixture.bundle.clone();
+        different_signers.seals[2] = sign_seal(&fixture.context, 3, &different_signers.message);
+        different_signers
+            .validate()
+            .expect("another exact ordered quorum");
+        assert!(matches!(
+            fixture.verify_bundle(&fixture.certificate, &different_signers),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(
+            fixture
+                .verify_certificate(
+                    &fixture.signed_certificate(fixture.certificate.clone(), &different_signers)
+                )
+                .is_err()
+        );
+        let mut other_certificate = fixture.certificate.clone();
+        other_certificate.signers = vec![0, 1, 3];
+        let other_certificate = fixture.signed_certificate(other_certificate, &fixture.bundle);
+        assert!(matches!(
+            fixture.verify_bundle(&other_certificate, &fixture.bundle),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(fixture.verify_certificate(&other_certificate).is_err());
+        fixture
+            .verify_certificate(&fixture.signed_certificate(other_certificate, &different_signers))
+            .expect("coherent replacement by another exact quorum is valid");
+
+        for signers in [vec![0, 1], vec![0, 1, 2, 3], vec![0, 0, 1], vec![0, 2, 1]] {
+            let mut certificate = fixture.certificate.clone();
+            certificate.signers = signers.clone();
+            let mut bundle = fixture.bundle.clone();
+            bundle.seals = signers
+                .iter()
+                .map(|index| sign_seal(&fixture.context, *index, &bundle.message))
+                .collect();
+            let certificate = fixture.signed_certificate(certificate, &bundle);
+            assert!(
+                matches!(
+                    fixture.verify_bundle(&certificate, &bundle),
+                    Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+                ),
+                "exact ordered quorum rejects {signers:?}"
+            );
+            assert!(
+                fixture.verify_certificate(&certificate).is_err(),
+                "ingress rejects {signers:?}"
+            );
+        }
+        for index in 0..fixture.bundle.seals.len() {
+            for eq in [true, false] {
+                let mut corrupt = fixture.bundle.clone();
+                if eq {
+                    corrupt.seals[index].eq_proof_signature =
+                        signed_other_statement.seals[index].eq_proof_signature;
+                } else {
+                    corrupt.seals[index].ep_proof_signature =
+                        signed_other_statement.seals[index].ep_proof_signature;
+                }
+                corrupt
+                    .validate()
+                    .expect("canonical signatures from the wrong statement");
+                let error = fixture
+                    .verify_bundle(&fixture.certificate, &corrupt)
+                    .expect_err("every signer's two Pasta equations are mandatory");
+                assert!(matches!(
+                    error,
+                    mint::KagemushaMintFinalityErrorV1::InvalidSignature(_)
+                ));
+                assert!(error.to_string().contains("Schnorr equation failed"));
+                let certificate = fixture.signed_certificate(fixture.certificate.clone(), &corrupt);
+                wire::finality::verify_quorum_certificate_with_validator_pops(
+                    &fixture.context,
+                    &certificate,
+                    &fixture.pops,
+                )
+                .expect("aggregate BLS remains independently valid");
+                assert!(
+                    fixture.verify_certificate(&certificate).is_err(),
+                    "ingress must check signer {index}, Eq mutation = {eq}"
+                );
+            }
+        }
+        let bls = fixture
+            .certificate
+            .bls_aggregate_signature()
+            .expect("valid aggregate framing");
+        let mut missing = fixture.certificate.clone();
+        missing.aggregate_signature = bls.to_vec();
+        assert!(missing.kagemusha_finality_seal_payload().is_err());
+        assert!(fixture.verify_certificate(&missing).is_err());
+        let mut wrong_kind = fixture.certificate.clone();
+        wrong_kind.aggregate_signature = wire::encode_kagemusha_consensus_signature_envelope_v1(
+            wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+            bls,
+            &fixture.bundle.encode(),
+        )
+        .expect("well-framed wrong envelope kind");
+        assert!(wrong_kind.kagemusha_finality_seal_payload().is_err());
+        assert!(fixture.verify_certificate(&wrong_kind).is_err());
+        let mut bad_bls = fixture.certificate.clone();
+        let wrong_signatures = fixture.keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::new(key.private_key(), b"another BLS statement")
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let wrong_bls = iroha_crypto::bls_normal_aggregate_signatures(
+            &wrong_signatures
+                .iter()
+                .map(Vec::as_slice)
+                .collect::<Vec<_>>(),
+        )
+        .expect("real aggregate for another statement");
+        bad_bls.aggregate_signature = wire::encode_kagemusha_consensus_signature_envelope_v1(
+            wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+            &wrong_bls,
+            &fixture.bundle.encode(),
+        )
+        .expect("valid envelope with wrong aggregate BLS signature");
+        fixture
+            .verify_bundle(&bad_bls, &fixture.bundle)
+            .expect("paired quorum remains independently valid");
+        assert!(
+            fixture.verify_certificate(&bad_bls).is_err(),
+            "Pasta quorum cannot replace aggregate BLS verification"
+        );
+
+        let mut out_of_range = fixture.certificate.clone();
+        out_of_range.signers = vec![0, 1, 4];
+        assert!(matches!(
+            fixture.verify_bundle(&out_of_range, &fixture.bundle),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(fixture.verify_certificate(&out_of_range).is_err());
+        let mut prepare = fixture.certificate.clone();
+        prepare.phase = wire::GlobalPhase::Prepare;
+        let prepare = fixture.signed_certificate(prepare, &fixture.bundle);
+        assert!(matches!(
+            fixture.verify_bundle(&prepare, &fixture.bundle),
+            Err(mint::KagemushaMintFinalityErrorV1::InvalidStatement(_))
+        ));
+        assert!(fixture.verify_certificate(&prepare).is_err());
+
+        let (boundary_vote, boundary_message) = zero_top_up_boundary(&fixture);
+        let boundary_bundle = KagemushaMintFinalitySealBundleV1 {
+            seals: (0..3)
+                .map(|index| sign_seal(&fixture.context, index, &boundary_message))
+                .collect(),
+            message: boundary_message,
+        };
+        let mut boundary_certificate =
+            fixture.signed_certificate(certificate_for_vote(&boundary_vote), &boundary_bundle);
+        fixture
+            .verify_bundle(&boundary_certificate, &boundary_bundle)
+            .expect("zero-top-up paired quorum");
+        fixture
+            .verify_certificate(&boundary_certificate)
+            .expect("sealed zero-top-up boundary QC");
+        boundary_certificate.aggregate_signature = boundary_certificate
+            .bls_aggregate_signature()
+            .expect("boundary aggregate BLS")
+            .to_vec();
+        assert_eq!(
+            boundary_certificate.kagemusha_finality_seal_payload(),
+            Ok(None)
+        );
+        wire::finality::verify_quorum_certificate_with_validator_pops(
+            &fixture.context,
+            &boundary_certificate,
+            &fixture.pops,
+        )
+        .expect("unsealed boundary aggregate BLS is still valid");
+        assert!(
+            fixture.verify_certificate(&boundary_certificate).is_err(),
+            "epoch rotation cannot omit its Pasta bundle"
+        );
+    }
+}
+
+#[cfg(feature = "bls")]
 #[test]
 fn timeout_vote_installs_embedded_qc_before_forming_tc() {
     let directory = TempDir::new().expect("temporary directory");

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Validate SoraFS reference SDK release evidence artifacts."""
+"""Validate SoraFS reference SDK release evidence against independent sources.
+
+Every gate selection requires an authenticated signed-manifest anchor. Supply
+the exact absolute source context and its independently reviewed SHA-256 with
+--signed-manifest-source-context and --signed-manifest-source-context-sha256.
+Raw Ed25519 verification does not establish hardware custody: qualification
+requires the native ReleaseManifest receipt verifier and rejects missing support.
+"""
 
 from __future__ import annotations
 
@@ -87,6 +94,12 @@ from sorafs_reference_sdk_supply_chain import (  # noqa: E402
     SupplyChainSourceResult,
     validate_supply_chain_sources,
 )
+from sorafs_reference_sdk_signed_manifest import (  # noqa: E402
+    SIGNED_MANIFEST_CANARY_FIELDS,
+    SignedManifestSourceError,
+    VerifiedSignedManifestSources,
+    authenticate_signed_manifest_sources,
+)
 
 SUMMARY_SCHEMA = "sorafs.reference_sdk.release_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
@@ -127,8 +140,6 @@ RELEASE_MANIFEST_BOUND_KINDS = (
 POLICY_BOUND_KINDS = ("governance_approval",)
 RELEASE_KEY_BOUND_KINDS = ("governance_approval",)
 ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS = ("ed25519",)
-REQUIRED_SIGNING_PROVIDER = "authenticated_external_signer"
-REQUIRED_SIGNING_BACKEND = "software"
 SUPPLY_CHAIN_TARGET_RESULT_FIELDS = frozenset(
     {
         "target",
@@ -263,24 +274,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "release_manifest_digest_hex",
         "raw_archives_included",
     ),
-    "signed_manifest": COMMON_EVIDENCE_REQUIRED_FIELDS
-    + (
-        "manifest_signed",
-        "manifest_signature_verified",
-        "manifest_sha256_published",
-        "governed_release_key_used",
-        "public_key_fingerprint_recorded",
-        "private_key_absent",
-        "signature_algorithm",
-        "signing_provider",
-        "signing_backend",
-        "signing_provider_revision",
-        "signer_response_verified",
-        "manifest_digest_hex",
-        "policy_digest_hex",
-        "public_key_fingerprint_hex",
-        "raw_manifest_included",
-    ),
+    "signed_manifest": COMMON_EVIDENCE_REQUIRED_FIELDS + SIGNED_MANIFEST_CANARY_FIELDS,
     "supply_chain": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "target_count",
@@ -363,6 +357,8 @@ class ValidationOptions:
     provenance_certificate_identity: str | None = None
     provenance_oidc_issuer: str | None = None
     provenance_verification_public_key: bytes | None = None
+    signed_manifest_source_context: Path | None = None
+    signed_manifest_source_context_sha256: str | None = None
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
@@ -426,23 +422,21 @@ def validate_release_archive(
     require_false(payload, "raw_archives_included", errors)
 
 
-def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None:
-    require_bool_true(payload, "manifest_signed", errors)
-    require_bool_true(payload, "manifest_signature_verified", errors)
-    require_bool_true(payload, "manifest_sha256_published", errors)
-    require_bool_true(payload, "governed_release_key_used", errors)
-    require_bool_true(payload, "public_key_fingerprint_recorded", errors)
-    require_bool_true(payload, "private_key_absent", errors)
+def validate_signed_manifest(
+    payload: dict[str, Any], errors: list[str], options: ValidationOptions,
+) -> None:
+    for field in ("manifest_signature_verified", "hardware_custody_verified", "completed_operation_verified", "state_observation_verified"):
+        require_bool_true(payload, field, errors)
     require_string_in(
         payload,
         "signature_algorithm",
         ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS,
         errors,
     )
-    require_string_equal(payload, "signing_provider", REQUIRED_SIGNING_PROVIDER, errors)
-    require_string_equal(payload, "signing_backend", REQUIRED_SIGNING_BACKEND, errors)
-    require_positive_int(payload, "signing_provider_revision", errors)
-    require_bool_true(payload, "signer_response_verified", errors)
+    require_string_in(payload, "signing_backend", ("hardware",), errors)
+    require_string_in(payload, "role", ("release_manifest",), errors)
+    for field in ("key_revision", "policy_revision", "finalized_height", "manifest_size"):
+        require_positive_int(payload, field, errors)
     require_hex(payload, "manifest_digest_hex", HEX64_LEN, errors)
     policy_digest = require_policy_digest(payload, errors)
     if policy_digest and not any(bytes.fromhex(policy_digest)):
@@ -453,6 +447,21 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
     if public_key_fingerprint and not any(bytes.fromhex(public_key_fingerprint)):
         errors.append("public_key_fingerprint_hex must not be zero")
     require_false(payload, "raw_manifest_included", errors)
+    try:
+        verified = authenticate_signed_manifest_sources(
+            options.signed_manifest_source_context,
+            options.signed_manifest_source_context_sha256,
+            options.now_unix,
+        )
+    except SignedManifestSourceError as error:
+        errors.append(f"signed-manifest source: {error}")
+        return
+    if not isinstance(verified, VerifiedSignedManifestSources):
+        errors.append("signed-manifest source authenticator returned without a verified hardware receipt")
+        return
+    for field, expected in verified.canary_fields().items():
+        if type(payload.get(field)) is not type(expected) or payload.get(field) != expected:
+            errors.append(f"signed_manifest {field} differs from the authenticated receipt")
 
 
 def decode_ed25519_public_key(value: str | None) -> bytes | None:
@@ -880,7 +889,7 @@ def validate_kind_specific(
     if kind.name == "release_archive":
         validate_release_archive(payload, errors, options)
     elif kind.name == "signed_manifest":
-        validate_signed_manifest(payload, errors)
+        validate_signed_manifest(payload, errors, options)
     elif kind.name == "supply_chain":
         validate_supply_chain(payload, errors, options)
     elif kind.name == "downstream_bindings":
@@ -950,6 +959,9 @@ def build_summary(
     summary_out: Path | None,
 ) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
+    # Selecting a subset of SDK checks cannot remove the release trust anchor.
+    if "signed_manifest" not in required_kinds:
+        required_kinds = ("signed_manifest", *required_kinds)
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_release_manifest_digests: set[str] = set()
@@ -1206,7 +1218,7 @@ def main(argv: list[str] | None = None) -> int:
         "--require-kind",
         action="append",
         default=[],
-        help="Required evidence kind, or comma-separated kinds. Defaults to all SF-11 kinds.",
+        help="Required evidence kinds (all by default); authenticated signed_manifest is always mandatory.",
     )
     parser.add_argument("--summary-out", type=Path, help="Optional summary JSON output path.")
     parser.add_argument(
@@ -1242,6 +1254,14 @@ def main(argv: list[str] | None = None) -> int:
             "Root containing source artifacts named by supply_chain "
             "source_artifacts bindings."
         ),
+    )
+    parser.add_argument(
+        "--signed-manifest-source-context", type=Path,
+        help="Independent absolute path to the closed, pinned signed-manifest source context.",
+    )
+    parser.add_argument(
+        "--signed-manifest-source-context-sha256",
+        help="Independently reviewed SHA-256 of the exact signed-manifest source context.",
     )
     parser.add_argument(
         "--provenance-certificate-identity",
@@ -1288,6 +1308,8 @@ def main(argv: list[str] | None = None) -> int:
         provenance_verification_public_key=decode_ed25519_public_key(
             args.provenance_verification_public_key_hex
         ),
+        signed_manifest_source_context=args.signed_manifest_source_context,
+        signed_manifest_source_context_sha256=args.signed_manifest_source_context_sha256,
     )
     preflight_errors = validate_checker_preflight(args)
     preflight_errors.extend(

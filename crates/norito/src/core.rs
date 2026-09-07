@@ -6673,7 +6673,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     );
     Ok((payload, final_flags))
 }
-/// Return the exact canonical payload length without allocating an output buffer.
+/// Return the exact payload length under the active layout without allocating an output buffer.
 ///
 /// This deliberately counts a real serialization pass instead of trusting
 /// [`NoritoSerialize::encoded_len_exact`], because that method is only an optimization hint and an
@@ -6698,7 +6698,7 @@ pub fn encoded_payload_len(value: &dyn NoritoSerialize) -> Result<usize, Error> 
     drop(encode_guard);
     Ok(payload_len)
 }
-/// Return the exact canonical framed length without allocating an output buffer.
+/// Return the exact framed length under the active layout without allocating an output buffer.
 ///
 /// Like [`encoded_payload_len`], this counts a real serialization pass instead
 /// of trusting length hints.

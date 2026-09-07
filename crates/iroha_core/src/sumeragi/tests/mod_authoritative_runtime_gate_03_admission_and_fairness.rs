@@ -1491,14 +1491,17 @@ fn certified_view_cut_preserves_exact_locked_commit_and_historical_commit_qc() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let roster = validator_peers(4);
     let mut matching_commit = v2_vote(wire::GlobalPhase::Commit);
-    let protected_lock = match &mut matching_commit {
+    let (protected_lock, protected_execution) = match &mut matching_commit {
         BlockMessage::V2(wire::ConsensusMessageV2 {
             payload: wire::ConsensusMessageV2Payload::Vote(vote),
             ..
         }) => {
             vote.round.view = 2;
             vote.proposal_round = vote.round;
-            (vote.proposal_round, vote.subject)
+            (
+                (vote.proposal_round, vote.subject),
+                vote.execution_commitment,
+            )
         }
         _ => unreachable!("Commit fixture carries one v2 Vote"),
     };
@@ -1511,7 +1514,7 @@ fn certified_view_cut_preserves_exact_locked_commit_and_historical_commit_qc() {
             0,
             false,
         )
-        .advance_view(5, Some(protected_lock))
+        .advance_view(5, Some(protected_lock), Some(protected_execution))
         .expect("publish the exact durable lock with the certified view cut");
     ingress
         .advance_leader_wire_recovery_cut(authority)
@@ -1593,7 +1596,7 @@ fn same_origin_timeout_upgrade_replaces_the_installed_terminal_certificate() {
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-            thin,
+            thin.clone(),
             validator.clone()
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
@@ -1610,6 +1613,7 @@ fn same_origin_timeout_upgrade_replaces_the_installed_terminal_certificate() {
     let runtime = ownership
         .leader_wire_runtime_receipt()
         .expect("runtime receipt is installed");
+    let installed_token = runtime.token().clone();
     ingress
         .mark_leader_wire_volatile_terminal(runtime)
         .expect("publish the installed-certificate tombstone");
@@ -1625,8 +1629,48 @@ fn same_origin_timeout_upgrade_replaces_the_installed_terminal_certificate() {
         ingress
             .advance_leader_wire_recovery_cut(next)
             .expect("publish the certified view cut that installing TC(V) produces"),
-        0
+        1,
+        "TC(V) without a selected Prepare is obsolete after the consumer enters V+1"
     );
+    let gate = {
+        let state = ingress.state.lock();
+        assert!(state.leader_wire_lifecycles.is_empty());
+        assert_eq!(
+            state.last_admission_ordinal,
+            installed_token.admission_ordinal
+        );
+        Arc::clone(
+            state
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .expect("the certified cut retains its exact durable gate"),
+        )
+    };
+    assert!(
+        gate.restore()
+            .expect("inspect retired thin TC")
+            .records()
+            .is_empty()
+    );
+    assert!(
+        gate.identity_is_obsolete(&installed_token.identity)
+            .expect("the live WAL cut rejects the exact thin TC")
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            thin,
+            validator.clone()
+        )),
+        Ok(super::FairV2IngressPushDisposition::Coalesced)
+    ));
+    {
+        let state = ingress.state.lock();
+        assert!(state.leader_wire_lifecycles.is_empty());
+        assert_eq!(
+            state.last_admission_ordinal,
+            installed_token.admission_ordinal
+        );
+    }
     let upgrade = v2_locked_timeout_certificate(round.view);
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
@@ -1636,12 +1680,19 @@ fn same_origin_timeout_upgrade_replaces_the_installed_terminal_certificate() {
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     let state = ingress.state.lock();
+    assert_eq!(state.leader_wire_lifecycles.len(), 1);
     let replacement = state
         .leader_wire_lifecycles
         .values()
         .next()
         .expect("the upgrade owns the released timeout slot");
     assert_eq!(replacement.token.identity.view, round.view);
+    assert!(replacement.token.admission_ordinal > installed_token.admission_ordinal);
+    assert_ne!(
+        replacement.token.identity.canonical_wire_hash,
+        installed_token.identity.canonical_wire_hash,
+        "the stronger same-round certificate owns a fresh authenticated occurrence"
+    );
     assert_eq!(
         replacement.status,
         super::FairV2IngressLeaderWireStatus::Ingress
@@ -2594,10 +2645,12 @@ fn timeout_certificate_crosses_retained_chunk_reservation() {
     certificate.round = round;
     let timeout_inbound =
         InboundBlockMessage::from_authenticated_peer(timeout.clone(), validator.clone());
-    assert!(super::fair_v2_ingress_certified_fence_escape_advances_owner(
-        &chunk_token,
-        &timeout_inbound,
-    ));
+    assert!(
+        super::fair_v2_ingress_certified_fence_escape_advances_owner(
+            &chunk_token,
+            &timeout_inbound,
+        )
+    );
     assert!(matches!(
         ingress.try_push(timeout_inbound),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
@@ -2711,7 +2764,10 @@ fn retained_chunk_does_not_hide_timeout_vote_needed_to_close_its_view() {
             )
         })
         .expect("the timeout share crosses a retained chunk to help form its retiring TC");
-    assert_eq!(admitted_timeout_vote.message().encode(), timeout_vote.encode());
+    assert_eq!(
+        admitted_timeout_vote.message().encode(),
+        timeout_vote.encode()
+    );
     assert_eq!(
         ingress.state.lock().len,
         1,

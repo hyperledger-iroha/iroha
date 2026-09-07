@@ -16,6 +16,9 @@ pub(crate) enum V2ApplyError {
     /// Kura persistence or canonical association failed.
     #[error(transparent)]
     Kura(#[from] crate::kura::Error),
+    /// A canonical storage read failed before it could authenticate local evidence.
+    #[error("Sumeragi v2 canonical storage read requires restart recovery: {0}")]
+    CanonicalStorageRead(#[source] crate::kura::Error),
     /// Apply task and frozen context do not identify one exact decision.
     #[error("Sumeragi v2 Apply task differs from its frozen context or body")]
     TaskMismatch,
@@ -38,9 +41,6 @@ pub(crate) enum V2ApplyError {
         /// Decided height.
         decision_height: usize,
     },
-    /// Kura already contains a different block at the decided height.
-    #[error("Kura contains a conflicting block at the Sumeragi v2 decision height")]
-    KuraConflict,
     /// WSV reports application but Kura has no canonical block.
     #[error("WSV is ahead of Kura while completing a Sumeragi v2 decision")]
     StateAheadOfKura,
@@ -108,7 +108,9 @@ impl V2ApplyError {
     pub(crate) const fn requires_restart_recovery(&self) -> bool {
         match self {
             Self::Kura(error) => error.requires_restart_recovery(),
-            Self::CommittedRecoveryRequired { .. } => true,
+            Self::CommittedRecoveryRequired { .. }
+            | Self::CanonicalStorageRead(_)
+            | Self::StateAheadOfKura => true,
             #[cfg(test)]
             Self::InjectedCrashAfterKuraStore
             | Self::InjectedCrashAfterWsvCheckpoint

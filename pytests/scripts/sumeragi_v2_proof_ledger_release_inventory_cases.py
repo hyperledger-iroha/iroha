@@ -424,6 +424,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         ),
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
+        *(Path(relative) for relative in module._READY_VALIDATE_WAL_CRASH_SOURCE_FILES),
         *paths,
     ]
     expanded: list[Path] = []
@@ -454,7 +455,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 866 tests",
+            "must contain exactly 881 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -525,9 +526,9 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "canonical module/test inventory SHA-256",
         ),
         (
-            "readonly expected_production_liveness_test_count=866",
+            "readonly expected_production_liveness_test_count=881",
             "readonly expected_production_liveness_test_count=861",
-            "production liveness source count must be sealed as 866",
+            "production liveness source count must be sealed as 881",
         ),
         (
             "  sumeragi::v2_core::tests\n"
@@ -562,26 +563,26 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=522",
-            "readonly expected_multilane_focus_test_count=521",
-            "multilane G-UNIT source count must be sealed as 522",
+            "readonly expected_multilane_focus_test_count=531",
+            "readonly expected_multilane_focus_test_count=530",
+            "multilane G-UNIT source count must be sealed as 531",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 523 ]]; then""",
+                """'[:space:]')" != 532 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 522 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 522 focus rows",
+                """'[:space:]')" != 531 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 531 focus rows",
         ),
         (
-            "The canonical 522-row TSV is",
-            "The canonical 521-row TSV is",
-            "G-UNIT inventory comment must seal 522 rows",
+            "The canonical 531-row TSV is",
+            "The canonical 530-row TSV is",
+            "G-UNIT inventory comment must seal 531 rows",
         ),
         (
-            "including exact 522/522 G-UNIT,",
-            "including exact 521/522 G-UNIT,",
-            "terminal success text must seal exact 522/522 G-UNIT",
+            "including exact 531/531 G-UNIT,",
+            "including exact 530/531 G-UNIT,",
+            "terminal success text must seal exact 531/531 G-UNIT",
         ),
         (
             "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
@@ -795,24 +796,24 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             "  native_amx_grouped_parity_test_counts=(\n"
             "    7\n"
-            "    63\n"
-            "    61\n",
+            "    67\n"
+            "    65\n",
             "  native_amx_grouped_parity_test_counts=(\n"
             "    7\n"
-            "    62\n"
-            "    61\n",
+            "    66\n"
+            "    65\n",
             "grouped Native AMX SDK runner suite inventory must equal",
         ),
         (
             Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
-            "  python)\n    observed_test_count=63\n",
-            "  python)\n    observed_test_count=62\n",
+            "  python)\n    observed_test_count=67\n",
+            "  python)\n    observed_test_count=66\n",
             "grouped Native AMX SDK harness suite inventory must equal",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '    ("python", 63),\n',
-            '    ("python", 62),\n',
+            '    ("python", 67),\n',
+            '    ("python", 66),\n',
             "grouped Native AMX SDK receipt suite inventory must equal",
         ),
     ),
@@ -866,10 +867,10 @@ def test_production_release_inventory_rejects_grouped_sdk_count_drift(
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
             "    129\n"
-            "    88\n",
+            "    90\n",
             "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
             "    125\n"
-            "    88\n",
+            "    90\n",
             "Sumeragi SDK diagnostics runner suite inventory must equal",
         ),
         (
@@ -888,7 +889,7 @@ def test_production_release_inventory_rejects_grouped_sdk_count_drift(
             Path("javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"),
             '  "typed Sumeragi endpoints reject swapped status and diagnostics payloads",\n',
             "",
-            "dedicated JavaScript Sumeragi diagnostics inventory must contain exactly 44",
+            "dedicated JavaScript Sumeragi diagnostics inventory must contain exactly 45",
         ),
         (
             Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
@@ -1277,26 +1278,26 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 866 tests across 42 modules.\n"
+            "current inventory to 881 tests across 43 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 83 legs.",
-            "current inventory to 866 tests across 42 modules.\n"
+            "corridor contains 84 legs.",
+            "current inventory to 881 tests across 43 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 82 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 866-test,\n42-module inventory. The complete source-sealed\n"
+            "current 881-test,\n43-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 83 legs",
-            "current 866-test,\n42-module inventory. The complete source-sealed\n"
+            "contains 84 legs",
+            "current 881-test,\n43-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 82 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current inventory to 866\nexact tests across 42 modules and 83 pre-network legs.",
-            "current inventory to 866\nexact tests across 42 modules and 82 pre-network legs.",
+            "current inventory to 881\nexact tests across 43 modules and 84 pre-network legs.",
+            "current inventory to 881\nexact tests across 43 modules and 82 pre-network legs.",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
@@ -1305,18 +1306,18 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "contain exactly 522 unique required",
-            "contain exactly 521 unique required",
+            "contain exactly 531 unique required",
+            "contain exactly 530 unique required",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "tests: 316 core, 143 queue-journal",
+            "tests: 325 core, 143 queue-journal",
             "tests: 315 core, 143 queue-journal",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "exact `522/522` source consistency",
-            "exact `521/522` source consistency",
+            "exact `531/531` source consistency",
+            "exact `530/531` source consistency",
         ),
     ),
     ids=(
@@ -1377,9 +1378,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 866",
+            "_PRODUCTION_TEST_COUNT = 881",
             "_PRODUCTION_TEST_COUNT = 861",
-            "production test count must equal the exact shell inventory count 866",
+            "production test count must equal the exact shell inventory count 881",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -1441,8 +1442,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-adapter", "sumeragi::v2::tests", 52),',
             '("production-v2-adapter", "sumeragi::v2::tests", 49),',
-            '("production-v2-adapter", "sumeragi::v2::tests", 48),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -1477,7 +1478,7 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),',
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 65),',
             '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 62),',
             "production module receipt tuple must equal the exact shell",
         ),
@@ -1485,7 +1486,7 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
             '        "production-v2-lifecycle-coordinator",\n'
             '        "sumeragi::v2_lifecycle_coordinator",\n'
-            "        43,\n"
+            "        45,\n"
             "    ),",
             '        "production-v2-lifecycle-coordinator",\n'
             '        "sumeragi::v2_lifecycle_coordinator",\n'
@@ -1507,8 +1508,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 90),',
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 89),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 92),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 91),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -1531,9 +1532,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=83",
             "  readonly expected_corridor_leg_count=84",
-            "sealed at 83 legs",
+            "  readonly expected_corridor_leg_count=83",
+            "sealed at 84 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
@@ -1582,3 +1583,58 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
 
     errors = module._production_liveness_release_inventory_errors(tmp_path)
     assert any(expected_error in error for error in errors), errors
+
+
+def test_ready_validate_wal_crash_release_binding_accepts_current_source(tmp_path: Path) -> None:
+    module = load_checker()
+    sources = [Path(relative) for relative in module._READY_VALIDATE_WAL_CRASH_SOURCE_FILES]
+    for relative in sources:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+        for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative.as_posix(), ()):
+            dependency = relative.parent / component
+            if dependency not in sources:
+                sources.append(dependency)
+    assert module._ready_validate_wal_crash_replay_source_errors(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("source_index", "old", "new", "diagnostic"),
+    (
+        (0, "adapter.wal.append(&encoded_wal_payload)", "adapter.append_without_durable_wal(&encoded_wal_payload)", "durable append before live Sign seal"),
+        (0, "frame.payload() != encoded_wal_payload.as_slice()", "false", "durable append before live Sign seal"),
+        (0, "#[cfg(test)]\n    crash_after_wal_append: bool", "crash_after_wal_append: bool", "test-only bound-publication field"),
+        (1, "self.file.sync_data()?", "self.file.flush()?", "actual WAL sync"),
+        (2, "if let Err(source) = io.sync_data()", "if let Err(source) = io.flush()", "core WAL acknowledgment order"),
+        (3, "for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit]", "for phase in [wire::GlobalPhase::Prepare]", "crash regression exact repeated replay"),
+        (3, "for _ in 0..2", "for _ in 0..1", "crash regression exact repeated replay"),
+        (3, 'std::fs::read(&wal_path).expect("read WAL after fresh replay and signing"),\n                durable_wal', 'std::fs::read(&wal_path).expect("read WAL after fresh replay and signing"),\n                wal_before', "crash regression exact repeated replay"),
+    ),
+)
+def test_ready_validate_wal_crash_release_binding_rejects_mutations(
+    tmp_path: Path, source_index: int, old: str, new: str, diagnostic: str,
+) -> None:
+    module = load_checker()
+    sources = [Path(relative) for relative in module._READY_VALIDATE_WAL_CRASH_SOURCE_FILES]
+    for relative in sources:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+        for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative.as_posix(), ()):
+            dependency = relative.parent / component
+            if dependency not in sources:
+                sources.append(dependency)
+    baseline = module._ready_validate_wal_crash_replay_source_errors(tmp_path)
+    assert baseline == [], baseline
+    path = tmp_path / module._READY_VALIDATE_WAL_CRASH_SOURCE_FILES[source_index]
+    source = path.read_text(encoding="utf-8")
+    if source_index == 3:
+        start = source.index("fn ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit(")
+    else:
+        start = 0
+    offset = source.find(old, start)
+    assert offset >= 0
+    path.write_text(source[:offset] + new + source[offset + len(old):], encoding="utf-8")
+    errors = module._ready_validate_wal_crash_replay_source_errors(tmp_path)
+    assert any(diagnostic in error for error in errors), errors

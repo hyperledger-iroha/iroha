@@ -15,6 +15,7 @@ import org.hyperledger.iroha.sdk.crypto.Blake2b
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
+import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
 /**
  * Strict JSON models for Native AMX V2 control receipts.
@@ -60,8 +61,7 @@ object NativeAmxV2 {
     private const val SETTLEMENT_TYPE =
         "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
     private val SETTLEMENT_HASH_DOMAIN =
-        "iroha.consensus.native-amx.participant-settlement.v1"
-            .toByteArray(StandardCharsets.UTF_8)
+        "iroha:native-amx:participant-settlement:v1".toByteArray(StandardCharsets.UTF_8)
 
     private class BlsNormalPeerId(
         val literal: String,
@@ -105,8 +105,8 @@ object NativeAmxV2 {
     /** Exact raw 32-byte source identity, encoded as uppercase hexadecimal. */
     class SourceId(val value: String) {
         init {
-            require(SOURCE_ID.matches(value)) {
-                "Native AMX source ID must be exactly 32 uppercase hexadecimal bytes"
+            require(SOURCE_ID.matches(value) && value.any { it != '0' }) {
+                "Native AMX source ID must be exactly 32 nonzero uppercase hexadecimal bytes"
             }
         }
 
@@ -186,6 +186,11 @@ object NativeAmxV2 {
         val height: BigInteger,
         val view: BigInteger,
     ) {
+        init {
+            positiveU64(height, "round.height")
+            unsignedU64(view, "round.view")
+        }
+
         override fun equals(other: Any?): Boolean =
             other is Round &&
                 contextId == other.contextId &&
@@ -300,74 +305,50 @@ object NativeAmxV2 {
         ).hashCode()
     }
 
-    /** One zero-effect source row in a participant settlement. */
-    class SettlementReceipt internal constructor(
-        val sourceId: SourceId,
-        val localAmount: String,
-        val xorDue: String,
-        val xorAfterHaircut: String,
-        val xorVariance: String,
-        val timestampMs: BigInteger,
-    ) {
-        override fun equals(other: Any?): Boolean =
-            other is SettlementReceipt &&
-                sourceId == other.sourceId &&
-                localAmount == other.localAmount &&
-                xorDue == other.xorDue &&
-                xorAfterHaircut == other.xorAfterHaircut &&
-                xorVariance == other.xorVariance &&
-                timestampMs == other.timestampMs
-
-        override fun hashCode(): Int = listOf(
-            sourceId,
-            localAmount,
-            xorDue,
-            xorAfterHaircut,
-            xorVariance,
-            timestampMs,
-        ).hashCode()
-    }
-
-    /** Exact nonrecursive participant settlement certified by a Native AMX leg. */
+    /** Bounded participant control with exact route, authority and FIFO membership. */
     class ParticipantSettlement internal constructor(
-        val blockHeight: BigInteger,
         val laneId: Long,
-        val laneIncarnation: ConsensusHash,
         val dataspaceId: BigInteger,
-        val transactionCount: Long,
-        val totalLocalAmount: String,
-        val totalXorDue: String,
-        val totalXorAfterHaircut: String,
-        val totalXorVariance: String,
-        receipts: List<SettlementReceipt>,
+        val laneIncarnation: ConsensusHash,
+        val participantLaneBlockHeight: BigInteger,
+        val authorityContextHeight: BigInteger,
+        val previousNativeSettlementHash: ConsensusHash?,
+        sourceIds: List<SourceId>,
     ) {
-        val receipts: List<SettlementReceipt> =
-            Collections.unmodifiableList(receipts.toList())
+        val sourceIds: List<SourceId> = Collections.unmodifiableList(sourceIds.toList())
+
+        init {
+            require(laneId in 0..0xffff_ffffL && dataspaceId >= BigInteger.ZERO && dataspaceId <= U64_MAX) {
+                "participant route must fit unsigned lane and dataspace IDs"
+            }
+            require(participantLaneBlockHeight > BigInteger.ZERO && participantLaneBlockHeight <= U64_MAX &&
+                authorityContextHeight > BigInteger.ZERO && authorityContextHeight <= U64_MAX) {
+                "participant authority heights must be positive unsigned 64-bit integers"
+            }
+            require(this.sourceIds.size in 1..MAX_GROUP_SOURCES &&
+                this.sourceIds.toSet().size == this.sourceIds.size) {
+                "participant sources must contain 1..4096 unique FIFO identities"
+            }
+            require(participantLaneBlockHeight != BigInteger.ONE || previousNativeSettlementHash == null) {
+                "the first lane block cannot reference a previous Native settlement"
+            }
+        }
+
+        /** Hash the exact seven-field canonical Norito frame. */
+        fun computedHash(): ConsensusHash = computeParticipantSettlementHash(this)
 
         override fun equals(other: Any?): Boolean =
             other is ParticipantSettlement &&
-                blockHeight == other.blockHeight &&
-                laneId == other.laneId &&
+                laneId == other.laneId && dataspaceId == other.dataspaceId &&
                 laneIncarnation == other.laneIncarnation &&
-                dataspaceId == other.dataspaceId &&
-                transactionCount == other.transactionCount &&
-                totalLocalAmount == other.totalLocalAmount &&
-                totalXorDue == other.totalXorDue &&
-                totalXorAfterHaircut == other.totalXorAfterHaircut &&
-                totalXorVariance == other.totalXorVariance &&
-                receipts == other.receipts
+                participantLaneBlockHeight == other.participantLaneBlockHeight &&
+                authorityContextHeight == other.authorityContextHeight &&
+                previousNativeSettlementHash == other.previousNativeSettlementHash &&
+                sourceIds == other.sourceIds
 
         override fun hashCode(): Int = listOf(
-            blockHeight,
-            laneId,
-            laneIncarnation,
-            dataspaceId,
-            transactionCount,
-            totalLocalAmount,
-            totalXorDue,
-            totalXorAfterHaircut,
-            totalXorVariance,
-            receipts,
+            laneId, dataspaceId, laneIncarnation, participantLaneBlockHeight,
+            authorityContextHeight, previousNativeSettlementHash, sourceIds,
         ).hashCode()
     }
 
@@ -668,6 +649,7 @@ object NativeAmxV2 {
             "$path.total_xor_after_haircut",
         )
         canonicalQuantity(record["total_xor_variance"], "$path.total_xor_variance")
+        validateSwapMetadata(record["swap_metadata"], "$path.swap_metadata")
         array(record["receipts"], "$path.receipts")
         array(record["nexus_fee_receipts"], "$path.nexus_fee_receipts")
         val nativeReceipts = array(
@@ -681,7 +663,9 @@ object NativeAmxV2 {
             parseReceipt(receipt, "$path.native_amx_receipts[$index]")
         }
         val orderedSources = parsed.map(Receipt::sourceId)
-        requireStrictlyOrdered(orderedSources.map(SourceId::value), "$path source IDs")
+        require(orderedSources.toSet().size == orderedSources.size) {
+            "$path source IDs must be unique in FIFO order"
+        }
         parsed.forEachIndexed { index, receipt ->
             require(
                 receipt.laneId == laneId &&
@@ -693,8 +677,9 @@ object NativeAmxV2 {
             }
             receipt.legs.forEach { leg ->
                 require(
-                    leg.participantSettlement.receipts.map(SettlementReceipt::sourceId) ==
-                        orderedSources,
+                    leg.laneId != laneId || leg.dataspaceId != dataspaceId ||
+                        leg.laneIncarnation != laneIncarnation ||
+                        leg.participantSettlement.sourceIds == orderedSources,
                 ) {
                     "$path.native_amx_receipts[$index] does not bind the exact ordered source group"
                 }
@@ -849,33 +834,21 @@ object NativeAmxV2 {
         if (!requiresMixedRoleAnchorValidation) {
             val position = matchingEntrypoints.single()
             require(
-                descriptor.acceptedCandidateIndices.size == settlement.receipts.size &&
-                    descriptor.acceptedTransactionHashes.size == settlement.receipts.size &&
-                    settlement.receipts[position].sourceId == body.sourceId,
+                descriptor.acceptedCandidateIndices.size == settlement.sourceIds.size &&
+                    descriptor.acceptedTransactionHashes.size == settlement.sourceIds.size &&
+                    settlement.sourceIds[position] == body.sourceId,
             ) { "$path participant descriptor and grouped settlement are not aligned" }
         }
 
-        val settlementSources = settlement.receipts.map(SettlementReceipt::sourceId)
         require(
             settlementHash == body.participantSettlementCommitment &&
-                settlementHash == computeParticipantSettlementHash(settlement) &&
-                settlement.blockHeight == body.participantLaneBlockHeight &&
+                settlementHash == settlement.computedHash() &&
+                settlement.participantLaneBlockHeight == body.participantLaneBlockHeight &&
+                settlement.authorityContextHeight == body.authorityContextHeight &&
                 settlement.laneId == laneId &&
                 settlement.dataspaceId == dataspaceId &&
                 settlement.laneIncarnation == body.participantLaneIncarnation &&
-                settlement.transactionCount == settlement.receipts.size.toLong() &&
-                settlement.totalLocalAmount == "0" &&
-                settlement.totalXorDue == "0" &&
-                settlement.totalXorAfterHaircut == "0" &&
-                settlement.totalXorVariance == "0" &&
-                settlementSources.count { it == body.sourceId } == 1 &&
-                settlement.receipts.all {
-                    it.localAmount == "0" &&
-                        it.xorDue == "0" &&
-                        it.xorAfterHaircut == "0" &&
-                        it.xorVariance == "0" &&
-                        it.timestampMs == body.authorityContextHeight
-                },
+                settlement.sourceIds.count { it == body.sourceId } == 1,
         ) { "$path participant settlement differs from its signed body" }
         return Leg(
             laneId,
@@ -1213,54 +1186,38 @@ object NativeAmxV2 {
         return descriptor
     }
 
+    /** Decode only the seven-field Native AMX participant control. */
+    @JvmStatic
+    fun parseParticipantSettlement(json: String): ParticipantSettlement =
+        parseParticipantSettlement(parseJson(json), "native AMX participant settlement")
+
+    /** Decode the exact participant-control map without accepting retired fields. */
+    @JvmStatic
+    fun parseParticipantSettlement(value: Map<String, Any?>): ParticipantSettlement =
+        parseParticipantSettlement(value, "native AMX participant settlement")
+
     private fun parseParticipantSettlement(value: Any?, path: String): ParticipantSettlement {
         val record = exactObject(value, PARTICIPANT_SETTLEMENT_FIELDS, path)
-        require(record["swap_metadata"] == null) {
-            "$path.swap_metadata must be null for control-only participant settlement"
+        val values = array(record["source_ids"], "$path.source_ids")
+        require(values.size in 1..MAX_GROUP_SOURCES) {
+            "$path.source_ids must contain 1..$MAX_GROUP_SOURCES sources"
         }
-        require(array(record["nexus_fee_receipts"], "$path.nexus_fee_receipts").isEmpty()) {
-            "$path.nexus_fee_receipts must be empty"
+        val sources = values.mapIndexed { index, value ->
+            source(value, "$path.source_ids[$index]")
         }
-        val receiptValues = array(record["receipts"], "$path.receipts")
-        require(receiptValues.size in 1..MAX_GROUP_SOURCES) {
-            "$path.receipts must contain 1..$MAX_GROUP_SOURCES grouped sources"
+        require(sources.toSet().size == sources.size) {
+            "$path.source_ids must be unique in FIFO order"
         }
-        val receipts = receiptValues.mapIndexed { index, receipt ->
-            parseSettlementReceipt(receipt, "$path.receipts[$index]")
-        }
-        requireStrictlyOrdered(receipts.map { it.sourceId.value }, "$path.receipts source IDs")
         return ParticipantSettlement(
-            blockHeight = positiveU64(record["block_height"], "$path.block_height"),
-            laneId = laneId(record["lane_id"], "$path.lane_id"),
-            laneIncarnation = hash(record["lane_incarnation"], "$path.lane_incarnation"),
-            dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id"),
-            transactionCount = sourceCount(record["tx_count"], "$path.tx_count"),
-            totalLocalAmount = canonicalQuantity(
-                record["total_local_amount"],
-                "$path.total_local_amount",
-            ),
-            totalXorDue = canonicalQuantity(record["total_xor_due"], "$path.total_xor_due"),
-            totalXorAfterHaircut = canonicalQuantity(
-                record["total_xor_after_haircut"],
-                "$path.total_xor_after_haircut",
-            ),
-            totalXorVariance = canonicalQuantity(
-                record["total_xor_variance"],
-                "$path.total_xor_variance",
-            ),
-            receipts = receipts,
-        )
-    }
-
-    private fun parseSettlementReceipt(value: Any?, path: String): SettlementReceipt {
-        val record = exactObject(value, SETTLEMENT_RECEIPT_FIELDS, path)
-        return SettlementReceipt(
-            source(record["source_id"], "$path.source_id"),
-            canonicalQuantity(record["local_amount"], "$path.local_amount"),
-            canonicalQuantity(record["xor_due"], "$path.xor_due"),
-            canonicalQuantity(record["xor_after_haircut"], "$path.xor_after_haircut"),
-            canonicalQuantity(record["xor_variance"], "$path.xor_variance"),
-            unsignedU64(record["timestamp_ms"], "$path.timestamp_ms"),
+            laneId(record["lane_id"], "$path.lane_id"),
+            unsignedU64(record["dataspace_id"], "$path.dataspace_id"),
+            hash(record["lane_incarnation"], "$path.lane_incarnation"),
+            positiveU64(record["participant_lane_block_height"], "$path.participant_lane_block_height"),
+            positiveU64(record["authority_context_height"], "$path.authority_context_height"),
+            record["previous_native_settlement_hash"]?.let {
+                hash(it, "$path.previous_native_settlement_hash")
+            },
+            sources,
         )
     }
 
@@ -1374,10 +1331,37 @@ object NativeAmxV2 {
 
     private fun canonicalQuantity(value: Any?, path: String): String {
         val text = string(value, path)
-        require(text.length <= 155 && QUANTITY.matches(text)) {
+        require(text.length <= 155) {
             "$path must be a canonical bounded non-negative quantity"
         }
-        return text
+        return NumericV1Codec.decodeQuantityJson(text).toString()
+    }
+
+    private fun validateSwapMetadata(value: Any?, path: String) {
+        if (value == null) return
+        val record = exactObject(value, SWAP_METADATA_FIELDS, path)
+        boundedInt(record["epsilon_bps"], "$path.epsilon_bps", 0, 0xffff)
+        laneId(record["twap_window_seconds"], "$path.twap_window_seconds")
+        val numeric = string(record["twap_local_per_xor"], "$path.twap_local_per_xor")
+        require(numeric.length <= 156) { "$path.twap_local_per_xor exceeds the Numeric text bound" }
+        NumericV1Codec.decodeDecimalJson(numeric)
+        val liquidity = exactObject(
+            record["liquidity_profile"],
+            setOf("profile", "state"),
+            "$path.liquidity_profile",
+        )
+        require(liquidity["profile"] in setOf("Tier1", "Tier2", "Tier3") && liquidity["state"] == null) {
+            "$path.liquidity_profile must be a canonical tagged liquidity profile"
+        }
+        val volatility = exactObject(
+            record["volatility_class"],
+            setOf("bucket", "state"),
+            "$path.volatility_class",
+        )
+        require(
+            volatility["bucket"] in setOf("Stable", "Elevated", "Dislocated") &&
+                volatility["state"] == null,
+        ) { "$path.volatility_class must be a canonical tagged volatility class" }
     }
 
     private fun canonicalBlsNormalValidatorSet(
@@ -1593,55 +1577,24 @@ object NativeAmxV2 {
     ): ConsensusHash {
         val payload = structure(
             listOf(
-                u64(settlement.blockHeight),
                 field(u32(settlement.laneId)),
-                hashBytes(settlement.laneIncarnation),
                 field(u64(settlement.dataspaceId)),
-                u64(BigInteger.valueOf(settlement.transactionCount)),
-                quantity(settlement.totalLocalAmount),
-                quantity(settlement.totalXorDue),
-                quantity(settlement.totalXorAfterHaircut),
-                quantity(settlement.totalXorVariance),
-                byteArrayOf(0),
-                vector(settlement.receipts, ::settlementReceipt),
-                vector(emptyList<ByteArray>()) { it },
+                hashBytes(settlement.laneIncarnation),
+                u64(settlement.participantLaneBlockHeight),
+                u64(settlement.authorityContextHeight),
+                settlement.previousNativeSettlementHash?.let {
+                    byteArrayOf(1) + field(hashBytes(it))
+                } ?: byteArrayOf(0),
+                // Norito [u8; 32] frames every byte, unlike the raw Hash representation.
+                vector(settlement.sourceIds) { source ->
+                    structure(hexBytes(source.value).map { byte -> byteArrayOf(byte) })
+                },
             ),
         )
         val frame = noritoFrame(SETTLEMENT_TYPE, payload)
         val domainLength = u64(BigInteger.valueOf(SETTLEMENT_HASH_DOMAIN.size.toLong()))
         return ConsensusHash(
             hashLiteral(domainLength + SETTLEMENT_HASH_DOMAIN + frame),
-        )
-    }
-
-    private fun settlementReceipt(receipt: SettlementReceipt): ByteArray =
-        structure(
-            listOf(
-                hexBytes(receipt.sourceId.value),
-                quantity(receipt.localAmount),
-                quantity(receipt.xorDue),
-                quantity(receipt.xorAfterHaircut),
-                quantity(receipt.xorVariance),
-                u64(receipt.timestampMs),
-            ),
-        )
-
-    private fun quantity(value: String): ByteArray {
-        val separator = value.indexOf('.')
-        val whole = if (separator < 0) value else value.substring(0, separator)
-        val fraction = if (separator < 0) "" else value.substring(separator + 1)
-        val mantissa = BigInteger(whole + fraction)
-        val signedLittleEndian =
-            if (mantissa == BigInteger.ZERO) {
-                ByteArray(0)
-            } else {
-                mantissa.toByteArray().reversedArray()
-            }
-        return structure(
-            listOf(
-                u32(signedLittleEndian.size.toLong()) + signedLittleEndian,
-                u32(fraction.length.toLong()),
-            ),
         )
     }
 
@@ -1758,18 +1711,14 @@ object NativeAmxV2 {
         }
     }
 
-    private fun requireStrictlyOrdered(values: List<String>, path: String) {
-        require(values.zipWithNext().all { (left, right) -> left < right }) {
-            "$path must be strictly ordered and unique"
-        }
-    }
-
     private fun requireCanonicalNonzeroHash(value: String, field: String) {
         require(CANONICAL_HASH.matches(value)) {
             "$field must be a canonical Iroha hash literal"
         }
         val bytes = HashLiteral.decode(value)
-        require(bytes.any { it.toInt() != 0 }) { "$field must not be the zero hash" }
+        require(bytes.dropLast(1).any { it.toInt() != 0 } || bytes.last().toInt() != 1) {
+            "$field must not be the marked zero hash"
+        }
         require((bytes[bytes.lastIndex].toInt() and 1) == 1) {
             "$field has an invalid Iroha hash marker bit"
         }
@@ -1778,9 +1727,15 @@ object NativeAmxV2 {
     private val SOURCE_ID = Regex("^[0-9A-F]{64}$")
     private val CANONICAL_HASH = Regex("^hash:[0-9A-F]{64}#[0-9A-F]{4}$")
     private val BLS_NORMAL_PEER_ID = Regex("^ea0130[0-9A-F]{96}$")
-    private val QUANTITY = Regex("^(?:0|[1-9][0-9]*)(?:\\.[0-9]{0,27}[1-9])?$")
+    private val SWAP_METADATA_FIELDS = setOf(
+        "epsilon_bps",
+        "twap_window_seconds",
+        "liquidity_profile",
+        "twap_local_per_xor",
+        "volatility_class",
+    )
 
-    private val PARTICIPANT_SETTLEMENT_FIELDS = setOf(
+    private val GROUP_FIELDS = setOf(
         "block_height",
         "lane_id",
         "lane_incarnation",
@@ -1793,8 +1748,8 @@ object NativeAmxV2 {
         "swap_metadata",
         "receipts",
         "nexus_fee_receipts",
+        "native_amx_receipts",
     )
-    private val GROUP_FIELDS = PARTICIPANT_SETTLEMENT_FIELDS + "native_amx_receipts"
     private val RECEIPT_FIELDS = setOf(
         "version",
         "source_id",
@@ -1882,12 +1837,8 @@ object NativeAmxV2 {
     private val DESCRIPTOR_OPTIONAL_FIELDS = setOf(
         "previous_lane_block_descriptor_hash",
     )
-    private val SETTLEMENT_RECEIPT_FIELDS = setOf(
-        "source_id",
-        "local_amount",
-        "xor_due",
-        "xor_after_haircut",
-        "xor_variance",
-        "timestamp_ms",
+    private val PARTICIPANT_SETTLEMENT_FIELDS = setOf(
+        "lane_id", "dataspace_id", "lane_incarnation", "participant_lane_block_height",
+        "authority_context_height", "previous_native_settlement_hash", "source_ids",
     )
 }

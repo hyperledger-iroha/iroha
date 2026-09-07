@@ -37,6 +37,7 @@ fn store_block_with_merge_entry_appends_log() {
     kura.store_block_with_merge_entry(block, &entry)
         .expect("store block with merge entry");
     assert_eq!(kura.blocks_count(), 2);
+    let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
     kura.block_data.lock()[1].1 = None;
     assert_eq!(
         kura.get_merge_entry_by_carrier_height(nonzero!(2_usize))
@@ -402,6 +403,7 @@ fn store_block_with_merge_entry_rejects_out_of_order_existing_backfill() {
         .expect("store first carrier and merge entry");
     kura.store_block_with_merge_entry(Arc::clone(&block2), &entry2)
         .expect("store second carrier and merge entry");
+    let _ = persist_v2_finality_chain_through(&kura, nonzero!(3_usize));
     kura.truncate_merge_log_to_len(0)
         .expect("simulate missing merge log before out-of-order backfill");
     let err = kura
@@ -1920,10 +1922,17 @@ fn store_block_with_merge_entry_repairs_post_commit_append_failure_on_exact_retr
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open persistent Kura");
+    // Bind the configured initial incarnation before this fixture writes
+    // durable blocks or recovery sidecars into the primary store.
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let mut blocks = DummyBlocks::new();
-    let parent = blocks.next();
+    let parent = blocks.next_with_results();
     let mut entry = sample_merge_entry(1);
-    let block = next_merge_carrier(&mut blocks, &mut entry);
+    let block = bind_merge_entry_to_carrier(blocks.next_with_results(), &mut entry);
     let block_hash = block.hash();
     let entry_hash = entry.canonical_hash();
     kura.store_block(parent).expect("store carrier parent");
@@ -2002,6 +2011,13 @@ fn merge_append_boundary_failures_recover_for_retry_and_reopen() {
                 &RuntimeLaneConfig::default(),
             )
             .expect("open persistent Kura");
+            // Bind the configured initial incarnation before this fixture writes
+            // durable blocks or recovery sidecars into the primary store.
+            publish_initial_configured_lane_geometry_for_test(
+                &kura,
+                &RuntimeLaneConfig::default(),
+                &BTreeMap::new(),
+            );
             let mut blocks = DummyBlocks::new();
             let parent = blocks.next();
             let mut entry = sample_merge_entry(1);
@@ -2080,10 +2096,17 @@ fn startup_repairs_each_block_first_merge_publication_crash_window() {
             &RuntimeLaneConfig::default(),
         )
         .expect("open Kura");
+        // Bind the configured initial incarnation before this fixture writes
+        // durable blocks or recovery sidecars into the primary store.
+        publish_initial_configured_lane_geometry_for_test(
+            &kura,
+            &RuntimeLaneConfig::default(),
+            &BTreeMap::new(),
+        );
         let mut blocks = DummyBlocks::new();
-        let parent = blocks.next();
+        let parent = blocks.next_with_results();
         let mut entry = sample_merge_entry(1);
-        let block = next_merge_carrier(&mut blocks, &mut entry);
+        let block = bind_merge_entry_to_carrier(blocks.next_with_results(), &mut entry);
         let block_hash = block.hash();
         kura.store_block(parent).expect("store carrier parent");
         kura.persist_pending_certified_merge_entry(&entry)
@@ -2156,7 +2179,15 @@ fn merge_log_truncated_when_block_store_pruned() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
     let lane_cfg = RuntimeLaneConfig::default();
-    let merge_path = lane_cfg.primary().merge_log_path(dir.path());
+    // Establish the signed configured route while the Kura root is pristine.
+    // Only then emulate an uncommitted merge suffix on that admitted store.
+    let (initial, initial_count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_cfg)
+            .expect("initialize authenticated empty Kura");
+    assert_eq!(initial_count.0, 0);
+    publish_initial_configured_lane_geometry_for_test(&initial, &lane_cfg, &BTreeMap::new());
+    let merge_path = lane_cfg.primary().merge_log_path(initial.store_root());
+    drop(initial);
     {
         let mut merge_log = MergeLedgerLog::open_at(&merge_path, MERGE_LEDGER_CACHE_CAPACITY)
             .expect("prepare merge log");
@@ -2299,7 +2330,8 @@ fn merge_log_rejects_unsupported_entry_version_without_mutation() {
     assert!(matches!(
         error,
         Error::MergeCarrierConflict(ref message)
-            if message.contains("unsupported merge ledger entry version")
+            if message.contains("failed exact Norito decode")
+                && message.contains("unsupported merge-ledger entry version")
     ));
     assert_eq!(
         fs::read(&log_path).expect("read rejected unsupported log image"),
@@ -2694,4 +2726,112 @@ fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
         );
         assert!(!reopened.canonical_association_stage_path().exists());
     }
+}
+
+#[test]
+fn finalized_merge_retry_preserves_exact_complete_transaction_index() {
+    for append_tail in [false, true] {
+        let dir = TempDir::new().expect("create exact merge retry root");
+        let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open exact merge retry Kura");
+        let (entrypoint_hash, _, _) = store_indexed_reservation_carrier(&kura, 0x91);
+        let carrier = kura
+            .get_block_without_merge_sidecar(nonzero!(2_usize))
+            .expect("read exact finalized carrier body");
+        let entry = kura
+            .get_merge_entry_by_carrier_height(nonzero!(2_usize))
+            .expect("authenticate finalized carrier")
+            .expect("indexed merge entry");
+        if append_tail {
+            let mut tail: SignedBlock =
+                BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+                    .chain(0, Some(carrier.as_ref()))
+                    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                    .unpack(|_| {})
+                    .into();
+            tail.set_transaction_results(Vec::new(), &[], Vec::new())
+                .expect("attach the exact empty ordinary results");
+            tail.replace_signatures(BTreeSet::from([BlockSignature::new(
+                0,
+                SignatureOf::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), &tail.header()),
+            )]))
+            .expect("sign the final executed ordinary tail header");
+            kura.store_block(Arc::new(tail))
+                .expect("advance beyond finalized carrier");
+        }
+        let expected = Some(BTreeSet::from([nonzero!(2_usize)]));
+        assert_eq!(
+            kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
+            expected
+        );
+        let frame_count = kura.merge_log.lock().total_entries;
+        for _ in 0..2 {
+            kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+                .expect("exact finalized retry preserves published authority");
+            assert_eq!(
+                kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
+                expected,
+                "retry must preserve the complete transaction index, append_tail={append_tail}"
+            );
+            assert_eq!(kura.merge_log.lock().total_entries, frame_count);
+            assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+        }
+    }
+}
+#[test]
+fn finalized_merge_retry_rejects_corrupt_finality_before_republishing_index() {
+    let dir = TempDir::new().expect("create corrupt finality retry root");
+    let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open corrupt finality retry Kura");
+    let (entrypoint_hash, _, _) = store_indexed_reservation_carrier(&kura, 0x92);
+    let carrier = kura
+        .get_block_without_merge_sidecar(nonzero!(2_usize))
+        .expect("read finalized carrier body");
+    let entry = kura
+        .get_merge_entry_by_carrier_height(nonzero!(2_usize))
+        .expect("authenticate original carrier")
+        .expect("indexed merge entry");
+    assert_eq!(
+        kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
+        Some(BTreeSet::from([nonzero!(2_usize)]))
+    );
+    let index_census = || {
+        let index = kura.transaction_entrypoint_index.lock();
+        (
+            index.complete,
+            index.heights_by_entrypoint.clone(),
+            index.incomplete_merge_heights.clone(),
+        )
+    };
+    let original_index = index_census();
+    let finality_path = kura.v2_finality_artifact_path(2);
+    fs::write(&finality_path, b"occupied corrupt finality")
+        .expect("replace exact occupied finality artifact");
+    let files_before = snapshot_regular_files_recursively(dir.path());
+    let error = kura
+        .store_block_with_merge_entry(carrier, &entry)
+        .expect_err(
+            "occupied corrupt finality must never fall through to unfinished-tip authority",
+        );
+    assert!(matches!(
+        error,
+        Error::CanonicalBlockCommittedRecoveryRequired { .. }
+    ));
+    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    assert_eq!(
+        index_census(),
+        original_index,
+        "rejected retry must not demote or republish index state"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(dir.path()),
+        files_before,
+        "rejected retry must retain the exact occupied corruption and all durable evidence"
+    );
 }

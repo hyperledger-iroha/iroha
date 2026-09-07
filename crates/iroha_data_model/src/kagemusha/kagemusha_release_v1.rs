@@ -397,6 +397,65 @@ pub struct KagemushaEnabledProfileV1 {
     pub qualification_report: KagemushaEvidenceFileV1,
 }
 
+/// Public provider proof authority admitted for one exact enabled hardware profile.
+///
+/// This record never contains the provider secret. The receipt authorizes its
+/// SHA-256 commitment, while the credential circuit proves possession.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(schema_name = "iroha.kagemusha.v1.provider-policy-entry")]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaProviderPolicyEntryV1 {
+    /// Exact enabled hardware profile; entries are strictly ordered by this ID.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hardware_profile_id: [u8; 32],
+    /// SHA-256 commitment under the provider-proof-authority domain.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub provider_authority_commitment: [u8; 32],
+    /// Unique leaf position in the fixed-depth 16 provider registry.
+    pub provider_profile_index: u16,
+    /// Canonical low-S P-256 authorization by this profile's governed issuer.
+    pub issuer_signature: super::KagemushaDeviceSignatureV1,
+}
+
+#[derive(Encode)]
+#[norito(schema_name = "iroha.kagemusha.v1.provider-policy-authorization")]
+struct ProviderPolicyAuthorizationPreimageV1 {
+    domain: Vec<u8>,
+    version: u16,
+    hardware_profile_id: [u8; 32],
+    provider_profile_index: u16,
+    provider_authority_commitment: [u8; 32],
+}
+
+/// Return the canonical bytes the governed issuer signs to authorize a provider.
+///
+/// The exact hardware profile ID binds its issuer key, suite commitment, epoch,
+/// capabilities and validity. Final release, registry-root and circuit-key IDs
+/// are excluded so authorization can precede root-specific key generation.
+///
+/// # Errors
+///
+/// Returns an error for a reserved identity or canonical encoding failure.
+pub fn kagemusha_provider_policy_signing_bytes_v1(
+    hardware_profile_id: [u8; 32],
+    provider_profile_index: u16,
+    provider_authority_commitment: [u8; 32],
+) -> Result<Vec<u8>, KagemushaReleaseErrorV1> {
+    if !digest_is_nonzero(hardware_profile_id) || !digest_is_nonzero(provider_authority_commitment)
+    {
+        return Err(KagemushaReleaseErrorV1::InvalidValidationReceipt);
+    }
+    norito::encode_canonical(&ProviderPolicyAuthorizationPreimageV1 {
+        domain: b"iroha:kagemusha:v1:provider-policy-authorization".to_vec(),
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        hardware_profile_id,
+        provider_profile_index,
+        provider_authority_commitment,
+    })
+    .map_err(|_| KagemushaReleaseErrorV1::InvalidValidationReceipt)
+}
+
 /// Recursive relation qualified for each enabled hardware profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1211,6 +1270,10 @@ pub struct KagemushaInternalValidationReceiptV1 {
     /// Exact state/helper circuit-profile digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub profile_digest: [u8; 32],
+    /// Exact tagged native circuit-layout digest checked before artifact decoding.
+    /// This is distinct from the report-derived evidence `profile_digest`.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub native_profile_digest: [u8; 32],
     /// Canonical little-endian Fp Poseidon digest of the compiled Eq protocol exercised by qualification.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub eq_protocol_digest: [u8; 32],
@@ -1220,9 +1283,14 @@ pub struct KagemushaInternalValidationReceiptV1 {
     /// Digest of the canonically ordered artifact inventory.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub artifact_set_digest: [u8; 32],
-    /// Authenticated hardware allowlist/policy root.
+    /// Digest of the exact enabled-profile list, distinct from the provider Merkle root.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub hardware_policy_digest: [u8; 32],
+    /// Independently derived SHA-256 provider registry root admitted by this receipt.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub provider_policy_root: [u8; 32],
+    /// Exactly one public provider proof-authority binding per enabled profile.
+    pub provider_policy: Vec<KagemushaProviderPolicyEntryV1>,
     /// Immutable manifest, local trust policy, and threshold-signed verifier observations.
     pub evidence_closure: KagemushaEvidenceClosureV1,
     /// Circuit-shape synthesis report.
@@ -1274,7 +1342,7 @@ pub struct KagemushaReleaseManifestV1 {
     /// Canonical little-endian Fq Poseidon digest of the compiled Ep protocol.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub ep_protocol_digest: [u8; 32],
-    /// Authenticated hardware allowlist/policy root.
+    /// Digest of the exact enabled-profile list, distinct from the provider Merkle root.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub hardware_policy_digest: [u8; 32],
     /// SHA-256 of the canonical internal-validation receipt.
@@ -1529,6 +1597,9 @@ impl std::error::Error for KagemushaReleaseErrorV1 {}
 #[derive(Debug, PartialEq, Eq)]
 pub struct KagemushaAuthenticatedReleaseV1 {
     manifest: KagemushaReleaseManifestV1,
+    native_profile_digest: [u8; 32],
+    provider_policy_root: [u8; 32],
+    provider_policy: Vec<KagemushaProviderPolicyEntryV1>,
     distinct_relation_protocols: KagemushaDistinctRelationProtocolsV1,
     manifest_digest: [u8; 32],
     receipt_digest: [u8; 32],
@@ -1808,6 +1879,134 @@ pub fn kagemusha_hardware_policy_digest_v1(
             enabled_profiles: enabled_profiles.to_vec(),
         },
     )
+}
+
+/// Derive the fixed-depth SHA-256 provider registry from the complete admitted inventory.
+///
+/// Every enabled profile has exactly one row. Class and capabilities come from
+/// the governed profile, and unoccupied leaves use a domain-separated empty
+/// value. The leaf excludes release-derived values so signing this root cannot
+/// introduce a release-identity cycle. Work is bounded by 64 rows and 16 levels.
+///
+/// # Errors
+///
+/// Rejects missing, extra, reordered, substituted, zero-authority, or duplicate-index rows.
+pub fn kagemusha_provider_policy_root_v1(
+    enabled_profiles: &[KagemushaEnabledProfileV1],
+    entries: &[KagemushaProviderPolicyEntryV1],
+) -> Result<[u8; 32], KagemushaReleaseErrorV1> {
+    provider_policy_tree(enabled_profiles, entries, None).map(|(root, _)| root)
+}
+
+/// Derive the exact bottom-up sibling path for one admitted public provider authority.
+///
+/// This helper produces public Merkle material only; it never grants release or
+/// provider-secret authority. Paths use the same bounded inventory as the root.
+///
+/// # Errors
+///
+/// Rejects an invalid inventory or a profile that is absent from it.
+pub fn kagemusha_provider_policy_path_v1(
+    enabled_profiles: &[KagemushaEnabledProfileV1],
+    entries: &[KagemushaProviderPolicyEntryV1],
+    hardware_profile_id: [u8; 32],
+) -> Result<[[u8; 32]; 16], KagemushaReleaseErrorV1> {
+    provider_policy_tree(enabled_profiles, entries, Some(hardware_profile_id)).map(|(_, path)| path)
+}
+
+fn provider_policy_tree(
+    enabled_profiles: &[KagemushaEnabledProfileV1],
+    entries: &[KagemushaProviderPolicyEntryV1],
+    target_profile: Option<[u8; 32]>,
+) -> Result<([u8; 32], [[u8; 32]; 16]), KagemushaReleaseErrorV1> {
+    use std::collections::BTreeMap;
+
+    validate_enabled_profiles(enabled_profiles)
+        .map_err(|_| KagemushaReleaseErrorV1::InvalidValidationReceipt)?;
+    if entries.len() != enabled_profiles.len() {
+        return Err(KagemushaReleaseErrorV1::InvalidValidationReceipt);
+    }
+    let mut target_index = match target_profile {
+        Some(profile_id) => u32::from(
+            entries
+                .iter()
+                .find(|entry| entry.hardware_profile_id == profile_id)
+                .ok_or(KagemushaReleaseErrorV1::InvalidValidationReceipt)?
+                .provider_profile_index,
+        ),
+        None => 0,
+    };
+    let mut nodes: BTreeMap<u32, [u8; 32]> = BTreeMap::new();
+    for (profile, entry) in enabled_profiles.iter().zip(entries) {
+        if entry.hardware_profile_id != profile.hardware_profile_id
+            || !digest_is_nonzero(entry.provider_authority_commitment)
+        {
+            return Err(KagemushaReleaseErrorV1::InvalidValidationReceipt);
+        }
+        entry
+            .issuer_signature
+            .verify(
+                &profile.hardware_profile.governance_credential_public_key,
+                &kagemusha_provider_policy_signing_bytes_v1(
+                    entry.hardware_profile_id,
+                    entry.provider_profile_index,
+                    entry.provider_authority_commitment,
+                )?,
+            )
+            .map_err(|_| KagemushaReleaseErrorV1::InvalidValidationReceipt)?;
+        let class = match profile.hardware_profile.platform_class {
+            super::KagemushaHardwarePlatformClassV1::AndroidOemService => 0_u8,
+            super::KagemushaHardwarePlatformClassV1::AppleOemService => 1,
+            super::KagemushaHardwarePlatformClassV1::DedicatedSecureElement => 2,
+            super::KagemushaHardwarePlatformClassV1::OtherQualified => 3,
+        };
+        let mut leaf = Sha256::new();
+        leaf.update(b"iroha:kagemusha:v1:hardware-policy-leaf\0");
+        leaf.update(entry.hardware_profile_id);
+        leaf.update([class]);
+        leaf.update(profile.hardware_profile.capability_mask.to_le_bytes());
+        leaf.update(entry.provider_authority_commitment);
+        if nodes
+            .insert(
+                u32::from(entry.provider_profile_index),
+                leaf.finalize().into(),
+            )
+            .is_some()
+        {
+            return Err(KagemushaReleaseErrorV1::InvalidValidationReceipt);
+        }
+    }
+    let mut empty: [u8; 32] = Sha256::digest(b"iroha:kagemusha:v1:hardware-policy-empty\0").into();
+    let mut path = [[0; 32]; 16];
+    for sibling in &mut path {
+        *sibling = nodes.get(&(target_index ^ 1)).copied().unwrap_or(empty);
+        target_index /= 2;
+        let mut parents = BTreeMap::new();
+        for index in nodes.keys() {
+            let parent = index / 2;
+            parents.entry(parent).or_insert_with(|| {
+                provider_policy_node(
+                    nodes.get(&(parent * 2)).copied().unwrap_or(empty),
+                    nodes.get(&(parent * 2 + 1)).copied().unwrap_or(empty),
+                )
+            });
+        }
+        empty = provider_policy_node(empty, empty);
+        nodes = parents;
+    }
+    let root = nodes
+        .get(&0)
+        .copied()
+        .ok_or(KagemushaReleaseErrorV1::InvalidValidationReceipt)?;
+    Ok((root, path))
+}
+
+fn provider_policy_node(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"iroha:kagemusha:v1:hardware-policy-node\0");
+    hash.update(left);
+    hash.update(right);
+    hash.finalize().into()
 }
 
 /// Derive the identity of one profile's complete typed qualification matrix.
@@ -2178,6 +2377,8 @@ impl KagemushaInternalValidationReceiptV1 {
         let expected_hardware_policy_digest =
             kagemusha_hardware_policy_digest_v1(&enabled_profiles)
                 .map_err(|_| KagemushaReleaseErrorV1::InvalidValidationReceipt)?;
+        let expected_provider_policy_root =
+            kagemusha_provider_policy_root_v1(&enabled_profiles, &self.provider_policy)?;
         let expected_vk_digest = self
             .profile_qualifications
             .first()
@@ -2198,10 +2399,12 @@ impl KagemushaInternalValidationReceiptV1 {
             self.source_tree_digest,
             self.cargo_lock_digest,
             self.profile_digest,
+            self.native_profile_digest,
             self.eq_protocol_digest,
             self.ep_protocol_digest,
             self.artifact_set_digest,
             self.hardware_policy_digest,
+            self.provider_policy_root,
         ];
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
             || digests.into_iter().any(|digest| !digest_is_nonzero(digest))
@@ -2212,7 +2415,9 @@ impl KagemushaInternalValidationReceiptV1 {
                 &self.helper_protocols,
             )
             || self.hardware_policy_digest != expected_hardware_policy_digest
+            || self.provider_policy_root != expected_provider_policy_root
             || self.profile_digest != expected_profile_digest
+            || self.native_profile_digest == self.profile_digest
             || !validate_evidence_closure(self.evidence_closure)
             || self
                 .profile_qualifications
@@ -2652,6 +2857,9 @@ impl KagemushaReleaseManifestV1 {
         let attestation_digest = digest_encoded(RELEASE_ATTESTATION_DIGEST_DOMAIN, attestation)?;
         Ok(KagemushaAuthenticatedReleaseV1 {
             manifest: self.clone(),
+            native_profile_digest: receipt.native_profile_digest,
+            provider_policy_root: receipt.provider_policy_root,
+            provider_policy: receipt.provider_policy.clone(),
             distinct_relation_protocols,
             manifest_digest: expected_subject.manifest_digest,
             receipt_digest: expected_subject.validation_receipt_digest,
@@ -2700,10 +2908,28 @@ impl KagemushaAuthenticatedReleaseV1 {
         self.manifest.hardware_policy_digest
     }
 
+    /// Return the receipt-authenticated provider credential Merkle root.
+    #[must_use]
+    pub fn provider_policy_root(&self) -> [u8; 32] {
+        self.provider_policy_root
+    }
+
+    /// Return the exact admitted public provider authorities and registry positions.
+    #[must_use]
+    pub fn provider_policy(&self) -> &[KagemushaProviderPolicyEntryV1] {
+        &self.provider_policy
+    }
+
     /// Return the authenticated profile digest.
     #[must_use]
     pub fn profile_digest(&self) -> [u8; 32] {
         self.manifest.profile_digest
+    }
+
+    /// Return the receipt-authenticated native layout digest required before key decoding.
+    #[must_use]
+    pub fn native_profile_digest(&self) -> [u8; 32] {
+        self.native_profile_digest
     }
 
     /// Return the authenticated Eq/Fp compiled-protocol digest.

@@ -385,16 +385,23 @@ ignored cases), and strict library Clippy passes for those three packages.
 The new runtime test proves the original payload slice reaches the destination
 directly; generated-code tests reject reintroduced scratch storage.
 
-Before scratch removal, the complete rebuilt SDK passed **706 tests** on the
-default stack, with all 1,194 selected inputs unchanged. The original Musubi
-boundary case completed in 98.02 seconds, compared with 464.74 seconds at the
-earlier counting checkpoint. Those local timings are diagnostic evidence, not a
-pinned-runner performance or memory qualification. The model run completed with
-3,463 passes, one stale roster-error expectation and six ignored generators;
-all six allocation contracts passed. The stale expectation is now corrected
-without changing production validation, and a separate mint-roster rejection
-assertion preserves coverage of both validation layers. TODO: Finish the complete
-model/SDK reruns and Core/Torii caller qualification after scratch removal.
+After scratch removal, the rebuilt model passed **3,464 tests** (six ignored
+generators), all six allocation contracts passed, and the rebuilt SDK passed
+**706 tests**, with `RUST_MIN_STACK` unset. The corrected roster-error fixture
+preserves separate consensus- and mint-roster rejection assertions without
+changing production validation. A concurrent merge changed 395 captured inputs
+while these pre-merge executables ran; the results are retained as development
+evidence and do not qualify the merged checkout.
+
+Before scratch removal, the complete SDK also passed 706 tests with all 1,194
+selected inputs unchanged. Its original Musubi boundary case completed in
+98.02 seconds, compared with 464.74 seconds at the earlier counting checkpoint.
+Those local timings are diagnostic evidence, not pinned-runner performance or
+memory qualification. The merged participant settlement now owns seven private,
+validated control fields; previous-settlement linkage is a fixed-size typed
+hash, so it does not restore recursive receipt ownership or schema expansion.
+TODO: Qualify the merged settlement and codec regressions, Core/Torii callers,
+and SDK consumers from their current source inputs.
 Source/artifact hashes and individual logs remain under the ignored
 `target/architecture-redesign/owned-storage-identity/` directory.
 

@@ -4,7 +4,7 @@ const FIXTURE_VENDOR_ACCOUNT_LITERAL: &str =
     "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 
 #[test]
-fn core_host_enforces_exact_remote_spend_claim_consumption() {
+fn core_host_enforces_exact_remote_spend_claim_consumption_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(107);
     let manifest_root = [0x67; 32];
@@ -52,11 +52,11 @@ fn core_host_enforces_exact_remote_spend_claim_consumption() {
     );
     let reject = host.take_axt_reject_for_tests().expect("reject context");
     assert_eq!(reject.reason, AxtRejectReason::Proof);
-    assert!(reject.detail.contains("not consumed exactly once"));
+    assert_unanchored_spend_context(&reject);
 }
 
 #[test]
-fn core_host_enforces_shared_budget_across_completed_envelopes() {
+fn core_host_enforces_shared_budget_across_completed_envelopes_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(123);
     let manifest_root = [0x7B; 32];
@@ -108,14 +108,14 @@ fn core_host_enforces_shared_budget_across_completed_envelopes() {
         &attack_amount,
     );
     let mut attack_host = host_with_policy(authority.clone(), dsid, manifest_root, lane, 5);
-    commit_single_handle_envelope(
+    let result = commit_single_handle_envelope(
         &mut attack_host,
         &descriptor,
         &proof_a,
         &handle_a,
         &intent_a,
-    )
-    .expect("the first envelope is within the shared signed budget");
+    );
+    assert_unanchored_spend_rejection(&mut attack_host, result);
     assert_eq!(
         commit_single_handle_envelope(
             &mut attack_host,
@@ -130,12 +130,7 @@ fn core_host_enforces_shared_budget_across_completed_envelopes() {
     let reject = attack_host
         .take_axt_reject_for_tests()
         .expect("split-envelope budget reject context");
-    assert_eq!(reject.reason, AxtRejectReason::Budget);
-    assert!(
-        reject
-            .detail
-            .contains("shared handle budget exceeded across completed AXT envelopes")
-    );
+    assert_unanchored_spend_context(&reject);
 
     let control_amount = Quantity::from(5_u64);
     intent_a.op.amount = Some(control_amount.clone());
@@ -159,26 +154,26 @@ fn core_host_enforces_shared_budget_across_completed_envelopes() {
         &control_amount,
     );
     let mut control_host = host_with_policy(authority, dsid, manifest_root, lane, 5);
-    commit_single_handle_envelope(
+    let result = commit_single_handle_envelope(
         &mut control_host,
         &descriptor,
         &control_proof_a,
         &handle_a,
         &intent_a,
-    )
-    .expect("first control envelope is within the shared signed budget");
-    commit_single_handle_envelope(
+    );
+    assert_unanchored_spend_rejection(&mut control_host, result);
+    let result = commit_single_handle_envelope(
         &mut control_host,
         &descriptor,
         &control_proof_b,
         &handle_b,
         &intent_b,
-    )
-    .expect("two envelopes may consume exactly the shared signed budget");
+    );
+    assert_unanchored_spend_rejection(&mut control_host, result);
 }
 
 #[test]
-fn core_host_rejects_duplicate_use_of_one_proof_claim() {
+fn core_host_rejects_duplicate_use_of_one_proof_claim_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(108);
     let manifest_root = [0x68; 32];
@@ -230,15 +225,8 @@ fn core_host_rejects_duplicate_use_of_one_proof_claim() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-    vm.set_register(10, handle_ptr);
-    vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Err(VMError::PermissionDenied),
-        "the same proof-bound handle cannot be recorded twice"
-    );
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 
 #[test]
@@ -273,8 +261,9 @@ fn core_host_enforces_registered_asset_balance_policy() {
     );
 
     let mut restricted = host_with_policy(authority.clone(), dsid, manifest_root, lane, 5);
-    commit_single_handle_envelope(&mut restricted, &descriptor, &proof, &handle, &intent)
-        .expect("restricted asset may use the exact signed intent dataspace");
+    let result =
+        commit_single_handle_envelope(&mut restricted, &descriptor, &proof, &handle, &intent);
+    assert_unanchored_spend_rejection(&mut restricted, result);
 
     let mut global = host_with_policy(authority.clone(), dsid, manifest_root, lane, 5);
     global.set_axt_asset_policy_for_tests(
@@ -438,8 +427,9 @@ fn core_host_rejects_correctly_signed_stale_asset_incarnation_at_use() {
         &amount,
     );
     let mut control = host_with_policy(authority.clone(), dsid, manifest_root, lane, 5);
-    use_single_handle_envelope(&mut control, &descriptor, &control_proof, &handle, &intent)
-        .expect("a handle signed for the exact live asset incarnation must pass USE");
+    let result =
+        use_single_handle_envelope(&mut control, &descriptor, &control_proof, &handle, &intent);
+    assert_unanchored_spend_rejection(&mut control, result);
 
     let stale_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
         &axt_test_network_id(),
@@ -483,7 +473,7 @@ fn core_host_rejects_correctly_signed_stale_asset_incarnation_at_use() {
 }
 
 #[test]
-fn core_host_rejects_historical_incarnation_proof_for_current_handle() {
+fn core_host_rejects_historical_incarnation_proof_for_current_handle_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(113);
     let manifest_root = [0x6D; 32];
@@ -513,14 +503,14 @@ fn core_host_rejects_historical_incarnation_proof_for_current_handle() {
         &amount,
     );
     let mut control = host_with_policy(authority.clone(), dsid, manifest_root, lane, 5);
-    use_single_handle_envelope(
+    let result = use_single_handle_envelope(
         &mut control,
         &descriptor,
         &current_proof,
         &current_handle,
         &intent,
-    )
-    .expect("proof and handle from the exact current asset incarnation must pass USE");
+    );
+    assert_unanchored_spend_rejection(&mut control, result);
 
     let historical_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
         &axt_test_network_id(),
@@ -557,10 +547,7 @@ fn core_host_rejects_historical_incarnation_proof_for_current_handle() {
     );
     let reject = attack.take_axt_reject_for_tests().expect("reject context");
     assert_eq!(reject.reason, AxtRejectReason::Proof);
-    assert_eq!(
-        reject.detail,
-        "FASTPQ proof does not commit to the exact remote spend intent"
-    );
+    assert_unanchored_spend_context(&reject);
 }
 
 #[test]
@@ -605,7 +592,7 @@ fn core_host_rejects_signed_origin_outside_bound_descriptor() {
 }
 
 #[test]
-fn core_host_resolves_hidden_amount_from_verified_dataspace_proof() {
+fn core_host_resolves_hidden_amount_from_verified_dataspace_proof_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(73);
     let manifest_root = [0x73; 32];
@@ -706,11 +693,11 @@ fn core_host_resolves_hidden_amount_from_verified_dataspace_proof() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[test]
-fn core_host_rejects_standalone_replacement_of_handle_bound_proof() {
+fn core_host_rejects_standalone_replacement_of_handle_bound_proof_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(74);
     let manifest_root = [0x74; 32];
@@ -792,38 +779,8 @@ fn core_host_rejects_standalone_replacement_of_handle_bound_proof() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, initial_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-    let cache_before = host.axt_proof_cache_snapshot();
-    let short_replacement = proof_blob_for_remote_spend(
-        dsid,
-        manifest_root,
-        vec![0x74],
-        handle.expiry_slot - 1,
-        &handle,
-        &intent,
-        &effective_amount,
-    );
-    let replacement_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &short_replacement);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, replacement_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Err(VMError::PermissionDenied),
-        "caller-carried FASTPQ must not replace an issuer-authenticated proof"
-    );
-    let reject = host.take_axt_reject_for_tests().expect("reject context");
-    assert_eq!(reject.reason, AxtRejectReason::Proof);
-    assert!(
-        reject
-            .detail
-            .contains("authoritative finalized source-state anchor")
-    );
-    assert_eq!(
-        host.axt_proof_cache_snapshot(),
-        cache_before,
-        "the rejected standalone replacement must not change the authenticated cache entry"
-    );
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[test]
 fn core_host_rejects_unanchored_proof_before_using_envelope_dataspace() {

@@ -382,6 +382,9 @@ def copy_persistent_recovery_cut_fixture(tmp_path: Path, module) -> Path:
     repo_root = tmp_path / "repo"
     relatives = (
         "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/types.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
@@ -2857,3 +2860,311 @@ def test_deferred_handoff_mutation_fidelity_rejects_semantic_drift(
         formal_dir, tmp_path
     )
     assert any("-eq 13" in error for error in errors), errors
+
+
+@pytest.fixture(scope="module")
+def worker_actual_wal_enter_view_sources():
+    """Read the real reviewed include closures once for the fixture-owner controls."""
+    module = load_checker()
+    paths = []
+    sources = []
+    errors: list[str] = []
+    for name in ("v2.rs", "v2_worker.rs"):
+        path, source = module._read_reviewed_rust_source(
+            ROOT_DIR, "crates/iroha_core/src/sumeragi/" + name,
+            errors, "worker actual-WAL regression fixture",
+        )
+        paths.append(path)
+        sources.append(source)
+    assert not errors, errors
+    assert module._worker_actual_wal_enter_view_fixture_errors(*sources, *paths) == []
+    return module, tuple(sources), tuple(paths)
+
+
+def test_worker_actual_wal_enter_view_fixture_accepts_current_source(
+    worker_actual_wal_enter_view_sources,
+) -> None:
+    module, sources, paths = worker_actual_wal_enter_view_sources
+    assert module._worker_actual_wal_enter_view_fixture_errors(*sources, *paths) == []
+
+
+@pytest.mark.parametrize(
+    ("owner", "name", "old", "new"),
+    (
+        (0, "worker_view_adapter_with_replayed_commit", "WalRecordV2::LockAndCommit", "WalRecordV2::ObservePrepare"),
+        (0, "worker_view_adapter_with_replayed_commit", ".append(&payload)", ".skip_append(&payload)"),
+        (0, "worker_view_adapter_with_replayed_commit", "drop(adapter);", "let _ = &adapter;"),
+        (0, "worker_view_adapter_with_replayed_commit", "if replayed == &vote", "if true"),
+        (0, "worker_view_adapter_with_replayed_commit", "durable.commit_intent_for_lock(locked).is_some()", "true"),
+        (1, "new", "service.context.clone()", "fixture().0.context.clone()"),
+        (1, "new", "adapter.leader_wire_recovery_authority()", "adapter.synthetic_recovery_authority()"),
+        (1, "stage_timeout", ".authenticate(wire::ConsensusMessageV2::new(", ".trust_unverified(wire::ConsensusMessageV2::new("),
+        (1, "stage_timeout", ".receive_authenticated(authenticated)", ".skip_wal_persistence(authenticated)"),
+        (1, "stage_timeout", "(prepare.proposal_round, prepare.subject)", "(prepare.round, prepare.subject)"),
+        (1, "publish", "Some(authority)", "Some(service.leader_wire_recovery_authority)"),
+        (1, "worker_view_prepare_certificate", "signers: vec![0, 1, 2]", "signers: vec![0, 1, 1]"),
+        (1, "worker_view_timeout_certificate", "worker_view_quorum_signature(keys, &preimage)", "Vec::new()"),
+        (1, "worker_view_quorum_signature", "keys[..3]", "keys[..2]"),
+        (1, "entered_view_publishes_the_exact_protected_commit_vote_cut", "Some((prepare, commit_intent))", "None"),
+        (1, "entered_view_publishes_the_exact_protected_commit_vote_cut", "wal.publish(&mut service);", ""),
+        (1, "entered_view_publishes_the_exact_protected_commit_vote_cut", ".entered_view(next, certificate, protected_lock)", ".entered_view(EventTag::new(next.height(), next.view(), next.generation()), certificate, protected_lock)"),
+    ),
+)
+def test_worker_actual_wal_enter_view_fixture_rejects_weakened_owners(
+    worker_actual_wal_enter_view_sources, owner: int, name: str, old: str, new: str,
+) -> None:
+    module, originals, paths = worker_actual_wal_enter_view_sources
+    sources = list(originals)
+    items = module.rust_items(sources[owner], name)
+    if name in ("new", "publish"):
+        items = tuple(item for item in items if item.brace_context[-1] == ("impl", "WorkerViewWalFixture"))
+    assert len(items) == 1
+    item = items[0]
+    # Normalized Rust tokens let source formatting change without weakening the mutation.
+    tokens = module.rust_code_tokens(item.source)
+    old_tokens = module.rust_code_tokens(old)
+    positions = [i for i in range(len(tokens) - len(old_tokens) + 1)
+                 if tokens[i:i + len(old_tokens)] == old_tokens]
+    assert len(positions) == 1, (name, old)
+    index = positions[0]
+    replacement = " ".join(tokens[:index] + module.rust_code_tokens(new) + tokens[index + len(old_tokens):])
+    sources[owner] = sources[owner].replace(item.source, replacement, 1)
+    errors = module._worker_actual_wal_enter_view_fixture_errors(*sources, *paths)
+    assert any("worker actual-WAL fixture " + name in error for error in errors), errors
+
+
+@pytest.fixture(scope="module")
+def persistent_recovery_canonical_items():
+    """Extract current real owners once; every mutation starts from this valid baseline."""
+    module = load_checker()
+    paths, sources, errors = {}, {}, []
+    for owner, name in {
+        "adapter": "v2.rs", "consumer": "v2_leader_wire_consumer.rs",
+        "core_wal": "v2_core/wal.rs", "core_types": "v2_core/types.rs",
+        "effects": "v2_effects.rs", "store": "serviced_candidate_store.rs",
+        "ingress": "mod.rs", "worker": "v2_worker.rs",
+    }.items():
+        paths[owner], sources[owner] = module._read_reviewed_rust_source(
+            ROOT_DIR, "crates/iroha_core/src/sumeragi/" + name,
+            errors, "canonical persistent recovery-cut source",
+        )
+    assert not errors, errors
+    items = module._persistent_recovery_cut_canonical_items(paths, sources, errors)
+    assert not errors, errors
+    assert module._persistent_recovery_cut_canonical_item_errors(paths, items) == []
+    return module, paths, items
+
+
+def test_persistent_recovery_canonical_owners_accept_current_source(
+    persistent_recovery_canonical_items,
+) -> None:
+    module, paths, items = persistent_recovery_canonical_items
+    assert module._persistent_recovery_cut_canonical_item_errors(paths, items) == []
+
+
+@pytest.mark.parametrize(
+    ("key", "old", "new"),
+    (
+        ("factory", "pub(super)", "pub(crate)"),
+        ("factory", "adapter.ensure_ingress()?;", ""),
+        ("factory", "adapter.reducer.current_tag()", "reducer::EventTag::new(1, 0, reducer::Generation::INITIAL)"),
+        ("factory", "certificate.proposal_round()", "certificate.round()"),
+        ("factory", "durable.commit_intent_for_lock(locked).is_some()", "true"),
+        ("factory", "adapter.registry.execution_commitment(locked.round(), locked.subject())?", "wire::ExecutionCommitment::default()"),
+        ("factory", "wal_id: durable.last_id()", "wal_id: reducer::PersistenceId::ZERO"),
+        ("factory", "decision_durable: durable.decision().is_some()", "decision_durable: false"),
+        ("geometry", "self.owner == owner", "true"),
+        ("geometry", "self.context_id == context_id", "true"),
+        ("geometry", "self.height == height", "true"),
+        ("monotonicity", "self.wal_id >= previous.wal_id", "true"),
+        ("monotonicity", "self.consumer_tag.strictly_advances(previous.consumer_tag)", "true"),
+        ("monotonicity", "!previous.decision_durable || self.decision_durable", "true"),
+        ("monotonicity", "self.highest_prepare_view >= previous.highest_prepare_view", "true"),
+        ("monotonicity", "(Some(_), None) => false", "(Some(_), None) => true"),
+        ("monotonicity", "new.0.view > old.0.view", "new.0.view >= old.0.view"),
+        ("statement", "(proposal_round, subject, *execution_commitment)", "(proposal_round, subject)"),
+        ("protected_commit", "identity.context_id == round.context_id", "true"),
+        ("protected_commit", "identity.height == round.height", "true"),
+        ("protected_commit", "identity.view == round.view", "true"),
+        ("protected_commit", "identity.subject_hash == Hash::new(subject.encode())", "true"),
+        ("protected_commit", "identity.vote_statement_hash == self.protected_commit_statement", "true"),
+        ("protected_commit", "self.protected_commit_statement.is_some()", "true"),
+        ("admission", "if self.decision_durable", "if false"),
+        ("admission", "view <= current_view", "true"),
+        ("admission", "view.checked_add(1).is_some()", "true"),
+        ("admission", "installed_same_round: self.installed_timeout_view == Some(view)", "installed_same_round: true"),
+        ("payload_admission", "vote.round == vote.proposal_round", "true"),
+        ("retirement", "&& !self.admits_ingress_identity(&token.identity)", "&& true"),
+        ("rearm", "self.consumer_tag.strictly_advances(consumed_by)", "true"),
+        ("rearm", "self.admits_ingress_identity(&token.identity)", "true"),
+        ("wal_apply", "next.apply_in_place(context, local_validator, entry)?; *self = next;", "*self = next.clone(); next.apply_in_place(context, local_validator, entry)?;"),
+        ("wal_locks", "validate_qc(context, prepare, Phase::Prepare)?;", ""),
+        ("wal_locks", "Self::validate_local_vote(context, local_validator, *vote, Phase::Commit)?;", ""),
+        ("wal_locks", "vote.subject() != prepare.subject()", "false"),
+        ("wal_locks", "insert_unique_vote(&mut self.commit_intents, *vote)?;", ""),
+        ("wal_locks", "certificate.validate(context).map_err(|_| ReplayError::InvalidCertificate)?;", ""),
+        ("wal_vote", "Some(vote.signer()) != local_validator", "false"),
+        ("wal_commit_intent", "vote.proposal_round() == round", "true"),
+        ("wal_commit_intent", "vote.subject() == locked.subject()", "true"),
+        ("qc_geometry", "self.reference.proposal_round != self.reference.round", "false"),
+        ("qc_geometry", "Quorum::require(context, &signers)", "Quorum::calculate(context, &signers)"),
+        ("tc_geometry", "certificate.round().view() > self.round.view()", "false"),
+        ("tc_geometry", "certificate.validate(context)?;", ""),
+        ("adapter_factory", "LeaderWireRecoveryAuthority::from_adapter(self)", "LeaderWireRecoveryAuthority::from_replayed_adapter(self)"),
+        ("store", "retiring != *expected_retiring_slots", "!retiring.is_subset(expected_retiring_slots)"),
+        ("store", "LeaderWireLifecycleStatus::Dormant | LeaderWireLifecycleStatus::VolatileTerminal", "LeaderWireLifecycleStatus::Dormant | LeaderWireLifecycleStatus::VolatileTerminal | LeaderWireLifecycleStatus::Ingress"),
+        ("store", "next.rearms(&record.token, *tag)", "true"),
+        ("store", "!retiring.is_empty() || !rearming.is_empty()", "!retiring.is_empty()"),
+        ("store", "*state = previous;", ""),
+        ("store", "Ok(rearming)", "state.records.clear(); Ok(rearming)"),
+        ("store", "Ok(rearming)", "state.runtime_consumer_epochs.clear(); Ok(rearming)"),
+        ("mirror", "Ok(retiring.len())", "state.leader_wire_lifecycles.clear(); Ok(retiring.len())"),
+        ("store", "state.replay_dormant.insert(slot.clone());", "state.records.get_mut(slot).unwrap().token.lifecycle_ordinal = 0; state.replay_dormant.insert(slot.clone());"),
+        ("mirror", "gate.advance_recovery_cut(next, &retiring)?", "gate.advance_recovery_cut(next, &retiring).unwrap_or_default()"),
+        ("mirror", "record.ingress_predecessors.clear();", "record.token.lifecycle_ordinal = 0; record.ingress_predecessors.clear();"),
+        ("runtime_factory", "self.driver().leader_wire_recovery_authority()", "self.synthetic_authority()"),
+        ("executor_publish", "decided_subject, authority", "decided_subject, None"),
+        ("service_publish", "self.leader_wire_ingress.advance_leader_wire_recovery_cut(next)?; self.leader_wire_recovery_authority = next;", "self.leader_wire_recovery_authority = next; self.leader_wire_ingress.advance_leader_wire_recovery_cut(next)?;"),
+        ("service_publish", "self.leader_wire_ingress.advance_leader_wire_recovery_cut(next)?;", "let _ = self.leader_wire_ingress.advance_leader_wire_recovery_cut(next);"),
+        ("enter", "tag != self.leader_wire_recovery_authority.consumer_tag()", "tag.view() != self.leader_wire_recovery_authority.consumer_tag().view()"),
+    ),
+)
+def test_persistent_recovery_canonical_rejects_weakened_predicates(
+    persistent_recovery_canonical_items, key: str, old: str, new: str,
+) -> None:
+    module, paths, originals = persistent_recovery_canonical_items
+    items = dict(originals)
+    item = items[key]
+    tokens = module.rust_code_tokens(item.source)
+    old_tokens = module.rust_code_tokens(old)
+    positions = module._token_sequence_positions(tokens, old_tokens)
+    assert len(positions) == 1, (key, old, positions)
+    position = positions[0]
+    source = " ".join(tokens[:position] + module.rust_code_tokens(new) + tokens[position + len(old_tokens):])
+    items[key] = replace(item, source=source, body=source[source.index("{") + 1:source.rfind("}")],
+                         structural_source=module.mask_rust_comments_and_literals(source))
+    errors = module._persistent_recovery_cut_canonical_item_errors(paths, items)
+    assert any("canonical recovery-cut " + key in error for error in errors), errors
+
+
+@pytest.mark.parametrize("key", ("publish_apply", "publish_pre_timeout", "publish_pacemaker", "publish_capacity", "publish_step", "publish_recovery"))
+@pytest.mark.parametrize("mutation", ("omit", "before_wal", "after_consume", "duplicate"))
+def test_persistent_recovery_canonical_rejects_publication_order_drift(
+    persistent_recovery_canonical_items, key: str, mutation: str,
+) -> None:
+    module, paths, originals = persistent_recovery_canonical_items
+    items = dict(originals)
+    item = items[key]
+    tokens = list(module.rust_code_tokens(item.source))
+    publish = module.rust_code_tokens("if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close(error, services)); }")
+    positions = module._token_sequence_positions(tuple(tokens), publish)
+    assert len(positions) == 1
+    position = positions[0]
+    del tokens[position:position + len(publish)]
+    if mutation == "before_wal":
+        wal = module._token_sequence_positions(tuple(tokens), module.rust_code_tokens("wal_step.complete();"))
+        assert len(wal) == 1
+        tokens[wal[0]:wal[0]] = publish
+    elif mutation == "after_consume":
+        # All original predicates remain present, but publication is causally late.
+        tokens[-1:-1] = publish
+    elif mutation == "duplicate":
+        tokens[position:position] = publish + publish
+    source = " ".join(tokens)
+    items[key] = replace(item, source=source, body=source[source.index("{") + 1:source.rfind("}")],
+                         structural_source=module.mask_rust_comments_and_literals(source))
+    errors = module._persistent_recovery_cut_canonical_item_errors(paths, items)
+    assert any("canonical recovery-cut " + key in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ("cfg", "cfg_attr", "wrong_path", "public", "duplicate", "comment", "alias", "inner_cfg"))
+def test_persistent_recovery_canonical_rejects_module_edge_substitution(
+    persistent_recovery_canonical_items, mutation: str,
+) -> None:
+    module, paths, originals = persistent_recovery_canonical_items
+    items = dict(originals)
+    edge, export = items["module_statements"]
+    source = edge.source
+    if mutation == "cfg":
+        source = "#[cfg(test)]\n" + source
+    elif mutation == "cfg_attr":
+        source = "#[cfg_attr(not(test), path = \"unreviewed.rs\")]\n" + source
+    elif mutation == "wrong_path":
+        source = source.replace('"v2_leader_wire_consumer.rs"', '"unreviewed.rs"')
+    elif mutation == "public":
+        source = source.replace("mod leader_wire_consumer;", "pub(crate) mod leader_wire_consumer;")
+    elif mutation == "duplicate":
+        source += source
+    elif mutation == "comment":
+        source = "/*" + source + "*/"
+    elif mutation == "alias":
+        source = source.replace("mod leader_wire_consumer;", "mod other_consumer;")
+    elif mutation == "inner_cfg":
+        source = "#![cfg(test)]\n" + source
+    items["module_statements"] = module.rust_top_level_statements(source) + (export,)
+    errors = module._persistent_recovery_cut_canonical_item_errors(paths, items)
+    assert any("exact private ungated module edge" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("key", ("factory", "monotonicity", "wal_locks", "store", "mirror", "runtime_factory", "executor_publish", "service_publish", "enter"))
+def test_persistent_recovery_canonical_rejects_disabled_production_owners(
+    persistent_recovery_canonical_items, key: str,
+) -> None:
+    module, paths, originals = persistent_recovery_canonical_items
+    items = dict(originals)
+    items[key] = replace(items[key], attributes=("#[cfg(test)]",))
+    errors = module._persistent_recovery_cut_canonical_item_errors(paths, items)
+    assert any("canonical recovery-cut " + key in error and "cfg" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("name", ("from_replayed_adapter", "with_protected_lock", "advance_view", "with_durable_decision"))
+def test_persistent_recovery_canonical_rejects_scalar_fixture_as_production(
+    persistent_recovery_canonical_items, name: str,
+) -> None:
+    module, paths, originals = persistent_recovery_canonical_items
+    items = dict(originals)
+    fixture, = items["fixture_" + name]
+    items["fixture_" + name] = (replace(fixture, attributes=()),)
+    errors = module._persistent_recovery_cut_canonical_item_errors(paths, items)
+    assert any("scalar authority fixture " + name in error for error in errors), errors
+
+
+def test_persistent_recovery_canonical_requires_private_wal_fields(
+    persistent_recovery_canonical_items,
+) -> None:
+    module, paths, originals = persistent_recovery_canonical_items
+    items = dict(originals)
+    authority, = items["authority_structs"]
+    assert authority.body.count("consumer_tag:") == 1
+    items["authority_structs"] = (replace(authority, body=authority.body.replace("consumer_tag:", "pub(crate) consumer_tag:", 1)),)
+    errors = module._persistent_recovery_cut_canonical_item_errors(paths, items)
+    assert any("private actual-WAL ownership" in error for error in errors), errors
+
+
+def test_persistent_recovery_cut_current_source_full_integration() -> None:
+    """Keep the complete producer, startup, cut, high-watermark, and formal binding independent."""
+    module = load_checker()
+    assert module._persistent_recovery_cut_source_fidelity_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize("insertion", (
+    "let tag = reducer::EventTag::new(1, 0, reducer::Generation::INITIAL);",
+    "let durable = fabricated_durable_state();",
+    "let protected_lock = None;",
+    "let protected_commit_statement = None;",
+))
+def test_persistent_recovery_canonical_rejects_shadowed_factory_ownership(
+    persistent_recovery_canonical_items, insertion: str,
+) -> None:
+    module, paths, originals = persistent_recovery_canonical_items
+    items = dict(originals)
+    item = items["factory"]
+    # Keep every original required fragment present and ordered. Shadowing between
+    # fragments must still fail the complete current-factory construction contract.
+    anchor = "let protected_lock" if "let tag" in insertion or "let durable" in insertion else "Ok(Self {"
+    assert item.source.count(anchor) == 1
+    source = item.source.replace(anchor, insertion + "\n" + anchor, 1)
+    items["factory"] = replace(item, source=source, body=source[source.index("{") + 1:source.rfind("}")],
+                               structural_source=module.mask_rust_comments_and_literals(source))
+    errors = module._persistent_recovery_cut_canonical_item_errors(paths, items)
+    assert any("complete actual-WAL construction" in error for error in errors), errors

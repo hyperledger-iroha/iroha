@@ -14,7 +14,15 @@ internal sealed class TransactionEncodingContext
     private static readonly Dictionary<CurveId, byte> PublicKeyAlgorithmTags = new()
     {
         [CurveId.Ed25519] = 0,
+        [CurveId.Secp256k1] = 1,
+        [CurveId.BlsNormal] = 2,
+        [CurveId.BlsSmall] = 3,
         [CurveId.MlDsa] = 4,
+        [CurveId.Gost256A] = 5,
+        [CurveId.Gost256B] = 6,
+        [CurveId.Gost256C] = 7,
+        [CurveId.Gost512A] = 8,
+        [CurveId.Gost512B] = 9,
         [CurveId.Sm2] = 10,
     };
 
@@ -46,24 +54,48 @@ internal sealed class TransactionEncodingContext
     public byte[] EncodeAccountController(string accountId)
     {
         var parsed = AccountAddress.Parse(CanonicalizeAccountId(accountId));
-        if (parsed.CurveIdentifier is null || parsed.PublicKey.Length == 0)
-        {
-            throw new ArgumentException("Multisig account controllers are not yet supported by the managed transaction encoder.", nameof(accountId));
-        }
-
-        if (!PublicKeyAlgorithmTags.TryGetValue(parsed.CurveIdentifier.Value, out var algorithmTag))
-        {
-            throw new ArgumentException($"Unsupported account curve `{parsed.CurveIdentifier}` for managed Norito encoding.", nameof(accountId));
-        }
-
-        var compactKey = new byte[parsed.PublicKey.Length + 1];
-        compactKey[0] = algorithmTag;
-        parsed.PublicKey.CopyTo(compactKey, 1);
-
         var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(EncodeConstVec(compactKey));
+        if (parsed.GetMultisigPolicy() is { } policy)
+        {
+            var members = new CanonicalNoritoWriter();
+            members.WriteSequenceLength(checked((ulong)policy.Members.Count));
+            foreach (var member in policy.Members)
+            {
+                var memberWriter = new CanonicalNoritoWriter();
+                memberWriter.WriteField(EncodeControllerPublicKey(member.Curve, member.PublicKey));
+                memberWriter.WriteField(EncodeUInt16(member.Weight));
+                members.WriteField(memberWriter.ToArray());
+            }
+            var policyWriter = new CanonicalNoritoWriter();
+            policyWriter.WriteField([policy.Version]);
+            policyWriter.WriteField(EncodeUInt16(policy.Threshold));
+            policyWriter.WriteField(members.ToArray());
+            writer.WriteUInt32LittleEndian(1);
+            writer.WriteField(policyWriter.ToArray());
+        }
+        else
+        {
+            writer.WriteUInt32LittleEndian(0);
+            writer.WriteField(EncodeControllerPublicKey(parsed.CurveIdentifier!.Value, parsed.PublicKey));
+        }
         return writer.ToArray();
+    }
+
+    private static byte[] EncodeUInt16(ushort value)
+    {
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteUInt16LittleEndian(value);
+        return writer.ToArray();
+    }
+
+    private byte[] EncodeControllerPublicKey(CurveId curve, ReadOnlySpan<byte> publicKey)
+    {
+        if (!PublicKeyAlgorithmTags.TryGetValue(curve, out var algorithmTag))
+            throw new ArgumentException($"Unsupported account curve `{curve}` for managed Norito encoding.", nameof(curve));
+        var compactKey = new byte[publicKey.Length + 1];
+        compactKey[0] = algorithmTag;
+        publicKey.CopyTo(compactKey.AsSpan(1));
+        return EncodeConstVec(compactKey);
     }
 
     public byte[] EncodeString(string value)

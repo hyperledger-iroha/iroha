@@ -1,17 +1,21 @@
-//! Four-validator regressions for SoraFS moderation sortition and bond settlement.
+//! Four-validator regressions for SoraFS moderation proof admission, sortition and bond settlement.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    crypto::{KeyPair, Signature},
+    crypto::{HashOf, KeyPair, Signature},
     data_model::{
-        isi::sorafs::{
-            AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            CommitSorafsPopCredentialBatch, FinalizeSorafsModerationSortition,
-            RaiseSorafsModerationChallenge, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsModerationChallenge, SetSorafsModerationPolicy, SetSorafsPopIssuerPolicy,
-            SubmitSorafsModerationAppeal,
+        events::data::sorafs::SorafsModerationLedgerEventKind,
+        isi::{
+            error::{InstructionExecutionError, InvalidParameterError},
+            sorafs::{
+                AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
+                CommitSorafsPopCredentialBatch, FinalizeSorafsModerationSortition,
+                RaiseSorafsModerationChallenge, RegisterSorafsModerationJurorEligibility,
+                ResolveSorafsModerationChallenge, SetSorafsModerationPolicy,
+                SetSorafsPopIssuerPolicy, SubmitSorafsModerationAppeal,
+            },
         },
         prelude::*,
         query::{
@@ -19,7 +23,8 @@ use iroha::{
             block::prelude::FindBlocks,
             dsl::IntoPredicate as _,
             sorafs::prelude::{
-                FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
+                FindSorafsModerationAppeal, FindSorafsModerationCase,
+                FindSorafsModerationChallenge, FindSorafsModerationSnapshot,
             },
         },
         sorafs::{
@@ -29,8 +34,10 @@ use iroha::{
                 MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
                 ModerationAppealIntakeV1, ModerationAppealRecordV1, ModerationAppealStatusV1,
                 ModerationCaseRecordV1, ModerationCaseStatusV1, ModerationChallengeDecisionV1,
-                ModerationChallengeKindV1, ModerationChallengeRecordV1, ModerationLedgerPolicyV1,
+                ModerationChallengeKindV1, ModerationChallengeRecordV1,
+                ModerationFinalizedLedgerSnapshotV1, ModerationLedgerPolicyV1,
                 ModerationSortitionAnchorV1, sorafs_moderation_pop_challenge_v1,
+                sorafs_moderation_pop_presentation_binding_v1,
                 sorafs_moderation_pop_verifier_context_v1,
             },
             pop_registry::{
@@ -39,7 +46,7 @@ use iroha::{
                 pop_credential_payload_commitment_v1, pop_revocation_nonce_commitment_v1,
             },
         },
-        transaction::FeePaymentIntent,
+        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
     },
 };
 use iroha_executor_data_model::permission::{
@@ -47,6 +54,7 @@ use iroha_executor_data_model::permission::{
     sorafs::{CanManageSorafsModeration, CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer},
 };
 use iroha_primitives::numeric::Quantity;
+use iroha_test_network::read_on_dedicated_thread;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
@@ -66,7 +74,10 @@ use sorafs_manifest::pop_credentials::{
     verify_pop_revocation_list_signature_v1,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::time::{Instant, sleep};
+use tokio::{
+    task::JoinSet,
+    time::{Instant, sleep, timeout_at},
+};
 
 const CASE_ID: &str = "four-peer-anchor";
 const ROUND_ID: &str = "round-1";
@@ -81,6 +92,30 @@ fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
 
+async fn submit_instructions(
+    client: &Client,
+    instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+) -> Result<HashOf<SignedTransaction>> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        instructions,
+        no_fee(),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "fee quote changed the selected payer, sponsor revision, or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    account.submit_transaction_and_wait(&transaction).await
+}
+
 fn unix_time_ms() -> Result<u64> {
     u64::try_from(
         SystemTime::now()
@@ -93,9 +128,93 @@ fn unix_time_ms() -> Result<u64> {
 
 fn bounded_client(client: Client) -> Client {
     integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.torii_request_timeout = Duration::from_secs(5);
         client.transaction_status_timeout = TRANSACTION_TIMEOUT;
         client.transaction_ttl = Some(Duration::from_secs(300));
     })
+}
+
+fn require_native_rejection(
+    result: Result<HashOf<SignedTransaction>>,
+    expected_message: &str,
+) -> Result<()> {
+    let error = result
+        .err()
+        .ok_or_else(|| eyre!("expected native rejection: {expected_message}"))?;
+    let Some(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)),
+    ))) = error.downcast_ref::<TransactionRejectionReason>()
+    else {
+        return Err(eyre!(
+            "transport, timeout or unrelated validation cannot prove {expected_message}: {error:?}"
+        ));
+    };
+    ensure!(
+        message == expected_message,
+        "unexpected native rejection for {expected_message}: {error:?}"
+    );
+    Ok(())
+}
+
+fn moderation_ledger_bytes(snapshot: &ModerationFinalizedLedgerSnapshotV1) -> Result<Vec<u8>> {
+    let mut ledger = snapshot.clone();
+    // Rejected transactions and read barriers may advance the chain, but cannot change any
+    // policy, enrollment, counter, case, or committed moderation event (including its cursor).
+    ledger.finalized_height = 0;
+    ledger.finalized_block_hash = [0; 32];
+    ledger.finalized_at_unix_ms = 0;
+    norito::encode_canonical(&ledger).wrap_err("encode complete moderation ledger state")
+}
+
+async fn wait_for_enrollment_snapshot(
+    network: &sandbox::SerializedNetwork,
+    label: &str,
+    minimum_finalized_height: u64,
+    predicate: impl Fn(&ModerationFinalizedLedgerSnapshotV1) -> Result<bool>,
+) -> Result<ModerationFinalizedLedgerSnapshotV1> {
+    ensure!(
+        network.peers().len() == 4,
+        "enrollment requires four validators"
+    );
+    let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        let mut reads = JoinSet::new();
+        for peer in network.peers() {
+            let client = bob_client(peer);
+            reads.spawn(async move {
+                read_on_dedicated_thread(move || {
+                    client
+                        .client()
+                        .query_single(FindSorafsModerationSnapshot::new(1, 32))
+                        .map_err(Into::into)
+                })
+                .await
+            });
+        }
+        let mut snapshots = Vec::with_capacity(4);
+        let mut failures = Vec::new();
+        while let Some(result) = timeout_at(deadline, reads.join_next())
+            .await
+            .wrap_err_with(|| format!("{label}: finalized snapshot query deadline elapsed"))?
+        {
+            match result? {
+                Ok(snapshot) => snapshots.push(snapshot),
+                Err(error) => failures.push(format!("{error:?}")),
+            }
+        }
+        if snapshots.len() == 4
+            && snapshots.windows(2).all(|pair| pair[0] == pair[1])
+            && snapshots[0].finalized_height >= minimum_finalized_height
+            && predicate(&snapshots[0])?
+        {
+            return Ok(snapshots.remove(0));
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "{label}: four validators did not converge; query failures: {failures:?}"
+        );
+        sleep(POLL_INTERVAL).await;
+    }
 }
 
 fn bob_client(peer: &iroha_test_network::NetworkPeer) -> Client {
@@ -193,6 +312,7 @@ impl PopMaterial {
         &self,
         challenge: [u8; 32],
         verifier_context: &str,
+        presentation_binding: [u8; 32],
         now_epoch: u64,
     ) -> PopMembershipProofV1 {
         prove_pop_membership_v1(
@@ -206,6 +326,7 @@ impl PopMaterial {
             },
             challenge,
             verifier_context,
+            presentation_binding,
             now_epoch,
         )
         .expect("create challenge-bound moderation PoP proof")
@@ -507,12 +628,18 @@ async fn wait_for_appeals(
         let mut appeals = Vec::with_capacity(network.peers().len());
         let mut failures = Vec::new();
         for (index, peer) in network.peers().iter().enumerate() {
-            match bob_client(peer)
-                .client()
-                .query_single(FindSorafsModerationAppeal::new(
-                    CASE_ID.to_owned(),
-                    ROUND_ID.to_owned(),
-                )) {
+            let client = bob_client(peer);
+            match read_on_dedicated_thread(move || {
+                client
+                    .client()
+                    .query_single(FindSorafsModerationAppeal::new(
+                        CASE_ID.to_owned(),
+                        ROUND_ID.to_owned(),
+                    ))
+                    .map_err(Into::into)
+            })
+            .await
+            {
                 Ok(appeal) => appeals.push(appeal),
                 Err(error) => failures.push(format!("peer {index}: {error}")),
             }
@@ -691,11 +818,13 @@ async fn wait_for_settlement_convergence(
         let mut observations = Vec::with_capacity(network.peers().len());
         let mut failures = Vec::new();
         for (index, peer) in network.peers().iter().enumerate() {
-            match settlement_observation(
-                &bob_client(peer),
-                voting_asset_id,
-                include_carpenter_challenge,
-            ) {
+            let client = bob_client(peer);
+            let voting_asset_id = voting_asset_id.clone();
+            match read_on_dedicated_thread(move || {
+                settlement_observation(&client, &voting_asset_id, include_carpenter_challenge)
+            })
+            .await
+            {
                 Ok(observation) => observations.push(observation),
                 Err(error) => failures.push(format!("peer {index}: {error}")),
             }
@@ -751,13 +880,17 @@ async fn wait_for_settlement_convergence(
     }
 }
 
-fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
-    let block = client
-        .client()
-        .query(FindBlocks)
-        .filter_with(|block| block.equals("height", height).into_predicate())
-        .execute_single()
-        .map_err(|error| eyre!("query exact finalized block {height}: {error}"))?;
+async fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
+    let client = client.clone();
+    let block = read_on_dedicated_thread(move || {
+        client
+            .client()
+            .query(FindBlocks)
+            .filter_with(|block| block.equals("height", height).into_predicate())
+            .execute_single()
+            .map_err(|error| eyre!("query exact finalized block {height}: {error}"))
+    })
+    .await?;
     ensure!(
         block.header().height().get() == height,
         "exact finalized-block query returned height {} for requested height {height}",
@@ -766,7 +899,7 @@ fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
     Ok(block)
 }
 
-fn assert_exact_first_post_deadline_anchor(
+async fn assert_exact_first_post_deadline_anchor(
     network: &sandbox::SerializedNetwork,
     anchor: ModerationSortitionAnchorV1,
     registration_deadline_unix_ms: u64,
@@ -782,8 +915,10 @@ fn assert_exact_first_post_deadline_anchor(
     for (index, peer) in network.peers().iter().enumerate() {
         let client = bob_client(peer);
         let block = exact_block(&client, anchor.block_height)
+            .await
             .wrap_err_with(|| format!("peer {index} anchor block"))?;
         let previous = exact_block(&client, anchor.block_height - 1)
+            .await
             .wrap_err_with(|| format!("peer {index} pre-anchor block"))?;
         ensure!(
             *block.hash().as_ref() == anchor.block_hash,
@@ -803,9 +938,16 @@ fn assert_exact_first_post_deadline_anchor(
     Ok(())
 }
 
-#[tokio::test]
-async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable() -> Result<()>
-{
+#[test]
+fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable() -> Result<()> {
+    super::sorafs_network::run(
+        stringify!(four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable),
+        four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable_impl,
+    )
+}
+
+async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable_impl()
+-> Result<()> {
     init_instruction_registry();
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -830,6 +972,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
         ));
     let context =
         stringify!(four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable);
+    let builder = super::sorafs_network::bounded_storage(builder);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
@@ -843,7 +986,8 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     let now_epoch = unix_time_ms()? / 1_000;
     let pop_policy = pop_policy(&BOB_KEYPAIR);
     let moderation_policy = moderation_policy();
-    bob.submit_all(
+    submit_instructions(
+        &bob,
         [
             InstructionBox::from(SetSorafsPopIssuerPolicy::new(pop_policy)),
             InstructionBox::from(CommitSorafsPopCredentialBatch::new(
@@ -852,14 +996,17 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
             )),
             InstructionBox::from(SetSorafsModerationPolicy::new(moderation_policy)),
         ],
-        no_fee(),
-    )?;
+    )
+    .await?;
 
     let registration_deadline_unix_ms = unix_time_ms()?.saturating_add(30_000);
-    alice_client(&network.peers()[0]).submit(
-        SubmitSorafsModerationAppeal::new(appeal_intake(registration_deadline_unix_ms)),
-        no_fee(),
-    )?;
+    submit_instructions(
+        &alice_client(&network.peers()[0]),
+        [SubmitSorafsModerationAppeal::new(appeal_intake(
+            registration_deadline_unix_ms,
+        ))],
+    )
+    .await?;
 
     let wait_ms = registration_deadline_unix_ms
         .saturating_sub(unix_time_ms()?)
@@ -867,10 +1014,14 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     sleep(Duration::from_millis(wait_ms)).await;
     // An idle test network need not create empty blocks. This transaction starts the first
     // post-deadline QueuePlan sequence whose earliest committed carrier must pin the anchor.
-    bob.submit(
-        Log::new(Level::INFO, "pin due moderation anchor".to_owned()),
-        no_fee(),
-    )?;
+    submit_instructions(
+        &bob,
+        [Log::new(
+            Level::INFO,
+            "pin due moderation anchor".to_owned(),
+        )],
+    )
+    .await?;
 
     let anchored = wait_for_appeals(&network, "wait for pinned sortition anchor", |appeal| {
         appeal.status == ModerationAppealStatusV1::RegisteringJurors
@@ -886,17 +1037,19 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
             .all(|appeal| appeal.sortition_anchor == Some(anchor)),
         "four peers did not retain one byte-identical sortition anchor"
     );
-    assert_exact_first_post_deadline_anchor(&network, anchor, registration_deadline_unix_ms)?;
+    assert_exact_first_post_deadline_anchor(&network, anchor, registration_deadline_unix_ms)
+        .await?;
 
     // Carry an unrelated transaction after the anchor before preparing sortition. The final
     // QueuePlan carrier must still consume the pinned draw rather than whichever parent is latest.
-    bob.submit(
-        Log::new(
+    submit_instructions(
+        &bob,
+        [Log::new(
             Level::INFO,
             "delayed moderation sortition carrier".to_owned(),
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     let delayed = wait_for_appeals(&network, "retain anchor after delayed carrier", |appeal| {
         appeal.status == ModerationAppealStatusV1::RegisteringJurors
             && appeal.sortition_anchor == Some(anchor)
@@ -910,17 +1063,18 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     );
 
     let appeal = &delayed[0];
-    bob.submit(
-        FinalizeSorafsModerationSortition::new(
+    submit_instructions(
+        &bob,
+        [FinalizeSorafsModerationSortition::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             appeal.pop_snapshot_digest,
             anchor.block_hash,
             Vec::new(),
             Vec::new(),
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     let finalized = wait_for_appeals(&network, "finalize insufficient panel", |appeal| {
         appeal.status == ModerationAppealStatusV1::InsufficientEligiblePool
     })
@@ -934,9 +1088,17 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     Ok(())
 }
 
-#[tokio::test]
+#[test]
+fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds() -> Result<()> {
+    super::sorafs_network::run(
+        stringify!(four_peer_moderation_challenge_settlements_converge_and_conserve_bonds),
+        four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_impl,
+    )
+}
+
 #[allow(clippy::too_many_lines)]
-async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds() -> Result<()> {
+async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_impl() -> Result<()>
+{
     init_instruction_registry();
     let voting_asset_id: AssetDefinitionId =
         iroha_config::parameters::defaults::governance::voting_asset_id()
@@ -991,6 +1153,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         ));
     let context =
         stringify!(four_peer_moderation_challenge_settlements_converge_and_conserve_bonds);
+    let builder = super::sorafs_network::bounded_storage(builder);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
@@ -1005,7 +1168,8 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     let material = pop_material(&BOB_KEYPAIR, published_at_epoch);
     let policy = moderation_policy_with_custody(BOB_ID.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone());
     let policy_digest = policy.digest().expect("fixture moderation policy digest");
-    bob.submit_all(
+    submit_instructions(
+        &bob,
         [
             InstructionBox::from(SetSorafsPopIssuerPolicy::new(pop_policy(&BOB_KEYPAIR))),
             InstructionBox::from(CommitSorafsPopCredentialBatch::new(
@@ -1014,11 +1178,12 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
             )),
             InstructionBox::from(SetSorafsModerationPolicy::new(policy)),
         ],
-        no_fee(),
-    )?;
+    )
+    .await?;
 
-    // Leave enough real time for the deterministic membership prover on debug/CI hardware.
-    let registration_deadline_unix_ms = unix_time_ms()?.saturating_add(60_000);
+    // Two independently generated membership proofs and their signed admission checks must
+    // finish within the real registration window, including on debug/CI hardware.
+    let registration_deadline_unix_ms = unix_time_ms()?.saturating_add(180_000);
     let intake = settlement_appeal_intake(registration_deadline_unix_ms, policy_digest);
     let acceptance_deadline_unix_ms = intake.acceptance_deadline_unix_ms;
     let commit_deadline_unix_ms = intake.commit_deadline_unix_ms;
@@ -1027,45 +1192,227 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         material.credential.expires_at_epoch > reveal_deadline_epoch,
         "fixture credential must remain valid beyond the mandatory 24-hour reveal schedule"
     );
-    alice_client(&network.peers()[0])
-        .submit(SubmitSorafsModerationAppeal::new(intake), no_fee())?;
-
-    let submitted = wait_for_appeals(&network, "wait for settlement appeal intake", |appeal| {
-        appeal.status == ModerationAppealStatusV1::RegisteringJurors
-    })
+    submit_instructions(
+        &alice_client(&network.peers()[0]),
+        [SubmitSorafsModerationAppeal::new(intake)],
+    )
     .await?;
-    let appeal = &submitted[0];
+
+    let submitted = wait_for_enrollment_snapshot(
+        &network,
+        "wait for settlement appeal intake",
+        1,
+        |snapshot| {
+            Ok(snapshot.appeals.len() == 1
+                && snapshot.cases.is_empty()
+                && snapshot.status.is_some_and(|status| {
+                    status.appeal_intakes == 1 && status.eligibility_proofs == 0
+                })
+                && snapshot.appeal(CASE_ID, ROUND_ID).is_some_and(|view| {
+                    view.appeal.status == ModerationAppealStatusV1::RegisteringJurors
+                        && view.appeal.eligible_jurors.is_empty()
+                        && view.eligibility.is_empty()
+                })
+                && snapshot
+                    .events
+                    .iter()
+                    .map(|event| event.event.kind)
+                    .collect::<Vec<_>>()
+                    == vec![
+                        SorafsModerationLedgerEventKind::PolicyActivated,
+                        SorafsModerationLedgerEventKind::AppealSubmitted,
+                    ])
+        },
+    )
+    .await?;
+    let appeal = &submitted
+        .appeal(CASE_ID, ROUND_ID)
+        .ok_or_else(|| eyre!("converged moderation snapshot lost its appeal"))?
+        .appeal;
+    ensure!(
+        !appeal.intake.exclusions.contains(&BOB_ID),
+        "second recipient must reach proof validation rather than conflict exclusion"
+    );
+    let unregistered_ledger = moderation_ledger_bytes(&submitted)?;
     let challenge =
         sorafs_moderation_pop_challenge_v1(appeal.intake_digest, appeal.pop_snapshot_digest);
     let verifier_context = sorafs_moderation_pop_verifier_context_v1(appeal.intake_digest);
+    let presentation_binding =
+        sorafs_moderation_pop_presentation_binding_v1(appeal.intake_digest, &CARPENTER_ID)?;
     let proof = material.proof(
         challenge,
         &verifier_context,
+        presentation_binding,
         appeal.submitted_at_unix_ms / 1_000,
     );
     ensure!(
-        proof.challenge_digest == challenge && proof.verifier_context == verifier_context,
-        "fixture PoP proof must bind the admitted appeal challenge and verifier context"
+        proof.challenge_digest == challenge
+            && proof.verifier_context == verifier_context
+            && proof.presentation_binding_digest == presentation_binding,
+        "fixture PoP proof must bind the admitted appeal, shared context and Carpenter"
     );
-    carpenter_client(&network.peers()[0]).submit(
-        RegisterSorafsModerationJurorEligibility::new(
+    let second_binding =
+        sorafs_moderation_pop_presentation_binding_v1(appeal.intake_digest, &BOB_ID)?;
+    // The prover validates its newly generated transcript against the requested recipient.
+    // This is a second valid presentation of one credential, not an edited proof envelope.
+    let second_proof = material.proof(
+        challenge,
+        &verifier_context,
+        second_binding,
+        appeal.submitted_at_unix_ms / 1_000,
+    );
+    ensure!(
+        second_binding != presentation_binding
+            && second_proof.presentation_binding_digest == second_binding
+            && second_proof.challenge_digest == challenge
+            && second_proof.verifier_context == verifier_context
+            && second_proof.nullifier == proof.nullifier
+            && second_proof.proof_bytes != proof.proof_bytes,
+        "fresh recipient-bound proofs must retain one shared credential nullifier"
+    );
+    let proof_payload = norito::encode_canonical(&proof)?;
+    let mut proof_digest = blake3::Hasher::new();
+    proof_digest.update(b"sorafs.moderation.pop-proof-payload.v1");
+    proof_digest.update(&proof_payload);
+    let proof_digest = *proof_digest.finalize().as_bytes();
+
+    require_native_rejection(
+        submit_instructions(
+            &bob,
+            [RegisterSorafsModerationJurorEligibility::new(
+                CASE_ID.to_owned(),
+                ROUND_ID.to_owned(),
+                proof_payload.clone(),
+            )],
+        )
+        .await,
+        "moderation juror PoP membership proof failed: membership proof presentation binding does not match the verifier request",
+    )?;
+    submit_instructions(
+        &bob,
+        [Log::new(
+            Level::INFO,
+            "copied moderation proof rejected".to_owned(),
+        )],
+    )
+    .await?;
+    let copied_barrier = {
+        let client = bob.clone();
+        read_on_dedicated_thread(move || {
+            client
+                .client()
+                .query_single(FindSorafsModerationSnapshot::new(1, 32))
+                .map_err(Into::into)
+        })
+        .await?
+    };
+    ensure!(
+        copied_barrier.finalized_height > submitted.finalized_height,
+        "copied-proof read barrier must advance beyond the initial enrollment snapshot"
+    );
+    wait_for_enrollment_snapshot(
+        &network,
+        "copied proof leaves enrollment and moderation ledger unchanged",
+        copied_barrier.finalized_height,
+        |snapshot| Ok(moderation_ledger_bytes(snapshot)? == unregistered_ledger),
+    )
+    .await?;
+
+    // Admit exactly the same canonical bytes under the rightful account. The failed copy
+    // must not consume its nullifier or reserve an eligibility slot for the copier.
+    submit_instructions(
+        &carpenter_client(&network.peers()[0]),
+        [RegisterSorafsModerationJurorEligibility::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
-            norito::encode_canonical(&proof).expect("encode canonical moderation PoP proof"),
-        ),
-        no_fee(),
+            proof_payload,
+        )],
+    )
+    .await?;
+    let enrolled = wait_for_enrollment_snapshot(
+        &network,
+        "wait for Carpenter eligibility",
+        copied_barrier.finalized_height + 1,
+        |snapshot| {
+            Ok(snapshot.appeals.len() == 1
+                && snapshot.cases.is_empty()
+                && snapshot.status.is_some_and(|status| {
+                    status.appeal_intakes == 1 && status.eligibility_proofs == 1
+                })
+                && snapshot.appeal(CASE_ID, ROUND_ID).is_some_and(|view| {
+                    view.appeal.status == ModerationAppealStatusV1::RegisteringJurors
+                        && view.appeal.eligible_jurors == vec![CARPENTER_ID.clone()]
+                        && view.eligibility.len() == 1
+                        && view.eligibility[0].juror == *CARPENTER_ID
+                        && view.eligibility[0].nullifier == proof.nullifier
+                        && view.eligibility[0].proof_digest == proof_digest
+                        && view.eligibility[0].pop_snapshot_digest == appeal.pop_snapshot_digest
+                        && view.eligibility[0].credential_expires_at_epoch == proof.expires_at_epoch
+                })
+                && snapshot.events.len() == 3
+                && snapshot.events[..2] == submitted.events
+                && snapshot.events[2].sequence == 3
+                && snapshot.events[2].event.kind
+                    == SorafsModerationLedgerEventKind::EligibilityRegistered
+                && snapshot.events[2].event.authority == *CARPENTER_ID
+                && snapshot.events[2].event.case_id.as_deref() == Some(CASE_ID)
+                && snapshot.events[2].event.round_id.as_deref() == Some(ROUND_ID))
+        },
+    )
+    .await?;
+    let enrolled_ledger = moderation_ledger_bytes(&enrolled)?;
+
+    require_native_rejection(
+        submit_instructions(
+            &bob,
+            [RegisterSorafsModerationJurorEligibility::new(
+                CASE_ID.to_owned(),
+                ROUND_ID.to_owned(),
+                norito::encode_canonical(&second_proof)?,
+            )],
+        )
+        .await,
+        "moderation juror PoP membership proof nullifier was already consumed",
     )?;
-    wait_for_appeals(&network, "wait for Carpenter eligibility", |appeal| {
-        appeal.status == ModerationAppealStatusV1::RegisteringJurors
-            && appeal.eligible_jurors == vec![CARPENTER_ID.clone()]
-    })
+    submit_instructions(
+        &bob,
+        [Log::new(
+            Level::INFO,
+            "shared moderation nullifier rejected".to_owned(),
+        )],
+    )
+    .await?;
+    let nullifier_barrier = {
+        let client = bob.clone();
+        read_on_dedicated_thread(move || {
+            client
+                .client()
+                .query_single(FindSorafsModerationSnapshot::new(1, 32))
+                .map_err(Into::into)
+        })
+        .await?
+    };
+    ensure!(
+        nullifier_barrier.finalized_height > enrolled.finalized_height,
+        "shared-nullifier read barrier must advance beyond successful enrollment"
+    );
+    wait_for_enrollment_snapshot(
+        &network,
+        "shared nullifier leaves the rightful enrollment and moderation ledger unchanged",
+        nullifier_barrier.finalized_height,
+        |snapshot| Ok(moderation_ledger_bytes(snapshot)? == enrolled_ledger),
+    )
     .await?;
 
     sleep_past(registration_deadline_unix_ms).await?;
-    bob.submit(
-        Log::new(Level::INFO, "pin settlement moderation anchor".to_owned()),
-        no_fee(),
-    )?;
+    submit_instructions(
+        &bob,
+        [Log::new(
+            Level::INFO,
+            "pin settlement moderation anchor".to_owned(),
+        )],
+    )
+    .await?;
     let anchored = wait_for_appeals(&network, "wait for settlement sortition anchor", |appeal| {
         appeal.status == ModerationAppealStatusV1::RegisteringJurors
             && appeal.sortition_anchor.is_some()
@@ -1080,18 +1427,20 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
             .all(|appeal| appeal.sortition_anchor == Some(anchor)),
         "four peers did not retain one byte-identical settlement sortition anchor"
     );
-    assert_exact_first_post_deadline_anchor(&network, anchor, registration_deadline_unix_ms)?;
-    bob.submit(
-        FinalizeSorafsModerationSortition::new(
+    assert_exact_first_post_deadline_anchor(&network, anchor, registration_deadline_unix_ms)
+        .await?;
+    submit_instructions(
+        &bob,
+        [FinalizeSorafsModerationSortition::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             anchored[0].pop_snapshot_digest,
             anchor.block_hash,
             vec![CARPENTER_ID.clone()],
             Vec::new(),
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     let selected = wait_for_appeals(&network, "wait for Carpenter sortition", |appeal| {
         appeal.status == ModerationAppealStatusV1::AwaitingAcceptance
             && appeal
@@ -1105,14 +1454,15 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         .as_ref()
         .ok_or_else(|| eyre!("settlement appeal lost its panel selection"))?
         .sortition_digest;
-    carpenter_client(&network.peers()[0]).submit(
-        AcceptSorafsModerationJurorAssignment::new(
+    submit_instructions(
+        &carpenter_client(&network.peers()[0]),
+        [AcceptSorafsModerationJurorAssignment::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             sortition_digest,
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     wait_for_appeals(
         &network,
         "wait for Carpenter assignment acceptance",
@@ -1123,14 +1473,15 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     )
     .await?;
     sleep_past(acceptance_deadline_unix_ms).await?;
-    bob.submit(
-        ActivateSorafsModerationCase::new(
+    submit_instructions(
+        &bob,
+        [ActivateSorafsModerationCase::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             sortition_digest,
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     wait_for_appeals(&network, "wait for activated settlement ballot", |appeal| {
         appeal.status == ModerationAppealStatusV1::BallotOpen
             && appeal.activated_at_unix_ms.is_some()
@@ -1138,8 +1489,9 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     .await?;
     sleep_past(commit_deadline_unix_ms).await?;
 
-    alice_client(&network.peers()[0]).submit(
-        RaiseSorafsModerationChallenge::new(
+    submit_instructions(
+        &alice_client(&network.peers()[0]),
+        [RaiseSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             ALICE_CHALLENGE_ID.to_owned(),
@@ -1147,9 +1499,9 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
             None,
             [0x81; 32],
             "Alice disputes the evidence binding".to_owned(),
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     wait_for_settlement_convergence(
         &network,
         &voting_asset_id,
@@ -1178,15 +1530,16 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         },
     )
     .await?;
-    bob.submit(
-        ResolveSorafsModerationChallenge::new(
+    submit_instructions(
+        &bob,
+        [ResolveSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             ALICE_CHALLENGE_ID.to_owned(),
             ModerationChallengeDecisionV1::Rejected,
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     wait_for_settlement_convergence(
         &network,
         &voting_asset_id,
@@ -1218,8 +1571,9 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     )
     .await?;
 
-    carpenter_client(&network.peers()[0]).submit(
-        RaiseSorafsModerationChallenge::new(
+    submit_instructions(
+        &carpenter_client(&network.peers()[0]),
+        [RaiseSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             CARPENTER_CHALLENGE_ID.to_owned(),
@@ -1227,9 +1581,9 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
             None,
             [0x82; 32],
             "Carpenter requests governance review".to_owned(),
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     wait_for_settlement_convergence(
         &network,
         &voting_asset_id,
@@ -1266,15 +1620,16 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     .await?;
     // Expiry still belongs to the core synthetic-time regression: this real network cannot wait
     // out the mandatory 24-hour resolution grace during an integration run.
-    bob.submit(
-        ResolveSorafsModerationChallenge::new(
+    submit_instructions(
+        &bob,
+        [ResolveSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
             CARPENTER_CHALLENGE_ID.to_owned(),
             ModerationChallengeDecisionV1::Accepted,
-        ),
-        no_fee(),
-    )?;
+        )],
+    )
+    .await?;
     wait_for_settlement_convergence(
         &network,
         &voting_asset_id,
@@ -1309,5 +1664,48 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         },
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+fn moderation_proof_rejection_requires_the_exact_native_error() {
+    let message = "moderation juror PoP membership proof nullifier was already consumed";
+    let error = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message.to_owned(),
+        )),
+    ));
+    require_native_rejection(Err(eyre!(error.clone())), message).unwrap();
+    assert!(require_native_rejection(Err(eyre!(error)), "nullifier was already consumed").is_err());
+    assert!(require_native_rejection(Err(eyre!("{message}")), message).is_err());
+    let unrelated =
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message.to_owned()));
+    assert!(require_native_rejection(Err(eyre!(unrelated)), message).is_err());
+}
+
+#[test]
+fn moderation_ledger_comparison_preserves_enrollment_counters() -> Result<()> {
+    let mut snapshot = ModerationFinalizedLedgerSnapshotV1 {
+        version: 1,
+        finalized_height: 1,
+        finalized_block_hash: [1; 32],
+        finalized_at_unix_ms: 1,
+        policy: None,
+        status: Some(Default::default()),
+        appeals: Vec::new(),
+        cases: Vec::new(),
+        events: Vec::new(),
+    };
+    let before = moderation_ledger_bytes(&snapshot)?;
+    snapshot.finalized_height = 2;
+    snapshot.finalized_block_hash = [2; 32];
+    snapshot.finalized_at_unix_ms = 2;
+    ensure!(moderation_ledger_bytes(&snapshot)? == before);
+    snapshot
+        .status
+        .as_mut()
+        .expect("fixture has ledger counters")
+        .eligibility_proofs = 1;
+    ensure!(moderation_ledger_bytes(&snapshot)? != before);
     Ok(())
 }

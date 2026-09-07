@@ -84,6 +84,21 @@ pub struct OptimizedConstants<F: PrimeField, const T: usize> {
 }
 
 impl<F: PrimeField, const T: usize, const RATE: usize> OptimizedPoseidonSpec<F, T, RATE> {
+    /// Generate the original round constants and dense MDS matrix used by [`Self::new`].
+    ///
+    /// This exposes the existing deterministic generator for circuits that constrain the
+    /// original permutation directly. Parameters must match the optimized specification being
+    /// replaced. It neither changes that specification nor stores a second set of constants in it.
+    pub fn unoptimized_constants<const R_F: usize, const R_P: usize, const SECURE_MDS: usize>(
+    ) -> (Vec<[F; T]>, [[F; T]; T])
+    where
+        F: FromUniformBytes<64> + Ord,
+    {
+        let (round_constants, mds, _) =
+            Poseidon128Pow5Gen::<F, T, RATE, R_F, R_P, SECURE_MDS>::constants();
+        (round_constants, mds)
+    }
+
     /// Generate new spec with specific number of full and partial rounds. `SECURE_MDS` is usually 0, but may need to be specified because insecure matrices may sometimes be generated
     pub fn new<const R_F: usize, const R_P: usize, const SECURE_MDS: usize>() -> Self
     where

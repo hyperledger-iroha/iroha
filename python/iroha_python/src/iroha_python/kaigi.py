@@ -6,14 +6,9 @@ argument dictionaries used by some SDKs.  This module therefore constructs the
 registered ``(wire_id, framed_payload)`` pair directly and wraps it in the exact
 ``InstructionBox`` archive before asking the native bridge to decode it again.
 
-Account arguments currently accept exact sentinel-prefixed I105 identifiers
-whose controller is one prime-order Ed25519 key.  Other algorithms and multisig
-controllers fail closed until the Python address model can validate and encode
-their complete consensus key material.
-
-Domain labels, call names, and metadata ``Name`` keys currently admit the
-deterministic ASCII subset.  Canonical Unicode/ACE identity input fails closed
-until Python can call the same fingerprinted NFC and UTS-46 profiles as Rust.
+Identity fields use the required native Rust validators and canonical Norito
+frames. This preserves full single-key and multisig controllers, the pinned
+Unicode NFC profile for Names, and the pinned UTS-46 profile for domains.
 """
 
 from __future__ import annotations
@@ -24,19 +19,12 @@ import json
 import re
 import struct
 from dataclasses import dataclass
-from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Mapping, Sequence
 
 from norito.crc64 import crc64 as _crc64
 
-from .address import (
-    AccountAddress,
-    AccountAddressError,
-    AddressClass,
-    CurveId,
-    i105_discriminant_from_sentinel,
-)
+from ._native import load_crypto_extension
 
 if TYPE_CHECKING:
     from .crypto import Instruction
@@ -105,27 +93,12 @@ _MAX_JSON_BYTES: Final[int] = 1_048_576
 _MAX_JSON_DEPTH: Final[int] = 128
 _U64_MAX: Final[int] = (1 << 64) - 1
 _U32_MAX: Final[int] = (1 << 32) - 1
+# ``kaigi_zk::Scalar`` is Pasta Fp; its canonical representation is little-endian.
+_PASTA_FP_MODULUS: Final[int] = int(
+    "40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16
+)
 _HASH_LITERAL_RE: Final[re.Pattern[str]] = re.compile(
     r"hash:([0-9A-F]{64})#([0-9A-F]{4})\Z", re.ASCII
-)
-_ASCII_DOMAIN_LABEL_RE: Final[re.Pattern[str]] = re.compile(
-    r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\Z", re.ASCII
-)
-_BIDI_CONTROLS: Final[frozenset[str]] = frozenset(
-    {
-        "\u061c",
-        "\u200e",
-        "\u200f",
-        "\u202a",
-        "\u202b",
-        "\u202c",
-        "\u202d",
-        "\u202e",
-        "\u2066",
-        "\u2067",
-        "\u2068",
-        "\u2069",
-    }
 )
 
 
@@ -236,52 +209,41 @@ def _string(value: str) -> bytes:
     return _field(value.encode("utf-8"))
 
 
-def _name(value: Any, context: str) -> tuple[str, bytes]:
+def _canonical_identity(
+    value: Any, context: str, kind: str
+) -> tuple[str, bytes]:
     literal = _text(value, context, allow_empty=False)
-    encoded = literal.encode("utf-8")
-    if len(encoded) > 255:
-        raise ValueError(f"{context} exceeds the 255-byte UTF-8 limit")
-    # TODO: expose the Rust profile-pinned ICU NFC validator to Python so
-    # non-ASCII identity names do not depend on the host Unicode-data version.
-    if not literal.isascii():
-        raise ValueError(f"{context} must be ASCII until the consensus NFC profile is shared")
-    if any(
-        ord(character) < 0x20
-        or ord(character) == 0x7F
-        or character.isspace()
-        or character in _BIDI_CONTROLS
-        or character in "@#$"
-        for character in literal
-    ):
-        raise ValueError(f"{context} is not a canonical Iroha Name")
-    return literal, _string(literal)
+    native = load_crypto_extension()
+    encoder = getattr(native, f"_encode_{kind}_v1", None)
+    if encoder is None:
+        raise RuntimeError(
+            f"iroha_python._crypto is missing the canonical {kind} encoder; rebuild the extension"
+        )
+    try:
+        canonical, frame = encoder(literal)
+    except ValueError as error:
+        raise ValueError(f"{context}: {error}") from error
+    expected_type = {
+        "account_id": "iroha_data_model::account::model::AccountId",
+        "domain_id": "iroha_data_model::domain::model::DomainId",
+        "name": "iroha_data_model::name::model::Name",
+    }[kind]
+    if type(canonical) is not str or type(frame) is not bytes:
+        raise RuntimeError(f"native {kind} encoder returned invalid result types")
+    if len(frame) < _NORITO_HEADER_BYTES or len(frame) > _MAX_ARCHIVE_BYTES:
+        raise RuntimeError(f"native {kind} encoder returned an invalid frame length")
+    payload = frame[_NORITO_HEADER_BYTES:]
+    if frame != _frame(payload, _schema_hash(expected_type)):
+        raise RuntimeError(f"native {kind} encoder returned a noncanonical frame")
+    return canonical, payload
+
+
+def _name(value: Any, context: str) -> tuple[str, bytes]:
+    return _canonical_identity(value, context, "name")
 
 
 def _domain_id(value: Any, context: str) -> tuple[str, bytes]:
-    literal = _text(value, context, allow_empty=False)
-    if literal.strip() != literal:
-        raise ValueError(f"{context} must not contain surrounding whitespace")
-    parts = literal.split(".")
-    if len(parts) != 2:
-        raise ValueError(f"{context} must use the exact domain.dataspace form")
-    canonical_parts = []
-    encoded_parts = []
-    for index, part in enumerate(parts):
-        label_context = f"{context} segment {index}"
-        # TODO: share the pinned Rust UTS-46 profile with Python so canonical
-        # non-ASCII and ACE labels can be admitted without depending on the
-        # host Python/IDNA data version.  ASCII labels are exact and portable.
-        if not part.isascii() or part.startswith("xn--"):
-            raise ValueError(f"{label_context} must be a canonical non-ACE ASCII label")
-        canonical = part.lower()
-        if _ASCII_DOMAIN_LABEL_RE.fullmatch(canonical) is None:
-            raise ValueError(f"{label_context} is not a canonical domain label")
-        if len(canonical) >= 4 and canonical[2:4] == "--":
-            raise ValueError(f"{label_context} has a reserved double hyphen")
-        _, encoded_name = _name(canonical, label_context)
-        canonical_parts.append(canonical)
-        encoded_parts.append(encoded_name)
-    return ".".join(canonical_parts), _struct(*encoded_parts)
+    return _canonical_identity(value, context, "domain_id")
 
 
 def _kaigi_id(value: "KaigiIdV1", context: str) -> bytes:
@@ -292,104 +254,8 @@ def _kaigi_id(value: "KaigiIdV1", context: str) -> bytes:
     return _struct(domain, call_name)
 
 
-_ED25519_FIELD: Final[int] = (1 << 255) - 19
-_ED25519_D: Final[int] = (-121665 * pow(121666, _ED25519_FIELD - 2, _ED25519_FIELD)) % (
-    _ED25519_FIELD
-)
-_ED25519_SQRT_M1: Final[int] = pow(2, (_ED25519_FIELD - 1) // 4, _ED25519_FIELD)
-_ED25519_ORDER: Final[int] = (1 << 252) + 27742317777372353535851937790883648493
-
-
-def _edwards_add(
-    left: tuple[int, int, int, int], right: tuple[int, int, int, int]
-) -> tuple[int, int, int, int]:
-    x1, y1, z1, t1 = left
-    x2, y2, z2, t2 = right
-    field = _ED25519_FIELD
-    a = ((y1 - x1) * (y2 - x2)) % field
-    b = ((y1 + x1) * (y2 + x2)) % field
-    c = (2 * _ED25519_D * t1 * t2) % field
-    d = (2 * z1 * z2) % field
-    e = (b - a) % field
-    f = (d - c) % field
-    g = (d + c) % field
-    h = (b + a) % field
-    return (e * f % field, g * h % field, f * g % field, e * h % field)
-
-
-def _edwards_double(point: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
-    x, y, z, _ = point
-    field = _ED25519_FIELD
-    a = x * x % field
-    b = y * y % field
-    c = 2 * z * z % field
-    d = -a % field
-    e = ((x + y) * (x + y) - a - b) % field
-    g = (d + b) % field
-    f = (g - c) % field
-    h = (d - b) % field
-    return (e * f % field, g * h % field, f * g % field, e * h % field)
-
-
-@lru_cache(maxsize=256)
-def _require_prime_order_ed25519(public_key: bytes) -> None:
-    if len(public_key) != 32:
-        raise ValueError("I105 Ed25519 account key must contain exactly 32 bytes")
-    encoded_y = int.from_bytes(public_key, "little")
-    sign = encoded_y >> 255
-    y = encoded_y & ((1 << 255) - 1)
-    field = _ED25519_FIELD
-    if y >= field:
-        raise ValueError("I105 account key is not a canonical compressed Ed25519 point")
-    y_squared = y * y % field
-    denominator = (_ED25519_D * y_squared + 1) % field
-    if denominator == 0:
-        raise ValueError("I105 account key is not an Ed25519 point")
-    x_squared = (y_squared - 1) * pow(denominator, field - 2, field) % field
-    x = pow(x_squared, (field + 3) // 8, field)
-    if x * x % field != x_squared:
-        x = x * _ED25519_SQRT_M1 % field
-    if x * x % field != x_squared or (x == 0 and sign == 1):
-        raise ValueError("I105 account key is not a canonical compressed Ed25519 point")
-    if x & 1 != sign:
-        x = field - x
-    if x == 0 and y == 1:
-        raise ValueError("I105 account key is a small-order Ed25519 point")
-    point = (x, y, 1, x * y % field)
-    multiple = (0, 1, 1, 0)
-    addend = point
-    scalar = _ED25519_ORDER
-    while scalar:
-        if scalar & 1:
-            multiple = _edwards_add(multiple, addend)
-        addend = _edwards_double(addend)
-        scalar >>= 1
-    x_result, y_result, z_result, _ = multiple
-    if x_result % field != 0 or (y_result - z_result) % field != 0:
-        raise ValueError("I105 account key is not in the prime-order Ed25519 subgroup")
-
-
 def _account_id(value: Any, context: str) -> tuple[str, bytes]:
-    literal = _text(value, context, allow_empty=False)
-    if literal.strip() != literal:
-        raise ValueError(f"{context} must not contain surrounding whitespace")
-    discriminant = i105_discriminant_from_sentinel(literal)
-    if discriminant is None:
-        raise ValueError(f"{context} must be an exact sentinel-prefixed I105 account ID")
-    try:
-        address = AccountAddress.from_i105(literal, expected_discriminant=discriminant)
-    except AccountAddressError as error:
-        raise ValueError(f"{context} must be an exact canonical I105 account ID") from error
-    if address.to_i105(discriminant) != literal:
-        raise ValueError(f"{context} must be an exact canonical I105 account ID")
-    if address.header.class_ != AddressClass.SINGLE_KEY:
-        raise ValueError(f"{context} uses an account controller unsupported by this Python codec")
-    if address.controller.curve != CurveId.ED25519:
-        raise ValueError(f"{context} must use an Ed25519 account controller")
-    public_key = bytes(address.controller.public_key)
-    _require_prime_order_ed25519(public_key)
-    public_key_payload = _vec_u8(bytes([0]) + public_key, const_items=True)
-    return literal, struct.pack("<I", 0) + _field(public_key_payload)
+    return _canonical_identity(value, context, "account_id")
 
 
 def _vec_u8(value: Any, *, context: str = "bytes", const_items: bool = False) -> bytes:
@@ -436,6 +302,17 @@ def _require_all_or_none(context: str, **artifacts: Any) -> None:
             f"{context} privacy artifacts must be all present or all omitted; "
             f"missing {', '.join(missing)}"
         )
+
+
+def _pasta_scalar_bytes(value: Any, context: str) -> bytes:
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{context} must be a raw bytes-like Pasta Fp scalar")
+    raw = bytes(value)
+    if len(raw) != 32:
+        raise ValueError(f"{context} must contain exactly 32 bytes")
+    if int.from_bytes(raw, "little") >= _PASTA_FP_MODULUS:
+        raise ValueError(f"{context} must be a canonical Pasta Fp scalar below the modulus")
+    return raw
 
 
 def _hash_bytes(value: Any, context: str) -> bytes:
@@ -563,32 +440,29 @@ class KaigiIdV1:
 
 @dataclass(frozen=True)
 class KaigiParticipantCommitmentV1:
-    """Ledger-safe participant commitment without a clear-text alias tag."""
+    """A raw canonical Pasta Fp participant commitment with no alias tag."""
 
-    commitment: bytes | str
+    commitment: bytes
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "commitment",
-            _hash_bytes(self.commitment, "KaigiParticipantCommitmentV1.commitment"),
+            _pasta_scalar_bytes(self.commitment, "KaigiParticipantCommitmentV1.commitment"),
         )
 
 
 @dataclass(frozen=True)
 class KaigiParticipantNullifierV1:
-    """Ledger-safe participant nullifier; the V1 timing hint is fixed to zero."""
+    """A raw canonical Pasta Fp nullifier with no clear-text timing field."""
 
-    digest: bytes | str
-    issued_at_ms: int = 0
+    digest: bytes
 
     def __post_init__(self) -> None:
-        if type(self.issued_at_ms) is not int or self.issued_at_ms != 0:
-            raise ValueError("KaigiParticipantNullifierV1.issued_at_ms must be zero")
         object.__setattr__(
             self,
             "digest",
-            _hash_bytes(self.digest, "KaigiParticipantNullifierV1.digest"),
+            _pasta_scalar_bytes(self.digest, "KaigiParticipantNullifierV1.digest"),
         )
 
 
@@ -628,7 +502,7 @@ class KaigiRelayManifestV1:
             )
         if any(not isinstance(hop, KaigiRelayHopV1) for hop in hops):
             raise TypeError("KaigiRelayManifestV1.hops entries must be KaigiRelayHopV1")
-        relay_ids = [hop.relay_id for hop in hops]
+        relay_ids = [_account_id(hop.relay_id, "relay identity")[1] for hop in hops]
         if len(set(relay_ids)) != len(relay_ids):
             raise ValueError("KaigiRelayManifestV1.hops must not contain duplicate relays")
         _u64(self.expiry_ms, "KaigiRelayManifestV1.expiry_ms")
@@ -699,13 +573,13 @@ class KaigiInstructionWireV1:
 def _participant_commitment(value: KaigiParticipantCommitmentV1) -> bytes:
     if not isinstance(value, KaigiParticipantCommitmentV1):
         raise TypeError("commitment must be a KaigiParticipantCommitmentV1")
-    return _struct(bytes(value.commitment), b"\x00")
+    return _struct(bytes(value.commitment))
 
 
 def _participant_nullifier(value: KaigiParticipantNullifierV1) -> bytes:
     if not isinstance(value, KaigiParticipantNullifierV1):
         raise TypeError("nullifier must be a KaigiParticipantNullifierV1")
-    return _struct(bytes(value.digest), _u64(value.issued_at_ms, "nullifier.issued_at_ms"))
+    return _struct(bytes(value.digest))
 
 
 def _relay_hop(value: KaigiRelayHopV1) -> bytes:
@@ -758,7 +632,7 @@ def encode_create_kaigi_instruction_v1(
     and 4096. ``None`` preserves the absent wire field and uses that maximum.
     """
 
-    host_literal, host_payload = _account_id(host, "CreateKaigi.host")
+    _, host_payload = _account_id(host, "CreateKaigi.host")
     if title is not None:
         title = _text(title, "CreateKaigi.title")
     if description is not None:
@@ -769,10 +643,10 @@ def encode_create_kaigi_instruction_v1(
         _u64(scheduled_start_ms, "CreateKaigi.scheduled_start_ms")
     billing_payload = None
     if billing_account is not None:
-        billing_literal, billing_payload = _account_id(
+        _, billing_payload = _account_id(
             billing_account, "CreateKaigi.billing_account"
         )
-        if billing_literal != host_literal:
+        if billing_payload != host_payload:
             raise ValueError("CreateKaigi.billing_account must equal the signed host in V1")
     privacy_tags = {"Transparent": 0, "ZkRosterV1": 1}
     room_tags = {"Public": 0, "Authenticated": 1}
@@ -793,6 +667,10 @@ def encode_create_kaigi_instruction_v1(
             raise ValueError("transparent CreateKaigi must omit every privacy artifact")
     else:
         _require_all_or_none("CreateKaigi", **privacy_artifacts)
+        if commitment is None:
+            raise ValueError(
+                "private CreateKaigi requires the host commitment, nullifier, roster_root, and proof"
+            )
     call = _struct(
         _kaigi_id(call_id, "CreateKaigi.call_id"),
         host_payload,
@@ -833,18 +711,13 @@ def _encode_join_or_leave_kaigi_instruction_v1(
     roster_root: bytes | str | None,
     proof: bytes | None,
 ) -> KaigiInstructionWireV1:
-    if wire_id == LEAVE_KAIGI_WIRE_ID_V1 and any(
-        value is not None for value in (commitment, nullifier, roster_root, proof)
-    ):
-        raise ValueError("LeaveKaigi V1 privacy artifacts are reserved and must be omitted")
-    if wire_id == JOIN_KAIGI_WIRE_ID_V1:
-        _require_all_or_none(
-            "JoinKaigi",
-            commitment=commitment,
-            nullifier=nullifier,
-            roster_root=roster_root,
-            proof=proof,
-        )
+    _require_all_or_none(
+        "JoinKaigi" if wire_id == JOIN_KAIGI_WIRE_ID_V1 else "LeaveKaigi",
+        commitment=commitment,
+        nullifier=nullifier,
+        roster_root=roster_root,
+        proof=proof,
+    )
     _, participant_payload = _account_id(participant, "Kaigi participant")
     payload = _struct(
         _kaigi_id(call_id, "Kaigi.call_id"),
@@ -880,18 +753,28 @@ def encode_join_kaigi_instruction_v1(
 
 
 def encode_leave_kaigi_instruction_v1(
-    *, call_id: KaigiIdV1, participant: str
+    *,
+    call_id: KaigiIdV1,
+    participant: str,
+    commitment: KaigiParticipantCommitmentV1 | None = None,
+    nullifier: KaigiParticipantNullifierV1 | None = None,
+    roster_root: bytes | str | None = None,
+    proof: bytes | None = None,
 ) -> KaigiInstructionWireV1:
-    """Encode one transparent-mode ``LeaveKaigi`` canonical wire payload."""
+    """Encode a leave, including the complete authorization quartet for a private call.
+
+    The transparent form omits all four artifacts. Core checks the call mode,
+    participation sequence, ownership, and proof against committed state.
+    """
 
     return _encode_join_or_leave_kaigi_instruction_v1(
         LEAVE_KAIGI_WIRE_ID_V1,
         call_id=call_id,
         participant=participant,
-        commitment=None,
-        nullifier=None,
-        roster_root=None,
-        proof=None,
+        commitment=commitment,
+        nullifier=nullifier,
+        roster_root=roster_root,
+        proof=proof,
     )
 
 
@@ -929,7 +812,7 @@ def encode_record_kaigi_usage_instruction_v1(
     call_id: KaigiIdV1,
     duration_ms: int,
     billed_gas: int = 0,
-    usage_commitment: bytes | str | None = None,
+    usage_commitment: bytes | None = None,
     proof: bytes | None = None,
 ) -> KaigiInstructionWireV1:
     """Encode one typed ``RecordKaigiUsage`` canonical wire payload."""
@@ -945,7 +828,7 @@ def encode_record_kaigi_usage_instruction_v1(
         _u64(billed_gas, "RecordKaigiUsage.billed_gas"),
         _option(
             usage_commitment,
-            lambda value: _hash_bytes(value, "RecordKaigiUsage.usage_commitment"),
+            lambda value: _pasta_scalar_bytes(value, "RecordKaigiUsage.usage_commitment"),
         ),
         _option(proof, lambda value: _proof(value, "RecordKaigiUsage.proof")),
     )
@@ -1077,12 +960,24 @@ def build_join_kaigi_instruction(
     ).to_instruction()
 
 
-def build_leave_kaigi_instruction(*, call_id: KaigiIdV1, participant: str) -> "Instruction":
+def build_leave_kaigi_instruction(
+    *,
+    call_id: KaigiIdV1,
+    participant: str,
+    commitment: KaigiParticipantCommitmentV1 | None = None,
+    nullifier: KaigiParticipantNullifierV1 | None = None,
+    roster_root: bytes | str | None = None,
+    proof: bytes | None = None,
+) -> "Instruction":
     """Build a native ``LeaveKaigi`` instruction from typed keyword arguments."""
 
     return encode_leave_kaigi_instruction_v1(
         call_id=call_id,
         participant=participant,
+        commitment=commitment,
+        nullifier=nullifier,
+        roster_root=roster_root,
+        proof=proof,
     ).to_instruction()
 
 
@@ -1112,7 +1007,7 @@ def build_record_kaigi_usage_instruction(
     call_id: KaigiIdV1,
     duration_ms: int,
     billed_gas: int = 0,
-    usage_commitment: bytes | str | None = None,
+    usage_commitment: bytes | None = None,
     proof: bytes | None = None,
 ) -> "Instruction":
     """Build a native ``RecordKaigiUsage`` instruction from typed keyword arguments."""

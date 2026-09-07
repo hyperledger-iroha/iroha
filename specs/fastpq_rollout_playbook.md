@@ -55,9 +55,13 @@ to the release/upgrade ticket and keep the bundle in
 
 1. **Capture GPU benchmarks.**
    - Run the canonical workload (20 000 logical rows, 32 768 padded rows) via
-     `cargo run -p fastpq_prover --features dev-tools --bin fastpq_metal_bench -- --rows 20000 --pretty`.
+     `cargo run -p fastpq_prover --features dev-tools,fastpq-gpu --bin fastpq_metal_bench -- --rows 20000 --pretty`.
    - Wrap the result with `scripts/fastpq/wrap_benchmark.py` using `--row-usage <decoded witness>` so the bundle carries the gadget evidence alongside the GPU telemetry. Pass `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` so the wrapper fails fast if either accelerator exceeds the target or if the Poseidon queue/profile telemetry is missing, and to generate the detached signature.
    - Repeat on the CUDA host so the manifest contains both GPU families.
+   - FFT/IFFT/LDE timing paths require successful GPU dispatch completion;
+     hardware errors or a busy GPU lane abort the capture. The production
+     planner retains deterministic CPU fallback, but those fallback timings
+     cannot be reported as GPU benchmark evidence.
    - Do **not** strip the `benchmarks.metal_dispatch_queue` or
      `benchmarks.zero_fill_hotspots` blocks from the wrapped JSON. The CI gate
      (`ci/check_fastpq_rollout.sh`) now reads those fields and fails when queue
@@ -65,6 +69,23 @@ to the release/upgrade ticket and keep the bundle in
      0.40 ms`, enforcing the Stage 7 telemetry guard automatically.
 2. **Generate the manifest.** Use `cargo xtask fastpq-bench-manifest …` as
    shown in the table. Store `fastpq_bench_manifest.json` in the rollout bundle.
+   The rollout gate re-reads each capture and checks SHA-256/BLAKE3 hashes,
+   matching row counts and geometry, positive sample counts, the claimed GPU
+   backend, all six canonical operations, and actual timings against every
+   declared threshold. CPU fallback captures, partial operation captures,
+   malformed or nonfinite measurements, and Metal queues without actual
+   dispatches cannot qualify. Run the helper directly with
+   `python3 scripts/fastpq/validate_rollout_manifest.py <manifest>`.
+   Configure `FASTPQ_ROLLOUT_TRUSTED_PUBLIC_KEY` with the raw Ed25519 public-key
+   hex supplied through the release trust policy, independently of the evidence
+   bundle. The shell gate also authenticates the manifest via
+   `cargo xtask fastpq-verify-bench-manifest --manifest <manifest> --trusted-public-key <hex>`.
+   Missing signatures, invalid signatures and self-declared untrusted signers
+   fail closed. `FASTPQ_XTASK_BIN` may point to a reviewed prebuilt xtask binary;
+   otherwise the gate builds the workspace tool with the locked dependency graph.
+   CUDA hardware qualification runs set the test-only `FASTPQ_CUDA_REQUIRE=1`:
+   the nightly CUDA job then fails if parity/determinism tests cannot execute
+   on CUDA, including runtime failures that optional developer runs may skip.
 3. **Export Grafana.**
    - Annotate the `FASTPQ Acceleration Overview` board with the rollout window,
      linking to the relevant Grafana panel IDs.

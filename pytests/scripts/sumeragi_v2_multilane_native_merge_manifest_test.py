@@ -24,6 +24,312 @@ def load_support():
     return module
 
 
+@pytest.fixture(scope="module")
+def participant_application_contract():
+    """Load the two canonical owners and six regressions once, without Cargo."""
+    support = load_support()
+    module = support.load_checker()
+    native = module.native_merge_manifest
+    bindings = (
+        native.NATIVE_PARTICIPANT_APPLICATION_ROLE_BINDINGS
+        + native.NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS
+    )
+    items = {}
+    errors: list[str] = []
+    with module._reviewed_rust_source_cache():
+        for relative, kind, symbol, tokens in bindings:
+            item = module._rust_binding_item(
+                support.ROOT_DIR, relative, kind, symbol,
+                "Native participant application role", errors,
+            )
+            assert item is not None, errors
+            assert all(token in item for token in tokens), symbol
+            items[(relative, kind, symbol)] = item
+    native.validate_native_merge_manifest_relations(support.ROOT_DIR, items, errors)
+    assert errors == []
+    return support, module, items
+
+
+def test_native_participant_role_bindings_match_canonical_inventory(
+    participant_application_contract,
+) -> None:
+    """Both owners and all six tests use the existing exact binding schema."""
+    support, module, _items = participant_application_contract
+    native = module.native_merge_manifest
+    expected = (
+        native.NATIVE_PARTICIPANT_APPLICATION_ROLE_BINDINGS
+        + native.NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS
+    )
+    assert len(native.NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS) == 6
+    model = next(
+        row for row in support.canonical_models()
+        if row["module"] == module.NATIVE_PREPUBLICATION_MODULE
+    )
+    for relative, kind, symbol, tokens in expected:
+        rows = [
+            row for row in model["production_symbols"]
+            if row["path"] == relative and row["symbol"] == symbol
+        ]
+        assert rows == [{
+            "path": relative, "kind": kind, "symbol": symbol,
+            "required_tokens": list(tokens),
+        }]
+        assert (relative, kind, symbol, tokens) in module.NATIVE_PREPUBLICATION_BINDINGS
+
+
+@pytest.mark.parametrize("phase", ("prepare", "commit"))
+@pytest.mark.parametrize(
+    "field",
+    (
+        "participant_lane_id", "participant_dataspace_id",
+        "participant_lane_incarnation", "authority_context_height",
+        "participant_previous_block_height", "participant_previous_block_descriptor_hash",
+        "participant_lane_block_height", "participant_lane_block_view",
+        "participant_proposal_hash", "participant_settlement_commitment",
+        "coordinator_lane_id", "coordinator_dataspace_id", "coordinator_lane_incarnation",
+        "planned_coordinator_block_height", "coordinator_lane_block_view",
+        "coordinator_proposal_hash",
+    ),
+)
+def test_native_participant_role_rejects_collapsed_phase_identity_checks(
+    participant_application_contract, phase: str, field: str,
+) -> None:
+    """Using one QC twice must not erase independent Prepare/Commit checks."""
+    support, module, items = participant_application_contract
+    native = module.native_merge_manifest
+    symbol = "native_amx_participant_application_role"
+    key = (native.NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE, "fn", symbol)
+    item = items[key]
+    old = f"{phase}.{field}"
+    other_phase = "commit" if phase == "prepare" else "prepare"
+    assert old in item
+    weakened = item.replace(old, f"{other_phase}.{field}", 1)
+    errors: list[str] = []
+    native.validate_native_merge_manifest_relations(
+        support.ROOT_DIR, {key: weakened}, errors
+    )
+    assert any(symbol in error and "exact reviewed Native relation" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "native_amx_participant_application_role",
+            "compute_settlement_hash(&leg.participant_settlement)",
+            "Result::<_, &'static str>::Ok(leg.participant_settlement_hash)",
+        ),
+        *(
+            (
+                "native_amx_participant_application_role",
+                f"leg.participant_settlement.{field} != descriptor.{descriptor}",
+                "false",
+            )
+            for field, descriptor in (
+                ("lane_id", "lane_id"), ("dataspace_id", "dataspace_id"),
+                ("lane_incarnation", "lane_incarnation"),
+                ("block_height", "lane_block_height"),
+            )
+        ),
+        *(
+            (
+                "native_amx_participant_application_role",
+                f"{left} != receipt.{right}",
+                "false",
+            )
+            for left, right in (
+                ("descriptor.lane_incarnation", "lane_incarnation"),
+                ("descriptor.proposal_height", "authority_context_height"),
+                ("descriptor.lane_block_height", "lane_block_height"),
+                ("descriptor.lane_block_view", "lane_block_view"),
+                ("leg.participant_proposal.proposal_hash", "coordinator_proposal_hash"),
+            )
+        ),
+        (
+            "native_amx_participant_application_role",
+            "descriptor.lane_id == receipt.lane_id && descriptor.dataspace_id == receipt.dataspace_id",
+            "descriptor.lane_id == receipt.lane_id || descriptor.dataspace_id == receipt.dataspace_id",
+        ),
+        (
+            "native_amx_receipt_requires_separate_participant_application_for",
+            "matches |= descriptor.lane_id == lane_id",
+            "matches = descriptor.lane_id == lane_id",
+        ),
+        (
+            "native_amx_receipt_requires_separate_participant_application_for",
+            "native_amx_participant_application_role(receipt, leg)?",
+            "native_amx_participant_application_role(receipt, leg)"
+            ".unwrap_or(NativeAmxParticipantApplicationRole::SeparateParticipant)",
+        ),
+        (
+            "native_amx_receipt_requires_separate_participant_application_for",
+            "&& descriptor.lane_incarnation == lane_incarnation;",
+            "&& descriptor.lane_incarnation == lane_incarnation; if matches { return Ok(true); }",
+        ),
+        (
+            "native_amx_receipt_requires_separate_participant_application_for",
+            "&& descriptor.dataspace_id == dataspace_id",
+            "|| descriptor.dataspace_id == dataspace_id",
+        ),
+    ),
+)
+def test_native_participant_role_rejects_settlement_route_and_lookup_shortcuts(
+    participant_application_contract, symbol: str, old: str, new: str,
+) -> None:
+    """Identity guards and complete receipt scanning survive targeted mutations."""
+    support, module, items = participant_application_contract
+    native = module.native_merge_manifest
+    key = (native.NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE, "fn", symbol)
+    item = " ".join(items[key].split())
+    assert item.count(old) == 1
+    errors: list[str] = []
+    native.validate_native_merge_manifest_relations(
+        support.ROOT_DIR, {key: item.replace(old, new, 1)}, errors
+    )
+    assert any(symbol in error and "exact reviewed Native relation" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "old", "new"),
+    (
+        (
+            "role_rejects_independent_prepare_and_commit_identity_drift",
+            "[NativeAmxPhase::Prepare, NativeAmxPhase::Commit]", "[NativeAmxPhase::Prepare]",
+        ),
+        (
+            "role_rejects_independent_prepare_and_commit_identity_drift",
+            "NativeAmxPhase::Commit => &mut leg.commit_qc.body",
+            "NativeAmxPhase::Commit => &mut leg.prepare_qc.body",
+        ),
+        ("role_rejects_coherent_same_route_coordinator_drift", "rebind_participant_identity(leg);", ""),
+        ("role_rejects_coherent_same_route_coordinator_drift", "Err(SAME_ROUTE_DRIFT)", "Err(INCONSISTENT_IDENTITY)"),
+        ("role_rejects_settlement_identity_and_content_tampering", "mutate(&mut altered.legs[index]);", ""),
+        ("role_rejects_settlement_identity_and_content_tampering", "Err(INCONSISTENT_IDENTITY)", "Ok(NativeAmxParticipantApplicationRole::SeparateParticipant)"),
+        ("lookup_validates_later_legs_after_an_exact_match", "receipt.legs.swap(0, matching_index)", "receipt.legs.swap(1, matching_index)"),
+        ("lookup_validates_later_legs_after_an_exact_match", "[route.0, LaneId::new(90)]", "[LaneId::new(90)]"),
+        ("lookup_validates_later_legs_after_an_exact_match", ".participant_previous_block_height += 1", ".participant_previous_block_height += 0"),
+    ),
+)
+def test_native_participant_role_rejects_weakened_rust_regressions(
+    participant_application_contract, suffix: str, old: str, new: str,
+) -> None:
+    """The source gate protects the adversarial fixture and its rejecting oracle."""
+    support, module, items = participant_application_contract
+    native = module.native_merge_manifest
+    symbol = f"participant_application_{suffix}"
+    key = (native.NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE, "fn", symbol)
+    item = items[key]
+    assert item.count(old) == 1
+    errors: list[str] = []
+    native.validate_native_merge_manifest_relations(
+        support.ROOT_DIR, {key: item.replace(old, new, 1)}, errors
+    )
+    assert any(symbol in error for error in errors), errors
+
+
+def test_native_model_rejects_obsolete_and_duplicate_source_owners(
+    tmp_path: Path,
+) -> None:
+    """Every active model row must resolve once to a current production owner."""
+    support = load_support()
+    module = support.load_checker()
+    model = next(
+        model for model in support.canonical_models()
+        if model["module"] == module.NATIVE_PREPUBLICATION_MODULE
+    )
+    required = module._CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS
+    model["production_symbols"] = [
+        binding for binding in model["production_symbols"]
+        if (binding["path"], binding["symbol"]) in required
+    ]
+    assert len(model["production_symbols"]) == len(required)
+    support.copy_reviewed_source_fixture_with_includes(
+        tmp_path, module,
+        {Path(binding["path"]) for binding in model["production_symbols"]},
+    )
+    duplicate = model["production_symbols"][0]
+    obsolete = "pending_native_participant_recovery_markers"
+    model["production_symbols"].extend((
+        duplicate.copy(),
+        {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "kind": "fn",
+            "symbol": obsolete,
+            "required_tokens": [
+                "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached"
+            ],
+        },
+    ))
+    errors: list[str] = []
+    module._validate_model(
+        tmp_path, support.ROOT_DIR / "formal/sumeragi_v2", model, errors
+    )
+    assert len(errors) == 2, errors
+    assert any(
+        "duplicate production binding" in error and duplicate["symbol"] in error
+        for error in errors
+    ), errors
+    assert any(
+        obsolete in error and "found 0" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "symbol", "earlier", "later"),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
+            "adapter.ensure_globally_applied_lane_receipts_durable()?;",
+            "construction.complete();",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "V2LaneWorkAdapter::activate_after_lane_drain_queue_install",
+            "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;",
+            "self.drive_lane_sessions();",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work/"
+            "canonical_executed_block_application_repair.rs",
+            "CanonicalExecutedBlockRecovery::reconcile_cached_front",
+            ".preflight_cached_finalized_merge_carrier_reconstruction(&block)",
+            "self.needs.pop_front();",
+        ),
+    ),
+)
+def test_native_canonical_recovery_requires_publication_and_activation_order(
+    relative: str, symbol: str, earlier: str, later: str
+) -> None:
+    """Current recovery owners retain the startup/output ordering guarantees."""
+    support = load_support()
+    module = support.load_checker()
+    errors: list[str] = []
+    item = module._rust_binding_item(
+        support.ROOT_DIR, relative, "method", symbol,
+        "canonical recovery startup owner", errors,
+    )
+    assert errors == [] and item is not None
+    key = (relative, "method", symbol)
+    module.native_merge_manifest.validate_native_merge_manifest_relations(
+        support.ROOT_DIR, {key: item}, errors
+    )
+    assert errors == []
+    assert item.count(earlier) == item.count(later) == 1
+    first, second = item.index(earlier), item.index(later)
+    assert first < second
+    weakened = (
+        item[:first] + later + item[first + len(earlier):second]
+        + earlier + item[second + len(later):]
+    )
+    module.native_merge_manifest.validate_native_merge_manifest_relations(
+        support.ROOT_DIR, {key: weakened}, errors
+    )
+    assert any(
+        symbol in error and "is missing or reorders token" in error for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("symbol", "propagate"),
     (

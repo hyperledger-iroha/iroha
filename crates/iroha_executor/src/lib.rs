@@ -371,18 +371,20 @@ mod tests {
             Some(QueryRequest::Singular(_)) => Err(ValidationFail::QueryFailed(
                 data_model::query::error::QueryExecutionFail::NotFound,
             )),
-            Some(QueryRequest::Start(query)) => {
+            Some(QueryRequest::Start(query)) => Ok(QueryResponse::Iterable(QueryOutput::new(
+                empty_iterable_batch(&query),
+                0,
+                None,
+            ))),
+            Some(QueryRequest::Continue(_)) | None => {
                 Ok(QueryResponse::Iterable(QueryOutput::new(
-                    empty_iterable_batch(&query),
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Permission(
+                        Vec::new(),
+                    )),
                     0,
                     None,
                 )))
             }
-            Some(QueryRequest::Continue(_)) | None => Ok(QueryResponse::Iterable(QueryOutput::new(
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Permission(Vec::new())),
-                0,
-                None,
-            ))),
         };
         let body = norito::to_bytes(&response).expect("encode query ok");
         unsafe { encode_with_len_prefix(&body) }

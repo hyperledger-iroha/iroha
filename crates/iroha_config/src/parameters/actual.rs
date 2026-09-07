@@ -1733,6 +1733,8 @@ pub struct Network {
     pub max_frame_bytes_peer_gossip: usize,
     /// Per-topic frame caps (bytes) for Health messages.
     pub max_frame_bytes_health: usize,
+    /// Per-topic frame cap for authenticated Connect relay traffic.
+    pub max_frame_bytes_connect: usize,
     /// Per-topic frame caps (bytes) for Other messages.
     pub max_frame_bytes_other: usize,
     /// QUIC max idle timeout for stream inactivity (if QUIC is enabled).
@@ -11586,10 +11588,9 @@ pub struct Zk {
     pub poseidon_params_id: Option<u32>,
     /// Pedersen parameter set identifier to embed into policies (if any).
     pub pedersen_params_id: Option<u32>,
-    /// Optional verifying key reference used for Kaigi roster join proofs.
-    pub kaigi_roster_join_vk: Option<VerifyingKeyRef>,
-    /// Optional verifying key reference used for Kaigi roster leave proofs.
-    pub kaigi_roster_leave_vk: Option<VerifyingKeyRef>,
+    /// Governed verifying key for every final Kaigi authorization action.
+    pub kaigi_authorization_vk: Option<VerifyingKeyRef>,
+
     /// Optional verifying key reference used for Kaigi usage commitment proofs.
     pub kaigi_usage_vk: Option<VerifyingKeyRef>,
     /// Maximum proof size accepted from a single confidential operation.

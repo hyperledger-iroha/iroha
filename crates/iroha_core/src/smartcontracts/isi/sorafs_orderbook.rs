@@ -51,7 +51,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
-use norito::{DecodeLimits, decode_from_bytes_with_limits};
+use norito::DecodeLimits;
 use sorafs_manifest::{
     XorQuantity,
     orderbook::{
@@ -338,17 +338,22 @@ fn event_journal_head_key() -> &'static StatePath {
         StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
     })
 }
-fn nonce_key(owner: &AccountId) -> StatePath {
+fn nonce_key(owner: &AccountId) -> Result<StatePath, InstructionExecutionError> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NONCE_KEY_DOMAIN_V1);
-    hasher.update(owner.to_string().as_bytes());
-    digest_key(NONCE_STATE_KEY_PREFIX, *hasher.finalize().as_bytes())
+    norito::core::write_canonical_to_writer(owner, &mut hasher).map_err(|error| {
+        corrupt_state(format!("failed to encode orderbook nonce owner: {error}"))
+    })?;
+    Ok(digest_key(
+        NONCE_STATE_KEY_PREFIX,
+        *hasher.finalize().as_bytes(),
+    ))
 }
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    norito::to_bytes(value)
+    norito::encode_canonical(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
@@ -430,22 +435,17 @@ where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-        decode_from_bytes_with_limits::<T>(bytes, limits)
+        norito::decode_canonical_with_limits::<T>(bytes, limits)
     });
     let value = value.map_err(|error| {
         if crate::smartcontracts::isi::query::singular_query_limits_active()
             && error.is_decode_resource_limit()
         {
             InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
-        }
-    })?;
-    norito::verify_exact_frame(&value, bytes).map_err(|error| {
-        if matches!(error, norito::Error::NonCanonicalEncoding) {
+        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
             corrupt_state(format!("{label} state is not exact canonical Norito"))
         } else {
-            corrupt_state(format!("failed to encode {label}: {error}"))
+            corrupt_state(format!("failed to decode {label}: {error}"))
         }
     })?;
     Ok((value, usage.total_allocated_bytes()))
@@ -877,7 +877,7 @@ fn read_nonce(
     world: &impl WorldReadOnly,
     owner: &AccountId,
 ) -> Result<Option<OrderbookOwnerNonceRecord>, InstructionExecutionError> {
-    let key = nonce_key(owner);
+    let key = nonce_key(owner)?;
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
@@ -917,7 +917,7 @@ fn write_nonce(
     state_transaction
         .world
         .smart_contract_state
-        .insert(nonce_key(owner), encoded);
+        .insert(nonce_key(owner)?, encoded);
     Ok(())
 }
 fn read_order(
@@ -3829,7 +3829,7 @@ fn query_event_page(
         }
         let (position, resolved) = read_event_sequence(state_ro, current_sequence, previous)?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            .checked_add(norito::canonical_frame_len(&resolved).map_err(|error| {
                 QueryExecutionFail::Conversion(format!(
                     "failed to size committed orderbook event: {error}"
                 ))
@@ -3863,7 +3863,7 @@ fn query_event_page(
         has_more,
         next_after,
     };
-    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(&page).map_err(|error| {
         QueryExecutionFail::Conversion(format!(
             "failed to size committed orderbook event page: {error}"
         ))
@@ -4084,6 +4084,8 @@ mod tests {
         provider_advert::SignatureAlgorithm,
     };
     pub(super) const NOW: u64 = 10_000;
+    // Ten micro-XOR per byte keeps the small, exact-range receipt fixtures nonzero.
+    const TEST_TRADE_LOCK_MICRO: u128 = 10 * BYTES_PER_GIB as u128;
     pub(super) fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
@@ -4235,7 +4237,7 @@ mod tests {
             maker_order_id: [trade_id[0].wrapping_add(1); 32],
             taker_order_id: [trade_id[0].wrapping_add(2); 32],
             tier: OrderTierV1::Hot,
-            price_per_gib: xor_micro(1_000),
+            price_per_gib: xor_micro(TEST_TRADE_LOCK_MICRO),
             filled_gib: 1,
             maker_fee: XorQuantity::zero(),
             taker_fee: XorQuantity::zero(),
@@ -4444,11 +4446,12 @@ mod tests {
         provider: &AccountId,
         settlement: &AccountId,
         receipt: &SettlementReceiptV1,
-        amount_micro: u128,
     ) {
         let escrow_id = orderbook_settlement_escrow_id(receipt.channel_id);
         let parent_id = orderbook_order_escrow_id(receipt.trade_id);
-        let amount = micro_quantity(amount_micro);
+        let amount = trade_escrow_requirement_v1(&test_trade(receipt.trade_id))
+            .expect("fixture trade escrow")
+            .into_quantity();
         let expires_at_ms = (NOW + 100) * 1_000;
         crate::smartcontracts::isi::escrow::open_orderbook_order_asset_lock(
             state_transaction,
@@ -4478,14 +4481,7 @@ mod tests {
             expires_at_ms,
         )
         .expect("close fully partitioned test parent");
-        seed_settlement_channel(
-            state_transaction,
-            buyer,
-            provider,
-            settlement,
-            receipt,
-            amount_micro,
-        );
+        seed_settlement_channel(state_transaction, buyer, provider, settlement, receipt);
     }
     pub(super) fn seed_settlement_channel(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -4493,7 +4489,6 @@ mod tests {
         provider: &AccountId,
         settlement: &AccountId,
         receipt: &SettlementReceiptV1,
-        amount_micro: u128,
     ) {
         state_transaction
             .world
@@ -4514,7 +4509,8 @@ mod tests {
             book_revision: 1,
             recorded_at_unix: trade.timestamp_unix,
         };
-        let locked = XorQuantity::try_from_micro(amount_micro).expect("channel lock amount");
+        let locked = trade_escrow_requirement_v1(&trade).expect("fixture trade escrow");
+        let fee = trade_fee_requirement_v1(&trade).expect("fixture trade fee");
         let channel = OrderbookSettlementChannelRecord {
             channel_id: receipt.channel_id,
             trade_id: receipt.trade_id,
@@ -4526,8 +4522,8 @@ mod tests {
             remaining_bytes: BYTES_PER_GIB,
             initial_xor_locked: locked.clone(),
             remaining_xor_locked: locked,
-            initial_fee_xor_locked: XorQuantity::zero(),
-            remaining_fee_xor_locked: XorQuantity::zero(),
+            initial_fee_xor_locked: fee.clone(),
+            remaining_fee_xor_locked: fee,
             status: OrderbookSettlementChannelStatusV1::Open,
             opened_at_unix: NOW - 2,
             expires_at_unix: NOW + 100,
@@ -5501,60 +5497,7 @@ mod tests {
             Err(QueryExecutionFail::Conversion(_))
         ));
     }
-    #[test]
-    fn signed_cancellation_updates_order_and_shared_nonce() {
-        let buyer = keypair(0x31);
-        let authority = account(&buyer);
-        let state = state_with_accounts(&[&buyer]);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let order = order(&buyer, 1);
-        let initial_balance = asset_balance(&stx, &authority);
-        let escrow_id = orderbook_order_escrow_id(order.order_id);
-        SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
-            .execute(&authority, &mut stx)
-            .expect("order");
-        assert!(asset_balance(&stx, &authority) < initial_balance);
-        let cancel = cancel(&buyer, order.order_id, 2);
-        CancelSorafsOrderbookOrder::new(encode(&cancel), policy_digest)
-            .execute(&authority, &mut stx)
-            .expect("cancel");
-        let stored = read_order(stx.world(), order.order_id)
-            .expect("read order")
-            .expect("order");
-        assert_eq!(stored.status, OrderbookOrderStatusV1::Cancelled);
-        assert!(stored.canonical_cancel.is_some());
-        assert_eq!(stored.cancelled_at_unix, Some(NOW));
-        assert_eq!(stored.cancelled_policy_digest, Some(policy_digest));
-        assert_eq!(asset_balance(&stx, &authority), initial_balance);
-        let escrow = stx
-            .world
-            .asset_escrows
-            .get(&escrow_id)
-            .expect("closed bid custody");
-        assert_eq!(
-            escrow.status,
-            iroha_data_model::escrow::AssetEscrowStatus::Cancelled
-        );
-        assert_eq!(escrow.remaining_amount, Quantity::zero());
-        assert!(
-            !crate::smartcontracts::isi::escrow::is_orderbook_order_lock(stx.world(), &escrow_id,)
-                .expect("read removed bid marker")
-        );
-        assert_eq!(
-            read_nonce(stx.world(), &authority)
-                .expect("read nonce")
-                .expect("nonce")
-                .highest_nonce,
-            2
-        );
-        assert!(
-            CancelSorafsOrderbookOrder::new(encode(&cancel), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-    }
+    include!("sorafs/orderbook_nonce_tests.rs");
     #[test]
     fn cancellation_rejects_unknown_wrong_owner_wrong_policy_and_stale_nonce() {
         let buyer = keypair(0x32);
@@ -5878,9 +5821,7 @@ mod tests {
             .execute(&settlement_id, &mut stx)
             .expect_err("revoked exact ask binding blocks matching until maintenance");
         assert!(
-            revoked_match
-                .to_string()
-                .contains("run orderbook maintenance"),
+            matches!(&revoked_match, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("run orderbook maintenance")),
             "unexpected revoked-provider match error: {revoked_match}"
         );
         assert_eq!(
@@ -6285,7 +6226,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("bid order custody balance does not match authoritative escrow record"),
+                .contains("native orderbook custody balance does not match its asset-lock record"),
             "unexpected custody-divergence error: {error}"
         );
         assert_two_fill_match_unchanged(&stx, &fixture, &before, [false, false]);
@@ -6444,14 +6385,20 @@ mod tests {
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
         let treasury_id = account(&treasury);
-        let mut state =
-            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
+        let mut state = state_with_settlement_accounts(
+            &settlement,
+            &buyer,
+            &provider,
+            &treasury,
+            TEST_TRADE_LOCK_MICRO,
+        );
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA1);
         let policy_digest = activate_policy(&mut stx, &authority);
         let first = receipt(&provider, 1, 9, 8, 0, 10);
-        open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &first, 1_000);
+        assert_eq!(first.xor_debited, xor_micro(100));
+        open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &first);
         RecordSorafsOrderbookSettlementReceipt::new(encode(&first), policy_digest)
             .execute(&authority, &mut stx)
             .expect("first receipt");
@@ -6537,7 +6484,7 @@ mod tests {
             .asset_escrows
             .get(&orderbook_settlement_escrow_id(first.channel_id))
             .expect("settlement lock");
-        let expected_remaining = micro_quantity(1_000)
+        let expected_remaining = micro_quantity(TEST_TRADE_LOCK_MICRO)
             .checked_sub(&first.xor_debited.clone().into_quantity())
             .and_then(|remaining| {
                 remaining.checked_sub(&second.xor_debited.clone().into_quantity())
@@ -6603,22 +6550,8 @@ mod tests {
         let second = receipt(&provider, 2, 2, 9, 0, 10);
         transact(&mut state, 1, NOW, |transaction| {
             activate_policy(transaction, &authority);
-            seed_settlement_channel(
-                transaction,
-                &buyer_id,
-                &provider_id,
-                &authority,
-                &first,
-                100,
-            );
-            seed_settlement_channel(
-                transaction,
-                &buyer_id,
-                &provider_id,
-                &authority,
-                &second,
-                100,
-            );
+            seed_settlement_channel(transaction, &buyer_id, &provider_id, &authority, &first);
+            seed_settlement_channel(transaction, &buyer_id, &provider_id, &authority, &second);
             let mut status = read_status(transaction.world())
                 .expect("read fixture status")
                 .expect("configured status");
@@ -6699,8 +6632,13 @@ mod tests {
         let provider_id = account(&provider);
         let treasury_id = account(&treasury);
         let relayer_id = account(&relayer);
-        let mut state =
-            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
+        let mut state = state_with_settlement_accounts(
+            &settlement,
+            &buyer,
+            &provider,
+            &treasury,
+            TEST_TRADE_LOCK_MICRO,
+        );
         let attacker_id = account(&attacker);
         let (attacker_key, attacker_value) = Account::new(attacker_id.clone())
             .build(&attacker_id)
@@ -6715,7 +6653,7 @@ mod tests {
         seed_test_call_hash(&mut stx, 0xA2);
         let policy_digest = activate_policy(&mut stx, &authority);
         let base = receipt(&provider, 1, 6, 7, 0, 10);
-        open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &base, 1_000);
+        open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &base);
         let mut noncanonical = encode(&base);
         noncanonical.push(0);
         assert!(
@@ -6767,8 +6705,14 @@ mod tests {
             .asset_escrows
             .get(&orderbook_settlement_escrow_id(base.channel_id))
             .expect("settlement lock");
-        assert_eq!(escrow.remaining_amount, micro_quantity(1_000));
-        assert_eq!(asset_balance(&stx, &escrow.custody), micro_quantity(1_000));
+        assert_eq!(
+            escrow.remaining_amount,
+            micro_quantity(TEST_TRADE_LOCK_MICRO)
+        );
+        assert_eq!(
+            asset_balance(&stx, &escrow.custody),
+            micro_quantity(TEST_TRADE_LOCK_MICRO)
+        );
         assert_no_receipt_status_mutation(&stx);
         let active_policy = read_policy(stx.world())
             .expect("read active policy")

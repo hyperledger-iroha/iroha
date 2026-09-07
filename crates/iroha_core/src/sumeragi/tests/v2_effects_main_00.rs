@@ -191,6 +191,7 @@ struct FakeRuntime {
         crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment,
     >,
     exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
+    exact_effect_batch_ownership: Option<(Vec<AdapterEffect>, Vec<RuntimeEffectOwnership>)>,
     retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
     pending_live_decision_apply: Option<(EventTag, DurableDecision)>,
@@ -442,6 +443,18 @@ impl EffectRuntime for FakeRuntime {
         self.effect_ownership_calls = self.effect_ownership_calls.saturating_add(1);
         if effects.is_empty() {
             return Ok(Vec::new());
+        }
+        if let Some((expected, ownership)) = self.exact_effect_batch_ownership.take() {
+            if effects == expected
+                && effects.len() == ownership.len()
+                && effects
+                    .iter()
+                    .zip(&ownership)
+                    .all(|(effect, owner)| owner.exactly_binds_adapter_effect(effect))
+            {
+                return Ok(ownership);
+            }
+            return Err("fake admitted batch changed before its ownership transfer".to_owned());
         }
         if let Some((expected, ownership)) = self.exact_effect_ownership.take() {
             if effects == core::slice::from_ref(&expected)
@@ -1423,9 +1436,7 @@ impl Fixture {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("v2-effect-executor-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1544,16 +1555,25 @@ struct ProductionTransportFixture {
 }
 impl ProductionTransportFixture {
     fn new() -> Self {
-        Self::new_with_local_validator_and_queue_config(None, RuntimeQueueConfig::default())
+        Self::new_with_local_role_and_queue_config(None, RuntimeQueueConfig::default())
     }
     fn new_validator() -> Self {
-        Self::new_with_local_validator_and_queue_config(Some(0), RuntimeQueueConfig::default())
+        Self::new_with_local_role_and_queue_config(
+            Some(crate::sumeragi::v2_core::CommitteeRole::SetBValidator),
+            RuntimeQueueConfig::default(),
+        )
+    }
+    fn new_set_a_validator() -> Self {
+        Self::new_with_local_role_and_queue_config(
+            Some(crate::sumeragi::v2_core::CommitteeRole::SetAValidator),
+            RuntimeQueueConfig::default(),
+        )
     }
     fn new_with_runtime_queue_config(queue_config: RuntimeQueueConfig) -> Self {
-        Self::new_with_local_validator_and_queue_config(None, queue_config)
+        Self::new_with_local_role_and_queue_config(None, queue_config)
     }
-    fn new_with_local_validator_and_queue_config(
-        local_validator: Option<wire::ValidatorIndex>,
+    fn new_with_local_role_and_queue_config(
+        local_role: Option<crate::sumeragi::v2_core::CommitteeRole>,
         queue_config: RuntimeQueueConfig,
     ) -> Self {
         let mut validator_keys = (1_u8..=4)
@@ -1573,9 +1593,7 @@ impl ProductionTransportFixture {
         let network_id =
             crate::sumeragi::synthetic_network_id("v2-production-transport-regression");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1602,6 +1620,19 @@ impl ProductionTransportFixture {
             },
             leader_seed: [0x62; 32],
         };
+        let local_validator = local_role.map(|role| {
+            let committee = crate::sumeragi::v2_core::Committee::project_indices(
+                context.height,
+                0,
+                context.roster.len(),
+                context.leader(0),
+            )
+            .expect("production transport committee geometry");
+            (0..context.roster.len())
+                .map(|index| wire::ValidatorIndex::try_from(index).expect("small fixture roster"))
+                .find(|index| committee.role(*index) == Ok(role))
+                .expect("the requested fixture role exists in the frozen committee")
+        });
         let round = round(&context, 0);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
@@ -2224,6 +2255,101 @@ fn canonical_payload_manifest(
         .manifest()
         .clone()
 }
+/// Build the exact live fair-ingress boundary around this already-open adapter.
+/// The lifecycle journal is its sole descriptor-owned WAL sibling and shares
+/// the runtime's actor-global ordinal source.
+fn bound_adapter_leader_wire_ingress_for_effect_test(
+    adapter: &SumeragiV2Adapter,
+    wal_path: &std::path::Path,
+    owner: [u8; 32],
+    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+) -> (
+    crate::sumeragi::FairV2Ingress,
+    Arc<crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+) {
+    let context = adapter.wire_context();
+    let source_bytes = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+    let ordinary_bytes = iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES
+        .get()
+        .checked_add(crate::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES)
+        .expect("default ordinary ingress partition fits usize");
+    let completion_bytes = source_bytes
+        .checked_sub(crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+        .and_then(|bytes| bytes.checked_sub(crate::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES))
+        .and_then(|bytes| bytes.checked_sub(ordinary_bytes))
+        .expect("default ingress source partitions are disjoint");
+    let global_plaintext = iroha_p2p::frame_plaintext_cap(
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get(),
+    );
+    let ingress = crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+        32,
+        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+        source_bytes,
+        crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+        crate::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES,
+        completion_bytes,
+        global_plaintext
+            .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get()),
+        global_plaintext
+            .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get()),
+        global_plaintext
+            .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get()),
+        iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES.get(),
+        Some(1),
+    );
+    let roster = context
+        .roster
+        .iter()
+        .map(|power| power.validator.clone())
+        .collect::<BTreeSet<_>>();
+    ingress
+        .configure_roster_for_context(
+            roster.iter().cloned(),
+            &context.network_id,
+            context.da_layout,
+        )
+        .expect("actual context fits the fair-ingress geometry");
+    ingress.require_leader_wire_lifecycle_gate();
+    let capacity =
+        crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+            roster.len(),
+            context.da_layout.max_chunk_count,
+        )
+        .expect("derive finite leader-wire capacity");
+    let authority = adapter
+        .leader_wire_recovery_authority()
+        .expect("actual replayed adapter authority");
+    assert!(authority.matches_geometry(context.id(), context.height, owner));
+    let (gate, restore) = crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(
+        adapter
+            .mint_leader_wire_store_authority(wal_path)
+            .expect("mint the exact runtime safety-WAL sibling once"),
+        context.id(),
+        context.height,
+        owner,
+        roster,
+        capacity,
+        context.da_layout.max_chunk_count,
+        authority,
+        &[],
+        &[],
+    )
+    .expect("open the runtime-owned leader-wire journal");
+    ingress
+        .bind_leader_wire_lifecycle_gate(
+            Arc::clone(&gate),
+            restore,
+            lifecycle_ordinals,
+            context.id(),
+            context.height,
+        )
+        .expect("bind the same actor-global lifecycle source");
+    ingress
+        .open()
+        .expect("open the actual fair-ingress boundary");
+    (ingress, gate)
+}
+
 fn deliberately_conflicting_payload_manifest(
     context: &wire::HeightContext,
     round: wire::ConsensusRound,
@@ -2414,4 +2540,134 @@ fn manifest_at_view(fixture: &Fixture, view: u64) -> wire::PayloadManifest {
         fixture.manifest.subject,
         &fixture.body,
     )
+}
+
+/// Explicit fixture adapter handoff for executor-only admission tests.
+///
+/// `FakeRuntime` never infers an authenticated envelope or a durable view from
+/// arbitrary effects. Positive fixtures opt into this helper to install the
+/// frontier and signed Proposal replay sidecar that their modeled adapter has
+/// already admitted. Missing/foreign authority tests continue to use the raw
+/// consumer. Real serialized-runtime tests drive the actual adapter instead.
+impl V2EffectExecutor<FakeRuntime> {
+    fn consume_admitted_fixture_effects(
+        &mut self,
+        fixture: &Fixture,
+        effects: Vec<AdapterEffect>,
+        services: &mut FakeServices,
+    ) -> Result<usize, EffectExecutorError> {
+        if effects.is_empty() {
+            return self.consume_effects(effects, services);
+        }
+        if let Some(AdapterEffect::EnterView {
+            tag,
+            protected_lock,
+            ..
+        }) = effects.first()
+        {
+            assert!(
+                self.reconciled_tag
+                    .is_some_and(|old| tag.strictly_advances(old))
+            );
+            assert!(
+                self.runtime.round_tag == self.reconciled_tag
+                    || self.runtime.round_tag == Some(*tag)
+            );
+            self.runtime.round_tag = Some(*tag);
+            self.runtime.locked_body = protected_lock_body(protected_lock.as_ref());
+            if let Some(protected) = protected_lock.as_ref() {
+                let high = protected.as_ref();
+                if self
+                    .runtime
+                    .highest_prepare
+                    .is_none_or(|old| old.round.view < high.round.view)
+                {
+                    self.runtime.highest_prepare = Some(high);
+                }
+            }
+        }
+        let mut ownership = self
+            .runtime
+            .take_effect_ownership(&effects)
+            .map_err(EffectExecutorError::Runtime)?;
+        for (effect, owner) in effects.iter().zip(&mut ownership) {
+            let AdapterEffect::FetchBody {
+                round,
+                subject,
+                manifest: Some(manifest),
+                certificate: None,
+                ..
+            } = effect
+            else {
+                continue;
+            };
+            if owner.exact_remote_proposal_fetch_replay(effect).is_some() {
+                continue;
+            }
+            let wire::ConsensusMessageV2Payload::Proposal(mut proposal) = proposal(fixture).payload
+            else {
+                unreachable!("Proposal fixture payload")
+            };
+            proposal.round = *round;
+            proposal.proposer = fixture.context.leader(round.view);
+            proposal.subject = *subject;
+            proposal.manifest.clone_from(manifest);
+            proposal.signature = Signature::new(
+                fixture.validator_keys[usize::try_from(proposal.proposer).expect("fixture leader")]
+                    .private_key(),
+                &proposal.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            assert!(owner.bind_authenticated_remote_proposal_replay_for_test(proposal, effect));
+        }
+        assert!(
+            self.runtime
+                .exact_effect_batch_ownership
+                .replace((effects.clone(), ownership))
+                .is_none()
+        );
+        self.consume_effects(effects, services)
+    }
+}
+
+#[test]
+fn raw_ordinary_fetch_still_requires_authenticated_proposal_admission() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let before = executor.body_ownership_projection();
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    assert!(
+        matches!(executor.consume_effects(vec![fetch], &mut services),
+        Err(EffectExecutorError::Contract(reason)) if reason.contains("omitted its authenticated replay owner"))
+    );
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert!(services.fetch_tasks.is_empty());
+    assert!(executor.output_guard.restart_required());
+}
+
+#[test]
+fn raw_enter_view_still_requires_an_admitted_reducer_frontier() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let before = executor.body_ownership_projection();
+    assert!(
+        matches!(executor.consume_effects(vec![AdapterEffect::EnterView {
+        tag: tag(1), certificate: timeout_at_view(&fixture, 0), protected_lock: None,
+    }], &mut services), Err(EffectExecutorError::Contract(reason))
+        if reason.contains("did not advance the reconciled reducer incarnation"))
+    );
+    assert_eq!(executor.runtime.effect_ownership_calls, 0);
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert!(services.entered_view_locks.is_empty());
+    assert!(executor.output_guard.restart_required());
 }

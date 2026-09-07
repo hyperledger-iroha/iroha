@@ -10,6 +10,7 @@ import {
 import { NetworkId as SourceNetworkId } from "../src/networkId.js";
 import {
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
+  parseSumeragiDiagnosticsPayload as parseSourceDiagnostics,
 } from "../src/sumeragiTyped.js";
 import {
   verifyBlockMerkleProof as sourceVerifyBlockMerkleProof,
@@ -29,6 +30,7 @@ const { NetworkId: DistNetworkId } = await import(
 );
 const {
   __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
+  parseSumeragiDiagnosticsPayload: parseDistDiagnostics,
 } = await import(new URL("./sumeragiTyped.js", distToriiClientUrl));
 const {
   verifyBlockMerkleProof: distVerifyBlockMerkleProof,
@@ -46,6 +48,51 @@ const fixtureDocument = JSON.parse(readFileSync(fixtureUrl, "utf8"));
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function validateParticipantSettlementBoundaries(helpers, original) {
+  const first = { ...clone(original), lane_id: 0, dataspace_id: 0,
+    participant_lane_block_height: 1, previous_native_settlement_hash: null };
+  const later = { ...first, participant_lane_block_height: 2 };
+  const linked = { ...later, previous_native_settlement_hash: first.lane_incarnation };
+  for (const value of [first, later, linked]) {
+    assert.deepEqual(helpers.parseParticipantSettlement(value, "participant"), value);
+  }
+  assert.notEqual(helpers.computeParticipantSettlementHash(later),
+    helpers.computeParticipantSettlementHash(linked));
+  assert.notEqual(helpers.computeParticipantSettlementHash(first),
+    helpers.computeParticipantSettlementHash({ ...first, source_ids: [...first.source_ids].reverse() }));
+  const maximumSources = Array.from({ length: 4096 }, (_, index) =>
+    (index + 1).toString(16).toUpperCase().padStart(64, "0"));
+  assert.equal(helpers.parseParticipantSettlement({ ...first, source_ids: maximumSources },
+    "participant").source_ids.length, 4096);
+  const invalid = Object.keys(first).map((missing) => {
+    const value = { ...first };
+    delete value[missing];
+    return value;
+  });
+  for (const retired of ["block_height", "tx_count", "receipts", "total_local_amount",
+    "total_xor_due", "total_xor_after_haircut", "total_xor_variance", "swap_metadata",
+    "nexus_fee_receipts", "native_amx_receipts"]) {
+    invalid.push({ ...first, [retired]: null });
+  }
+  for (const update of [
+    { previous_native_settlement_hash: first.lane_incarnation },
+    { source_ids: [] }, { source_ids: ["00".repeat(32)] },
+    { source_ids: [first.source_ids[0], first.source_ids[0]] },
+    { source_ids: [...maximumSources, "FF".repeat(32)] },
+    { source_ids: [first.source_ids[0].toLowerCase()] },
+    { participant_lane_block_height: 0 }, { authority_context_height: 0 },
+    { lane_id: 1n << 32n }, { dataspace_id: 1n << 64n },
+    { participant_lane_block_height: 2,
+      previous_native_settlement_hash: "hash:" + "00".repeat(31) + "01#C50E" },
+    { lane_incarnation: "hash:" + "00".repeat(31) + "01#C50E" },
+  ]) {
+    invalid.push({ ...first, ...update });
+  }
+  for (const value of invalid) {
+    assert.throws(() => helpers.computeParticipantSettlementHash(value));
+  }
 }
 
 function resealNativeAmxLeg(leg, helpers) {
@@ -252,6 +299,12 @@ function validateApplicationEvidence(document) {
     assert.equal(descriptor.descriptor_hash, leaf.descriptor_hash);
     assert.equal(leg.participant_proposal.proposal_hash, leaf.proposal_hash);
     assert.equal(leg.participant_settlement_hash, leaf.settlement_hash);
+    assert.ok(Object.hasOwn(leaf, "previous_native_settlement_hash"));
+    assert.ok(Object.hasOwn(leg.participant_settlement, "previous_native_settlement_hash"));
+    const settlement = sourceNativeAmxTestHelpers.parseParticipantSettlement(
+      leg.participant_settlement, "manifest participant settlement",
+    );
+    assert.equal(leaf.previous_native_settlement_hash, settlement.previous_native_settlement_hash);
     assert.equal(leg.prepare_qc.body.source_id, member.source_id);
     assert.equal(
       leg.prepare_qc.body.tx_entrypoint_hash,
@@ -366,15 +419,18 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
   const expectedSettlementHashes = new Map([
     [
       "7/11",
-      "hash:2DA510B86888B5D77EA760618AF06BE5511D39E8588156639EEAB566A91F2F5D#5534",
+      "hash:32950D237EC6ACA2B345D3EFFBD0FE7E30C6E9AF9BD90EE18F8FBFDBDE2A8699#E813",
     ],
     [
       "8/12",
-      "hash:0CDECBD738386DFB71F6ADB85E49799EC6982634632C99E6E81149E7F7F42FA5#B635",
+      "hash:954C813DA9EC5BE63036F21582293E718CF706A2275B25DA96E061FED76492CB#3240",
     ],
   ]);
   const vectorLegs =
     fixtureDocument.golden.receipt_group.native_amx_receipts[0].legs;
+  for (const helpers of [sourceNativeAmxTestHelpers, distNativeAmxTestHelpers]) {
+    validateParticipantSettlementBoundaries(helpers, vectorLegs[0].participant_settlement);
+  }
   for (const leg of vectorLegs) {
     const expected = expectedSettlementHashes.get(
       `${leg.lane_id}/${leg.dataspace_id}`,
@@ -396,6 +452,18 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
   }
 
   for (const [implementation, Client] of clientImplementations) {
+    // Genuine Rust fixture with every commitment changed coherently to the
+    // incorrect raw-Hash encoding of Vec<[u8; 32]> must still be rejected.
+    const rawSourceDiagnostics = clone(fixtureDocument.golden.expected_diagnostics);
+    const rawSourceLeg = rawSourceDiagnostics.lane_settlement_commitments[0]
+      .native_amx_receipts[0].legs[0];
+    const rawSourceHash = "hash:F4FBF033695C8BE66DAD0D4296C8C20207C2558175D7FC7E30284A1685F007E3#ED3B";
+    assert.notEqual(rawSourceHash, vectorLegs[0].participant_settlement_hash);
+    rawSourceLeg.participant_settlement_hash = rawSourceHash;
+    rawSourceLeg.prepare_qc.body.participant_settlement_commitment = rawSourceHash;
+    rawSourceLeg.commit_qc.body.participant_settlement_commitment = rawSourceHash;
+    await assert.rejects(() => diagnosticsClient(rawSourceDiagnostics, Client)
+      .getSumeragiDiagnosticsTyped(), /participant_settlement_hash/u, implementation);
     const diagnostics = await diagnosticsClient(
       clone(fixtureDocument.golden.expected_diagnostics),
       Client,
@@ -446,7 +514,7 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
           implementation,
         );
         assert.deepEqual(
-          leg.participant_settlement.receipts.map((entry) => entry.source_id),
+          leg.participant_settlement.source_ids,
           fixtureDocument.golden.ordered_source_ids,
           implementation,
         );
@@ -459,6 +527,115 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
     );
   }
   validateApplicationEvidence(fixtureDocument);
+});
+
+test("grouped Native AMX v2 requires canonical swap metadata", () => {
+  const limit = 1n << 511n;
+  const maximum = String(limit - 1n);
+  const minimumMagnitude = String(limit);
+  const metadata = {
+    epsilon_bps: 65535,
+    twap_window_seconds: 4294967295,
+    liquidity_profile: { profile: "Tier2", state: null },
+    twap_local_per_xor: "1.25",
+    volatility_class: { bucket: "Elevated", state: null },
+  };
+  const positives = [
+    "0", "1.25", "-1.25", maximum, `-${minimumMagnitude}`,
+    `${maximum.slice(0, -28)}.${maximum.slice(-28)}`,
+    `-${minimumMagnitude.slice(0, -28)}.${minimumMagnitude.slice(-28)}`,
+  ];
+  const invalidNumerics = [
+    null, true, 1, 1.25, {}, "", " ", " 1", "1 ", "+1", "01", "-0",
+    "1.0", "1.", ".5", "1e3", "NaN", "Infinity", "١", "1".repeat(157),
+    "0.00000000000000000000000000001", String(limit), String(-limit - 1n),
+  ];
+  const invalidMetadata = invalidNumerics.map((value) => ({
+    ...metadata, twap_local_per_xor: value,
+  }));
+  for (const [field, value] of [
+    ["epsilon_bps", -1], ["epsilon_bps", 65536], ["epsilon_bps", true],
+    ["epsilon_bps", 1.25], ["twap_window_seconds", -1],
+    ["twap_window_seconds", 4294967296], ["twap_window_seconds", "300"],
+    ["twap_window_seconds", 1.25], ["liquidity_profile", "Tier2"],
+    ["liquidity_profile", { profile: "Tier4", state: null }],
+    ["liquidity_profile", { profile: "Tier2", state: {} }],
+    ["liquidity_profile", { profile: "Tier2" }],
+    ["volatility_class", "Elevated"],
+    ["volatility_class", { bucket: "Unknown", state: null }],
+    ["volatility_class", { bucket: "Elevated", state: false }],
+    ["volatility_class", { bucket: "Elevated", state: null, extra: 0 }],
+  ]) {
+    invalidMetadata.push({ ...metadata, [field]: value });
+  }
+  for (const field of Object.keys(metadata)) {
+    const missing = clone(metadata);
+    delete missing[field];
+    invalidMetadata.push(missing);
+  }
+  invalidMetadata.push({ ...metadata, extra: null }, [], "metadata");
+  for (const [implementation, parse] of [
+    ["source", parseSourceDiagnostics], ["dist", parseDistDiagnostics],
+  ]) {
+    for (const numeric of positives) {
+      const input = clone(fixtureDocument.golden.expected_diagnostics);
+      input.lane_settlement_commitments[0].swap_metadata = {
+        ...metadata, twap_local_per_xor: numeric,
+      };
+      const parsed = parse(input).lane_settlement_commitments[0].swap_metadata;
+      assert.equal(parsed.twap_local_per_xor, numeric, implementation);
+      assert.equal(parsed.epsilon_bps, 65535, implementation);
+      assert.equal(parsed.twap_window_seconds, 4294967295, implementation);
+    }
+    for (const invalid of invalidMetadata) {
+      const input = clone(fixtureDocument.golden.expected_diagnostics);
+      input.lane_settlement_commitments[0].swap_metadata = invalid;
+      assert.throws(
+        () => parse(input),
+        (error) => (error instanceof TypeError || error instanceof RangeError)
+          && error.message.includes("swap_metadata"),
+        implementation,
+      );
+    }
+  }
+});
+
+test("grouped Native AMX v2 owns immutable checked participant settlements", () => {
+  for (const [implementation, parse, helpers] of [
+    ["source", parseSourceDiagnostics, sourceNativeAmxTestHelpers],
+    ["dist", parseDistDiagnostics, distNativeAmxTestHelpers],
+  ]) {
+    const input = clone(fixtureDocument.golden.expected_diagnostics);
+    const inputSettlement = input.lane_settlement_commitments[0]
+      .native_amx_receipts[0].legs[0].participant_settlement;
+    const expected = clone(inputSettlement);
+    const leg = parse(input).lane_settlement_commitments[0]
+      .native_amx_receipts[0].legs[0];
+    const settlement = leg.participant_settlement;
+    const checkedHash = leg.participant_settlement_hash;
+    assert.equal(helpers.computeParticipantSettlementHash(settlement), checkedHash);
+    assert.equal(Object.hasOwn(settlement, "native_amx_receipts"), false, implementation);
+
+    inputSettlement.source_ids[0] = "FF".repeat(32);
+    inputSettlement.source_ids.pop();
+    inputSettlement.native_amx_receipts = [{}];
+    inputSettlement.authority_context_height = 0;
+    assert.deepEqual(JSON.parse(JSON.stringify(settlement)), expected, implementation);
+
+    for (const mutate of [
+      () => { settlement.authority_context_height = 0; },
+      () => { settlement.source_ids = []; },
+      () => { settlement.source_ids[0] = settlement.source_ids[1]; },
+      () => { settlement.source_ids.pop(); },
+      () => { settlement.native_amx_receipts = [{}]; },
+    ]) {
+      assert.throws(mutate, TypeError, implementation);
+    }
+    assert.deepEqual(JSON.parse(JSON.stringify(settlement)), expected, implementation);
+    assert.equal(helpers.computeParticipantSettlementHash(settlement), checkedHash);
+    assert.equal(leg.prepare_qc.body.participant_settlement_commitment, checkedHash);
+    assert.equal(leg.commit_qc.body.participant_settlement_commitment, checkedHash);
+  }
 });
 
 test("grouped Native AMX v2 exposes mixed-role anchor deferral", async () => {
@@ -541,7 +718,10 @@ test("Rust-owned grouped Native AMX v2 corpus includes required controls", () =>
   const identifiers = new Set(
     fixtureDocument.negative_controls.map((control) => control.id),
   );
+  assert.equal(fixtureDocument.negative_controls.length, 58);
   const required = [
+    "missing_previous_native_settlement_hash",
+    "manifest_missing_previous_native_settlement_hash",
     "coherent_forged_validator_set_hash",
     "coherent_stale_descriptor_hash",
     "coherent_stale_proposal_hash",

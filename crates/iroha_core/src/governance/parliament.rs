@@ -1820,6 +1820,35 @@ impl ParliamentAttemptStateV1 {
         &self.required_bodies
     }
 
+    /// Admit the payloadless initial-sortition intent exactly once after qualification.
+    ///
+    /// A caller cannot use this intent to redraw a failed or already consumed
+    /// generation. Explicit retries retain their ordinary predecessor, slot,
+    /// eligibility and proposal-wide randomness-budget checks.
+    pub(crate) fn ensure_initial_sortition_ready_v1(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        self.ensure_active(governance_attempt_id)?;
+        let first = self
+            .required_bodies
+            .first()
+            .ok_or(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline)?;
+        self.ensure_stage(stage_for_body(first.body))?;
+        if !self.elections.is_empty()
+            || !self.sortition_capacity_failures.is_empty()
+            || !self.used_pulse_ids.is_empty()
+            || !self.used_pulse_slots.is_empty()
+            || !self.bodies.is_empty()
+            || !self.body_bindings.is_empty()
+        {
+            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BodyElection,
+            ));
+        }
+        Ok(())
+    }
+
     /// Validate immutable attempt bindings against their retained typed proposal.
     ///
     /// This check is required after persistence restore and again immediately

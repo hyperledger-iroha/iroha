@@ -559,6 +559,16 @@ impl Bus {
             handshake_buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+    /// Local WebSocket frame and retained session byte limits.
+    ///
+    /// These are transport readiness hints, not consensus admission policy.
+    pub(crate) fn frame_limits(&self) -> (usize, usize) {
+        (
+            self.policy.frame_max_bytes,
+            self.policy.session_buffer_max_bytes,
+        )
+    }
+
     /// Build an inert Connect bus from validated runtime configuration.
     ///
     /// Background services are started explicitly by Torii after the HTTP
@@ -2501,7 +2511,7 @@ impl Bus {
         tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::channel(network.subscriber_queue_cap().get());
             let filter =
-                SubscriberFilter::topics_for_route([Topic::Health], SubscriberRoute::Connect);
+                SubscriberFilter::topics_for_route([Topic::Connect], SubscriberRoute::Connect);
             let mut tx = tx;
             loop {
                 if shutdown_signal.is_sent() {

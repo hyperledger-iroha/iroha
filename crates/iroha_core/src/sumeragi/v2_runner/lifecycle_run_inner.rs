@@ -1580,7 +1580,7 @@ fn run_lifecycle_active_height(
                     .with_runner_runtime(
                         &mut active_runner,
                         |_owner, executor, _services, _local_proposal| {
-                            let pending = lane_work.has_pending_historical_recovery();
+                            let pending = lane_work.has_pending_historical_recovery()?;
                             let durable = if pending {
                                 None
                             } else {

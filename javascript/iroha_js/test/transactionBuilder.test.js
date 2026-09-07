@@ -2925,7 +2925,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
 test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
   const captures = [];
   const commitment = Buffer.alloc(32, 0x33);
-  const nullifier = Buffer.alloc(32, 0x44);
+  const nullifier = Buffer.alloc(32, 0x24);
   const proof = Buffer.from([0xfa, 0xce]);
   withTransactionApi(
     {
@@ -2950,7 +2950,7 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
           host: AUTHORITY_ID_INPUT,
           privacyMode: "ZkRosterV1",
           commitment: { commitment },
-          nullifier: { digest: nullifier, issuedAtMs: 0 },
+          nullifier: { digest: nullifier },
           proof,
         },
         privateKey: PRIVATE_KEY,
@@ -2958,13 +2958,13 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
   );
   const [{ instructions }] = captures;
   const created = instructions[0].Kaigi.CreateKaigi;
-  assert.equal(created.commitment.commitment, normalizedHashHex(commitment));
-  assert.equal(created.nullifier.digest, normalizedHashHex(nullifier));
+  assert.deepEqual(created.commitment.commitment, Array.from(commitment));
+  assert.deepEqual(created.nullifier.digest, Array.from(nullifier));
   assert.equal(created.proof, proof.toString("base64"));
 });
 
 test("buildJoinKaigiTransaction normalizes binary fields", () => {
-  const commitment = Buffer.alloc(32, 0x77);
+  const commitment = Buffer.alloc(32, 0x17);
   const nullifier = Buffer.alloc(32, 0x22);
   const proof = Buffer.from([0xaa, 0xbb, 0xcc, 0xdd]);
   const captures = [];
@@ -2991,7 +2991,7 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
           callId: "wonderland.sora:weekly-sync",
           participant: AUTHORITY_ID_INPUT,
           commitment: { commitment },
-          nullifier: { digest: nullifier, issuedAtMs: 0 },
+          nullifier: { digest: nullifier },
           proof,
         },
         privateKey: PRIVATE_KEY,
@@ -3001,12 +3001,12 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
   const [{ instructions }] = captures;
   const joinInstruction = instructions[0].Kaigi.JoinKaigi;
   assert.equal(joinInstruction.participant, AUTHORITY_ID);
-  assert.equal(
+  assert.deepEqual(
     joinInstruction.commitment.commitment,
-    normalizedHashHex(commitment),
+    Array.from(commitment),
   );
-  assert.equal(joinInstruction.nullifier.digest, normalizedHashHex(nullifier));
-  assert.equal(joinInstruction.nullifier.issued_at_ms, 0);
+  assert.deepEqual(joinInstruction.nullifier.digest, Array.from(nullifier));
+  assert.deepEqual(Object.keys(joinInstruction.nullifier), ["digest"]);
   assert.equal(joinInstruction.proof, proof.toString("base64"));
 });
 

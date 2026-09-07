@@ -179,6 +179,20 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let carrier = next_merge_carrier(&mut blocks, &mut entry);
+    let descriptor = &entry
+        .execution_batch
+        .as_ref()
+        .expect("one execution batch")
+        .lanes
+        .first()
+        .expect("one active execution")
+        .proposal
+        .descriptor;
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
+    );
     let expected = kura
         .merge_lane_application_artifact_required_bytes_for_block(carrier.as_ref(), Some(&entry))
         .expect("account committed carrier envelope");

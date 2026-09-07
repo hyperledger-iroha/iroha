@@ -1696,7 +1696,7 @@ enum SccpExactParser {
         let chainHash = try upperFixed(item, "chain_id_hash", bytes: 32)
         guard chainHash == irohaKeccak256(tairaChainId) else { throw SccpV1Error.invalid("\(label).chain_id_hash is not Taira") }
         let epoch = try SccpStrictJSON.uint64(item, "epoch", minimum: 1)
-        let epochEndHeight = try SccpStrictJSON.uint64(item, "epoch_end_height")
+        let epochEndHeight = try SccpStrictJSON.uint64(item, "epoch_end_height", minimum: 1)
         let rosterCommitment = try upperFixed(item, "roster_commitment", bytes: 32)
         let checkpointHeight = try SccpStrictJSON.uint64(item, "checkpoint_height", minimum: 1)
         guard checkpointHeight <= epochEndHeight else {

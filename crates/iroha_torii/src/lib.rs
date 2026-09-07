@@ -59,12 +59,14 @@
 mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
+mod game;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_commands;
 mod ledger_state_finality;
+mod nft_market;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "app_api")]
@@ -1145,6 +1147,8 @@ mod iso20022_bridge;
 mod limits;
 mod mcp;
 mod musubi;
+#[cfg(feature = "app_api")]
+mod offline_asset_registration;
 mod panic_recovery;
 #[cfg(feature = "app_api")]
 mod predicates;
@@ -18397,6 +18401,86 @@ async fn handler_get_configuration(
     let remote_ip = remote.ip();
     check_operator_rate_limit(&app, &headers, Some(remote_ip), "v1/configuration", true).await?;
     routing::handle_get_configuration(app.kiso.clone()).await
+}
+/// Exact native marketplace policy and reviewed rollout qualification.
+async fn handler_nft_offer_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/nft-offers/capabilities",
+    )
+    .await?;
+    nft_market::capabilities(&app)
+}
+/// Bounded public discovery of native NFT sale offers.
+async fn handler_nft_offer_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(params): NoritoQuery<nft_market::NftOfferListParams>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/nft-offers").await?;
+    nft_market::list(&app, params)
+}
+/// Exact immutable seller terms and retained terminal decision.
+async fn handler_nft_offer_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/nft-offers/by-id").await?;
+    nft_market::get(&app, &id)
+}
+/// Public native game session profile and proof qualification.
+async fn handler_game_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/capabilities").await?;
+    game::capabilities(&app)
+}
+/// Bounded public native game session discovery.
+async fn handler_game_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(params): NoritoQuery<game::GameListParams>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/sessions").await?;
+    game::list(&app, params)
+}
+/// Public exact native game session state.
+async fn handler_game_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/sessions/by-id").await?;
+    game::get(&app, &id)
+}
+/// Public bounded native execution-proof verification receipt.
+async fn handler_game_verification(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/games/verifications/by-id",
+    )
+    .await?;
+    game::verification(&app, &id)
 }
 /// GET /v1/vpn/profile — public Sora VPN profile snapshot for wallet clients.
 async fn handler_get_vpn_profile(
@@ -50715,6 +50799,13 @@ impl Torii {
             READYZ => unauthenticated_get(handler_readyz);
             LIVEZ => unauthenticated_get(handler_livez);
             NEXUS_LIFECYCLE_GET => public_get(handler_get_nexus_lane_lifecycle);
+            NFT_OFFER_CAPABILITIES => public_get(handler_nft_offer_capabilities);
+            NFT_OFFER_LIST => public_get(handler_nft_offer_list);
+            NFT_OFFER_GET => public_get(handler_nft_offer_get);
+            GAME_CAPABILITIES => public_get(handler_game_capabilities);
+            GAME_SESSION_LIST => public_get(handler_game_list);
+            GAME_SESSION_GET => public_get(handler_game_get);
+            GAME_VERIFICATION_GET => public_get(handler_game_verification);
             VPN_PROFILE => public_get(handler_get_vpn_profile);
             VPN_QUOTE_CREATE => limited_canonical_signature_post(handler_create_vpn_quote, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);
             VPN_SESSION_CREATE => limited_canonical_signature_post(handler_create_vpn_session, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);
@@ -51696,6 +51787,7 @@ impl Torii {
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => optional_canonical_signature_get(handler_explorer_account_detail);
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => optional_canonical_signature_get(handler_explorer_account_qr);
             EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => optional_canonical_signature_get(handler_explorer_domain_detail);
+            OFFLINE_ASSET_REGISTRATION_GET => optional_canonical_signature_get(offline_asset_registration::handler);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => optional_canonical_signature_get(handler_explorer_asset_definition_detail);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => optional_canonical_signature_get(handler_explorer_asset_definition_econometrics);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => optional_canonical_signature_get(handler_explorer_asset_definition_snapshot);

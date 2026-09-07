@@ -2,8 +2,8 @@
 use crate::sumeragi::smt::KvPair;
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus::ExecWitness;
+use iroha_data_model::execution_witness::KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1;
 use iroha_data_model::isi::kagemusha_v1::{
-    KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1, KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1,
     KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1,
 };
 use iroha_data_model::parliament_casting::{
@@ -13,11 +13,6 @@ use iroha_data_model::validation_fee::{
     VALIDATION_FEE_POLICY_WITNESS_KEY_V1, ValidationFeePolicyWitnessProofV1,
 };
 use std::collections::{BTreeMap, BTreeSet};
-
-fn is_kagemusha_reserve_receipt_witness_key_v1(key: &[u8]) -> bool {
-    key.len() == KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1
-        && key.first() == Some(&KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1)
-}
 
 /// Construct every Kagemusha V1 reserve-receipt proof in one execution witness.
 ///
@@ -30,7 +25,8 @@ pub(crate) fn kagemusha_reserve_receipt_witnesses_v1(
     let tagged_write_count = witness
         .writes
         .iter()
-        .filter(|entry| is_kagemusha_reserve_receipt_witness_key_v1(&entry.key))
+        // Select the entire reserved family so malformed key lengths fail validation below.
+        .filter(|entry| entry.key.first() == Some(&KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1))
         .count();
     let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
     for entry in &witness.writes {
@@ -42,7 +38,7 @@ pub(crate) fn kagemusha_reserve_receipt_witnesses_v1(
         .collect::<Vec<_>>();
     let targets = ordinary
         .iter()
-        .filter(|pair| is_kagemusha_reserve_receipt_witness_key_v1(&pair.key))
+        .filter(|pair| pair.key.first() == Some(&KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1))
         .collect::<Vec<_>>();
     if targets.len() != tagged_write_count {
         return Err("execution witness contains duplicate Kagemusha V1 receipt writes".to_owned());
@@ -351,9 +347,7 @@ mod tests {
         assert!(parliament_timed_ovn_casting_witness_proof_v1(&duplicate).is_err());
     }
 
-    #[test]
-    fn kagemusha_receipt_proof_is_exact_and_duplicate_safe() {
-        let operation_id = [0x61; 32];
+    fn sample_receipt(operation_id: [u8; 32]) -> KagemushaReserveReceiptV1 {
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
@@ -367,7 +361,7 @@ mod tests {
             iroha_crypto::Hash::new(b"kagemusha-receipt-proof-incarnation").into(),
         )
         .expect("asset incarnation");
-        let receipt = KagemushaReserveReceiptV1 {
+        KagemushaReserveReceiptV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id,
             kind: iroha_data_model::isi::kagemusha_v1::KagemushaOperationKindV1::TopUp,
@@ -389,7 +383,13 @@ mod tests {
             total_redemptions: 0,
             transaction_hash: [0x63; 32],
             committed_at_ms: 1,
-        };
+        }
+    }
+
+    #[test]
+    fn kagemusha_receipt_proof_is_exact_and_duplicate_safe() {
+        let operation_id = [0x61; 32];
+        let receipt = sample_receipt(operation_id);
         let receipt_write = ExecKv {
             key: KagemushaReserveReceiptWitnessV1::expected_key(operation_id),
             value: norito::encode_canonical(&receipt).expect("canonical receipt"),
@@ -421,5 +421,114 @@ mod tests {
             ..ExecWitness::default()
         };
         assert!(kagemusha_reserve_receipt_witnesses_v1(&duplicate).is_err());
+    }
+
+    #[test]
+    fn captured_block_synthetic_write_families_share_one_authenticated_root() {
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+            sumeragi::witness as recorder,
+        };
+        use iroha_data_model::{asset::AssetId, block::BlockHeader};
+        use iroha_primitives::numeric::Quantity;
+
+        let _guard = recorder::exec_witness_guard();
+        let receipts = [sample_receipt([0x61; 32]), sample_receipt([0x62; 32])];
+        for include_receipts in [false, true] {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                std::num::NonZeroU64::new(1).expect("height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut state_block = state.block(header);
+            recorder::start_block();
+            recorder::record_write_asset(
+                &AssetId::new(
+                    receipts[0].asset.clone(),
+                    iroha_test_samples::ALICE_ID.clone(),
+                ),
+                &Quantity::from(42_u32),
+            );
+            if include_receipts {
+                // Reverse insertion order also exercises the canonical operation-id order.
+                for receipt in receipts.iter().rev() {
+                    recorder::record_write_kagemusha_reserve_receipt_v1(receipt)
+                        .expect("record canonical receipt");
+                }
+            }
+            state_block.capture_exec_witness();
+            let witness = state_block
+                .take_exec_witness()
+                .expect("actual captured witness");
+            let encoded = norito::encode_canonical(&witness).expect("encode witness");
+            let decoded: ExecWitness = norito::decode_canonical(&encoded).expect("decode witness");
+            assert_eq!(decoded, witness);
+            assert_eq!(witness.writes.len(), if include_receipts { 5 } else { 3 });
+            let (fee, fee_root) =
+                validation_fee_policy_witness_proof_v1(&decoded).expect("actual fee proof");
+            let (casting, casting_root) = parliament_timed_ovn_casting_witness_proof_v1(&decoded)
+                .expect("actual casting proof");
+            let (proofs, receipt_root) = kagemusha_reserve_receipt_witnesses_v1(&decoded)
+                .expect("casting writes must not be decoded as receipts");
+            assert_eq!(fee_root, casting_root);
+            assert_eq!(fee_root, receipt_root);
+            assert!(fee.verify(fee_root));
+            assert!(casting.verify(fee_root));
+            assert_eq!(proofs.len(), if include_receipts { 2 } else { 0 });
+            for (proof, receipt) in proofs.iter().zip(&receipts) {
+                assert_eq!(&proof.receipt, receipt);
+                assert!(proof.verify(fee_root));
+                let encoded = norito::encode_canonical(proof).expect("encode receipt proof");
+                let decoded: KagemushaReserveReceiptWitnessV1 =
+                    norito::decode_canonical(&encoded).expect("decode receipt proof");
+                assert_eq!(&decoded, proof);
+                let mut wrong_namespace = decoded;
+                wrong_namespace.key[0] = 0xD5;
+                assert!(!wrong_namespace.verify(fee_root));
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_receipt_family_writes_are_never_filtered_as_absence() {
+        let receipt = sample_receipt([0x61; 32]);
+        let key = KagemushaReserveReceiptWitnessV1::expected_key(receipt.operation_id);
+        let value = norito::encode_canonical(&receipt).expect("canonical receipt");
+        let mut wrong_operation = key.clone();
+        wrong_operation[1] ^= 1;
+        for write in [
+            ExecKv {
+                key: vec![KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1],
+                value: value.clone(),
+            },
+            ExecKv {
+                key: [key.as_slice(), &[0]].concat(),
+                value: value.clone(),
+            },
+            ExecKv {
+                key: wrong_operation,
+                value,
+            },
+            ExecKv {
+                key,
+                value: b"malformed receipt".to_vec(),
+            },
+        ] {
+            let witness = ExecWitness {
+                writes: vec![write],
+                ..ExecWitness::default()
+            };
+            assert!(kagemusha_reserve_receipt_witnesses_v1(&witness).is_err());
+        }
     }
 }

@@ -552,11 +552,27 @@ mod tests {
                     .expect("fixture validator PoP")
             })
             .collect::<Vec<_>>();
+        let mint_finality_roster = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            validators: roster.iter().enumerate().map(|(index, validator)| {
+                let seed = 0xA0_u8 + u8::try_from(index).expect("four-validator fixture index");
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[seed; 32], 0, validator.validator.clone(),
+                ).expect("derive canonical paired-Pasta fixture keys")
+            }).collect(),
+        };
+        let mint_finality_epoch_id = mint_finality_roster
+            .finality_epoch_id()
+            .expect("derive exact fixture mint-finality epoch identifier");
         let context = HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch: 0,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -663,6 +679,13 @@ mod tests {
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch: parent_artifact.height_context.epoch,
+            kagemusha_mint_finality_epoch_id: parent_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: parent_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_roster
+                .clone(),
             epoch_end_height: parent_artifact.height_context.epoch_end_height,
             next_epoch_snapshot: None,
             mode: parent_artifact.height_context.mode,

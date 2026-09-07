@@ -121,6 +121,11 @@ settlement/publication, and four-validator recovery scenarios.
   commit/challenge/reveal windows. Private Halo2 membership proofs are verified
   against that exact historical snapshot while only their digest, appeal
   nullifier, eligibility class, expiry, and account binding are retained.
+  The V1 proof's required presentation binding commits to the canonical
+  authenticated juror and appeal intake in a constrained public input. The
+  verifier derives that expectation independently; a copied or retargeted proof
+  cannot enroll another account. The per-appeal challenge/context and nullifier
+  stay shared across accounts so one credential cannot enroll multiple jurors.
   Ordinary later issuer-policy, commitment-root, revocation-list, and audit-head
   advancement cannot rewrite or strand an admitted appeal: every historical
   publication and audit link is revalidated from consensus state. An emergency

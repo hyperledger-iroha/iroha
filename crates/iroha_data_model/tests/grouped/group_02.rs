@@ -2,6 +2,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../support/fixture_json.rs"]
 mod fixture_json;
+#[path = "../game_v1_codec.rs"]
+mod game_v1_codec;
 #[path = "../governance_generated_schema_identity.rs"]
 mod governance_generated_schema_identity;
 #[path = "../model_parser.rs"]
@@ -18,6 +20,8 @@ mod musubi_sdk_fixture;
 mod musubi_sdk_fixture_values;
 #[path = "../mutators.rs"]
 mod mutators;
+#[path = "../nft_market_v1_codec.rs"]
+mod nft_market_v1_codec;
 #[path = "../norito_chain_layout.rs"]
 mod norito_chain_layout;
 #[path = "../norito_golden_scaffold.rs"]

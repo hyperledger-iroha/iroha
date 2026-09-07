@@ -27,8 +27,12 @@ Features:
 
 ### KAGEMUSHA V1 wallet
 
-`KagemushaWalletV1.open(provider:)` accepts only a provider attesting the complete
-non-forking hardware contract. The wallet stages incoming payments before returning
+`KagemushaWalletV1.open(provider:allowBootstrap:)` accepts only a provider attesting
+the complete non-forking hardware contract. The required admission callback is
+checked after qualification and recovery, immediately before creating an absent
+aggregate. Retail apps must check current MiBank approval for the exact account
+and authority scope in that callback; `{ false }` permits committed recovery
+without creating a new aggregate. The wallet stages incoming payments before returning
 their durable acknowledgement, treats exact delivery duplicates idempotently, folds
 an opaque durable inbox prefix without a note-count limit, and folds only the pending
 credits needed to fund a send or redemption. Sender successors are usable immediately;
@@ -45,12 +49,49 @@ identity before executing a device operation. Payment and redemption reservation
 carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
 archive, shared with the native outgoing-operation index.
 
+Authenticated providers require an injected `KagemushaOperationIntentOwnerV1`
+backed by a durable `KagemushaOperationIntentStoringV1`. Its shared scope lock must
+serialize all owners, and the store must persist and reopen exact bytes before
+returning. The owner records full qualification and canonical commands before
+dispatch, and retains authenticated results after native acceptance. Apps call
+`acknowledgeDurableResult(operationID:canonicalResult:)` only after the dependent
+transcript is durable, including when resuming after an interrupted acknowledgement.
+Completed monetary records retain their evidence. Reads 1, 13, 18, and 21 use
+native `BeginObservation` (coordinator method 11) and never enter the durable
+intent store. Each begin supplies the exact canonical read command and receives
+a native random nonce. A new begin supersedes the prior challenge for that read;
+native owner recreation requires a fresh begin. Lost read replies are retried
+with a fresh challenge. Before a snapshot acknowledges an installed mutation,
+its exact accepted reply, nonce, authenticator, command, and qualification are
+saved on that mutation as historical evidence, never as a current read response.
+If native acceptance of a verified mutation fails, the live provider retains that
+exact response for acceptance and original-intent persistence before further work.
+After provider recreation, recovery replays unresolved internal commands with
+their durable identity and original qualification, then obtains a new signed
+snapshot before acknowledging installation. An absent aggregate cannot authorize
+replaying a bootstrap draft: the current `allowBootstrap` gate must approve it.
+The required live `bootstrapState(allowBootstrap:)` callback is checked again after
+durable/native reservation, immediately before device dispatch. An approval value
+is never persisted as authority.
+
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
 schema-2 transport. It checks the complete ABI-23 inventory and correlates method
 responses with the caller's request. It fails closed when the native coordinator
-is unavailable. Embedded preparation/candidate/recovery archives remain opaque;
-the typed wallet coordinator integration still requires the canonical native
-archive codecs described in [the source contract](../specs/kagemusha_device_bridge_v1.md).
+is unavailable. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
+implements the wallet coordinator interface over that transport and the exact
+`KagemushaCoreCoordinatorArchiveV1` codecs. It binds preparations to the caller,
+original public inputs, and qualification; candidates retain that exact preparation.
+Recovery and release retain the creation context across ordinary epoch rotation.
+Archive parsing proves canonical shape, while native Core must resolve each selector
+against its authenticated durable journal and verify proof and hardware authority.
+Authenticated reply admission carries the original full 64-byte low-S P-256
+response authenticator and exact canonical command so native Core can independently
+authenticate the transcript. Its signature binds the response header, command digest,
+hardware policy, and qualification report. The sole native verifier export is
+`connect_norito_kagemusha_device_command_response_v1_verify`; a library exposing the
+earlier response-only verifier cannot qualify. Historical mutation replies are
+re-admitted with their original command and qualification before recovery acknowledges them.
+The adapter supplies no software monetary backend. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online top-up is payer-signed. Build a transaction containing exactly one
 `KagemushaNoritoV1.topUpInstructionFrame(_:)` result with `QueuePlanSynced`
@@ -1232,12 +1273,20 @@ contains no governance or readiness state. Call
 `ToriiClient.getPrivacyExact12CapabilityManifestV1(canonicalAuth:)` over HTTPS
 to fetch the exact canonical committed manifest; redirects, JSON, compressed
 representations, missing canonical request authentication, and a missing or
-stale native bridge fail closed. `PrivacyExact12CapabilityAdmissionV1` issues
+stale native bridge fail closed. The signed fetch bypasses local cached responses
+and sends `Cache-Control: no-cache, no-store` for current committed state.
+`PrivacyExact12CapabilityAdmissionV1` issues
 an opaque per-protocol token only when the committed row is active, ready, and
 byte-identical to the ABI23 native-validated compiled catalog. The generic
 transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
-complete envelope profile tuple both at construction and final encoding.
+complete final V1 envelope profile tuple both at construction and final encoding.
+The client must supply `localSigningContext.networkId`: the authenticated origin
+and its token retain that exact network, the deployment's raw32 network and genesis
+fields must match it, and every retained statement's context must bind it.
+Final batch encoding also compares the token and statement against the batch's
+exact `networkId`; an admission from another network cannot be reused. Managed
+fixture projection and standalone native validation do not mint network authority.
 
 ABI23 requires exactly six privacy C exports, including
 `iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
@@ -1778,6 +1827,14 @@ symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 
+`getSumeragiDiagnostics()` validates raw JSON number tokens before typed decoding:
+integer fields reject decimal and exponent notation, while the full `UInt64` range
+remains exact. Settlement quantities and TWAP values use canonical decimal
+strings. TWAP retains the signed `Numeric` schema; settlement quantities are
+nonnegative. Swap metadata and its tagged values reject unknown fields.
+The Sumeragi wire decoder bounds vector counts by the available encoded fields
+and checks byte-vector lengths before allocating their payloads.
+
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated
 descriptor-only mirror containing `transaction_payloads.json` and
@@ -1818,6 +1875,14 @@ outputs and all generated SDK mirrors together; never use Java resources, an arc
 or a retained historical payload as an alternate Swift fixture source.
 
 ### Connect (WalletConnect-style relay)
+
+For a qualified deployment carrying complete native execution proofs, construct
+`ConnectClient` with `webSocketFactory: .urlSessionForExecutionProofs()`. This
+explicitly sets the URLSession WebSocket message bound to four MiB plus 4,096
+framing bytes. Ordinary factories retain their platform defaults. This option
+does not qualify a wallet or proof profile: Torii, P2P peers and proxies must use
+the matching reviewed execution transport configuration, and wallets must still
+validate the complete canonical transaction and its approved fee limit.
 
 The SDK ships `ConnectClient` and `ConnectSession` helpers for WebSocket
 session management, typed frame exchange, and encrypted envelope handling.
@@ -2207,3 +2272,40 @@ pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 - Public Swift SDK and Connect tutorial: [docs.iroha.tech](https://docs.iroha.tech/guide/tutorials/swift.html)
 - Executable Connect examples: [`examples/ios/NoritoDemo`](../examples/ios/NoritoDemo/README.md) and [`examples/ios/NoritoDemoXcode`](../examples/ios/NoritoDemoXcode/README.md)
 - SwiftUI demo contributor guide (local Torii setup, acceleration toggles): [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md)
+
+
+## Kaigi V1
+
+`KaigiInstructionsV1.swift` owns all nine native Kaigi instruction builders.
+Private create requires the complete commitment, nullifier, roster root and
+proof bundle; private join, leave and end use the same bundle. Usage takes a
+separate scalar commitment and supplied proof. The node binds these artifacts
+to the current call, original account, action and participation sequence.
+
+`KaigiAuthorizationScalarV1` preserves all 32 little-endian Pasta Fp bytes below
+the modulus, including zero. Commitment and nullifier wrappers each contain
+one scalar field. They have no hash marker, alias tag or issuance timestamp.
+The roster root remains a separate marked Iroha hash.
+
+Account-controller policies retain the full u16 member count (1–65,535). The
+address decoder requires the single canonical count layout, V1 policy version,
+nonzero weights, reachable threshold and members ordered by algorithm name and
+full public-key bytes. `MultisigPolicyBuilder` sorts input members into that
+order and rejects duplicates. Tests use the same canonical account encoder as
+applications.
+
+`KaigiPrivacyStateV1.decodeCanonicalRecordJSON` reads the full retained record,
+including original host and retained original participant accounts. It checks
+strict scalar/integer JSON, duplicate and unknown fields, effective participant
+limits, lifecycle, roster ownership and reserved leave/end history capacity.
+Arbitrary metadata keeps its own JSON values. Account comparisons retain full
+controllers, including multisig policy, independent of network display prefixes.
+The redacted Torii application view cannot supply this record. This projection
+does not authenticate a response, recompute the roster root, check canonical
+account ordering, establish rekey authority or verify an authorization proof.
+
+`KaigiFinalWireFixturesV1.swift` pins all nine transparent instruction forms,
+all five private actions and a complex private create to Rust-owned model
+bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
+qualification and four-validator execution require separate evidence. The
+canonical Swift package always requires the real ABI23 NoritoBridge artifact.

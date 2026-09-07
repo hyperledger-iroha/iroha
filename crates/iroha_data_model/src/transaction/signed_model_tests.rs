@@ -818,6 +818,42 @@ fn finalized_privacy_payload() -> TransactionPayload {
     );
     payload
 }
+
+#[test]
+fn privacy_intent_rejects_foreign_network_even_after_digest_refinalization() {
+    for domain in [
+        TransactionDomain::Network(test_network_id(0x31)),
+        TransactionDomain::Genesis,
+    ] {
+        let mut payload = finalized_privacy_payload();
+        payload.domain = domain;
+        assert_eq!(
+            payload.validate_privacy_transaction_intent_binding_v1(),
+            Err(PrivacyTransactionIntentErrorV1::NetworkDomainMismatch)
+        );
+        let intent = payload
+            .privacy_transaction_intent_digest_v1()
+            .expect("projection can be computed for the adversarial payload");
+        mutate_direct_privacy_submission(&mut payload, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest = intent;
+            submission.envelope.statement_digest = submission
+                .envelope
+                .statement
+                .digest()
+                .expect("refinalized adversarial statement");
+        });
+        assert_eq!(
+            payload.validate_privacy_transaction_intent_binding_v1(),
+            Err(PrivacyTransactionIntentErrorV1::NetworkDomainMismatch),
+            "consistent hashes cannot authorize a foreign-network or genesis privacy proof"
+        );
+    }
+}
+
 fn privacy_test_contract_call() -> ContractInvocation {
     ContractInvocation {
         contract_address: crate::smart_contract::ContractAddress::derive(
@@ -1022,6 +1058,8 @@ fn assert_canonical_privacy_intent_kat(
         50_264,
         "the canonical fixture wire length is part of the cross-SDK KAT"
     );
+    // Final V1 includes the eight-byte wire marker and 48-byte catalog
+    // commitment, each with its canonical field-length prefix.
     assert_eq!(
         hex::encode(expected.as_bytes()),
         "99c38462e3d9dd3e1284cc59a618a42ee507dc1417b545c258d0b2997f04c5ca",

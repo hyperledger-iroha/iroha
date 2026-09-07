@@ -1,9 +1,10 @@
 # Kaigi over SoraNet
 
-Kaigi interactive traffic now rides the SoraNet anonymity transport end to
-end. Relays honour `kaigi-stream` exit routes, derive blinded room identifiers,
-and forward traffic to Kaigi hubs while preserving the same GAR and compliance
-guardrails used for Norito streaming.
+The current relay rejects every Kaigi exit route before opening a catalog or
+forwarding traffic. The local proxy has a separately tested spool bridge, but
+that bridge does not establish end-to-end SoraNet transport or anonymity.
+Completing the authenticated route-open and durable revocation boundaries is
+an outstanding first-release outcome.
 
 ## Exit relay behaviour
 - Token-bearing Kaigi filesystem routing is disabled in V1. Core rejects every
@@ -12,10 +13,10 @@ guardrails used for Norito streaming.
   record. There is no static/read-only exception.
 - The `RouteOpenFrame` stream tag `0x02` selects the Kaigi exit path. Its second
   byte is reserved and must be zero; it is not an authentication assertion.
-  Relays currently admit only `SoranetAccessKind::ReadOnly` routes and map them
-  to the `stream.kaigi.public` GAR category. Authenticated records fail closed
-  until a viewer credential is cryptographically bound to route opening.
-- The reserved adapter derives room identifiers by BLAKE3-blinding the
+  The relay records the configured public GAR category for diagnostics, then
+  returns `FilesystemPublicationDisabled`. A missing configured route returns
+  `StreamDisabled`. Neither read-only nor authenticated records are admitted.
+- The disabled adapter code derives room identifiers by BLAKE3-blinding the
   `{channel_id, route_id, stream_id}` tuple after a future route has passed the
   missing proof and revocation boundaries.
 - `exit_multiaddr` is retained only as signed diagnostic metadata. Exit adapters

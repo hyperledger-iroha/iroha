@@ -4263,6 +4263,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_frame_bytes_tx_gossip: defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),
             max_frame_bytes_peer_gossip: defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
             max_frame_bytes_health: defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+            max_frame_bytes_connect: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
             max_frame_bytes_other: defaults::network::MAX_FRAME_BYTES_OTHER.get(),
             quic_max_idle_timeout: None,
         }

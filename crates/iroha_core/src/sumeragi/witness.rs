@@ -13,8 +13,9 @@ use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     block::consensus::{ExecKv, ExecWitness},
     domain::DomainId,
+    execution_witness::ExecutionWitnessKeyTagV1,
     fastpq::{TransferTranscript, TransferTranscriptBundle},
-    isi::{KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1, KagemushaReserveReceiptV1},
+    isi::KagemushaReserveReceiptV1,
     name::Name,
     nft::NftId,
 };
@@ -325,35 +326,51 @@ fn map_ref_to_bundles(
 fn key_sep() -> u8 {
     0x1F // Unit Separator
 }
-fn enc_key_prefix(tag: u8, a: &str, b: &str) -> Vec<u8> {
+fn enc_key_prefix(tag: ExecutionWitnessKeyTagV1, a: &str, b: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + a.len() + 1 + b.len());
-    out.push(tag);
+    out.push(tag as u8);
     out.extend_from_slice(a.as_bytes());
     out.push(key_sep());
     out.extend_from_slice(b.as_bytes());
     out
 }
 fn key_account_kv(id: &AccountId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA1, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::AccountMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_domain_kv(id: &DomainId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA2, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::DomainMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_nft_kv(id: &NftId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA3, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::NftMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_asset_def_kv(id: &AssetDefinitionId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA4, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::AssetDefinitionMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_asset_balance(id: &AssetId) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + id.to_string().len());
-    out.push(0xB1);
+    out.push(ExecutionWitnessKeyTagV1::AssetBalance as u8);
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
 fn key_asset_def_total(id: &AssetDefinitionId) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + id.to_string().len());
-    out.push(0xB2);
+    out.push(ExecutionWitnessKeyTagV1::AssetDefinitionTotalSupply as u8);
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
@@ -484,10 +501,8 @@ pub fn record_write_asset_def_total(id: &AssetDefinitionId, val: &Quantity) {
 }
 /// Return the exact execution-witness key for one pooled Kagemusha V1 receipt.
 pub(crate) fn kagemusha_reserve_receipt_witness_key_v1(operation_id: [u8; 32]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(33);
-    key.push(KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
-    key.extend_from_slice(&operation_id);
-    key
+    iroha_data_model::execution_witness::kagemusha_reserve_receipt_witness_key_v1(operation_id)
+        .to_vec()
 }
 /// Record the pre-state receipt bytes, or canonical absence, for one V1 operation.
 pub(crate) fn record_read_kagemusha_reserve_receipt_v1(
@@ -672,7 +687,11 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                     .world
                     .account_roles_iter(&acc)
                     .any(|r| r == &role);
-                let k = enc_key_prefix(0xC1, &acc.to_string(), &role.to_string());
+                let k = enc_key_prefix(
+                    ExecutionWitnessKeyTagV1::AccountRoleBinding,
+                    &acc.to_string(),
+                    &role.to_string(),
+                );
                 let v = Json::new(present).get().as_bytes().to_vec();
                 with_active_slot(|g| {
                     g.reads.entry(k).or_insert(v);
@@ -684,7 +703,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         if let Ok(role) = iroha_data_model::role::RoleId::from_str(rest) {
             let present = state_block.world.roles().get(&role).is_some();
             let mut out = Vec::with_capacity(1 + rest.len());
-            out.push(0xC2);
+            out.push(ExecutionWitnessKeyTagV1::Role as u8);
             out.extend_from_slice(rest.as_bytes());
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {
@@ -704,7 +723,11 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                 .ok()
                 .is_some_and(|mut it| it.any(|p| p.name() == perm_s));
             let canonical_account = acc.to_string();
-            let k = enc_key_prefix(0xC3, &canonical_account, perm_s);
+            let k = enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &canonical_account,
+                perm_s,
+            );
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {
                 g.reads.entry(k).or_insert(v);
@@ -722,7 +745,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                 .role(&role_id)
                 .ok()
                 .is_some_and(|r| r.permissions().any(|p| p.name() == perm_s));
-            let k = enc_key_prefix(0xC4, role_s, perm_s);
+            let k = enc_key_prefix(ExecutionWitnessKeyTagV1::RolePermission, role_s, perm_s);
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {
                 g.reads.entry(k).or_insert(v);
@@ -846,7 +869,11 @@ mod tests {
             .expect("missing nft id");
         let role: RoleId = "auditor".parse().expect("role id");
         let unicode_role_raw = String::from("cafe\u{301}");
-        let unicode_role: RoleId = unicode_role_raw.parse().expect("unicode role id");
+        let unicode_role: RoleId = "café".parse().expect("canonical Unicode role id");
+        assert!(
+            unicode_role_raw.parse::<RoleId>().is_err(),
+            "non-NFC role spellings must remain invalid"
+        );
         let account_perm = "can_account_read";
         let role_perm = "can_role_read";
         let mut account_metadata = metadata_entry("color", "red");
@@ -1136,7 +1163,7 @@ mod tests {
         assert_read_value(
             &witness,
             enc_key_prefix(
-                0xC1,
+                ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &fixture.role.to_string(),
             ),
@@ -1145,7 +1172,7 @@ mod tests {
         assert_read_value(
             &witness,
             enc_key_prefix(
-                0xC1,
+                ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &missing_role.to_string(),
             ),
@@ -1159,22 +1186,38 @@ mod tests {
         assert_read_value(&witness, missing_role_key, bool_json_bytes(false));
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC3, &fixture.account.to_string(), fixture.account_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &fixture.account.to_string(),
+                fixture.account_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC3, &fixture.account.to_string(), "can_missing"),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &fixture.account.to_string(),
+                "can_missing",
+            ),
             bool_json_bytes(false),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC4, &fixture.role.to_string(), fixture.role_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.role.to_string(),
+                fixture.role_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC4, &fixture.role.to_string(), "can_missing"),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.role.to_string(),
+                "can_missing",
+            ),
             bool_json_bytes(false),
         );
         assert_read_value(
@@ -1214,6 +1257,11 @@ mod tests {
             format!("perm.account:{}", fixture.account),
             format!("perm.role:{}", fixture.role),
             String::from("account.detail:not_an_account:color"),
+            format!("account.detail: {} :color", fixture.account),
+            format!(
+                "perm.account: {} :{}",
+                fixture.account, fixture.account_perm
+            ),
             String::from("domain.detail:not_a_domain:region"),
             String::from("asset_def.detail:not_an_asset_definition:issuer"),
             String::from("nft.detail:not_an_nft:artist"),
@@ -1221,6 +1269,15 @@ mod tests {
             String::from("role:bad role"),
             String::from("perm.account:not_an_account:can_account_read"),
             String::from("perm.role:bad role:can_role_read"),
+            format!("role:{}", fixture.unicode_role_raw),
+            format!(
+                "role.binding:{}:{}",
+                fixture.account, fixture.unicode_role_raw
+            ),
+            format!(
+                "perm.role:{}:{}",
+                fixture.unicode_role_raw, fixture.role_perm
+            ),
             String::from("asset:not_an_asset"),
             String::from("asset_def:not_an_asset_definition"),
             format!("account.detail:{}:bad key", fixture.account),
@@ -1247,14 +1304,11 @@ mod tests {
         let issuer = "issuer".parse::<Name>().expect("metadata key");
         record_read_from_access_key(
             &state_block,
-            &format!("account.detail: {} :color", fixture.account),
+            &format!("account.detail:{}:color", fixture.account),
         );
         record_read_from_access_key(
             &state_block,
-            &format!(
-                "perm.account: {} :{}",
-                fixture.account, fixture.account_perm
-            ),
+            &format!("perm.account:{}:{}", fixture.account, fixture.account_perm),
         );
         record_read_from_access_key(
             &state_block,
@@ -1270,10 +1324,7 @@ mod tests {
         );
         record_read_from_access_key(
             &state_block,
-            &format!(
-                "perm.role:{}:{}",
-                fixture.unicode_role_raw, fixture.role_perm
-            ),
+            &format!("perm.role:{}:{}", fixture.unicode_role, fixture.role_perm),
         );
         let witness = drain_exec_witness();
         drop(guard);
@@ -1285,17 +1336,25 @@ mod tests {
         );
         assert_no_read_key(
             &witness,
-            enc_key_prefix(0xA1, &format!(" {} ", fixture.account), color.as_ref()),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountMetadata,
+                &format!(" {} ", fixture.account),
+                color.as_ref(),
+            ),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC3, &fixture.account.to_string(), fixture.account_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &fixture.account.to_string(),
+                fixture.account_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_no_read_key(
             &witness,
             enc_key_prefix(
-                0xC3,
+                ExecutionWitnessKeyTagV1::AccountPermission,
                 &format!(" {} ", fixture.account),
                 fixture.account_perm,
             ),
@@ -1314,7 +1373,7 @@ mod tests {
         assert_read_value(
             &witness,
             enc_key_prefix(
-                0xC1,
+                ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &fixture.role.to_string(),
             ),
@@ -1326,12 +1385,20 @@ mod tests {
         assert_no_read_key(&witness, role_fallthrough_key);
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC4, &fixture.unicode_role_raw, fixture.role_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.unicode_role.to_string(),
+                fixture.role_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_no_read_key(
             &witness,
-            enc_key_prefix(0xC4, &fixture.unicode_role.to_string(), fixture.role_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.unicode_role_raw,
+                fixture.role_perm,
+            ),
         );
     }
     #[test]
@@ -1427,7 +1494,10 @@ mod tests {
         };
         let key = kagemusha_reserve_receipt_witness_key_v1(operation_id);
         assert_eq!(key.len(), 33);
-        assert_eq!(key[0], KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
+        assert_eq!(
+            key[0],
+            ExecutionWitnessKeyTagV1::KagemushaReserveReceipt as u8
+        );
         assert_eq!(&key[1..], operation_id.as_slice());
         record_read_kagemusha_reserve_receipt_v1(operation_id, None);
         record_write_kagemusha_reserve_receipt_v1(&receipt).expect("encode receipt");

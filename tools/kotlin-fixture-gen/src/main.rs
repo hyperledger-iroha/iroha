@@ -1,7 +1,8 @@
 //! Generates Norito-encoded fixtures for Kotlin SDK parity tests.
 //!
-//! Each subcommand outputs the wire payload hex on the first line,
-//! followed by input parameters the Kotlin encoder needs.
+//! Instruction subcommands output wire payload hex followed by input parameters.
+//! `multisig-accounts-v1` emits checked complete-controller vectors as Norito JSON.
+//! `fastpq-balance-keys-v1` emits their canonical typed FASTPQ balance keys.
 //!
 //! When the Rust data model changes, this binary produces different
 //! bytes, causing the Kotlin parity tests to fail until the
@@ -32,6 +33,8 @@ use iroha_data_model::ram_lfe::{
 };
 use iroha_data_model::smart_contract::{ContractAddress, ContractLifecycleOwnerV1};
 use std::env;
+mod fastpq_balance_keys;
+mod multisig_accounts;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -44,7 +47,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!(
-            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program>",
+            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program|multisig-accounts-v1|fastpq-balance-keys-v1>",
             args[0]
         );
         std::process::exit(1);
@@ -56,6 +59,8 @@ fn main() {
         "claim-identifier" => emit_claim_identifier(),
         "contract-lifecycle" => emit_contract_lifecycle(),
         "hidden-ram-fhe-program" => emit_hidden_ram_fhe_program(),
+        "multisig-accounts-v1" => multisig_accounts::emit(),
+        "fastpq-balance-keys-v1" => fastpq_balance_keys::emit(),
         other => {
             eprintln!("Unknown fixture: {other}");
             std::process::exit(1);

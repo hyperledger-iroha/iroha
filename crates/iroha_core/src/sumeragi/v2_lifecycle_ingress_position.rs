@@ -1204,11 +1204,6 @@ impl<'a> FairIngressTurnCut<'a> {
     }
 }
 #[derive(Clone, Copy)]
-enum LifecycleQueueCutTarget {
-    Exact(u64),
-    NextAdmissible,
-}
-#[derive(Clone, Copy)]
 enum FairIngressTurnSelectionPolicy {
     OrdinaryRetireObsolete,
     PredicateOnly,
@@ -1415,13 +1410,12 @@ impl FairV2Ingress {
 
     /// Freeze one exact target's pre-predicate fair-ingress queue geometry.
     ///
-    /// This is the sole mint for lifecycle lane/source positions. It acquires
-    /// the same service lock as checked dequeue, then snapshots state at the
-    /// next physical admission cutoff. The selected ordinal must name exactly
-    /// one authenticated occurrence in the frozen ready prefix.
-    // TODO: Consume this cut only from the future composite planner factory,
-    // together with an executor-authenticated complete per-occurrence verdict
-    // set for selector debt and the existing mode/capacity/runner snapshots.
+    /// Exact Fetch completion recaptures its selected occurrence through the
+    /// executor's complete authenticated selector census. This acquires the
+    /// same service lock as checked dequeue, then snapshots state at the next
+    /// physical admission cutoff. The selected ordinal must name exactly one
+    /// authenticated occurrence in the frozen ready prefix; the cut alone does
+    /// not grant dequeue or scheduler authority.
     pub(super) fn capture_lifecycle_queue_cut(
         &self,
         target_physical_ordinal: u64,
@@ -1429,33 +1423,6 @@ impl FairV2Ingress {
         if target_physical_ordinal == 0 {
             return Err(FairIngressQueueCutError::ZeroTargetOrdinal);
         }
-        self.capture_lifecycle_queue_cut_for(
-            LifecycleQueueCutTarget::Exact(target_physical_ordinal),
-            |_| false,
-        )?
-        .ok_or(FairIngressQueueCutError::MissingTarget)
-    }
-
-    /// Freeze one complete queue census around the next fair admissible occurrence.
-    ///
-    /// Selection follows the ordinary dequeue's exact ready-source/lane order:
-    /// strict candidates are considered first, then dependency-bypass
-    /// candidates only when no strict candidate satisfies `predicate`.
-    /// Nothing is removed or rotated. A selected non-lifecycle or foreign
-    /// context is returned as `None`, leaving that occurrence to the ordinary
-    /// runner without exposing its physical ordinal.
-    pub(super) fn capture_next_lifecycle_queue_cut(
-        &self,
-        predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
-    ) -> Result<Option<FairIngressQueueCut<'_>>, FairIngressQueueCutError> {
-        self.capture_lifecycle_queue_cut_for(LifecycleQueueCutTarget::NextAdmissible, predicate)
-    }
-
-    fn capture_lifecycle_queue_cut_for(
-        &self,
-        target: LifecycleQueueCutTarget,
-        mut predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
-    ) -> Result<Option<FairIngressQueueCut<'_>>, FairIngressQueueCutError> {
         let service_guard = self.service_lock.lock();
         let state = self.state.lock();
         validate_live_queue_structure(&state)?;
@@ -1470,21 +1437,6 @@ impl FairV2Ingress {
         let bound_context = state.leader_wire_context;
         drop(state);
         validate_frozen_ownership_outside_state(&geometry, &selector_occurrences)?;
-        let next_admissible = matches!(target, LifecycleQueueCutTarget::NextAdmissible);
-        let target_physical_ordinal = match target {
-            LifecycleQueueCutTarget::Exact(ordinal) => ordinal,
-            LifecycleQueueCutTarget::NextAdmissible => {
-                let Some(ordinal) = select_next_admissible_ordinal(
-                    &geometry,
-                    &selector_occurrences,
-                    &mut predicate,
-                )?
-                else {
-                    return Ok(None);
-                };
-                ordinal
-            }
-        };
         let selected_positions = select_positions(&geometry, target_physical_ordinal)?;
         let selected = selector_occurrences
             .get(&target_physical_ordinal)
@@ -1494,22 +1446,13 @@ impl FairV2Ingress {
         let selected_projection = frozen_projection_for_ordinal(&geometry, target_physical_ordinal)
             .ok_or(FairIngressQueueCutError::MissingTarget)?;
         let Some(context) = selected.context() else {
-            if next_admissible {
-                return Ok(None);
-            }
             return Err(FairIngressQueueCutError::MissingTargetContext);
         };
         let Some(bound_context) = bound_context else {
-            if next_admissible {
-                return Ok(None);
-            }
             return Err(FairIngressQueueCutError::MissingTargetContext);
         };
         let bound_lifecycle_context = lifecycle_context_from_wire(bound_context);
         if context != bound_lifecycle_context {
-            if next_admissible {
-                return Ok(None);
-            }
             return Err(FairIngressQueueCutError::ForeignTargetContext);
         }
         let selected_source = selected_source.clone();
@@ -1546,7 +1489,7 @@ impl FairV2Ingress {
         if !cut.metadata_is_current() {
             return Err(FairIngressQueueCutError::InvalidOccurrenceIdentity);
         }
-        Ok(Some(cut))
+        Ok(cut)
     }
 }
 fn source_for_frozen_ordinal<'a>(
@@ -1560,47 +1503,6 @@ fn source_for_frozen_ordinal<'a>(
     })
 }
 
-fn select_next_admissible_ordinal(
-    geometry: &FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
-    selector_occurrences: &BTreeMap<u64, FairIngressSelectorOccurrence>,
-    predicate: &mut impl FnMut(&FairIngressSelectorOccurrence) -> bool,
-) -> Result<Option<u64>, FairIngressQueueCutError> {
-    let candidates = geometry
-        .ready_prefix
-        .iter()
-        .map(|source| {
-            geometry
-                .lanes
-                .get(source)
-                .ok_or(FairIngressQueueCutError::MissingReadyLane)?
-                .iter()
-                .map(|occurrence| {
-                    let selector = selector_occurrences
-                        .get(&occurrence.physical_admission_ordinal)
-                        .ok_or(FairIngressQueueCutError::InvalidOccurrenceIdentity)?;
-                    if selector.queue_gate() != occurrence.value.queue_gate
-                        || selector.is_obsolete() != occurrence.value.obsolete
-                    {
-                        return Err(FairIngressQueueCutError::InvalidOccurrenceIdentity);
-                    }
-                    Ok(selector)
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(select_fair_v2_ingress_candidate(
-        &candidates,
-        |occurrence| {
-            (
-                occurrence.physical_admission_ordinal(),
-                occurrence.queue_gate(),
-                occurrence.is_obsolete(),
-            )
-        },
-        |occurrence| predicate(occurrence),
-    )
-    .map(|(_, ordinal, _)| ordinal))
-}
 fn mint_pending_identities(
     context: (wire::HeightContextId, wire::Height),
     geometry: &FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
@@ -3140,9 +3042,18 @@ mod tests {
             ));
         }
         let initial = rotated
-            .capture_next_lifecycle_queue_cut(|_| true)
+            .capture_next_ingress_turn_cut(|_| true)
             .expect("read-only fair selection freezes the initial queue")
             .expect("initial fair winner exists");
+        let initial = match initial
+            .narrow_to_lifecycle(lifecycle_context_from_wire((context_id, HEIGHT)))
+            .unwrap_or_else(|_| panic!("selected fair winner belongs to the active lifecycle"))
+        {
+            FairIngressTurnContextCut::Lifecycle(cut) => cut,
+            FairIngressTurnContextCut::Ordinary(_) => {
+                panic!("same-context rotation fixture must retain a lifecycle winner")
+            }
+        };
         assert_eq!(initial.selected_identity().physical_admission_ordinal(), 1);
         drop(initial);
         let drained = rotated
@@ -3158,9 +3069,18 @@ mod tests {
             1,
         );
         let after_rotation = rotated
-            .capture_next_lifecycle_queue_cut(|_| true)
+            .capture_next_ingress_turn_cut(|_| true)
             .expect("read-only fair selection freezes the rotated queue")
             .expect("rotated fair winner exists");
+        let after_rotation = match after_rotation
+            .narrow_to_lifecycle(lifecycle_context_from_wire((context_id, HEIGHT)))
+            .unwrap_or_else(|_| panic!("selected fair winner belongs to the active lifecycle"))
+        {
+            FairIngressTurnContextCut::Lifecycle(cut) => cut,
+            FairIngressTurnContextCut::Ordinary(_) => {
+                panic!("same-context rotation fixture must retain a lifecycle winner")
+            }
+        };
         assert_eq!(
             after_rotation
                 .selected_identity()

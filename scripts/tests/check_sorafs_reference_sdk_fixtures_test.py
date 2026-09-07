@@ -83,14 +83,52 @@ def test_checked_in_inventory_is_valid_signed_and_domain_complete() -> None:
     """The repository inventory passes every offline check."""
 
     assert MODULE.validate_inventory(MODULE.DEFAULT_INVENTORY) == []
-    assert len(MODULE.EXPECTED_PAYLOADS) == 82
-    assert len(MODULE.EXPECTED_OUTCOMES) == 32
+    assert len(MODULE.EXPECTED_PAYLOADS) == 85
+    assert len(MODULE.EXPECTED_OUTCOMES) == 35
     assert {
         row[0] for row in MODULE.EXPECTED_PAYLOADS.values()
     } == MODULE.REQUIRED_DOMAINS - {"reference_sdk"}
     assert {
         row[0] for row in MODULE.EXPECTED_OUTCOMES.values()
     } == MODULE.REQUIRED_OUTCOME_DOMAINS
+
+
+def test_pop_membership_structural_vectors_have_exact_binding_and_error_classes() -> None:
+    """The current and two rejected wire shapes are independently inventoried."""
+
+    profiles = {
+        "pop_membership_current_v1": ("Ok", "SFS-OK-000", "46" * 32),
+        "pop_membership_missing_binding_v1": ("Error", "SFS-NORITO-001", None),
+        "pop_membership_zero_binding_v1": ("Error", "SFS-VAL-001", "00" * 32),
+    }
+    root = MODULE.DEFAULT_INVENTORY.parent
+    schemas = set()
+    for name, (status, code, binding) in profiles.items():
+        path = f"reference_sdk/{name}.to"
+        assert MODULE.EXPECTED_PAYLOADS[path][:3] == ("pop", "pop_membership_proof", "norito")
+        wire = (root / path).read_bytes()
+        assert wire[:4] == b"NRT0"
+        schemas.add(wire[6:22])
+        outcome = json.loads((root / f"reference_sdk/{name}_validation_outcome.json").read_bytes())
+        assert (outcome["status"], outcome["code"]) == (status, code)
+        bindings = [row["value"] for row in outcome["context"] if row["key"] == "presentation_binding_digest_hex"]
+        assert bindings == ([] if binding is None else [binding])
+        assert outcome["inputs"] == [{"kind": "pop_membership_proof", "path": f"{name}.to"}]
+    assert len(schemas) == 1, "the missing-field negative must advertise the actual current schema"
+
+
+def test_pop_membership_substituted_binding_context_is_rejected(tmp_path: Path) -> None:
+    """Inventory validation checks the exact structural field, beyond the file digest."""
+
+    inventory_path = copy_fixture_set(tmp_path)
+    fixture = inventory_path.parent / "reference_sdk/pop_membership_current_v1_validation_outcome.json"
+    outcome = json.loads(fixture.read_bytes())
+    for row in outcome["context"]:
+        if row["key"] == "presentation_binding_digest_hex":
+            row["value"] = "47" * 32
+    fixture.write_text(json.dumps(outcome, indent=2) + "\n", encoding="utf-8")
+    errors = MODULE.validate_inventory(inventory_path)
+    assert any("PoP presentation binding context differs" in error for error in errors)
 
 
 def test_cancel_asset_lock_hard_cut_vectors_are_closed_and_boundary_typed() -> None:

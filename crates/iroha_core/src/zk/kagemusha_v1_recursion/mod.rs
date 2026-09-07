@@ -10,6 +10,8 @@
 mod accumulation;
 mod artifacts;
 #[cfg(feature = "zk-halo2-ipa")]
+mod base_packing;
+#[cfg(feature = "zk-halo2-ipa")]
 mod canonical_preimage;
 #[cfg(feature = "zk-halo2-ipa")]
 mod composite;
@@ -17,6 +19,8 @@ mod composite;
 mod deferred_parent;
 mod generation;
 mod guard_bundle;
+#[cfg(feature = "zk-halo2-ipa")]
+mod guard_verifier;
 #[cfg(feature = "zk-halo2-ipa")]
 mod mint_authority;
 #[cfg(feature = "zk-halo2-ipa")]
@@ -31,16 +35,24 @@ mod mint_helper;
 #[cfg(feature = "zk-halo2-ipa")]
 mod mint_transport_decider;
 mod native_backend;
+#[cfg(feature = "zk-halo2-ipa")]
+mod provider_policy_root;
 mod relation;
+#[cfg(feature = "zk-halo2-ipa")]
+mod state_checkpoint;
 mod state_relation;
 mod terminal_authorization;
 mod transport_decider;
+#[cfg(feature = "zk-halo2-ipa")]
+mod typed_sha_consumer;
 
 #[cfg(all(
     any(test, feature = "kagemusha-real-proof-harness"),
     feature = "zk-halo2-ipa"
 ))]
 mod real_handoff_qualification_tests;
+#[cfg(all(test, unix, feature = "zk-halo2-ipa"))]
+pub(crate) use real_handoff_qualification_tests::DiagnosticMintStageProofV1;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -102,6 +114,8 @@ pub use generation::{
     KagemushaTerminalAuthorizationEpGenerationWitnessV1,
     KagemushaTerminalAuthorizationEqGenerationWitnessV1,
     KagemushaTerminalAuthorizationGenerationWitnessV1,
+    KagemushaTerminalAuthorizationHashClaimGenerationWitnessV1,
+    KagemushaTerminalAuthorizationHashClaimParityWitnessV1,
     KagemushaTerminalAuthorizationPrivateGenerationWitnessV1,
     KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
     KagemushaTerminalSendGenerationWitnessV1, generate_kagemusha_commit_wrapper_artifacts_v1,
@@ -124,12 +138,18 @@ pub use generation::{
     prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_payment_v1,
     prove_kagemusha_platform_credential_hash_claim_v1,
     prove_kagemusha_recursive_state_hash_claim_v1, prove_kagemusha_recursive_state_v1,
-    prove_kagemusha_redemption_v1, prove_kagemusha_terminal_authorization_v1,
+    prove_kagemusha_redemption_v1, prove_kagemusha_terminal_authorization_hash_claim_v1,
+    prove_kagemusha_terminal_authorization_v1,
 };
 pub use guard_bundle::{
     KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1, KagemushaGuardBundleRelationWitnessV1,
     KagemushaPlatformCredentialRelationCircuitV1, KagemushaPlatformCredentialRelationWitnessV1,
     KagemushaPlatformCredentialStatementV1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+pub use guard_verifier::{
+    KagemushaAuthenticatedGuardBundleVerifierV1, KagemushaGuardBundleProofPartsV1,
+    KagemushaGuardProofDiagnosticVerifierV1, KagemushaGuardVerificationErrorV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use mint_authority::KagemushaMintAuthorityCheckpointV1;
@@ -151,10 +171,14 @@ pub use mint_helper::{KagemushaMintAuthorityStepV1, KagemushaMintCertificateWitn
 pub use native_backend::{
     KagemushaAuthenticatedRecursiveVerifierV1, KagemushaRecursiveVerifierProfileV1,
 };
+#[cfg(feature = "zk-halo2-ipa")]
+pub use provider_policy_root::KagemushaProviderRootCircuitParamsV1;
 pub use relation::{
     KagemushaOperationRelationCircuitV1, KagemushaOperationRelationConfigV1,
     KagemushaOperationRelationWitnessV1,
 };
+#[cfg(feature = "zk-halo2-ipa")]
+pub use state_checkpoint::{KagemushaRecursiveStateCheckpointV1, KagemushaStateCheckpointErrorV1};
 pub use state_relation::{
     KagemushaReceiveFoldCreditV1, KagemushaStateRelationCircuitV1,
     KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,

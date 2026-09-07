@@ -1337,17 +1337,14 @@ where
         )
     });
     let zeta = scalar_chip.load_constant(ctx, Scalar::<C>::ZETA);
-    let zeta_v2_unreduced = scalar_chip.mul_no_carry(ctx, v2.clone(), zeta);
-    let zeta_v2 = scalar_chip.carry_mod(ctx, zeta_v2_unreduced);
-    let combined_unreduced = scalar_chip.add_no_carry(ctx, v1, zeta_v2);
-    let combined = scalar_chip.carry_mod(ctx, combined_unreduced);
+    let combined = fused_glv_combination(ctx, scalar_chip, v1, v2, zeta);
     let zeta_squared = scalar_chip.load_constant(ctx, Scalar::<C>::ZETA.square());
     let opposite_unreduced = scalar_chip.mul_no_carry(ctx, combined.clone(), zeta_squared);
     let opposite_value = scalar_chip.carry_mod(ctx, opposite_unreduced);
     let unsigned = scalar_chip.select(ctx, opposite_value, combined, opposite);
     let negative = scalar_chip.negate(ctx, unsigned.clone());
     let signed = scalar_chip.select(ctx, negative, unsigned, sign);
-    scalar_chip.assert_equal(ctx, source.coefficient.clone(), signed);
+    assert_canonical_source_equal(ctx, scalar_chip, source.coefficient.clone(), signed);
     let beta_squared_x = gate.mul(ctx, Existing(source.x), Constant(Base::<C>::ZETA.square()));
     let r_x = <GateChip<Base<C>> as GateInstructions<Base<C>>>::select(
         gate,
@@ -1383,6 +1380,53 @@ where
         bits: [scalar_bits(normalized.v1), scalar_bits(normalized.v2)],
     })
 }
+/// Bind the computed GLV result to a canonical source through every proper limb.
+///
+/// Both operands retain the original proper-limb range and CRT constraints. Their limbs are
+/// smaller than the native field modulus, so these cell equalities are integer equalities.
+/// Checking the source below the scalar modulus therefore also makes the equal result
+/// canonical; a second modulus check on the result is redundant. Equality of native residues
+/// alone would not imply this result and must never replace the complete limb equalities.
+fn assert_canonical_source_equal<F, S>(
+    ctx: &mut Context<F>,
+    scalar_chip: &FpChip<'_, F, S>,
+    source: ProperCrtUint<F>,
+    result: ProperCrtUint<F>,
+) where
+    F: BigPrimeField,
+    S: BigPrimeField,
+{
+    assert_eq!(source.limbs().len(), scalar_chip.num_limbs);
+    assert_eq!(result.limbs().len(), scalar_chip.num_limbs);
+    for (source_limb, result_limb) in source.limbs().iter().zip(result.limbs()) {
+        ctx.constrain_equal(source_limb, result_limb);
+    }
+    scalar_chip.enforce_less_than_p(ctx, source);
+}
+
+/// Reduce `v1 + zeta * v2` once after the complete integer addition.
+///
+/// The caller's segmented-scalar constraints give two proper 86-bit limbs and a zero
+/// third limb for both inputs. Thus the integer is below 2^428 even before the dense
+/// machine proves the stronger 128-bit bound, within `carry_mod`'s 2^510 allowance.
+/// Multiplication and addition propagate maximum limb widths 174 and 175 respectively;
+/// all radix carries and the native CRT equality remain in the final reduction.
+fn fused_glv_combination<F, S>(
+    ctx: &mut Context<F>,
+    scalar_chip: &FpChip<'_, F, S>,
+    v1: ProperCrtUint<F>,
+    v2: ProperCrtUint<F>,
+    zeta: ProperCrtUint<F>,
+) -> ProperCrtUint<F>
+where
+    F: BigPrimeField,
+    S: BigPrimeField,
+{
+    let product = scalar_chip.mul_no_carry(ctx, v2, zeta);
+    let combined = scalar_chip.add_no_carry(ctx, v1, product);
+    scalar_chip.carry_mod(ctx, combined)
+}
+
 fn load_segmented_scalar<F, S>(
     ctx: &mut Context<F>,
     scalar_chip: &FpChip<'_, F, S>,
@@ -1989,6 +2033,466 @@ mod tests {
         .map(|value| biguint_to_fe::<F>(&value))
         .collect()
     }
+    fn unfused_glv_combination_reference<F, S>(
+        ctx: &mut Context<F>,
+        chip: &FpChip<'_, F, S>,
+        v1: ProperCrtUint<F>,
+        v2: ProperCrtUint<F>,
+        zeta: ProperCrtUint<F>,
+    ) -> ProperCrtUint<F>
+    where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        let product = chip.mul_no_carry(ctx, v2, zeta);
+        let product = chip.carry_mod(ctx, product);
+        let sum = chip.add_no_carry(ctx, v1, product);
+        chip.carry_mod(ctx, sum)
+    }
+
+    fn glv_combination_boundary_pairs<C>() -> Vec<(u128, u128)>
+    where
+        C: CurveAffineExt,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let bound = match <C::Curve as CurveExt>::CURVE_ID {
+            "vesta" => FP_NORMALIZED_SUM_STRICT_BOUND,
+            "pallas" => FQ_NORMALIZED_SUM_STRICT_BOUND,
+            _ => panic!("GLV fixture requires a Pasta curve"),
+        };
+        let mut pairs = vec![
+            (0, 0),
+            (1, 1),
+            (bound - 1, bound - 1),
+            (u128::MAX, u128::MAX),
+        ];
+        pairs.extend(edge_scalars::<Scalar<C>>().into_iter().map(|scalar| {
+            let original = decompose_pasta_scalar::<C>(&scalar).expect("edge decomposition");
+            let normalized = normalize_decomposition::<C>(original).expect("edge normalization");
+            (normalized.v1, normalized.v2)
+        }));
+        pairs
+    }
+
+    fn assign_glv_combination_input<F, S>(
+        ctx: &mut Context<F>,
+        chip: &FpChip<'_, F, S>,
+        value: S,
+    ) -> ProperCrtUint<F>
+    where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        let assigned = chip.load_private(ctx, value);
+        // The unconditional pre-dense bound used by the fused carry argument.
+        chip.gate()
+            .assert_is_const(ctx, &assigned.limbs()[2], &F::ZERO);
+        assigned
+    }
+
+    fn glv_combination_graph<F, S>(
+        pairs: &[(u128, u128)],
+        fused: bool,
+        bad_scalar: bool,
+        overflow_input: bool,
+        lookup_bits: usize,
+    ) -> (BaseCircuitBuilder<F>, (usize, usize))
+    where
+        F: BigPrimeField,
+        S: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(if lookup_bits == 15 { 16 } else { 12 })
+            .use_lookup_bits(lookup_bits);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, S>::new(&range, LIMB_BITS, 3);
+        let mut total = (0, 0);
+        for &(v1, v2) in pairs {
+            let v1_value = S::from_u128(v1);
+            let v2_value = if overflow_input {
+                S::from(2).pow_vartime([172])
+            } else {
+                S::from_u128(v2)
+            };
+            let v1 = assign_glv_combination_input(builder.main(0), &chip, v1_value);
+            let v2 = assign_glv_combination_input(builder.main(0), &chip, v2_value);
+            let zeta = chip.load_constant(builder.main(0), S::ZETA);
+            let before = builder.statistics();
+            let combined = if fused {
+                fused_glv_combination(builder.main(0), &chip, v1, v2, zeta)
+            } else {
+                unfused_glv_combination_reference(builder.main(0), &chip, v1, v2, zeta)
+            };
+            let after = builder.statistics();
+            total.0 += after.gate.total_advice_per_phase[0] - before.gate.total_advice_per_phase[0];
+            total.1 +=
+                after.total_lookup_advice_per_phase[0] - before.total_lookup_advice_per_phase[0];
+            let expected =
+                v1_value + S::ZETA * v2_value + if bad_scalar { S::ONE } else { S::ZERO };
+            let expected = chip.load_constant(builder.main(0), expected);
+            // Keep the existing generic canonicalization on both operands.
+            chip.assert_equal(builder.main(0), combined, expected);
+        }
+        (builder, total)
+    }
+
+    fn assert_glv_fused_emitted_counts<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let pairs = glv_combination_boundary_pairs::<C>();
+        let (_, old) = glv_combination_graph::<Base<C>, Scalar<C>>(&pairs, false, false, false, 15);
+        let (_, new) = glv_combination_graph::<Base<C>, Scalar<C>>(&pairs, true, false, false, 15);
+        assert_eq!(
+            old.0 - new.0,
+            pairs.len() * 260,
+            "actual emitted Base cells"
+        );
+        assert_eq!(
+            old.1 - new.1,
+            pairs.len() * 60,
+            "actual emitted lookup entries"
+        );
+        eprintln!(
+            "glv_fused_count parity={} cases={} old_base={} old_lookup={} new_base={} new_lookup={}",
+            <C::Curve as CurveExt>::CURVE_ID,
+            pairs.len(),
+            old.0,
+            old.1,
+            new.0,
+            new.1
+        );
+    }
+
+    fn assert_glv_fused_constraints<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let pairs = glv_combination_boundary_pairs::<C>();
+        for fused in [false, true] {
+            let (mut valid, _) =
+                glv_combination_graph::<Base<C>, Scalar<C>>(&pairs, fused, false, false, 8);
+            valid.calculate_params(Some(9));
+            MockProver::run(12, &valid, vec![])
+                .expect("GLV sum fixture synthesis")
+                .assert_satisfied();
+            for (bad_scalar, overflow_input) in [(true, false), (false, true)] {
+                let (mut invalid, _) = glv_combination_graph::<Base<C>, Scalar<C>>(
+                    &[(1, 1)],
+                    fused,
+                    bad_scalar,
+                    overflow_input,
+                    8,
+                );
+                invalid.calculate_params(Some(9));
+                assert!(
+                    MockProver::run(12, &invalid, vec![])
+                        .expect("invalid GLV fixture synthesis")
+                        .verify()
+                        .is_err(),
+                    "the exact scalar and unconditional input bound must both remain constrained"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eq_glv_fused_carry_emits_260_fewer_cells_and_60_fewer_lookups() {
+        assert_glv_fused_emitted_counts::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_fused_carry_emits_260_fewer_cells_and_60_fewer_lookups() {
+        assert_glv_fused_emitted_counts::<EpAffine>();
+    }
+    #[test]
+    fn eq_glv_fused_carry_preserves_boundary_and_negative_constraints() {
+        assert_glv_fused_constraints::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_fused_carry_preserves_boundary_and_negative_constraints() {
+        assert_glv_fused_constraints::<EpAffine>();
+    }
+
+    fn source_equality_for_test<F, S>(
+        ctx: &mut Context<F>,
+        chip: &FpChip<'_, F, S>,
+        source: ProperCrtUint<F>,
+        result: ProperCrtUint<F>,
+        implied: bool,
+    ) where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        if implied {
+            assert_canonical_source_equal(ctx, chip, source, result);
+        } else {
+            // Retained original boundary: every limb equality and both modulus checks.
+            chip.assert_equal(ctx, source, result);
+        }
+    }
+
+    fn replace_remainder_copies<F: BigPrimeField>(
+        builder: &mut BaseCircuitBuilder<F>,
+        target: AssignedValue<F>,
+    ) {
+        let target_cell = target.cell.expect("fused remainder has a virtual cell");
+        let equalities = builder
+            .core()
+            .copy_manager
+            .lock()
+            .expect("GLV remainder copy manager")
+            .advice_equalities
+            .clone();
+        let mut cells = std::collections::BTreeSet::from([target_cell]);
+        loop {
+            let before = cells.len();
+            for (left, right) in &equalities {
+                if cells.contains(left) || cells.contains(right) {
+                    cells.insert(*left);
+                    cells.insert(*right);
+                }
+            }
+            if cells.len() == before {
+                break;
+            }
+        }
+        for cell in &cells {
+            assert_eq!(cell.type_id(), target_cell.type_id());
+            assert_eq!(cell.context_id(), 0);
+            builder
+                .main(0)
+                .replace_advice_with_trivial(cell.offset(), *target.value() + F::ONE);
+        }
+        let replacement = builder
+            .main(0)
+            .get(isize::try_from(target_cell.offset()).expect("remainder offset fits isize"))
+            .value;
+        // Keep every duplicate and lookup witness consistent with the attempted remainder.
+        // Rejection must come from the remaining arithmetic, not a stale duplicate copy.
+        for manager in builder.lookup_manager() {
+            let mut lookups = manager
+                .cells_to_lookup
+                .lock()
+                .expect("GLV remainder lookups");
+            for row in lookups.values_mut().flatten() {
+                for lookup in row {
+                    if lookup.cell.is_some_and(|cell| cells.contains(&cell)) {
+                        lookup.value = replacement;
+                    }
+                }
+            }
+        }
+    }
+
+    fn glv_source_equality_graph<C>(
+        scalars: &[Scalar<C>],
+        implied: bool,
+        wrong_source: bool,
+        tampered_remainder_limb: Option<usize>,
+        lookup_bits: usize,
+    ) -> (BaseCircuitBuilder<Base<C>>, (usize, usize))
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let mut builder = BaseCircuitBuilder::<Base<C>>::new(false)
+            .use_k(if lookup_bits == 15 { 16 } else { 12 })
+            .use_lookup_bits(lookup_bits);
+        let range = builder.range_chip();
+        let chip = FpChip::<Base<C>, Scalar<C>>::new(&range, LIMB_BITS, 3);
+        let mut equality_cost = (0, 0);
+        for scalar in scalars {
+            let normalized = normalize_decomposition::<C>(
+                decompose_pasta_scalar::<C>(scalar).expect("canonical source decomposition"),
+            )
+            .expect("canonical source normalization");
+            let ctx = builder.main(0);
+            let source = chip.load_private(
+                ctx,
+                *scalar
+                    + if wrong_source {
+                        Scalar::<C>::ONE
+                    } else {
+                        Scalar::<C>::ZERO
+                    },
+            );
+            let sign = ctx.load_witness(Base::<C>::from(normalized.negative as u64));
+            let opposite = ctx.load_witness(Base::<C>::from(normalized.opposite as u64));
+            chip.gate().assert_bit(ctx, sign);
+            chip.gate().assert_bit(ctx, opposite);
+            let segments = [
+                scalar_segments(normalized.v1),
+                scalar_segments(normalized.v2),
+            ]
+            .map(|values| values.map(|value| ctx.load_witness(Base::<C>::from(u64::from(value)))));
+            let v1 = load_segmented_scalar(ctx, &chip, normalized.v1, &segments[0]);
+            let v2 = load_segmented_scalar(ctx, &chip, normalized.v2, &segments[1]);
+            let zeta = chip.load_constant(ctx, Scalar::<C>::ZETA);
+            let combined = fused_glv_combination(ctx, &chip, v1, v2, zeta);
+            let target = tampered_remainder_limb.map(|index| combined.limbs()[index]);
+            let zeta_squared = chip.load_constant(ctx, Scalar::<C>::ZETA.square());
+            let opposite_unreduced = chip.mul_no_carry(ctx, combined.clone(), zeta_squared);
+            let opposite_value = chip.carry_mod(ctx, opposite_unreduced);
+            let unsigned = chip.select(ctx, opposite_value, combined, opposite);
+            let negative = chip.negate(ctx, unsigned.clone());
+            let signed = chip.select(ctx, negative, unsigned, sign);
+            let before = builder.statistics();
+            source_equality_for_test(builder.main(0), &chip, source, signed, implied);
+            let after = builder.statistics();
+            equality_cost.0 +=
+                after.gate.total_advice_per_phase[0] - before.gate.total_advice_per_phase[0];
+            equality_cost.1 +=
+                after.total_lookup_advice_per_phase[0] - before.total_lookup_advice_per_phase[0];
+            if let Some(target) = target {
+                replace_remainder_copies(&mut builder, target);
+            }
+        }
+        (builder, equality_cost)
+    }
+
+    fn assert_glv_source_canonicality_counts<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let scalars = edge_scalars::<Scalar<C>>();
+        let (_, old) = glv_source_equality_graph::<C>(&scalars, false, false, None, 15);
+        let (_, new) = glv_source_equality_graph::<C>(&scalars, true, false, None, 15);
+        assert_eq!(old.0 - new.0, scalars.len() * 110);
+        assert_eq!(old.1 - new.1, scalars.len() * 21);
+        eprintln!(
+            "glv_implied_canonicality parity={} cases={} old_base={} old_lookup={} new_base={} new_lookup={}",
+            <C::Curve as CurveExt>::CURVE_ID,
+            scalars.len(),
+            old.0,
+            old.1,
+            new.0,
+            new.1,
+        );
+    }
+
+    fn source_integer_equality_graph<F, S>(
+        source: BigUint,
+        result: BigUint,
+        implied: bool,
+    ) -> BaseCircuitBuilder<F>
+    where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        // Fixed proper integers permit noncanonical values without reducing through S first.
+        // All cases fit three 86-bit limbs, including the deliberately wider 2^255 scalar.
+        assert!(source.bits() <= 3 * LIMB_BITS as u64);
+        assert!(result.bits() <= 3 * LIMB_BITS as u64);
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(12)
+            .use_lookup_bits(8);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, S>::new(&range, LIMB_BITS, 3);
+        let source = chip.load_constant_uint(builder.main(0), source);
+        let result = chip.load_constant_uint(builder.main(0), result);
+        source_equality_for_test(builder.main(0), &chip, source, result, implied);
+        builder.calculate_params(Some(9));
+        builder
+    }
+
+    fn assert_glv_source_canonicality_constraints<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let scalar_modulus = modulus::<Scalar<C>>();
+        let native_modulus = modulus::<Base<C>>();
+        let zero = BigUint::from(0_u8);
+        let one = BigUint::from(1_u8);
+        let wider: BigUint = &one << 255_usize;
+        let mut integer_cases = vec![
+            (zero.clone(), zero.clone(), true),
+            (&scalar_modulus - &one, &scalar_modulus - &one, true),
+            (scalar_modulus.clone(), scalar_modulus.clone(), false),
+            (&scalar_modulus + &one, &scalar_modulus + &one, false),
+            (wider.clone(), wider, false),
+            (zero.clone(), scalar_modulus, false),
+            // Equal native-field residues must still fail complete integer equality.
+            (zero.clone(), native_modulus, false),
+        ];
+        integer_cases.extend((0..3).map(|limb| (zero.clone(), &one << (LIMB_BITS * limb), false)));
+        for implied in [false, true] {
+            for (source, result, expected) in &integer_cases {
+                let graph = source_integer_equality_graph::<Base<C>, Scalar<C>>(
+                    source.clone(),
+                    result.clone(),
+                    implied,
+                );
+                let accepted = MockProver::run(12, &graph, vec![])
+                    .expect("proper-integer source equality synthesis")
+                    .verify()
+                    .is_ok();
+                assert_eq!(
+                    accepted, *expected,
+                    "implied={implied} source={source} result={result}"
+                );
+            }
+            let (mut valid, _) = glv_source_equality_graph::<C>(
+                &edge_scalars::<Scalar<C>>(),
+                implied,
+                false,
+                None,
+                8,
+            );
+            valid.calculate_params(Some(9));
+            MockProver::run(12, &valid, vec![])
+                .expect("full normalized GLV source equality synthesis")
+                .assert_satisfied();
+            for (wrong_source, tampered_limb) in [
+                (true, None),
+                (false, Some(0)),
+                (false, Some(1)),
+                (false, Some(2)),
+            ] {
+                let (mut invalid, _) = glv_source_equality_graph::<C>(
+                    &[Scalar::<C>::ONE],
+                    implied,
+                    wrong_source,
+                    tampered_limb,
+                    8,
+                );
+                invalid.calculate_params(Some(9));
+                assert!(
+                    MockProver::run(12, &invalid, vec![])
+                        .expect("incorrect source or carry remainder synthesis")
+                        .verify()
+                        .is_err(),
+                    "implied={implied} wrong_source={wrong_source} remainder={tampered_limb:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eq_glv_source_canonicality_emits_110_fewer_cells_and_21_fewer_lookups() {
+        assert_glv_source_canonicality_counts::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_source_canonicality_emits_110_fewer_cells_and_21_fewer_lookups() {
+        assert_glv_source_canonicality_counts::<EpAffine>();
+    }
+    #[test]
+    fn eq_glv_source_canonicality_preserves_integer_and_remainder_constraints() {
+        assert_glv_source_canonicality_constraints::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_source_canonicality_preserves_integer_and_remainder_constraints() {
+        assert_glv_source_canonicality_constraints::<EpAffine>();
+    }
+
     fn assert_decomposition_edges<C>(strict_bound: u128)
     where
         C: CurveAffineExt,

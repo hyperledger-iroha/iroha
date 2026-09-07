@@ -175,6 +175,11 @@ pub(crate) fn reviewed_v2_adapter_source_for_test() -> &'static str {
         .get_or_init(|| {
             include_str!("v2.rs")
                 .replacen(
+                    "mod leader_wire_consumer;\n",
+                    include_str!("v2_leader_wire_consumer.rs"),
+                    1,
+                )
+                .replacen(
                     "include!(\"v2_adapter_persistence_and_wal_types.rs\");\n",
                     include_str!("v2_adapter_persistence_and_wal_types.rs"),
                     1,
@@ -324,6 +329,7 @@ enum SourceId {
     KuraMergeSupport,
     KuraReleaseAuthority,
     LaneWork,
+    LeaderWireConsumer,
     Launch,
     Ledger,
     LifecycleOpen,
@@ -378,6 +384,7 @@ impl SourceId {
             "kura_merge_support" => Self::KuraMergeSupport,
             "kura_release_authority" => Self::KuraReleaseAuthority,
             "lane_work" => Self::LaneWork,
+            "leader_wire_consumer" => Self::LeaderWireConsumer,
             "launch" => Self::Launch,
             "ledger" => Self::Ledger,
             "lifecycle_open" => Self::LifecycleOpen,
@@ -455,6 +462,7 @@ fn source(id: SourceId) -> String {
             include_str!("../kura/autonomous_release_authority.rs").to_owned()
         }
         SourceId::LaneWork => include_str!("v2_lane_work.rs").to_owned(),
+        SourceId::LeaderWireConsumer => include_str!("v2_leader_wire_consumer.rs").to_owned(),
         SourceId::Launch => include_str!("v2_lifecycle_launch.rs").to_owned(),
         SourceId::Ledger => reviewed_lifecycle_ledger_source_for_test().to_owned(),
         SourceId::LifecycleOpen => include_str!("v2_lifecycle_open.rs").replacen(
@@ -890,5 +898,20 @@ fn source_contract_case_ids_are_unique() {
     assert_eq!(ids.len(), 54, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
+    }
+}
+
+/// Run large debug-only lifecycle fixtures on their explicit bounded stack.
+/// Actual Core35 diagnostics pass all fifteen callers at this size; production
+/// worker construction and stack use remain separate qualification obligations.
+#[cfg(test)]
+pub(super) fn run_bounded_coordinator_fixture(name: &'static str, body: fn()) {
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(body)
+        .expect("spawn bounded coordinator fixture thread");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
     }
 }

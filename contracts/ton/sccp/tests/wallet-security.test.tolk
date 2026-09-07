@@ -247,6 +247,60 @@ fun securityTairaToTonPayload(recipient: address, amount: uint128): CanonicalPay
     };
 }
 
+fun securityReplacePayloadCellByte(value: cell, offset: int, replacement: uint8): cell {
+    var input = value.beginParse();
+    val prefix = input.loadBits(offset * 8);
+    input.loadUint(8);
+    return beginCell().storeSlice(prefix).storeUint(replacement, 8).storeSlice(input).endCell();
+}
+
+@test.fail_with(50)
+get fun `test proven mint payload rejects the retired transfer discriminator`() {
+    val payload = securityTairaToTonPayload(address.fromWorkchainAndHash(0, 0x1234), 1);
+    expect(parseProvenTairaToTonPayloadCells(payload, 1).amount).toEqual(1);
+    parseProvenTairaToTonPayloadCells(
+        {
+            header: securityReplacePayloadCellByte(payload.header, 0, 0),
+            chunk1: payload.chunk1,
+            chunk2: payload.chunk2,
+            chunk3: payload.chunk3,
+        },
+        1,
+    );
+}
+
+@test.fail_with(50)
+get fun `test proven mint payload rejects the retired text codec`() {
+    val payload = securityTairaToTonPayload(address.fromWorkchainAndHash(0, 0x1234), 1);
+    expect(parseProvenTairaToTonPayloadCells(payload, 1).amount).toEqual(1);
+    parseProvenTairaToTonPayloadCells(
+        {
+            header: securityReplacePayloadCellByte(payload.header, 26, 0),
+            chunk1: payload.chunk1,
+            chunk2: payload.chunk2,
+            chunk3: payload.chunk3,
+        },
+        1,
+    );
+}
+
+@test.fail_with(50)
+get fun `test proven mint payload rejects the retired TON account codec`() {
+    val payload = securityTairaToTonPayload(address.fromWorkchainAndHash(0, 0x1234), 1);
+    expect(parseProvenTairaToTonPayloadCells(payload, 1).amount).toEqual(1);
+    val recipientCodecOffset = validateTairaRecipient(securityValidTairaRecipient()).size() + 5;
+    expect(recipientCodecOffset < ordinaryByteLength(payload.chunk1)).toEqual(true);
+    parseProvenTairaToTonPayloadCells(
+        {
+            header: payload.header,
+            chunk1: securityReplacePayloadCellByte(payload.chunk1, recipientCodecOffset, 3),
+            chunk2: payload.chunk2,
+            chunk3: payload.chunk3,
+        },
+        1,
+    );
+}
+
 fun securitySignals(
     messageId: uint256,
     payloadHash: uint256,

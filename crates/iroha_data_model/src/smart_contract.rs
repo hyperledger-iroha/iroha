@@ -13,6 +13,49 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{format, str::FromStr, string::String, vec::Vec};
 use thiserror::Error;
+/// Domain separator for the canonical deployable contract artifact hash.
+///
+/// The hash deliberately covers the complete `.to` image, including the fixed
+/// execution header. Contract debug information belongs in a sidecar and is
+/// therefore not part of a deployable artifact.
+pub const CONTRACT_CODE_HASH_DOMAIN: &[u8] = b"iroha:ivm:contract-artifact:v1\0";
+/// Compute the canonical identity of a deployable IVM contract artifact.
+///
+/// This binds every execution-relevant header field as well as embedded
+/// interface metadata, literals, and code. Hashing alone does not validate
+/// artifact structure, ABI compatibility, or execution admission.
+#[must_use]
+pub fn contract_code_hash(artifact: &[u8]) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new_from_chunks(&[CONTRACT_CODE_HASH_DOMAIN, artifact])
+}
+#[cfg(test)]
+mod contract_code_hash_tests {
+    use super::{CONTRACT_CODE_HASH_DOMAIN, contract_code_hash};
+    use iroha_crypto::Hash;
+
+    #[test]
+    fn contract_code_hash_uses_the_exact_domain_and_complete_image() {
+        let mut artifact = b"IVM\0header-and-contract-body".to_vec();
+        let original = contract_code_hash(&artifact);
+        assert_eq!(
+            CONTRACT_CODE_HASH_DOMAIN,
+            b"iroha:ivm:contract-artifact:v1\0"
+        );
+        assert_eq!(
+            original,
+            Hash::new_from_chunks(&[CONTRACT_CODE_HASH_DOMAIN, &artifact])
+        );
+        assert_ne!(original, Hash::new(&artifact));
+        for index in [0, artifact.len() - 1] {
+            artifact[index] ^= 1;
+            assert_ne!(contract_code_hash(&artifact), original);
+            artifact[index] ^= 1;
+        }
+        assert_eq!(contract_code_hash(&artifact), original);
+        artifact.push(0);
+        assert_ne!(contract_code_hash(&artifact), original);
+    }
+}
 pub mod payloads {
     //! Contexts with function arguments for different entrypoints
     use crate::{block::BlockHeader, prelude::*};

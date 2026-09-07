@@ -313,15 +313,25 @@ class HttpClientTransport private constructor(
     /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
     fun getPrivacyCapabilities(
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<PrivacyExact12CapabilityManifestV1> =
-        fetchExactNoritoBytes(
+    ): CompletableFuture<PrivacyExact12CapabilityManifestV1> {
+        require(config.baseUri().scheme == "https") {
+            "Exact12 privacy capabilities require an HTTPS Torii endpoint"
+        }
+        val expectedNetworkId = config.requireLocalSigningContext().networkId()
+        return fetchExactNoritoBytes(
             buildExactNoritoGetRequest(
                 "/v1/privacy/capabilities",
                 PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES.toLong(),
                 canonicalAuth,
+                requestNoStore = true,
             ),
             "privacy capabilities",
-        ).thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1)
+            requireIdentityEncoding = true,
+            requireExactResponseProvenance = true,
+        ).thenApply { archive ->
+            PrivacyExact12CapabilityManifestV1.fromAuthenticatedTorii(archive, expectedNetworkId)
+        }
+    }
 
     /**
      * Obtain the token required immediately before constructing a retained privacy action.
@@ -1920,9 +1930,16 @@ class HttpClientTransport private constructor(
         path: String,
         maximumResponseBytes: Long,
         canonicalAuth: ToriiCanonicalRequestAuth? = null,
+        requestNoStore: Boolean = false,
     ): TransportRequest {
         require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
             "Accept must not be overridden for exact Norito requests"
+        }
+        if (requestNoStore) {
+            require(config.defaultHeaders().keys.none {
+                it.equals("Cache-Control", ignoreCase = true) ||
+                    it.equals("Accept-Encoding", ignoreCase = true)
+            }) { "Exact Norito cache and encoding headers are owned by the transport" }
         }
         if (canonicalAuth != null) requireCanonicalHeadersUnset()
         val target = resolvePath(path)
@@ -1932,6 +1949,10 @@ class HttpClientTransport private constructor(
             .addHeader("Accept", APPLICATION_NORITO)
             .setMaximumResponseBytes(maximumResponseBytes)
             .setTimeout(config.requestTimeout())
+        if (requestNoStore) {
+            builder.addHeader("Cache-Control", "no-store")
+            builder.addHeader("Accept-Encoding", "identity")
+        }
         for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
         if (canonicalAuth != null) {
             val canonicalHeaders = buildCanonicalHeaders("GET", target, null, canonicalAuth)

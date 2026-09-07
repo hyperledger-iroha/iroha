@@ -296,6 +296,9 @@ externally.
   remain available at capacity. Torii maps a new-key refusal to HTTP `429 Too
   Many Requests`; conflicts remain `409` and malformed snapshots remain `400`.
 - `runtime.checkpoint_max_bytes`: maximum canonical Norito checkpoint size.
+  Counting and persistence use the same uncompressed canonical V1 frame,
+  including its header and padding. Caller layout settings cannot alter the
+  admission result or the minimal retained checkpoint prefix.
   Oversize, corrupt, symlinked, or non-regular checkpoints fail startup rather
   than resetting durable replay or penalty state.
 - `runtime.proof_outcome_forwarder_interval_ms`: finalized-chain reconciliation

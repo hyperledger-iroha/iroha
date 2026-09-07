@@ -9,20 +9,19 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
     let buyer_id = account(&buyer);
     let provider_id = account(&provider);
     let treasury_id = account(&treasury);
-    let state = state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
+    let state = state_with_settlement_accounts(
+        &settlement,
+        &buyer,
+        &provider,
+        &treasury,
+        TEST_TRADE_LOCK_MICRO,
+    );
     let mut block = state.block(block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA6);
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 16, 17, 0, 10);
-    open_settlement_lock(
-        &mut stx,
-        &buyer_id,
-        &provider_id,
-        &authority,
-        &candidate,
-        1_000,
-    );
+    open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &candidate);
     let escrow_id = orderbook_settlement_escrow_id(candidate.channel_id);
     let custody = stx
         .world
@@ -46,7 +45,7 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
         .asset_escrows
         .get_mut(&escrow_id)
         .expect("settlement lock")
-        .remaining_amount = micro_quantity(999);
+        .remaining_amount = micro_quantity(TEST_TRADE_LOCK_MICRO - 1);
     assert!(
         RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
             .execute(&authority, &mut stx)
@@ -56,7 +55,7 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
         .asset_escrows
         .get_mut(&escrow_id)
         .expect("settlement lock")
-        .remaining_amount = micro_quantity(1_000);
+        .remaining_amount = micro_quantity(TEST_TRADE_LOCK_MICRO);
     stx.world
         .asset_escrows
         .get_mut(&escrow_id)
@@ -140,14 +139,17 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
     );
     assert_eq!(asset_balance(&stx, &provider_id), Quantity::zero());
     assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
-    assert_eq!(asset_balance(&stx, &custody), micro_quantity(1_000));
+    assert_eq!(
+        asset_balance(&stx, &custody),
+        micro_quantity(TEST_TRADE_LOCK_MICRO)
+    );
     assert_eq!(
         stx.world
             .asset_escrows
             .get(&escrow_id)
             .expect("settlement lock")
             .remaining_amount,
-        micro_quantity(1_000)
+        micro_quantity(TEST_TRADE_LOCK_MICRO)
     );
     assert!(
         read_receipt(stx.world(), candidate.receipt_id)
@@ -182,20 +184,19 @@ fn receipt_without_funded_lock_fails_closed() {
     let authority = account(&settlement);
     let buyer_id = account(&buyer);
     let provider_id = account(&provider);
-    let state = state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
+    let state = state_with_settlement_accounts(
+        &settlement,
+        &buyer,
+        &provider,
+        &treasury,
+        TEST_TRADE_LOCK_MICRO,
+    );
     let mut block = state.block(block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA3);
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 10, 11, 0, 10);
-    seed_settlement_channel(
-        &mut stx,
-        &buyer_id,
-        &provider_id,
-        &authority,
-        &candidate,
-        1_000,
-    );
+    seed_settlement_channel(&mut stx, &buyer_id, &provider_id, &authority, &candidate);
     assert!(
         RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
             .execute(&authority, &mut stx)
@@ -223,20 +224,19 @@ fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
     let buyer_id = account(&buyer);
     let provider_id = account(&provider);
     let treasury_id = account(&treasury);
-    let state = state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 50);
+    let state = state_with_settlement_accounts(
+        &settlement,
+        &buyer,
+        &provider,
+        &treasury,
+        TEST_TRADE_LOCK_MICRO,
+    );
     let mut block = state.block(block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA4);
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 12, 13, 0, 10);
-    open_settlement_lock(
-        &mut stx,
-        &buyer_id,
-        &provider_id,
-        &authority,
-        &candidate,
-        50,
-    );
+    open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &candidate);
     let escrow_id = orderbook_settlement_escrow_id(candidate.channel_id);
     let custody = stx
         .world
@@ -245,21 +245,37 @@ fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
         .expect("settlement lock")
         .custody
         .clone();
+    let mut overdraw = candidate;
+    overdraw.xor_debited = xor_micro(TEST_TRADE_LOCK_MICRO + 1);
+    overdraw.provider_credit = overdraw
+        .xor_debited
+        .checked_sub(&overdraw.fee_amount)
+        .expect("overdraw receipt remains internally balanced");
+    let candidate = sign_receipt(overdraw, &provider);
+    let error = RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
+        .execute(&authority, &mut stx)
+        .expect_err("a balanced signed receipt cannot debit more than the funded channel");
     assert!(
-        RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-            .execute(&authority, &mut stx)
-            .is_err()
+        matches!(
+            &error,
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message))
+                if message.contains("does not equal deterministic channel split")
+        ),
+        "unexpected overdraw error: {error:?}"
     );
     assert_eq!(asset_balance(&stx, &provider_id), Quantity::zero());
     assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
-    assert_eq!(asset_balance(&stx, &custody), micro_quantity(50));
+    assert_eq!(
+        asset_balance(&stx, &custody),
+        micro_quantity(TEST_TRADE_LOCK_MICRO)
+    );
     assert_eq!(
         stx.world
             .asset_escrows
             .get(&escrow_id)
             .expect("settlement lock")
             .remaining_amount,
-        micro_quantity(50)
+        micro_quantity(TEST_TRADE_LOCK_MICRO)
     );
     assert!(
         read_receipt(stx.world(), candidate.receipt_id)
@@ -283,20 +299,19 @@ fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation(
     let buyer_id = account(&buyer);
     let provider_id = account(&provider);
     let treasury_id = account(&treasury);
-    let state = state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
+    let state = state_with_settlement_accounts(
+        &settlement,
+        &buyer,
+        &provider,
+        &treasury,
+        TEST_TRADE_LOCK_MICRO,
+    );
     let mut block = state.block(block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA5);
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 14, 15, 0, 10);
-    open_settlement_lock(
-        &mut stx,
-        &buyer_id,
-        &provider_id,
-        &authority,
-        &candidate,
-        1_000,
-    );
+    open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &candidate);
     let escrow_id = orderbook_settlement_escrow_id(candidate.channel_id);
     let custody = stx
         .world
@@ -338,14 +353,17 @@ fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation(
     );
     assert_eq!(asset_balance(&stx, &provider_id), maximum);
     assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
-    assert_eq!(asset_balance(&stx, &custody), micro_quantity(1_000));
+    assert_eq!(
+        asset_balance(&stx, &custody),
+        micro_quantity(TEST_TRADE_LOCK_MICRO)
+    );
     assert_eq!(
         stx.world
             .asset_escrows
             .get(&escrow_id)
             .expect("settlement lock")
             .remaining_amount,
-        micro_quantity(1_000)
+        micro_quantity(TEST_TRADE_LOCK_MICRO)
     );
     assert!(
         read_receipt(stx.world(), candidate.receipt_id)
@@ -560,7 +578,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
             &provider_id,
             &authority,
             &first_receipt,
-            1_000,
         );
         seed_settlement_channel(
             transaction,
@@ -568,7 +585,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
             &provider_id,
             &authority,
             &other_channel_receipt,
-            1_000,
         );
         let mut channel_ids = [first_receipt.channel_id, other_channel_receipt.channel_id];
         channel_ids.sort_unstable();

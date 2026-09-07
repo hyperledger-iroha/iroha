@@ -13679,6 +13679,61 @@ mod evidence_http_tests {
             "unexpected error: {err}"
         );
     }
+    fn mint_finality_roster_fixture(
+        roster: &[ValidatorPower],
+    ) -> (
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    ) {
+        use iroha_data_model::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KagemushaMintFinalityValidatorKeysV1,
+        };
+
+        // Public test-only Pallas/Vesta generator multiples 1..=4, matching
+        // iroha_genesis::deterministic_test_kagemusha_mint_finality_genesis_parameters_for
+        // and the scalar construction in iroha_sccp::test_fixtures. These are
+        // independently provisioned fixture keys, never derived from BLS keys.
+        const EQ_PROOF_PUBLIC_KEYS: [&str; 4] = [
+            "00000000ed302d991bf94c09fc98462200000000000000000000000000000040",
+            "030000b067c50313fcac1144eee2fe0e0000000000000000000000000000001c",
+            "63d232eb3b8af0b75cfcf55ade47f6ff4cdf4e47a7454cb8ed67a9ba6f56e788",
+            "fc86bc8efbbcb878f49427618b6940409b9157e3d777a4c4c0514a8e0d92db18",
+        ];
+        const EP_PROOF_PUBLIC_KEYS: [&str; 4] = [
+            "0000000021eb468cdda89409fc98462200000000000000000000000000000040",
+            "03000070de065fede0093144eee2fe0e0000000000000000000000000000001c",
+            "5fce556feb6fee5a15560ddabae10224b026a5d0281af4c613955c39a8797837",
+            "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
+        ];
+        assert_eq!(roster.len(), 4, "fixture has exactly four validators");
+        let epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: test_network_id(),
+            epoch: 0,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    let mut eq_proof_public_key = [0; 32];
+                    hex::decode_to_slice(EQ_PROOF_PUBLIC_KEYS[index], &mut eq_proof_public_key)
+                        .expect("valid fixed Pallas fixture key");
+                    let mut ep_proof_public_key = [0; 32];
+                    hex::decode_to_slice(EP_PROOF_PUBLIC_KEYS[index], &mut ep_proof_public_key)
+                        .expect("valid fixed Vesta fixture key");
+                    KagemushaMintFinalityValidatorKeysV1 {
+                        validator: validator.validator.clone(),
+                        eq_proof_public_key,
+                        ep_proof_public_key,
+                    }
+                })
+                .collect(),
+        };
+        let epoch_id = epoch_roster
+            .finality_epoch_id()
+            .expect("valid exact mint-finality fixture roster");
+        (epoch_id, epoch_roster)
+    }
     fn sample_record() -> EvidenceRecord {
         let mut roster = (0..4)
             .map(|_| ValidatorPower {
@@ -13689,14 +13744,15 @@ mod evidence_http_tests {
             })
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-        let mint_roster = mint_finality_roster_fixture(test_network_id(), 0, &roster);
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            mint_finality_roster_fixture(&roster);
         let context = HeightContext {
             network_id: test_network_id(),
             protocol_version: PROTOCOL_VERSION,
             height: 10,
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint_roster.finality_epoch_id().unwrap(),
-            kagemusha_mint_finality_epoch_roster: mint_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -14742,6 +14798,67 @@ mod evidence_http_tests {
                 "anonymous account read must omit `{header}`"
             );
         }
+    }
+    #[test]
+    fn offline_asset_registration_uses_exact_signed_direct_torii_path() {
+        let client = client_with_base_url(base_url());
+        let asset = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .unwrap();
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(mock_transport)
+                    .get_offline_asset_registration_json(&asset)
+            });
+        result.expect("bounded JSON projection");
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/offline/assets/{asset}/registration")
+        );
+        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
+        assert_eq!(snapshot.max_response_bytes, 2 * 1024);
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("accept")
+                    && value == APPLICATION_JSON)
+        );
+    }
+    #[test]
+    fn offline_asset_registration_rejects_unavailable_or_non_json_response() {
+        let client = client_with_base_url(base_url());
+        let asset = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .unwrap();
+        let (result, _) = capture_request(
+            json_response(StatusCode::SERVICE_UNAVAILABLE, "{}"),
+            |mock_transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(mock_transport)
+                    .get_offline_asset_registration_json(&asset)
+            },
+        );
+        assert!(result.is_err());
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/plain")
+            .body(b"{}".to_vec())
+            .unwrap();
+        let (result, _) = capture_request(response, |mock_transport| {
+            client
+                .clone()
+                .with_test_http_transport(mock_transport)
+                .get_offline_asset_registration_json(&asset)
+        });
+        assert!(result.is_err());
     }
     #[test]
     fn runtime_and_node_json_requests_set_accept_json() {
@@ -16731,7 +16848,15 @@ impl AccountClient {
         let payload = PreparedTransactionPayload::from_transaction(transaction);
         self.submit_prepared_transaction_payload(&payload).await
     }
-    pub(crate) async fn submit_transaction_and_wait(
+    /// Submit one signed transaction and wait for state-resolved `Applied` finality.
+    ///
+    /// Queue-plan ambiguity is retained while finality is reconciled and attached
+    /// to an unresolved confirmation error without replaying the transaction.
+    ///
+    /// # Errors
+    /// Returns compatibility, transport, rejection, expiry, timeout, or unresolved
+    /// queue-plan ambiguity failures.
+    pub async fn submit_transaction_and_wait(
         &self,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
@@ -21600,7 +21725,7 @@ impl Client {
         self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)
     }
     /// Account-signed GET `/v1/contracts/code-bytes/{code_hash}` and decode a bounded,
-    /// canonical base64 artifact whose digest exactly matches `code_hash`.
+    /// canonical base64 artifact whose domain-separated contract hash exactly matches `code_hash`.
     ///
     /// # Errors
     /// Returns an error if request signing or transport fails, the response is non-OK,
@@ -21645,7 +21770,7 @@ impl Client {
                 "contract code artifact exceeds the first-release artifact limit"
             ));
         }
-        if *iroha_crypto::Hash::new(&code).as_ref() != expected_hash {
+        if *iroha_data_model::smart_contract::contract_code_hash(&code).as_ref() != expected_hash {
             return Err(eyre!(
                 "contract code artifact digest does not match the requested hash"
             ));
@@ -22085,6 +22210,32 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )
+    }
+    /// Read one current asset registration through the configured Torii and canonical account signature.
+    /// The returned projection is service evidence, not an issuer certificate or native capability.
+    /// # Errors
+    /// Rejects failed requests, non-JSON responses and replies exceeding the fixed 2 KiB bound.
+    pub fn get_offline_asset_registration_json(
+        &self,
+        asset: &AssetDefinitionId,
+    ) -> Result<norito::json::Value> {
+        let path = format!("v1/offline/assets/{asset}/registration");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.account_signed_get_request(url)?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(2 * 1024),
+        )?;
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get current asset registration",
+            " ",
+        )?;
+        if !Self::is_exact_json_content_type(Self::response_content_type(&resp)) {
+            return Err(eyre!("current asset registration response must be JSON"));
+        }
+        Self::decode_json_ok(resp, "Failed to decode current asset registration")
     }
     /// GET `/v1/runtime/abi/active`
     /// # Errors
@@ -29729,12 +29880,30 @@ mod tests {
         let snapshot = snapshots.first().expect("snapshot");
         assert_canonical_account_signed_request(&client, snapshot);
     }
+    fn compiled_contract_code_artifact_fixture() -> &'static [u8] {
+        // Retained compiler-produced, admitted public fixture; regeneration and
+        // provenance live beside these repository-local bytes. No compiler is
+        // required to run the SDK regression.
+        let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
+        assert_eq!(
+            hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
+            "63361387f9f575c3c4618f28b6236498a6a93c2e56579b64a58360a30f70f17b",
+            "checked-in fixture must retain its native artifact identity"
+        );
+        artifact
+    }
     #[test]
     fn contract_code_artifact_read_is_signed_canonical_bounded_and_hash_bound() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let code = b"first-release-contract-artifact";
-        let code_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
+        let code = compiled_contract_code_artifact_fixture();
+        let code_hash =
+            hex::encode(iroha_data_model::smart_contract::contract_code_hash(code).as_ref());
+        assert_ne!(
+            code_hash,
+            hex::encode(iroha_crypto::Hash::new(code).as_ref()),
+            "the complete artifact's contract identity is not its generic byte hash"
+        );
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
         let response = json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
         let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
@@ -29762,10 +29931,56 @@ mod tests {
         assert_canonical_account_signed_request(&client, snapshot);
     }
     #[test]
+    fn contract_code_artifact_read_rejects_generic_hash_and_header_substitution() {
+        let client = client_with_base_url(base_url());
+        let code = compiled_contract_code_artifact_fixture();
+        let canonical_hash =
+            hex::encode(iroha_data_model::smart_contract::contract_code_hash(code).as_ref());
+        let generic_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
+        assert_ne!(canonical_hash, generic_hash);
+        let mut changed_header = code.to_vec();
+        assert_eq!(&changed_header[..4], b"IVM\0");
+        assert!(changed_header.len() > 8);
+        changed_header[8] ^= 1;
+        for (requested_hash, returned_artifact) in [
+            (generic_hash, code.to_vec()),
+            (canonical_hash, changed_header),
+        ] {
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let code_b64 = base64::engine::general_purpose::STANDARD.encode(returned_artifact);
+            let response =
+                json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
+            let error = with_mock_http(respond_with(&store, response), |mock_transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(mock_transport)
+                    .get_contract_code_bytes(&requested_hash)
+                    .expect_err("generic hashing or header substitution must fail")
+            });
+            assert!(
+                error
+                    .to_string()
+                    .contains("artifact digest does not match the requested hash"),
+                "the authenticated response must fail at artifact identity validation: {error:#}"
+            );
+            let snapshots = store.lock().expect("snapshot store");
+            assert_eq!(snapshots.len(), 1);
+            let snapshot = snapshots.first().expect("snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(
+                snapshot.url.path(),
+                format!("/v1/contracts/code-bytes/{requested_hash}")
+            );
+            assert!(snapshot.body.is_empty());
+            assert_canonical_account_signed_request(&client, snapshot);
+        }
+    }
+    #[test]
     fn contract_code_artifact_read_rejects_nonexact_inputs_and_hostile_responses() {
         let client = client_with_base_url(base_url());
-        let code = b"hash-bound-contract-artifact";
-        let code_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
+        let code = compiled_contract_code_artifact_fixture();
+        let code_hash =
+            hex::encode(iroha_data_model::smart_contract::contract_code_hash(code).as_ref());
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         with_mock_http(

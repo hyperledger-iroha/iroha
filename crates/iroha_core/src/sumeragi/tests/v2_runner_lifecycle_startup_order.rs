@@ -1,12 +1,15 @@
 #[test]
 fn startup_reconciles_lifecycle_before_lane_work_activation() {
     let parent = include_str!("../v2_runner.rs");
+    let dispatch = &parent[parent
+        .find("match pending_kura_apply {")
+        .expect("runner dispatches the exact pending-Kura recovery state")..];
     for anchor in [
-        "if pending_kura_apply.is_none()",
-        "lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+        "None => lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+        "Some(pending) => lifecycle_pending_kura::run_pending_kura_lifecycle_height(",
     ] {
         assert!(
-            parent.contains(anchor),
+            dispatch.contains(anchor),
             "runner lost lifecycle handoff anchor: {anchor}"
         );
     }
@@ -288,12 +291,25 @@ fn local_producer_queue_custody_is_preflighted_before_cursor_mutation() {
         source[helper..startup].contains("local_actor != binding.producer_actor_projection()",),
         "observer Kura custody must remain independent of producer Queue ownership",
     );
+    let matcher = source
+        .find("fn exact_current_queue_group_matches(")
+        .expect("the exact ordered Queue group predicate remains source-bound");
+    assert!(matcher < helper);
+    assert!(source[helper..startup].contains(
+        "!exact_current_queue_group_matches(binding, &payload.reservation_keys, current_queue_groups)"
+    ), "producer preflight must call the exact Queue group predicate");
     assert!(
-        source[helper..startup].contains("current_keys.as_slice() == ordered_keys"),
+        source[matcher..helper].contains("current_keys.as_slice() == ordered_keys"),
         "producer recovery must preserve the exact ordered reservation keys",
     );
     assert!(
-        source[helper..startup].contains("lane_queue_reservation_group_binding_from_ordered_keys"),
+        source[matcher..helper].contains(
+            "lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter()).ok()"
+        ) && source[matcher..helper].contains(
+            "lane_queue_reservation_group_binding_from_ordered_keys(current_keys.iter()).ok()"
+        ) && source[matcher..helper].contains(
+            "usize::try_from(expected.reservation_count).ok() == Some(ordered_keys.len())"
+        ),
         "producer recovery must recompute the exact ordered reservation binding",
     );
 }

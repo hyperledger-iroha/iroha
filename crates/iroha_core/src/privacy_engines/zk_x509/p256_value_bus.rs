@@ -30,7 +30,7 @@ use super::{
     p256_trace::{P256EcdsaTraceMaterialV1, compile_p256_ecdsa_topology_v1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
@@ -3137,6 +3137,7 @@ mod tests {
         ZkX509P256ArithmeticKindV1, build_zk_x509_p256_arithmetic_trace_v1,
     };
     use super::*;
+    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
     use crate::privacy_engines::zk_x509::credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
         derive_zk_x509_credential_pre_aux_binding_v1,

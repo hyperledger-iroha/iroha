@@ -123,6 +123,7 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
         descriptor_hash: Hash::new(b"json native leaf descriptor"),
         proposal_hash: Hash::new(b"json native leaf proposal"),
         settlement_hash: HashOf::from_untyped_unchecked(Hash::new(b"json native leaf settlement")),
+        previous_native_settlement_hash: None,
         members: Vec::new(),
         application_block_height: 1,
         application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
@@ -132,8 +133,13 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
     };
     assert_required_nullable_field!(
         NativeAmxApplicationManifestLeafV1,
-        native_leaf,
+        native_leaf.clone(),
         "predecessor_descriptor_hash"
+    );
+    assert_required_nullable_field!(
+        NativeAmxApplicationManifestLeafV1,
+        native_leaf,
+        "previous_native_settlement_hash"
     );
 
     let commitment = execution_commitment(0x71);

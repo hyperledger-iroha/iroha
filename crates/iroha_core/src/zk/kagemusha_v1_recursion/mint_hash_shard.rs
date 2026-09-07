@@ -473,7 +473,7 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaMintHashShardCircuitV1<F> {
         {
             return Err("mint hash shard assigned instance shape drifted".to_owned());
         }
-        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)?;
         let usable_rows = (1_usize << KAGEMUSHA_MINT_HASH_SHARD_K_V1) - MINIMUM_UNUSABLE_ROWS;
         if TABLE8_COMPRESSION_ROWS_ESTIMATE_UNMEASURED > usable_rows {
             return Err("one Table8 compression does not fit the mint hash shard".to_owned());

@@ -1149,9 +1149,8 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
             },
         )
         .collect::<Vec<_>>();
-    let mint_finality = crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(
-        &mint_finality_roster,
-    );
+    let mint_finality =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&mint_finality_roster);
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (genesis_id, genesis_key_pair) = gen_account_in("genesis");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("Valid");
@@ -1389,11 +1388,31 @@ impl DummyBlocks {
         self.blocks.push(block.clone());
         block
     }
+    /// Complete execution before another fixture block binds this parent hash.
+    fn next_with_results(&mut self) -> Arc<SignedBlock> {
+        let mut block = self.next().as_ref().clone();
+        attach_ok_results_to_block(&mut block);
+        let signature = SignatureOf::try_from_hash(
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            block.header().hash(),
+        )
+        .expect("sign completed storage fixture header");
+        block
+            .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
+            .expect("install completed storage fixture signature");
+        let block = Arc::new(block);
+        *self
+            .blocks
+            .last_mut()
+            .expect("the generated block is retained") = Arc::clone(&block);
+        block
+    }
     fn get(&self, i: usize) -> Option<Arc<SignedBlock>> {
         self.blocks.get(i).cloned()
     }
 }
 fn store_dummy_blocks(kura: &Arc<Kura>, count: usize) -> Vec<HashOf<BlockHeader>> {
+    establish_dummy_store_primary_anchor(kura);
     let mut blocks = DummyBlocks::new();
     let mut hashes = Vec::with_capacity(count);
     for _ in 0..count {
@@ -1578,13 +1597,20 @@ fn sample_committed_lane_block_session_at_proposal_height_for_kura(
     crate::lane_consensus::CommittedLaneBlockSession,
     BTreeMap<PublicKey, Vec<u8>>,
 ) {
-    let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let signer_pop =
-        bls_normal_pop_prove(keypair.private_key()).expect("kura certified lane signer PoP");
-    let peer_id = PeerId::new(keypair.public_key().clone());
-    let validator_set = vec![peer_id];
-    let mut signer_pops = BTreeMap::new();
-    signer_pops.insert(keypair.public_key().clone(), signer_pop);
+    let keypairs = v2_finality_fixture_keys();
+    let validator_set = keypairs
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    let signer_pops = keypairs[..3]
+        .iter()
+        .map(|key| {
+            (
+                key.public_key().clone(),
+                bls_normal_pop_prove(key.private_key()).expect("actual selected signer PoP"),
+            )
+        })
+        .collect();
     let mut descriptor = LaneBlockDescriptorV1 {
         lane_id,
         dataspace_id,
@@ -1654,8 +1680,8 @@ fn sample_committed_lane_block_session_at_proposal_height_for_kura(
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set_hash: HashOf::new(&validator_set),
         validator_set: validator_set.clone(),
-        validator_count: 1,
-        min_quorum: 1,
+        validator_count: 4,
+        min_quorum: 3,
         qc_mode_tag: "permissioned:kura-certified-lane-block".to_string(),
         descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
     };
@@ -1666,20 +1692,26 @@ fn sample_committed_lane_block_session_at_proposal_height_for_kura(
         payload_block_hint: None,
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let prepare_vote = signed_lane_block_vote_for_kura(&proposal, CertPhase::Prepare, &keypair);
+    let prepare_votes = keypairs[..3]
+        .iter()
+        .map(|key| signed_lane_block_vote_for_kura(&proposal, CertPhase::Prepare, key))
+        .collect::<Vec<_>>();
     let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
-        prepare_vote.body.clone(),
+        proposal.vote_body(CertPhase::Prepare),
         validator_set.clone(),
-        std::slice::from_ref(&prepare_vote),
+        &prepare_votes,
     )
-    .expect("kura certified lane prepare QC");
-    let commit_vote = signed_lane_block_vote_for_kura(&proposal, CertPhase::Commit, &keypair);
+    .expect("exact 3-of-4 lane PrepareQC");
+    let commit_votes = keypairs[..3]
+        .iter()
+        .map(|key| signed_lane_block_vote_for_kura(&proposal, CertPhase::Commit, key))
+        .collect::<Vec<_>>();
     let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
-        commit_vote.body.clone(),
+        proposal.vote_body(CertPhase::Commit),
         validator_set,
-        std::slice::from_ref(&commit_vote),
+        &commit_votes,
     )
-    .expect("kura certified lane commit QC");
+    .expect("exact 3-of-4 lane CommitQC");
     (
         crate::lane_consensus::CommittedLaneBlockSession {
             proposal,
@@ -1742,12 +1774,28 @@ fn dummy_block_with_lane_payload_ownership_from_generator(
     dataspace_id: DataSpaceId,
     lane_block_height: u64,
 ) -> Arc<SignedBlock> {
-    block_with_lane_payload_ownership_for_kura(
+    let mut block = block_with_lane_payload_ownership_for_kura(
         generator.next().as_ref().clone(),
         lane_id,
         dataspace_id,
         lane_block_height,
     )
+    .as_ref()
+    .clone();
+    let signature = SignatureOf::try_from_hash(
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+        block.header().hash(),
+    )
+    .expect("sign the final ownership-bound fixture header");
+    block
+        .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
+        .expect("install the ownership-bound fixture signature");
+    let block = Arc::new(block);
+    *generator
+        .blocks
+        .last_mut()
+        .expect("generated block is retained") = Arc::clone(&block);
+    block
 }
 fn block_with_lane_payload_ownership_for_kura(
     mut block: SignedBlock,
@@ -2041,32 +2089,85 @@ fn test_kura_with_default_lane_markers(
 }
 
 fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &RuntimeLaneConfig) {
-    let configured_catalog_hash = kura
-        .configured_lane_catalog_baseline()
-        .expect("read configured Kura catalog baseline")
-        .expect("configured Kura catalog baseline");
-    for entry in lane_config.entries() {
-        let incarnation = Hash::new(
-            format!(
-                "kura-lane-incarnation:{}:{}",
-                entry.lane_id.as_u32(),
-                entry.dataspace_id.as_u64()
-            )
-            .as_bytes(),
-        );
-        if entry.lane_id == lane_config.primary().lane_id {
-            kura.establish_or_verify_configured_primary_geometry_anchor(
-                entry,
-                incarnation,
-                configured_catalog_hash,
-            )
-            .expect("bind configured primary Kura test geometry");
-        } else {
-            kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
-                .expect("install explicit Kura test lane marker");
-        }
-    }
+    publish_initial_configured_lane_geometry_for_test(kura, lane_config, &BTreeMap::new());
     kura.replace_lane_storage_entries_for_test(lane_config);
+}
+
+fn publish_initial_configured_lane_geometry_for_test(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+    requested_incarnations: &BTreeMap<LaneId, Hash>,
+) {
+    let (baseline, phases, _) = kura
+        .lane_geometry_journal_state_for_test()
+        .expect("inspect exact fixture geometry journal");
+    if !phases.is_empty() {
+        return;
+    }
+    let baseline = baseline.expect("authenticated fixture catalog baseline");
+    let mut incarnations = BTreeMap::new();
+    let mut activations = BTreeMap::new();
+    for entry in lane_config.entries() {
+        let incarnation = if let Some(incarnation) = requested_incarnations.get(&entry.lane_id) {
+            *incarnation
+        } else {
+            match kura.active_lane_incarnation_marker(entry) {
+                Ok((incarnation, activation)) => {
+                    assert_eq!(
+                        activation, 0,
+                        "initial fixture geometry activates at genesis"
+                    );
+                    incarnation
+                }
+                Err(Error::IO(error, _)) if error.kind() == ErrorKind::NotFound => Hash::new(
+                    format!(
+                        "kura-lane-incarnation:{}:{}",
+                        entry.lane_id.as_u32(),
+                        entry.dataspace_id.as_u64()
+                    )
+                    .as_bytes(),
+                ),
+                Err(error) => panic!("existing fixture lane marker is invalid: {error}"),
+            }
+        };
+        incarnations.insert(entry.lane_id, incarnation);
+        activations.insert(entry.lane_id, 0);
+    }
+    let primary_incarnation = incarnations[&LaneId::SINGLE];
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        primary_incarnation,
+        baseline,
+    )
+    .expect("anchor the fixture's configured primary");
+    if lane_config.entries().len() == 1 {
+        return;
+    }
+    let initial = RuntimeLaneConfig::default();
+    assert_eq!(
+        initial.primary(),
+        lane_config.primary(),
+        "this fixture publishes secondary lanes from the canonical primary segment"
+    );
+    // Secondary targets must still be absent: the real transition owns their
+    // first files and marker publication, including crash recovery provenance.
+    kura.apply_lane_geometry_transition(
+        &initial,
+        lane_config,
+        &BTreeMap::from([(LaneId::SINGLE, primary_incarnation)]),
+        &incarnations,
+        &BTreeMap::from([(LaneId::SINGLE, 0)]),
+        &activations,
+        &BTreeSet::new(),
+    )
+    .expect("durably apply the fixture's secondary lane geometry");
+    kura.mark_lane_geometry_catalog_published(
+        lane_config,
+        &incarnations,
+        &activations,
+        Some(baseline),
+    )
+    .expect("publish the fixture's exact lane geometry for restart");
 }
 
 fn populate_strict_kura_store(dir: &TempDir, count: usize) {
@@ -2211,18 +2312,24 @@ fn install_autonomous_lane_marker_for_kura(
     lane_config: &RuntimeLaneConfig,
     payload: &LaneExecutablePayloadV1,
 ) {
-    // Authenticated configured-catalog startup deliberately exposes only the
-    // primary storage segment until a production geometry journal publishes
-    // the rest. This isolated fixture explicitly installs its complete test
-    // catalog before binding the requested lane marker.
-    kura.replace_lane_storage_entries_for_test(lane_config);
+    // A configured catalog alone is not committed geometry. Publish its initial
+    // secondary lanes so restart exercises their artifacts and rejects corruption.
     let descriptor = &payload.origin_proposal.descriptor;
+    publish_initial_configured_lane_geometry_for_test(
+        kura,
+        lane_config,
+        &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
+    );
     let entry = lane_config
         .entry(descriptor.lane_id)
         .expect("autonomous payload lane has configured storage");
+    // Tests that deliberately change only a marker keep that fault injection
+    // explicit; this does not publish a later catalog or replace its journal.
     kura.install_lane_incarnation_marker_for_test(entry, descriptor.lane_incarnation, 0)
         .expect("install authoritative autonomous lane marker");
+    kura.replace_lane_storage_entries_for_test(lane_config);
 }
+
 fn rebind_autonomous_lane_payload_for_kura(
     source: &LaneExecutablePayloadV1,
     lane_id: LaneId,
@@ -2830,6 +2937,137 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
 }
 
 #[test]
+fn startup_canonical_tip_read_reuses_exact_audit_without_sidecar_payload_reads() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    finalize_chain_through_for_eviction(&kura, height);
+    kura.refresh_v2_startup_finality_verification()
+        .expect("audit finalized fixture");
+    let startup = kura
+        .begin_v2_startup_finality_verification()
+        .expect("bind the exact audit")
+        .expect("audit is reusable");
+    kura.clear_v2_finality_verification_cache_for_test();
+    kura.reset_v2_finality_crypto_verifications_for_test();
+    kura.reset_startup_replay_historical_payload_reads_for_test();
+    for _ in 0..2 {
+        assert_eq!(
+            startup
+                .canonical_block(height)
+                .expect("reuse audited canonical body")
+                .as_deref(),
+            Some(blocks[1].as_ref())
+        );
+    }
+    assert_eq!(kura.v2_finality_crypto_verifications_for_test(), 0);
+    assert_eq!(kura.startup_replay_historical_payload_reads_for_test(), 0);
+    assert!(matches!(
+        startup.canonical_block(nonzero!(1_usize)),
+        Err(Error::MissingV2FinalityArtifact { height: 1 })
+    ));
+    let (_other_dir, _other_config, other) = kura_root_fixture(nonzero!(4_usize));
+    assert!(
+        other
+            .read_block_body_with_authority_under_guards(
+                height,
+                CanonicalBlockReadAuthority::Startup(&startup)
+            )
+            .is_err(),
+        "an audited session cannot lend authority to another Kura"
+    );
+}
+
+#[test]
+fn startup_canonical_tip_read_rejects_changed_occupied_authority_after_session_open() {
+    for retained in [false, true] {
+        let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+        store_dummy_block_arcs(&kura, 2);
+        let height = nonzero!(2_usize);
+        finalize_chain_through_for_eviction(&kura, height);
+        kura.refresh_v2_startup_finality_verification()
+            .expect("audit finalized fixture");
+        let startup = kura
+            .begin_v2_startup_finality_verification()
+            .expect("bind the exact audit")
+            .expect("audit is reusable");
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        let path = if retained {
+            Kura::retained_block_record_path_for(&blocks_dir, 2)
+        } else {
+            Kura::v2_finality_artifact_path_for(&blocks_dir, 2)
+        };
+        let mut bytes = fs::read(&path).expect("read fixture authority to corrupt");
+        *bytes.last_mut().expect("authority has bytes") ^= 1;
+        fs::write(&path, &bytes).expect("corrupt occupied audited authority");
+        assert!(
+            startup.canonical_block(height).is_err(),
+            "session must not hide changed finality or retained evidence"
+        );
+        assert_eq!(
+            fs::read(&path).expect("retain corrupt evidence"),
+            bytes,
+            "read-only failure cannot repair evidence"
+        );
+    }
+}
+
+#[test]
+fn startup_canonical_tip_read_rejects_same_header_wire_substitution() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    finalize_chain_through_for_eviction(&kura, height);
+    kura.refresh_v2_startup_finality_verification()
+        .expect("audit finalized fixture");
+    let startup = kura
+        .begin_v2_startup_finality_verification()
+        .expect("bind the exact audit")
+        .expect("audit is reusable");
+    let mut substituted = blocks[1].as_ref().clone();
+    let key = KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
+        .expect("replacement signing key");
+    substituted
+        .replace_signatures(
+            [BlockSignature::new(
+                0,
+                SignatureOf::try_from_hash(key.private_key(), substituted.hash())
+                    .expect("sign unchanged header"),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("replace only envelope signature");
+    let wire = substituted
+        .encode_wire()
+        .expect("encode replaced signature");
+    assert_eq!(substituted.hash(), blocks[1].hash());
+    assert_eq!(
+        wire.len(),
+        blocks[1].encode_wire().expect("canonical wire").len()
+    );
+    let (path, slot) = {
+        let mut store = kura.block_store.lock();
+        (
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+            store.read_block_index(1).expect("occupied body slot"),
+        )
+    };
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("open body file");
+    file.seek(SeekFrom::Start(slot.start))
+        .expect("seek occupied slot");
+    file.write_all(&wire)
+        .expect("replace complete wire with unchanged header");
+    assert!(matches!(
+        startup.canonical_block(height),
+        Err(Error::CanonicalBlockWireMismatch { height: 2 })
+    ));
+}
+
+#[test]
 fn consensus_body_read_bypasses_warm_cache_and_rejects_occupied_corruption() {
     let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
     let blocks = store_dummy_block_arcs(&kura, 2);
@@ -2928,4 +3166,50 @@ fn consensus_body_read_rejects_decodable_same_header_wire_substitution() {
         Err(Error::CanonicalBlockWireMismatch { height: 2 })
     ));
     assert!(kura.block_data.lock().cached_body(1).is_some());
+}
+
+#[test]
+fn consensus_body_read_with_verified_finality_authenticates_pending_and_published_wire() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    let artifacts = v2_finality_artifacts_for_chain(&blocks);
+    let artifact = artifacts.last().expect("height-two exact finality").clone();
+    let authority = crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone())
+        .expect("verify the pending Apply certificate");
+    assert!(matches!(
+        kura.read_block_body(height),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })
+    ));
+    assert_eq!(
+        kura.read_block_body_with_verified_finality(height, &authority)
+            .expect("sealed pending read")
+            .as_deref(),
+        Some(blocks[1].as_ref())
+    );
+    let other = crate::block::VerifiedV2FinalityArtifact::verify(artifacts[0].clone())
+        .expect("verify other height");
+    assert!(
+        kura.read_block_body_with_verified_finality(height, &other)
+            .is_err()
+    );
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("publish exact finality");
+    assert_eq!(
+        kura.read_block_body_with_verified_finality(height, &authority)
+            .expect("exact published read")
+            .as_deref(),
+        Some(blocks[1].as_ref())
+    );
+    let finality_path = kura.v2_finality_artifact_path(2);
+    fs::write(&finality_path, b"corrupt occupied finality").expect("damage published finality");
+    assert!(
+        kura.read_block_body_with_verified_finality(height, &authority)
+            .is_err(),
+        "an owned certificate cannot bypass corrupt existing published evidence"
+    );
+    assert_eq!(
+        fs::read(finality_path).unwrap(),
+        b"corrupt occupied finality"
+    );
 }

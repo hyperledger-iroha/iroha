@@ -20,7 +20,7 @@ public enum PrivacyExact12CapabilityManifestErrorV1: Error, LocalizedError, Equa
         case let .compiledTupleMismatch(protocolId):
             return "Exact12 protocol \(protocolId.rawValue) differs from this binary's compiled profile tuple."
         case .invalidAdmission:
-            return "Exact12 capability admission is missing, stale, or protocol-substituted."
+            return "Exact12 capability admission is missing, stale, or bound to a different protocol or network."
         }
     }
 }
@@ -237,6 +237,8 @@ public struct PrivacyDeploymentActivationV1: Equatable, Sendable {
 /// Full network-bound deployment evidence retained from the native-validated archive.
 public struct PrivacyExact12DeploymentQualificationV1: Equatable, Sendable {
     public let version: UInt16
+    public let networkId: NetworkId
+    public let genesisHash: Data
     public let releaseManifestDigest: Data
     public let activations: [PrivacyDeploymentActivationV1]
     public let convergenceHeight: UInt64
@@ -298,7 +300,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
     public let protocols: [PrivacyExact12CapabilityRowV1]
     public let manifestDigest: Data
     private let archive: Data
-    fileprivate let authenticatedToriiOrigin: Bool
+    fileprivate let authenticatedNetworkId: NetworkId?
 
     fileprivate init(
         version: UInt32,
@@ -308,7 +310,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
         protocols: [PrivacyExact12CapabilityRowV1],
         manifestDigest: Data,
         canonicalArchive: Data,
-        authenticatedToriiOrigin: Bool = false
+        authenticatedNetworkId: NetworkId? = nil
     ) {
         self.version = version
         self.committedHeight = committedHeight
@@ -317,14 +319,20 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
         self.protocols = protocols
         self.manifestDigest = Data(manifestDigest)
         archive = Data(canonicalArchive)
-        self.authenticatedToriiOrigin = authenticatedToriiOrigin
+        self.authenticatedNetworkId = authenticatedNetworkId
     }
 
     /// Issue network authority only after the Torii client authenticates and bounds the response.
     static func fromAuthenticatedToriiResponseV1(
-        _ archive: Data
+        _ archive: Data,
+        expectedNetworkId: NetworkId
     ) throws -> PrivacyExact12CapabilityManifestV1 {
         let validated = try PrivacyNativeBridge.validateExact12CapabilityManifestV1(archive)
+        if validated.qualification != nil {
+            try PrivacyExact12CapabilityManifestCodecV1.requireDeploymentNetworkV1(
+                validated, expectedNetworkId: expectedNetworkId
+            )
+        }
         return PrivacyExact12CapabilityManifestV1(
             version: validated.version,
             committedHeight: validated.committedHeight,
@@ -333,7 +341,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
             protocols: validated.protocols,
             manifestDigest: validated.manifestDigest,
             canonicalArchive: validated.canonicalBytes(),
-            authenticatedToriiOrigin: true
+            authenticatedNetworkId: expectedNetworkId
         )
     }
 
@@ -350,6 +358,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
 /// Opaque token which revalidates its source manifest and native tuple at use time.
 public final class PrivacyExact12CapabilityTupleAdmissionV1: @unchecked Sendable {
     public let protocolId: PrivacyProtocolIdV1
+    public let networkId: NetworkId
     public let committedHeight: UInt64
     public let manifestDigest: Data
     public let operationSchema: PrivacyOperationSchemaV1
@@ -361,9 +370,11 @@ public final class PrivacyExact12CapabilityTupleAdmissionV1: @unchecked Sendable
 
     private init(
         manifest: PrivacyExact12CapabilityManifestV1,
-        row: PrivacyExact12CapabilityRowV1
+        row: PrivacyExact12CapabilityRowV1,
+        networkId: NetworkId
     ) {
         protocolId = row.protocolId
+        self.networkId = networkId
         committedHeight = manifest.committedHeight
         manifestDigest = Data(manifest.manifestDigest)
         operationSchema = row.operationSchema
@@ -373,16 +384,21 @@ public final class PrivacyExact12CapabilityTupleAdmissionV1: @unchecked Sendable
 
     fileprivate static func issue(
         manifest: PrivacyExact12CapabilityManifestV1,
-        row: PrivacyExact12CapabilityRowV1
+        row: PrivacyExact12CapabilityRowV1,
+        networkId: NetworkId
     ) -> PrivacyExact12CapabilityTupleAdmissionV1 {
-        PrivacyExact12CapabilityTupleAdmissionV1(manifest: manifest, row: row)
+        PrivacyExact12CapabilityTupleAdmissionV1(
+            manifest: manifest, row: row, networkId: networkId
+        )
     }
 
     fileprivate func requireAuthentic(
         for expectedProtocol: PrivacyProtocolIdV1,
-        instructionArchive: Data? = nil
+        expectedNetworkId: NetworkId,
+        instructionArchive: Data
     ) throws {
-        guard seal === Self.authenticSeal, protocolId == expectedProtocol else {
+        guard seal === Self.authenticSeal, protocolId == expectedProtocol,
+              networkId == expectedNetworkId else {
             throw PrivacyExact12CapabilityManifestErrorV1.invalidAdmission
         }
         let current = try PrivacyNativeBridge.validateExact12CapabilityManifestV1(
@@ -392,6 +408,9 @@ public final class PrivacyExact12CapabilityTupleAdmissionV1: @unchecked Sendable
               current.manifestDigest == manifestDigest else {
             throw PrivacyExact12CapabilityManifestErrorV1.invalidAdmission
         }
+        try PrivacyExact12CapabilityManifestCodecV1.requireDeploymentNetworkV1(
+            current, expectedNetworkId: networkId
+        )
         let row = current.row(for: expectedProtocol)
         guard row.isNetworkAvailable else {
             throw PrivacyExact12CapabilityManifestErrorV1.unavailableProtocol(expectedProtocol)
@@ -399,13 +418,12 @@ public final class PrivacyExact12CapabilityTupleAdmissionV1: @unchecked Sendable
         guard row.localCompiledTupleMatches else {
             throw PrivacyExact12CapabilityManifestErrorV1.compiledTupleMismatch(expectedProtocol)
         }
-        if let instructionArchive {
-            try PrivacyExact12CapabilityManifestCodecV1.requireSubmitProofInstruction(
-                instructionArchive,
-                row: row,
-                consensusLimits: current.consensusPolicy.currentLimits
-            )
-        }
+        try PrivacyExact12CapabilityManifestCodecV1.requireSubmitProofInstruction(
+            instructionArchive,
+            row: row,
+            consensusLimits: current.consensusPolicy.currentLimits,
+            expectedNetworkId: expectedNetworkId
+        )
     }
 }
 
@@ -415,7 +433,7 @@ public enum PrivacyExact12CapabilityAdmissionV1 {
         _ manifest: PrivacyExact12CapabilityManifestV1,
         protocolId: PrivacyProtocolIdV1
     ) throws -> PrivacyExact12CapabilityTupleAdmissionV1 {
-        guard manifest.authenticatedToriiOrigin else {
+        guard let expectedNetworkId = manifest.authenticatedNetworkId else {
             throw PrivacyExact12CapabilityManifestErrorV1.invalidAdmission
         }
         // Decode again so admission cannot rely on stale managed state or a prior native load.
@@ -426,6 +444,9 @@ public enum PrivacyExact12CapabilityAdmissionV1 {
               current.committedHeight == manifest.committedHeight else {
             throw PrivacyExact12CapabilityManifestErrorV1.invalidAdmission
         }
+        try PrivacyExact12CapabilityManifestCodecV1.requireDeploymentNetworkV1(
+            current, expectedNetworkId: expectedNetworkId
+        )
         let row = current.row(for: protocolId)
         guard row.isNetworkAvailable else {
             throw PrivacyExact12CapabilityManifestErrorV1.unavailableProtocol(protocolId)
@@ -435,17 +456,20 @@ public enum PrivacyExact12CapabilityAdmissionV1 {
         }
         return PrivacyExact12CapabilityTupleAdmissionV1.issue(
             manifest: current,
-            row: row
+            row: row,
+            networkId: expectedNetworkId
         )
     }
 
     public static func requireForConstruction(
         _ admission: PrivacyExact12CapabilityTupleAdmissionV1,
         protocolId: PrivacyProtocolIdV1,
+        expectedNetworkId: NetworkId,
         submitProofInstructionNorito: Data
     ) throws {
         try admission.requireAuthentic(
             for: protocolId,
+            expectedNetworkId: expectedNetworkId,
             instructionArchive: submitProofInstructionNorito
         )
     }
@@ -512,6 +536,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         Data("iroha:privacy:exact12-capability-manifest:v1".utf8)
     private static let securityClaimDigestDomain =
         Data("iroha:privacy:security-claim:v1".utf8)
+    private static let proofWireMagic = Data([0x49, 0x52, 0x48, 0x5a, 0x4b, 0x31, 0xa5, 0x5a])
     private static let exact12CatalogCommitment: Data = {
         let words: [UInt64] = [
             0x7c30_a004_39f1_37e0,
@@ -1298,12 +1323,15 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         )
         guard version == 1 else { throw invalid("deployment version must be exactly 1") }
         _ = try deployment.readField(maximum: maximumFieldBytes, label: "deployment chain id")
-        _ = try deployment.readField(maximum: maximumFieldBytes, label: "deployment network id")
-        _ = try fixed32(
-            deployment.readField(maximum: 33, label: "deployment genesis hash"),
-            label: "deployment genesis hash",
-            nonzero: true
+        // NetworkId and [u8; 32] each occupy exactly 32 inner field bytes.
+        let networkId = try exactNetworkId(
+            deployment.readField(maximum: 32, label: "deployment network id"),
+            label: "deployment network id"
         )
+        let genesisHash = try deployment.readField(maximum: 32, label: "deployment genesis hash")
+        guard genesisHash.count == 32, genesisHash == networkId.bytes else {
+            throw invalid("deployment genesis hash differs from its exact network id")
+        }
         let releaseManifestDigest = try fixed32(
             deployment.readField(maximum: 33, label: "deployed release digest"),
             label: "deployed release digest",
@@ -1376,6 +1404,8 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         try activationsReader.requireFinished("deployment activations")
         return PrivacyExact12DeploymentQualificationV1(
             version: version,
+            networkId: networkId,
+            genesisHash: genesisHash,
             releaseManifestDigest: releaseManifestDigest,
             activations: activations,
             convergenceHeight: convergenceHeight,
@@ -1636,10 +1666,23 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         )
     }
 
+    /// Projection check only; this never creates authenticated network authority.
+    static func requireDeploymentNetworkV1(
+        _ manifest: PrivacyExact12CapabilityManifestV1,
+        expectedNetworkId: NetworkId
+    ) throws {
+        guard let deployment = manifest.qualification?.deploymentQualification,
+              deployment.networkId == expectedNetworkId,
+              deployment.genesisHash == expectedNetworkId.bytes else {
+            throw invalid("deployment qualification differs from the expected signing network")
+        }
+    }
+
     static func requireSubmitProofInstruction(
         _ archive: Data,
         row: PrivacyExact12CapabilityRowV1,
-        consensusLimits: PrivacyConsensusLimitsV1
+        consensusLimits: PrivacyConsensusLimitsV1,
+        expectedNetworkId: NetworkId
     ) throws {
         guard archive.count <= Int(consensusLimits.maxActionBytes) else {
             throw invalid("submit-proof instruction exceeds committed consensus action bytes")
@@ -1659,8 +1702,8 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         try instruction.requireFinished("submit-proof instruction")
         var envelopeReader = WireReader(envelope)
         var fields: [Data] = []
-        fields.reserveCapacity(11)
-        for index in 0..<11 {
+        fields.reserveCapacity(13)
+        for index in 0..<13 {
             fields.append(try envelopeReader.readField(
                 maximum: maximumActionBytes,
                 label: "proof envelope field \(index)"
@@ -1668,32 +1711,83 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         }
         try envelopeReader.requireFinished("proof envelope")
 
-        guard try decodeProtocol(fields[0], label: "envelope protocol") == row.protocolId else {
+        guard fields[0] == proofWireMagic, fields[1] == exact12CatalogCommitment else {
+            throw invalid("submit-proof envelope differs from the final V1 wire marker or catalog")
+        }
+        guard try decodeProtocol(fields[2], label: "envelope protocol") == row.protocolId else {
             throw invalid("submit-proof instruction protocol differs from its admission")
         }
         guard case let .available(profile) = row.compiledProfile,
-              try exactUInt32(fields[1], "envelope proof system") == profile.proofSystemId.rawValue,
-              try exactUInt32(fields[2], "envelope engine") == profile.engineId.rawValue,
-              try fixed32(fields[3], label: "envelope parameter id", nonzero: true)
+              try exactUInt32(fields[3], "envelope proof system") == profile.proofSystemId.rawValue,
+              try exactUInt32(fields[4], "envelope engine") == profile.engineId.rawValue,
+              try fixed32(fields[5], label: "envelope parameter id", nonzero: true)
                 == profile.parameterId,
-              try fixed32(fields[4], label: "envelope parameter digest", nonzero: true)
+              try fixed32(fields[6], label: "envelope parameter digest", nonzero: true)
                 == profile.parameterDigest,
-              try fixed32(fields[5], label: "envelope verifier digest", nonzero: true)
+              try fixed32(fields[7], label: "envelope verifier digest", nonzero: true)
                 == profile.verifierDigest,
-              try fixed32(fields[6], label: "envelope statement schema digest", nonzero: true)
+              try fixed32(fields[8], label: "envelope statement schema digest", nonzero: true)
                 == profile.statementSchemaDigest,
-              try fixed32(fields[7], label: "envelope engine manifest digest", nonzero: true)
+              try fixed32(fields[9], label: "envelope engine manifest digest", nonzero: true)
                 == profile.engineManifestDigest else {
             throw invalid("submit-proof envelope differs from the admitted compiled profile tuple")
         }
-        _ = try fixed32(fields[8], label: "envelope statement digest", nonzero: true)
-        for (index, label) in [(9, "statement"), (10, "proof")] {
+        _ = try fixed32(fields[10], label: "envelope statement digest", nonzero: true)
+        try requireStatementNetworkV1(
+            fields[11], protocolId: row.protocolId, expectedNetworkId: expectedNetworkId
+        )
+        for (index, label) in [(11, "statement"), (12, "proof")] {
             let tagged = try taggedPayload(fields[index], label: "envelope \(label)")
             guard tagged.tag == row.protocolId.noritoDiscriminant,
                   let payload = tagged.payload, !payload.isEmpty else {
                 throw invalid("submit-proof envelope \(label) differs from its admitted protocol")
             }
         }
+    }
+
+    /// Every retained statement begins with PrivacyStatementContextV1. This
+    /// exact projection binds its network; native validation owns proof semantics.
+    static func requireStatementNetworkV1(
+        _ bytes: Data,
+        protocolId: PrivacyProtocolIdV1,
+        expectedNetworkId: NetworkId
+    ) throws {
+        let tagged = try taggedPayload(bytes, label: "envelope statement")
+        guard tagged.tag == protocolId.noritoDiscriminant, let payload = tagged.payload else {
+            throw invalid("submit-proof envelope statement differs from its admitted protocol")
+        }
+        var statement = WireReader(payload)
+        var context = WireReader(try statement.readField(
+            maximum: maximumActionBytes, label: "statement context"
+        ))
+        let networkId = try exactNetworkId(
+            context.readField(maximum: 32, label: "statement network id"),
+            label: "statement network id"
+        )
+        guard networkId == expectedNetworkId else {
+            throw invalid("statement context differs from the expected signing network")
+        }
+        _ = try exactUInt32(
+            context.readField(maximum: 4, label: "statement action index"),
+            "statement action index"
+        )
+        for label in [
+            "transaction intent digest", "parameter id", "parameter digest",
+            "verifier digest", "statement schema digest", "engine manifest digest",
+        ] {
+            _ = try fixed32(
+                context.readField(maximum: 33, label: "statement \(label)"),
+                label: "statement \(label)", nonzero: true
+            )
+        }
+        try context.requireFinished("statement context")
+    }
+
+    private static func exactNetworkId(_ bytes: Data, label: String) throws -> NetworkId {
+        guard let networkId = try? NetworkId(bytes: bytes) else {
+            throw invalid("\(label) must contain exactly 32 canonical network-id bytes")
+        }
+        return networkId
     }
 
     private static func validateSchedule(

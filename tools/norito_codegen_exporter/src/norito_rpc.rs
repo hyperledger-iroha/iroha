@@ -3556,7 +3556,11 @@ mod tests {
                 &malformed,
             )
             .expect_err("peer semantic source shape must fail closed");
-            assert!(error.to_string().contains("semantic instruction shape mismatch"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("semantic instruction shape mismatch")
+            );
         }
     }
     #[test]

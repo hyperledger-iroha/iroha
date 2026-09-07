@@ -75,9 +75,7 @@ impl Fixture {
         let network_id =
             crate::sumeragi::synthetic_network_id("sumeragi-v2-lifecycle-projection-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 1, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -2065,6 +2063,13 @@ fn accepted_effects(fixture: &Fixture) -> Vec<ExpectedProjection> {
 }
 #[test]
 fn every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work() {
+    crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+        "every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work",
+        every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work_fixture_body,
+    );
+}
+
+fn every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work_fixture_body() {
     let fixture = Fixture::new();
     let cases = accepted_effects(&fixture);
     assert_eq!(cases.len(), 19);
@@ -2481,6 +2486,13 @@ fn recovery_cut_consumes_exact_terminal_validate_body_outcome() {
 }
 #[test]
 fn coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection() {
+    crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+        "coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection",
+        coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection_fixture_body,
+    );
+}
+
+fn coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection_fixture_body() {
     let fixture = Fixture::new();
     let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::Proposal(fixture.proposal.clone()),

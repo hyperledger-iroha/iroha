@@ -170,6 +170,7 @@ fn decode_lowercase_hex_array<const N: usize>(input: &str) -> Result<[u8; N], Ha
 macro_rules! define_hash32_newtype {
     ($name:ident, $schema_name:literal, $doc:literal) => {
         #[doc = $doc]
+        /// JSON values and object keys use exactly 64 lowercase hexadecimal digits.
         #[repr(transparent)]
         #[derive(
             Clone,
@@ -306,7 +307,13 @@ macro_rules! define_hash32_newtype {
         #[cfg(feature = "json")]
         impl json::JsonObjectKeyOwned for $name {
             fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
-                Self::from_hex_str(key).map_err(|err| json::Error::Message(format!("{err}")))
+                if key.len() != Self::LENGTH * 2 {
+                    return Err(json::Error::Message(
+                        "governance hash key must contain exactly 64 lowercase hex digits"
+                            .to_owned(),
+                    ));
+                }
+                Self::from_hex_str(key).map_err(|err| json::Error::Message(err.to_string()))
             }
         }
         impl FromStr for $name {
@@ -996,6 +1003,8 @@ pub struct Vote {
     pub choice: VoteChoice,
 }
 /// Parliament governance body identifiers.
+///
+/// JSON values and object keys share the canonical lowercase, hyphenated body labels.
 #[derive(
     Clone,
     Copy,
@@ -1059,7 +1068,7 @@ pub const PARLIAMENT_BODIES_V1: [ParliamentBody; 10] = [
 ];
 #[cfg(feature = "json")]
 impl ParliamentBody {
-    const fn json_key_text(self) -> &'static str {
+    const fn json_label(self) -> &'static str {
         match self {
             Self::RulesCommittee => "rules-committee",
             Self::AgendaCouncil => "agenda-council",
@@ -1073,8 +1082,7 @@ impl ParliamentBody {
             Self::ConfirmationJury => "confirmation-jury",
         }
     }
-
-    fn parse_json_key_text(value: &str) -> Result<Self, json::Error> {
+    fn parse_json_label(value: &str) -> Result<Self, json::Error> {
         match value {
             "rules-committee" => Ok(Self::RulesCommittee),
             "agenda-council" => Ok(Self::AgendaCouncil),
@@ -1095,20 +1103,19 @@ impl ParliamentBody {
 #[cfg(feature = "json")]
 impl json::JsonSerialize for ParliamentBody {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(self.json_key_text(), out);
+        json::write_json_string(self.json_label(), out);
     }
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
-        json::write_json_string_to(self.json_key_text(), out)
+        json::write_json_string_to(self.json_label(), out)
     }
 }
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for ParliamentBody {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
-        let value = parser.parse_string()?;
-        Self::parse_json_key_text(&value)
+        Self::parse_json_label(&parser.parse_string()?)
     }
 }
 #[cfg(feature = "json")]
@@ -1117,13 +1124,13 @@ impl json::JsonObjectKey for ParliamentBody {
         &self,
         mut visitor: impl FnMut(&str) -> Result<(), E>,
     ) -> Result<(), E> {
-        visitor(self.json_key_text())
+        visitor(self.json_label())
     }
 }
 #[cfg(feature = "json")]
 impl json::JsonObjectKeyOwned for ParliamentBody {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
-        Self::parse_json_key_text(key)
+        Self::parse_json_label(key)
     }
 }
 /// Closed V1 governance risk classification.
@@ -3657,6 +3664,11 @@ mod tests {
                 json::to_json(&body).expect("Parliament body JSON"),
                 format!("\"{label}\"")
             );
+            assert_eq!(
+                json::from_json::<ParliamentBody>(&format!("\"{label}\""))
+                    .expect("Parliament body JSON roundtrip"),
+                body
+            );
 
             let map = std::collections::BTreeMap::from([(body, 1_u8)]);
             let encoded = format!("{{\"{label}\":1}}");
@@ -3681,10 +3693,19 @@ mod tests {
                 Err(json::BoundedJsonError::BodyTooLarge)
             ));
         }
-        assert!(
-            <ParliamentBody as json::JsonObjectKeyOwned>::from_json_key_text("RulesCommittee")
-                .is_err()
-        );
+        for invalid in [
+            "RulesCommittee",
+            "rules_committee",
+            "Rules-Committee",
+            " rules-committee",
+            "rules-committee ",
+            "unknown",
+        ] {
+            assert!(
+                <ParliamentBody as json::JsonObjectKeyOwned>::from_json_key_text(invalid).is_err()
+            );
+            assert!(json::from_json::<ParliamentBody>(&format!("\"{invalid}\"")).is_err());
+        }
     }
     #[test]
     fn contract_lifecycle_and_emergency_fingerprints_are_kind_separated() {

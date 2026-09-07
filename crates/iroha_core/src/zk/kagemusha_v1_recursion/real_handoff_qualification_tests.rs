@@ -6,7 +6,9 @@
 //! accepted as monetary authority or reported as a real payment proof.
 
 #[path = "real_payment_corridor.rs"]
-mod real_payment_corridor;
+pub(super) mod real_payment_corridor;
+#[cfg(all(test, unix))]
+pub(crate) use real_payment_corridor::DiagnosticMintStageProofV1;
 
 #[cfg(feature = "kagemusha-real-proof-harness")]
 pub(super) fn run_guarded_real_mint_authority_proof_v1() {
@@ -38,13 +40,18 @@ use iroha_data_model::{
     kagemusha::{
         KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
         KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1,
-        KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1, KagemushaPaymentRequestV1,
-        KagemushaPaymentV1, kagemusha_asset_identity_digest_v1, kagemusha_device_key_reference_v1,
-        kagemusha_liability_pool_id_v1, kagemusha_pasta_state_commitment_v1,
+        KagemushaDeviceSignatureV1, KagemushaEnabledProfileV1, KagemushaEvidenceFileV1,
+        KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1, KagemushaPairedProofV1,
+        KagemushaPastaStateCommitmentV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
+        KagemushaProviderPolicyEntryV1, kagemusha_asset_identity_digest_v1,
+        kagemusha_device_key_reference_v1, kagemusha_liability_pool_id_v1,
+        kagemusha_pasta_state_commitment_v1, kagemusha_provider_policy_path_v1,
+        kagemusha_provider_policy_root_v1, kagemusha_provider_policy_signing_bytes_v1,
+        kagemusha_suite_commitment_v1,
     },
     nexus::AxtAssetIncarnationV1,
 };
-use p256::ecdsa::SigningKey;
+use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use rand_core_06::OsRng;
 use sha2::{Digest as _, Sha256};
 use snark_verifier::{
@@ -254,7 +261,6 @@ fn policy_leaf(statement: &KagemushaPlatformCredentialStatementV1) -> DigestV1 {
     hasher.update([statement.platform_class]);
     hasher.update(statement.capability_mask.to_le_bytes());
     hasher.update(statement.provider_authority_commitment);
-    hasher.update(statement.canonical_empty_effect_digest);
     hasher.finalize().into()
 }
 
@@ -277,12 +283,122 @@ fn deterministic_signing_key(index: u64) -> SigningKey {
     unreachable!("P-256 scalar search is effectively bounded")
 }
 
+/// Public setup material for cryptographic diagnostics; it grants no release or OEM authority.
+struct DiagnosticProviderPolicy {
+    hardware_profile: KagemushaHardwareProfileV1,
+    root: DigestV1,
+    siblings: [DigestV1; 16],
+    provider_profile_index: u16,
+    provider_secret: DigestV1,
+}
+
+impl DiagnosticProviderPolicy {
+    fn new(hardware_profile: KagemushaHardwareProfileV1) -> Self {
+        let provider_secret = digest(b"provider-secret", 0);
+        let provider_profile_index = 0x5a31;
+        // These bounded records exercise the production tree derivation only. Their placeholder
+        // report/VK bindings are not authenticated evidence and never create a runtime capability.
+        let profile = KagemushaEnabledProfileV1 {
+            hardware_profile,
+            hardware_profile_id: hardware_profile.hardware_profile_id,
+            suite_id: digest(b"suite", 0),
+            vk_digest: digest(b"diagnostic-policy-vk", 0),
+            qualification_digest: digest(b"diagnostic-policy-qualification", 0),
+            policy_epoch: hardware_profile.policy_epoch,
+            qualification_report: KagemushaEvidenceFileV1 {
+                sha256: hardware_profile.qualification_report_digest,
+                byte_len: 1,
+            },
+        };
+        let provider_authority_commitment = provider_authority_commitment(provider_secret);
+        let issuer = deterministic_signing_key(0x7000);
+        assert_eq!(
+            hardware_profile.governance_credential_public_key,
+            KagemushaDevicePublicKeyV1::from_sec1_bytes(
+                issuer.verifying_key().to_encoded_point(false).as_bytes()
+            )
+            .expect("canonical diagnostic provider issuer"),
+            "diagnostic policy rows must be signed by the profile's exact issuer"
+        );
+        let authorization = kagemusha_provider_policy_signing_bytes_v1(
+            hardware_profile.hardware_profile_id,
+            provider_profile_index,
+            provider_authority_commitment,
+        )
+        .expect("canonical diagnostic provider-policy authorization");
+        let issuer_signature: Signature = issuer.sign(&authorization);
+        let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
+        let entry = KagemushaProviderPolicyEntryV1 {
+            hardware_profile_id: hardware_profile.hardware_profile_id,
+            provider_authority_commitment,
+            provider_profile_index,
+            issuer_signature: KagemushaDeviceSignatureV1::from_raw_bytes(
+                issuer_signature.to_bytes().as_ref(),
+            )
+            .expect("canonical low-S diagnostic provider-policy issuer signature"),
+        };
+        let root = kagemusha_provider_policy_root_v1(&[profile], &[entry])
+            .expect("derive diagnostic policy root from independent setup inventory");
+        let siblings = kagemusha_provider_policy_path_v1(
+            &[profile],
+            &[entry],
+            hardware_profile.hardware_profile_id,
+        )
+        .expect("derive canonical diagnostic provider inclusion path");
+        Self {
+            hardware_profile,
+            root,
+            siblings,
+            provider_profile_index,
+            provider_secret,
+        }
+    }
+}
+
+fn diagnostic_hardware_profile() -> KagemushaHardwareProfileV1 {
+    let issuer = deterministic_signing_key(0x7000);
+    let public_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+        issuer.verifying_key().to_encoded_point(false).as_bytes(),
+    )
+    .expect("canonical diagnostic issuer key");
+    KagemushaHardwareProfileV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
+        hardware_profile_id: [0; 32],
+        provider_id: digest(b"mint-provider", 0),
+        platform_class: KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+        product_class_digest: digest(b"mint-product", 0),
+        firmware_policy_digest: digest(b"mint-firmware", 0),
+        enrollment_attestation_verifier_digest: digest(b"mint-enrollment-verifier", 0),
+        attestation_trust_roots_digest: digest(b"mint-attestation-root", 0),
+        allowed_suite_commitment: kagemusha_suite_commitment_v1(digest(b"suite", 0)),
+        policy_epoch: 1,
+        governance_credential_public_key: public_key,
+        capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+        qualification_report_digest: digest(b"mint-qualification-report", 0),
+        valid_from_ms: 1,
+        expires_at_ms: 1_000_000,
+    }
+    .seal_hardware_profile_id()
+    .expect("canonical diagnostic hardware profile")
+}
+
 pub(super) fn credential_witness(
     index: u64,
     release_id: DigestV1,
     empty_effect: DigestV1,
 ) -> (KagemushaPlatformCredentialRelationWitnessV1, DigestV1) {
-    let provider_secret = digest(b"provider-secret", 0);
+    let policy = DiagnosticProviderPolicy::new(diagnostic_hardware_profile());
+    credential_witness_with_policy(index, release_id, empty_effect, &policy)
+}
+
+fn credential_witness_with_policy(
+    index: u64,
+    release_id: DigestV1,
+    empty_effect: DigestV1,
+    policy: &DiagnosticProviderPolicy,
+) -> (KagemushaPlatformCredentialRelationWitnessV1, DigestV1) {
+    let provider_secret = policy.provider_secret;
     let device_secret = digest(b"device-secret", index);
     let signing_key = deterministic_signing_key(index);
     let device_public_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
@@ -292,15 +408,10 @@ pub(super) fn credential_witness(
             .as_bytes(),
     )
     .expect("canonical qualification P-256 key");
-    let policy_siblings = core::array::from_fn(|depth| {
-        digest(
-            b"policy-sibling",
-            u64::try_from(depth).expect("policy depth fits u64"),
-        )
-    });
+    let policy_siblings = policy.siblings;
     let lane = lane();
     let asset_incarnation = incarnation();
-    let mut statement = KagemushaPlatformCredentialStatementV1 {
+    let statement = KagemushaPlatformCredentialStatementV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
         suite_id: digest(b"suite", 0),
@@ -321,17 +432,17 @@ pub(super) fn credential_witness(
         hardware_epoch_id: digest(b"hardware-epoch", index),
         key_reference: kagemusha_device_key_reference_v1(&device_public_key),
         device_public_key,
-        hardware_policy_id: digest(b"temporary-policy", 0),
+        hardware_policy_id: policy.root,
         device_authority_commitment: device_authority_commitment_v1(device_secret),
-        hardware_profile_id: digest(b"hardware-profile", 0),
-        policy_epoch: 1,
-        platform_class: 1,
+        hardware_profile_id: policy.hardware_profile.hardware_profile_id,
+        policy_epoch: policy.hardware_profile.policy_epoch,
+        platform_class: policy.hardware_profile.platform_class as u8,
         capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
         provider_authority_commitment: provider_authority_commitment(provider_secret),
         platform_attestation_digest: digest(b"platform-attestation", index),
         credential_issuance_digest: digest(b"credential-issuance", index),
         canonical_empty_effect_digest: empty_effect,
-        provider_profile_index: 0x5a31,
+        provider_profile_index: policy.provider_profile_index,
     };
     let mut root = policy_leaf(&statement);
     for (depth, sibling) in policy_siblings.iter().copied().enumerate() {
@@ -341,7 +452,10 @@ pub(super) fn credential_witness(
             policy_node(sibling, root)
         };
     }
-    statement.hardware_policy_id = root;
+    assert_eq!(
+        root, policy.root,
+        "credential must use the independent setup root"
+    );
     let witness = KagemushaPlatformCredentialRelationWitnessV1 {
         statement,
         provider_authority_secret: provider_secret,
@@ -475,6 +589,16 @@ pub(super) fn create_eq_proof<C: Circuit<Fp>>(
     circuit: C,
     instances: &[Fp],
 ) -> Vec<u8> {
+    try_create_eq_proof(params, proving_key, circuit, instances)
+        .expect("create and augment genuine EQ Halo2 proof")
+}
+
+fn try_create_eq_proof<C: Circuit<Fp>>(
+    params: &ParamsIPA<EqAffine>,
+    proving_key: &ProvingKey<EqAffine>,
+    circuit: C,
+    instances: &[Fp],
+) -> Result<Vec<u8>, String> {
     let columns: [&[Fp]; 1] = [instances];
     let proofs_instances: [&[&[Fp]]; 1] = [&columns];
     let mut transcript =
@@ -494,7 +618,7 @@ pub(super) fn create_eq_proof<C: Circuit<Fp>>(
         OsRng,
         &mut transcript,
     )
-    .expect("real Eq Halo2 proof");
+    .map_err(|error| format!("Halo2 proof creation rejected: {error}"))?;
     let raw = transcript.finalize();
     let proof = augment_halo2_ipa_proof_v1(
         params,
@@ -502,7 +626,7 @@ pub(super) fn create_eq_proof<C: Circuit<Fp>>(
         KagemushaRawHalo2IpaProofV1::new(raw),
         instances,
     )
-    .expect("augment real Eq Halo2 proof");
+    .map_err(|error| format!("Halo2 proof augmentation rejected: {error}"))?;
     assert!(!proof.is_empty());
     let protocol = compile(
         params,
@@ -513,7 +637,7 @@ pub(super) fn create_eq_proof<C: Circuit<Fp>>(
         .expect("valid Eq proof profile")
         .byte_len;
     assert_eq!(proof.len(), expected, "non-canonical real Eq proof length");
-    proof
+    Ok(proof)
 }
 
 pub(super) fn create_ep_proof<C: Circuit<Fq>>(
@@ -522,6 +646,16 @@ pub(super) fn create_ep_proof<C: Circuit<Fq>>(
     circuit: C,
     instances: &[Fq],
 ) -> Vec<u8> {
+    try_create_ep_proof(params, proving_key, circuit, instances)
+        .expect("create and augment genuine EP Halo2 proof")
+}
+
+fn try_create_ep_proof<C: Circuit<Fq>>(
+    params: &ParamsIPA<EpAffine>,
+    proving_key: &ProvingKey<EpAffine>,
+    circuit: C,
+    instances: &[Fq],
+) -> Result<Vec<u8>, String> {
     let columns: [&[Fq]; 1] = [instances];
     let proofs_instances: [&[&[Fq]]; 1] = [&columns];
     let mut transcript =
@@ -541,7 +675,7 @@ pub(super) fn create_ep_proof<C: Circuit<Fq>>(
         OsRng,
         &mut transcript,
     )
-    .expect("real Ep Halo2 proof");
+    .map_err(|error| format!("Halo2 proof creation rejected: {error}"))?;
     let raw = transcript.finalize();
     let proof = augment_halo2_ipa_proof_v1(
         params,
@@ -549,7 +683,7 @@ pub(super) fn create_ep_proof<C: Circuit<Fq>>(
         KagemushaRawHalo2IpaProofV1::new(raw),
         instances,
     )
-    .expect("augment real Ep Halo2 proof");
+    .map_err(|error| format!("Halo2 proof augmentation rejected: {error}"))?;
     assert!(!proof.is_empty());
     let protocol = compile(
         params,
@@ -560,7 +694,7 @@ pub(super) fn create_ep_proof<C: Circuit<Fq>>(
         .expect("valid Ep proof profile")
         .byte_len;
     assert_eq!(proof.len(), expected, "non-canonical real Ep proof length");
-    proof
+    Ok(proof)
 }
 
 fn dummy_ordinary_proof<C: CurveAffine>(protocol: &PlonkProtocol<C>, point: C) -> Vec<u8> {
@@ -638,6 +772,7 @@ fn history_instances<F: KagemushaPoseidonFieldV1>(
 }
 
 struct CredentialKeys {
+    provider_policy_root: DigestV1,
     eq_proving_key: ProvingKey<EqAffine>,
     ep_proving_key: ProvingKey<EpAffine>,
     eq_protocol: PlonkProtocol<EqAffine>,
@@ -647,6 +782,7 @@ struct CredentialKeys {
     eq_circuit_params: BaseCircuitParams,
     ep_circuit_params: BaseCircuitParams,
     hash_claim: KagemushaGeneratedMintHashClaimV1,
+    hash_claim_relation: KagemushaPlatformCredentialRelationWitnessV1,
 }
 
 struct CredentialProof {
@@ -712,8 +848,11 @@ impl CredentialKeys {
         eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
         ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
         witness: &KagemushaPlatformCredentialRelationWitnessV1,
+        provider_policy_root: DigestV1,
     ) -> Self {
-        preflight_kagemusha_platform_credential_key_configuration_v1().expect(
+        assert_ne!(provider_policy_root, [0; 32]);
+        assert_eq!(witness.statement.hardware_policy_id, provider_policy_root);
+        preflight_kagemusha_platform_credential_key_configuration_v1(provider_policy_root).expect(
             "PlatformCredential fixed auxiliary geometry must fit immutable helper-key limits",
         );
         let hash_claim = prove_kagemusha_platform_credential_hash_claim_v1(
@@ -738,13 +877,21 @@ impl CredentialKeys {
             witness,
             &hash_claim,
             |witness| {
-                let discovery =
-                    discover_kagemusha_platform_credential_audits_v1(eq_params, ep_params, witness)
-                        .expect("discover PlatformCredential reciprocal audits");
-                let eq_circuit =
-                    build_kagemusha_platform_credential_eq_v1(eq_params, witness, &discovery)
-                        .expect("build exact Eq PlatformCredential circuit");
-                let eq_circuit_params = eq_circuit.params();
+                let discovery = discover_kagemusha_platform_credential_audits_v1(
+                    eq_params,
+                    ep_params,
+                    witness,
+                    provider_policy_root,
+                )
+                .expect("discover PlatformCredential reciprocal audits");
+                let eq_circuit = build_kagemusha_platform_credential_eq_v1(
+                    eq_params,
+                    witness,
+                    &discovery,
+                    provider_policy_root,
+                )
+                .expect("build exact Eq PlatformCredential circuit");
+                let eq_circuit_params = eq_circuit.params().base;
                 let eq_proving_key = keygen_pk_with_helper_resource_preflight_consuming_v1(
                     eq_params,
                     eq_circuit,
@@ -755,10 +902,14 @@ impl CredentialKeys {
                 .expect("Eq credential PK");
                 halo2_proofs::release_allocator_slack();
 
-                let ep_circuit =
-                    build_kagemusha_platform_credential_ep_v1(ep_params, witness, &discovery)
-                        .expect("build exact Ep PlatformCredential circuit");
-                let ep_circuit_params = ep_circuit.params();
+                let ep_circuit = build_kagemusha_platform_credential_ep_v1(
+                    ep_params,
+                    witness,
+                    &discovery,
+                    provider_policy_root,
+                )
+                .expect("build exact Ep PlatformCredential circuit");
+                let ep_circuit_params = ep_circuit.params().base;
                 let ep_proving_key = keygen_pk_with_helper_resource_preflight_consuming_v1(
                     ep_params,
                     ep_circuit,
@@ -802,6 +953,7 @@ impl CredentialKeys {
             },
         );
         Self {
+            provider_policy_root,
             eq_proving_key,
             ep_proving_key,
             eq_protocol,
@@ -811,6 +963,7 @@ impl CredentialKeys {
             eq_circuit_params,
             ep_circuit_params,
             hash_claim,
+            hash_claim_relation: witness.clone(),
         }
     }
 
@@ -823,6 +976,23 @@ impl CredentialKeys {
         relation: KagemushaPlatformCredentialRelationWitnessV1,
         device_secret: DigestV1,
     ) -> CredentialProof {
+        let provider_policy_root = self.provider_policy_root;
+        assert_eq!(
+            relation.statement.hardware_policy_id, provider_policy_root,
+            "reused credential keys retain their independently selected setup root"
+        );
+        // The keys are reusable; a typed SHA claim authenticates only its exact relation.
+        // A new device/epoch therefore needs its own genuine claim under the same hash keys.
+        let generated_claim = (relation != self.hash_claim_relation).then(|| {
+            prove_kagemusha_platform_credential_hash_claim_v1(
+                eq_hash,
+                ep_hash,
+                &relation,
+                &test_only_recovery_seed(),
+            )
+            .expect("prove the exact successor PlatformCredential typed SHA claim")
+        });
+        let hash_claim = generated_claim.as_ref().unwrap_or(&self.hash_claim);
         let (
             eq_instances,
             ep_instances,
@@ -836,15 +1006,23 @@ impl CredentialKeys {
             eq_hash,
             ep_hash,
             &relation,
-            &self.hash_claim,
+            hash_claim,
             |witness| {
-                let discovery =
-                    discover_kagemusha_platform_credential_audits_v1(eq_params, ep_params, witness)
-                        .expect("discover PlatformCredential proof audits");
-                let eq_circuit =
-                    build_kagemusha_platform_credential_eq_v1(eq_params, witness, &discovery)
-                        .expect("build exact Eq PlatformCredential proof circuit");
-                assert_base_circuit_params_eq(&eq_circuit.params(), &self.eq_circuit_params);
+                let discovery = discover_kagemusha_platform_credential_audits_v1(
+                    eq_params,
+                    ep_params,
+                    witness,
+                    provider_policy_root,
+                )
+                .expect("discover PlatformCredential proof audits");
+                let eq_circuit = build_kagemusha_platform_credential_eq_v1(
+                    eq_params,
+                    witness,
+                    &discovery,
+                    provider_policy_root,
+                )
+                .expect("build exact Eq PlatformCredential proof circuit");
+                assert_base_circuit_params_eq(&eq_circuit.params().base, &self.eq_circuit_params);
                 let eq_column = eq_circuit
                     .public_instances()
                     .expect("Eq PlatformCredential instances");
@@ -867,10 +1045,14 @@ impl CredentialKeys {
                 .expect("encode Eq PlatformCredential accumulator");
                 halo2_proofs::release_allocator_slack();
 
-                let ep_circuit =
-                    build_kagemusha_platform_credential_ep_v1(ep_params, witness, &discovery)
-                        .expect("build exact Ep PlatformCredential proof circuit");
-                assert_base_circuit_params_eq(&ep_circuit.params(), &self.ep_circuit_params);
+                let ep_circuit = build_kagemusha_platform_credential_ep_v1(
+                    ep_params,
+                    witness,
+                    &discovery,
+                    provider_policy_root,
+                )
+                .expect("build exact Ep PlatformCredential proof circuit");
+                assert_base_circuit_params_eq(&ep_circuit.params().base, &self.ep_circuit_params);
                 let ep_column = ep_circuit
                     .public_instances()
                     .expect("Ep PlatformCredential instances");
@@ -898,8 +1080,8 @@ impl CredentialKeys {
                     ep_instances,
                     eq_proof,
                     ep_proof,
-                    self.hash_claim.eq_complete_history.clone(),
-                    self.hash_claim.ep_complete_history.clone(),
+                    hash_claim.eq_complete_history.clone(),
+                    hash_claim.ep_complete_history.clone(),
                     eq_current,
                     ep_current,
                 )
@@ -917,6 +1099,162 @@ impl CredentialKeys {
             eq_current,
             ep_current,
         }
+    }
+
+    /// Attack the retained setup keys with a complete, self-consistent alternative policy.
+    /// This is cryptographic diagnostic evidence, never provider or hardware qualification.
+    fn assert_substituted_policy_rejected(
+        &self,
+        eq_params: &ParamsIPA<EqAffine>,
+        ep_params: &ParamsIPA<EpAffine>,
+        eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
+        ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
+        credential: &CredentialProof,
+    ) {
+        assert_eq!(
+            credential.relation.statement.hardware_policy_id,
+            self.provider_policy_root
+        );
+        let mut substituted = credential.relation.clone();
+        substituted.provider_authority_secret = digest(b"unapproved-provider-secret", 0);
+        substituted.statement.provider_authority_commitment =
+            provider_authority_commitment(substituted.provider_authority_secret);
+        let mut substituted_root = policy_leaf(&substituted.statement);
+        for (depth, sibling) in substituted.policy_siblings.iter().copied().enumerate() {
+            substituted_root = if (substituted.statement.provider_profile_index >> depth) & 1 == 0 {
+                policy_node(substituted_root, sibling)
+            } else {
+                policy_node(sibling, substituted_root)
+            };
+        }
+        substituted.statement.hardware_policy_id = substituted_root;
+        substituted
+            .validate()
+            .expect("self-consistent adversarial policy witness");
+        assert_ne!(substituted_root, self.provider_policy_root);
+
+        // Replaying a real proof with only the public statement's policy root replaced fails.
+        let mut rebound = credential.relation.statement;
+        rebound.hardware_policy_id = substituted_root;
+        let mut eq_rebound = credential.eq_instances[0].clone();
+        eq_rebound[..2].copy_from_slice(&digest_limbs::<Fp>(rebound.canonical_digest()));
+        let mut ep_rebound = credential.ep_instances[0].clone();
+        ep_rebound[..2].copy_from_slice(&digest_limbs::<Fq>(rebound.canonical_digest()));
+        let accepts_eq = |proof: &[u8], instances: &[Fp]| {
+            verify_eq_succinct_protocol(eq_params, &self.eq_protocol, proof, instances)
+                .ok()
+                .and_then(|claim| KagemushaEqAccumulatorV1::from_native(&claim).ok())
+                .is_some_and(|claim| decide_kagemusha_eq_accumulator_v1(eq_params, &claim).is_ok())
+        };
+        let accepts_ep = |proof: &[u8], instances: &[Fq]| {
+            verify_ep_succinct_protocol(ep_params, &self.ep_protocol, proof, instances)
+                .ok()
+                .and_then(|claim| KagemushaEpAccumulatorV1::from_native(&claim).ok())
+                .is_some_and(|claim| decide_kagemusha_ep_accumulator_v1(ep_params, &claim).is_ok())
+        };
+        assert!(accepts_eq(
+            &credential.eq_proof,
+            &credential.eq_instances[0]
+        ));
+        assert!(accepts_ep(
+            &credential.ep_proof,
+            &credential.ep_instances[0]
+        ));
+        assert!(!accepts_eq(&credential.eq_proof, &eq_rebound));
+        assert!(!accepts_ep(&credential.ep_proof, &ep_rebound));
+
+        // Give the attacker a genuine SHA claim for its own root. Rejection must not depend on a
+        // malformed or stale claim, nor only on the honest prover's host preflight.
+        let claim = prove_kagemusha_platform_credential_hash_claim_v1(
+            eq_hash,
+            ep_hash,
+            &substituted,
+            &test_only_recovery_seed(),
+        )
+        .expect("prove the exact adversarial policy SHA claim");
+        with_claim_backed_credential_witness(eq_hash, ep_hash, &substituted, &claim, |witness| {
+            assert!(
+                discover_kagemusha_platform_credential_audits_v1(
+                    eq_params,
+                    ep_params,
+                    witness,
+                    self.provider_policy_root,
+                )
+                .is_err(),
+                "the retained setup root rejects a self-consistent replacement policy"
+            );
+
+            let discovery = discover_kagemusha_platform_credential_audits_v1(
+                eq_params,
+                ep_params,
+                witness,
+                substituted_root,
+            )
+            .expect("build an adversarial circuit under its independently substituted setup root");
+            assert!(
+                build_kagemusha_platform_credential_eq_v1(
+                    eq_params,
+                    witness,
+                    &discovery,
+                    self.provider_policy_root,
+                )
+                .is_err()
+            );
+            assert!(
+                build_kagemusha_platform_credential_ep_v1(
+                    ep_params,
+                    witness,
+                    &discovery,
+                    self.provider_policy_root,
+                )
+                .is_err()
+            );
+
+            // Deliberately bypass the honest retained-root selection and attempt to prove the
+            // replacement-root circuit with the original PK. Only cryptographic rejection counts.
+            let eq_circuit = build_kagemusha_platform_credential_eq_v1(
+                eq_params,
+                witness,
+                &discovery,
+                substituted_root,
+            )
+            .expect("construct exact adversarial Eq circuit");
+            assert_base_circuit_params_eq(&eq_circuit.params().base, &self.eq_circuit_params);
+            assert_eq!(eq_circuit.params().provider_policy_root, substituted_root);
+            let eq_instances = eq_circuit
+                .public_instances()
+                .expect("adversarial Eq instances");
+            if let Ok(proof) =
+                try_create_eq_proof(eq_params, &self.eq_proving_key, eq_circuit, &eq_instances)
+            {
+                assert!(
+                    !accepts_eq(&proof, &eq_instances),
+                    "original Eq key must reject a different fixed provider root"
+                );
+            }
+            halo2_proofs::release_allocator_slack();
+            let ep_circuit = build_kagemusha_platform_credential_ep_v1(
+                ep_params,
+                witness,
+                &discovery,
+                substituted_root,
+            )
+            .expect("construct exact adversarial Ep circuit");
+            assert_base_circuit_params_eq(&ep_circuit.params().base, &self.ep_circuit_params);
+            assert_eq!(ep_circuit.params().provider_policy_root, substituted_root);
+            let ep_instances = ep_circuit
+                .public_instances()
+                .expect("adversarial Ep instances");
+            if let Ok(proof) =
+                try_create_ep_proof(ep_params, &self.ep_proving_key, ep_circuit, &ep_instances)
+            {
+                assert!(
+                    !accepts_ep(&proof, &ep_instances),
+                    "original Ep key must reject a different fixed provider root"
+                );
+            }
+            halo2_proofs::release_allocator_slack();
+        });
     }
 }
 
@@ -1087,6 +1425,12 @@ pub(super) fn guard_public_instances<F: KagemushaPoseidonFieldV1>(
     let mut instances = digest_limbs::<F>(relation.statement_digest()).to_vec();
     instances.extend(digest_limbs::<F>(eq_audit));
     instances.extend(digest_limbs::<F>(ep_audit));
+    instances.extend(
+        relation
+            .credential_digests()
+            .into_iter()
+            .flat_map(digest_limbs::<F>),
+    );
     instances.extend(history.chunks_exact(16).map(|chunk| {
         from_u128::<F>(u128::from_le_bytes(
             chunk.try_into().expect("guard history limb width"),
@@ -1097,6 +1441,7 @@ pub(super) fn guard_public_instances<F: KagemushaPoseidonFieldV1>(
 }
 
 struct GuardKeys {
+    provider_policy_root: DigestV1,
     eq_proving_key: ProvingKey<EqAffine>,
     ep_proving_key: ProvingKey<EpAffine>,
     eq_verifying_key: VerifyingKey<EqAffine>,
@@ -1138,6 +1483,8 @@ fn guard_recursive_witness<'a>(
     credential_keys: &'a CredentialKeys,
     predecessor: &'a CredentialProof,
     successor: &'a CredentialProof,
+    eq_completed: &'a [super::KagemushaEqFoldOutputV1; 2],
+    ep_completed: &'a [super::KagemushaEpFoldOutputV1; 2],
     eq_fold: &'a super::KagemushaEqFoldOutputV1,
     ep_fold: &'a super::KagemushaEpFoldOutputV1,
     eq_audit: DigestV1,
@@ -1147,6 +1494,12 @@ fn guard_recursive_witness<'a>(
         relation,
         eq_credential_protocol: &credential_keys.eq_protocol,
         ep_credential_protocol: &credential_keys.ep_protocol,
+        eq_credential_instances: [&predecessor.eq_instances[0], &successor.eq_instances[0]],
+        ep_credential_instances: [&predecessor.ep_instances[0], &successor.ep_instances[0]],
+        eq_credential_claim_histories: [&predecessor.eq_claim_history, &successor.eq_claim_history],
+        ep_credential_claim_histories: [&predecessor.ep_claim_history, &successor.ep_claim_history],
+        eq_credential_history_fold_proofs: [eq_completed[0].proof(), eq_completed[1].proof()],
+        ep_credential_history_fold_proofs: [ep_completed[0].proof(), ep_completed[1].proof()],
         eq_predecessor_credential_proof: &predecessor.eq_proof,
         eq_successor_credential_proof: &successor.eq_proof,
         eq_credential_fold_proof: eq_fold.proof(),
@@ -1169,21 +1522,54 @@ fn prove_guard(
     predecessor: &CredentialProof,
     successor: &CredentialProof,
 ) -> GuardProof {
+    let provider_policy_root = credential_keys.provider_policy_root;
+    assert_eq!(
+        predecessor.relation.statement.hardware_policy_id,
+        provider_policy_root
+    );
+    assert_eq!(
+        successor.relation.statement.hardware_policy_id,
+        provider_policy_root
+    );
+    if let Some(keys) = guard_keys.as_ref() {
+        assert_eq!(
+            keys.provider_policy_root, provider_policy_root,
+            "reused Guard keys retain the credential setup root"
+        );
+    }
     let recovery_seed = test_only_recovery_seed();
+    let eq_completed = [predecessor, successor].map(|credential| {
+        fold_kagemusha_eq_accumulators_v1(
+            eq_params,
+            &credential.eq_current,
+            &credential.eq_claim_history,
+            &recovery_seed,
+        )
+        .expect("complete Eq credential proof and transported SHA history")
+    });
+    let ep_completed = [predecessor, successor].map(|credential| {
+        fold_kagemusha_ep_accumulators_v1(
+            ep_params,
+            &credential.ep_current,
+            &credential.ep_claim_history,
+            &recovery_seed,
+        )
+        .expect("complete Ep credential proof and transported SHA history")
+    });
     let eq_credential_fold = fold_kagemusha_eq_accumulators_v1(
         eq_params,
-        &predecessor.eq_current,
-        &successor.eq_current,
+        eq_completed[0].successor(),
+        eq_completed[1].successor(),
         &recovery_seed,
     )
-    .expect("fold Eq credential proofs");
+    .expect("merge complete Eq credential histories");
     let ep_credential_fold = fold_kagemusha_ep_accumulators_v1(
         ep_params,
-        &predecessor.ep_current,
-        &successor.ep_current,
+        ep_completed[0].successor(),
+        ep_completed[1].successor(),
         &recovery_seed,
     )
-    .expect("fold Ep credential proofs");
+    .expect("merge complete Ep credential histories");
     let (_, _, eq_audit, ep_audit) = build_kagemusha_guard_bundle_pair_v1(
         &eq_succinct_vk(eq_params),
         &ep_succinct_vk(ep_params),
@@ -1192,11 +1578,14 @@ fn prove_guard(
             credential_keys,
             predecessor,
             successor,
+            &eq_completed,
+            &ep_completed,
             &eq_credential_fold,
             &ep_credential_fold,
             [1; 32],
             [2; 32],
         ),
+        provider_policy_root,
     )
     .expect("derive GuardBundle audits");
     let build_proof_pair = || {
@@ -1208,11 +1597,14 @@ fn prove_guard(
                 credential_keys,
                 predecessor,
                 successor,
+                &eq_completed,
+                &ep_completed,
                 &eq_credential_fold,
                 &ep_credential_fold,
                 eq_audit,
                 ep_audit,
             ),
+            provider_policy_root,
         )
         .expect("build GuardBundle proof pair")
     };
@@ -1221,8 +1613,8 @@ fn prove_guard(
     assert_eq!(rebuilt_ep_audit, ep_audit);
 
     if guard_keys.is_none() {
-        let eq_circuit_params = eq_circuit.params();
-        let ep_circuit_params = ep_circuit.params();
+        let eq_circuit_params = eq_circuit.params().base;
+        let ep_circuit_params = ep_circuit.params().base;
         let eq_proving_key = keygen_pk_with_helper_resource_preflight_consuming_v1(
             eq_params,
             eq_circuit,
@@ -1262,6 +1654,7 @@ fn prove_guard(
             native_parent_protocol_digest_v1(&ep_protocol, KagemushaPastaParityV1::Ep)
                 .expect("Ep GuardBundle protocol digest");
         *guard_keys = Some(GuardKeys {
+            provider_policy_root,
             eq_proving_key,
             ep_proving_key,
             eq_verifying_key,
@@ -1285,8 +1678,8 @@ fn prove_guard(
         ep_circuit = rebuilt_ep_circuit;
     }
     let keys = guard_keys.as_ref().expect("GuardBundle keys installed");
-    assert_base_circuit_params_eq(&eq_circuit.params(), &keys.eq_circuit_params);
-    assert_base_circuit_params_eq(&ep_circuit.params(), &keys.ep_circuit_params);
+    assert_base_circuit_params_eq(&eq_circuit.params().base, &keys.eq_circuit_params);
+    assert_base_circuit_params_eq(&ep_circuit.params().base, &keys.ep_circuit_params);
     let eq_instances = guard_public_instances::<Fp>(
         &relation,
         eq_audit,
@@ -2196,6 +2589,42 @@ fn assert_mixed_transport_pairs_rejected(
             &second.ep_transport_public_instances,
         ),
         "the outer boundary must reject a current Ep proof with an old Ep history",
+    );
+}
+
+#[test]
+fn diagnostic_policy_setup_is_independent_of_device_release_and_empty_effect() {
+    let setup = DiagnosticProviderPolicy::new(diagnostic_hardware_profile());
+    let (first, _) = credential_witness_with_policy(
+        0,
+        digest(b"policy-test-release", 0),
+        digest(b"policy-test-empty", 0),
+        &setup,
+    );
+    let (second, _) = credential_witness_with_policy(
+        1,
+        digest(b"policy-test-release", 1),
+        digest(b"policy-test-empty", 1),
+        &setup,
+    );
+    assert_eq!(first.statement.hardware_policy_id, setup.root);
+    assert_eq!(second.statement.hardware_policy_id, setup.root);
+    assert_eq!(first.policy_siblings, setup.siblings);
+    assert_eq!(second.policy_siblings, setup.siblings);
+    assert_ne!(
+        first.statement.canonical_digest(),
+        second.statement.canonical_digest()
+    );
+    assert_eq!(
+        first.statement.platform_class,
+        KagemushaHardwarePlatformClassV1::DedicatedSecureElement as u8
+    );
+    let mut substituted = second;
+    substituted.statement.hardware_policy_id = digest(b"caller-selected-policy", 0);
+    assert!(substituted.validate().is_err());
+    assert_eq!(
+        setup.root, first.statement.hardware_policy_id,
+        "changing a caller witness cannot replace the retained setup policy"
     );
 }
 

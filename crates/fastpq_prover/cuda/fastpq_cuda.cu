@@ -1565,6 +1565,52 @@ __global__ void fastpq_bn254_lde_kernel(
     }
 }
 
+// Six independently generated width-three lanes over the canonical prepared
+// frame; all parameters come from the shared fastpq_isi parameter generator.
+__device__ void digest384_permute_v1(uint64_t state[3], size_t lane, const uint64_t* parameters) {
+    for (size_t round = 0; round < 65; ++round) {
+        for (size_t column = 0; column < 3; ++column)
+            state[column] = f_add(state[column], parameters[18 + (lane * 65 + round) * 3 + column]);
+        state[0] = poseidon_pow7(state[0]);
+        if (round < 4 || round >= 61) {
+            state[1] = poseidon_pow7(state[1]);
+            state[2] = poseidon_pow7(state[2]);
+        }
+        uint64_t mixed[3];
+        for (size_t row = 0; row < 3; ++row) {
+            mixed[row] = 0;
+            for (size_t column = 0; column < 3; ++column)
+                mixed[row] = f_add(mixed[row], f_mul(parameters[1188 + row * 3 + column], state[column]));
+        }
+        for (size_t column = 0; column < 3; ++column) state[column] = mixed[column];
+    }
+}
+__global__ void fastpq_digest384_hash_frames_v1_kernel(
+    const uint64_t* words, size_t word_count, const uint64_t* descriptors,
+    size_t frame_count, const uint64_t* parameters, uint64_t* output
+) {
+    size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    size_t frame = tid / 6;
+    size_t lane = tid % 6;
+    if (frame >= frame_count) return;
+    uint64_t offset = descriptors[frame * 3];
+    uint64_t length = descriptors[frame * 3 + 1];
+    uint64_t lane_word = descriptors[frame * 3 + 2];
+    if (length == 0 || (length & 1) != 0 || offset > word_count
+        || length > word_count - offset || lane_word >= length) {
+        output[tid] = FIELD_MODULUS;
+        return;
+    }
+    uint64_t state[3];
+    for (size_t column = 0; column < 3; ++column) state[column] = parameters[lane * 3 + column];
+    for (size_t index = 0; index < length; index += 2) {
+        state[0] = f_add(state[0], index == lane_word ? (uint64_t)lane : words[offset + index]);
+        state[1] = f_add(state[1], index + 1 == lane_word ? (uint64_t)lane : words[offset + index + 1]);
+        digest384_permute_v1(state, lane, parameters);
+    }
+    output[tid] = state[0];
+}
+
 __global__ void fastpq_poseidon_permute_kernel(uint64_t* states, size_t state_count) {
     size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= state_count) {
@@ -2993,5 +3039,104 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         return status;
     }
     memcpy(out_hashes, workspace->host_hashes, output_bytes);
+    return cudaSuccess;
+}
+
+// This path retains the exact failed workspace rather than discarding its
+// allocation addresses. The shared Poseidon mutex permits at most one failed
+// owner; global quarantine prevents another dispatch after an uncertain wait.
+static cudaError_t retain_failed_digest384_workspace_v1(PoseidonWorkspace* workspace, cudaError_t status) {
+    static PoseidonWorkspace retained;
+    retained = *workspace;
+    quarantine_cuda_backend();
+    abandon_poseidon_workspace(workspace);
+    return status;
+}
+static void wipe_digest384_host_region_v1(void* pointer, size_t bytes) {
+    volatile unsigned char* cursor = static_cast<volatile unsigned char*>(pointer);
+    while (bytes-- != 0) *cursor++ = 0;
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+}
+extern "C" cudaError_t fastpq_digest384_hash_frames_v1_cuda(
+    const uint64_t* words, size_t word_count, const uint64_t* descriptors, size_t frame_count,
+    const uint64_t* parameters, size_t parameter_count, uint64_t* output
+) {
+    if (words == nullptr || descriptors == nullptr || parameters == nullptr || output == nullptr
+        || frame_count == 0 || frame_count > 65536 || word_count == 0 || word_count > 4194304
+        || parameter_count != 1197) return cudaErrorInvalidValue;
+    for (size_t frame = 0; frame < frame_count; ++frame) {
+        uint64_t offset = descriptors[frame * 3], length = descriptors[frame * 3 + 1];
+        if (length == 0 || (length & 1) != 0 || offset > word_count
+            || length > word_count - offset || descriptors[frame * 3 + 2] >= length)
+            return cudaErrorInvalidValue;
+    }
+    // Fixed dispatch caps above make all these products fit even 32-bit size_t.
+    size_t word_bytes = word_count * sizeof(uint64_t);
+    size_t descriptor_bytes = frame_count * 3 * sizeof(uint64_t);
+    size_t parameter_bytes = parameter_count * sizeof(uint64_t);
+    size_t output_bytes = frame_count * 6 * sizeof(uint64_t);
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(frame_count * 6, 128, &grid_size)) return cudaErrorInvalidValue;
+    std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
+    PoseidonWorkspace* workspace = current_poseidon_workspace();
+    if (workspace == nullptr) return cudaErrorInvalidValue;
+    cudaError_t status;
+    status = ensure_workspace_buffer(&workspace->payloads, &workspace->payload_capacity_bytes, word_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_pinned_workspace_buffer(&workspace->host_payloads, &workspace->host_payload_capacity_bytes, word_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_workspace_buffer(&workspace->slices, &workspace->slice_capacity_bytes, descriptor_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_pinned_workspace_buffer(&workspace->host_slices, &workspace->host_slice_capacity_bytes, descriptor_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_workspace_buffer(&workspace->states, &workspace->state_capacity_bytes, parameter_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_pinned_workspace_buffer(&workspace->host_states, &workspace->host_state_capacity_bytes, parameter_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_workspace_buffer(&workspace->hashes, &workspace->hash_capacity_bytes, output_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_pinned_workspace_buffer(&workspace->host_hashes, &workspace->host_hash_capacity_bytes, output_bytes);
+    if (status != cudaSuccess) return status;
+    status = ensure_poseidon_stream(workspace);
+    if (status != cudaSuccess) return status;
+    status = ensure_poseidon_event(workspace);
+    if (status != cudaSuccess) return status;
+    memcpy(workspace->host_payloads, words, word_bytes);
+    memcpy(workspace->host_slices, descriptors, descriptor_bytes);
+    memcpy(workspace->host_states, parameters, parameter_bytes);
+    struct Region { void* device; void* host; size_t bytes; };
+    Region regions[] = {
+        {workspace->payloads, workspace->host_payloads, word_bytes},
+        {workspace->slices, workspace->host_slices, descriptor_bytes},
+        {workspace->states, workspace->host_states, parameter_bytes},
+        {workspace->hashes, workspace->host_hashes, output_bytes},
+    };
+    for (size_t index = 0; index < 3; ++index) {
+        status = cudaMemcpyAsync(regions[index].device, regions[index].host, regions[index].bytes,
+                                 cudaMemcpyHostToDevice, workspace->stream);
+        if (status != cudaSuccess) return retain_failed_digest384_workspace_v1(workspace, status);
+    }
+    fastpq_digest384_hash_frames_v1_kernel<<<grid_size, 128, 0, workspace->stream>>>(
+        workspace->payloads, word_count, reinterpret_cast<const uint64_t*>(workspace->slices),
+        frame_count, workspace->states, workspace->hashes);
+    status = cudaGetLastError();
+    if (status != cudaSuccess) return retain_failed_digest384_workspace_v1(workspace, status);
+    status = cudaMemcpyAsync(workspace->host_hashes, workspace->hashes, output_bytes,
+                             cudaMemcpyDeviceToHost, workspace->stream);
+    if (status != cudaSuccess) return retain_failed_digest384_workspace_v1(workspace, status);
+    status = cudaEventRecord(workspace->event, workspace->stream);
+    if (status == cudaSuccess) status = wait_for_event(workspace->event);
+    if (status != cudaSuccess) return retain_failed_digest384_workspace_v1(workspace, status);
+    memcpy(output, workspace->host_hashes, output_bytes);
+    // Completion makes these pinned regions exclusively host-owned. Wipe all
+    // used regions, then require a second completion before reusing device memory.
+    for (const Region& region : regions) wipe_digest384_host_region_v1(region.host, region.bytes);
+    for (const Region& region : regions) {
+        status = cudaMemsetAsync(region.device, 0, region.bytes, workspace->stream);
+        if (status != cudaSuccess) return retain_failed_digest384_workspace_v1(workspace, status);
+    }
+    status = cudaEventRecord(workspace->event, workspace->stream);
+    if (status == cudaSuccess) status = wait_for_event(workspace->event);
+    if (status != cudaSuccess) return retain_failed_digest384_workspace_v1(workspace, status);
     return cudaSuccess;
 }

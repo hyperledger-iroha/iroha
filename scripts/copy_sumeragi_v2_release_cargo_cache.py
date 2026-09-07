@@ -2901,7 +2901,7 @@ def _sdk_source_manifest(
         or set(gradle) != {
             "distribution_archive", "distribution_sha256", "gradle_user_home",
             "distribution_url", "gradle_user_home_inventory",
-            "java_wrapper_properties_sha256", "kotlin_wrapper_properties_sha256",
+            "kotlin_wrapper_properties_sha256",
             "version", "wrapper_cache_key",
         }
     ):
@@ -2932,7 +2932,6 @@ def _sdk_source_manifest(
         (openapi_node, "package_lock_sha256"),
         (swiftpm, "package_resolved_sha256"),
         (gradle, "distribution_sha256"),
-        (gradle, "java_wrapper_properties_sha256"),
         (gradle, "kotlin_wrapper_properties_sha256"),
     ):
         if not isinstance(section.get(name), str) or re.fullmatch(
@@ -3633,25 +3632,22 @@ def _sdk_bindings(
         )
         if head.decode("ascii", "strict").strip() != item["revision"]:
             raise CacheCopyError("SwiftPM checkout does not match Package.resolved")
-    wrapper_digests: dict[str, str] = {}
-    for kind in ("kotlin", "java"):
-        wrapper = bundle_root / f"gradle/{kind}-gradle-wrapper.properties"
-        payload, _ = _read_regular(wrapper, f"{kind} Gradle wrapper properties")
-        digest = hashlib.sha256(payload).hexdigest()
-        if digest != gradle[f"{kind}_wrapper_properties_sha256"]:
-            raise CacheCopyError(f"{kind} Gradle wrapper properties changed")
-        values = dict(
-            line.split("=", 1) for line in payload.decode("utf-8").splitlines()
-            if line and not line.startswith("#") and "=" in line
-        )
-        if values.get("distributionUrl") != SDK_GRADLE_DISTRIBUTION_URL.replace(
-            ":", r"\:", 1,
-        ):
-            raise CacheCopyError(f"{kind} Gradle wrapper does not select 9.3.0")
-        pinned = values.get("distributionSha256Sum")
-        if pinned is not None and pinned != gradle["distribution_sha256"]:
-            raise CacheCopyError(f"{kind} Gradle wrapper checksum disagrees with the protected manifest")
-        wrapper_digests[kind] = digest
+    wrapper = bundle_root / "gradle/kotlin-gradle-wrapper.properties"
+    payload, _ = _read_regular(wrapper, "Kotlin Gradle wrapper properties")
+    wrapper_digest = hashlib.sha256(payload).hexdigest()
+    if wrapper_digest != gradle["kotlin_wrapper_properties_sha256"]:
+        raise CacheCopyError("Kotlin Gradle wrapper properties changed")
+    values = dict(
+        line.split("=", 1) for line in payload.decode("utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    if values.get("distributionUrl") != SDK_GRADLE_DISTRIBUTION_URL.replace(
+        ":", r"\:", 1,
+    ):
+        raise CacheCopyError("Kotlin Gradle wrapper does not select 9.3.0")
+    pinned = values.get("distributionSha256Sum")
+    if pinned is not None and pinned != gradle["distribution_sha256"]:
+        raise CacheCopyError("Kotlin Gradle wrapper checksum disagrees with the protected manifest")
     gradle_cache_key = _sdk_gradle_distribution(
         bundle_root, str(gradle["distribution_sha256"]),
     )
@@ -3684,7 +3680,7 @@ def _sdk_bindings(
             "wrapper_cache_key": gradle_cache_key,
             "launcher_archive_name": SDK_GRADLE_LAUNCHER_ARCHIVE_NAME,
             "version": "9.3.0",
-            "wrapper_properties_sha256": wrapper_digests,
+            "wrapper_properties_sha256": {"kotlin": wrapper_digest},
         },
     }
 

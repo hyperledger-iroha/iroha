@@ -24,6 +24,9 @@ use std::{
     },
 };
 use thiserror::Error;
+#[cfg(test)]
+#[path = "address/canonical_multisig_tests.rs"]
+mod canonical_multisig_tests;
 #[cfg(feature = "json")]
 pub mod compliance_vectors;
 /// Obtain the currently configured chain discriminant for i105 literal encoding,
@@ -832,6 +835,14 @@ impl ControllerPayload {
                         public_key,
                     });
                 }
+                MultisigPolicy::validate_canonical_members(
+                    version,
+                    threshold,
+                    members
+                        .iter()
+                        .map(|member| (&member.public_key, member.weight)),
+                )
+                .map_err(AccountAddressError::InvalidMultisigPolicy)?;
                 Ok(Self::MultiSig(MultisigPayload {
                     version,
                     threshold,

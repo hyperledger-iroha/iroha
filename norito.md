@@ -176,6 +176,12 @@ admission, or buffer reservation. This prevents a recursive or incorrect
 length oracle from exhausting the stack, forcing a payload-sized speculative
 allocation, or understating the bytes accepted by the output pass.
 
+Use `canonical_frame_len` to count the exact uncompressed V1 frame emitted by
+`encode_canonical`, including for resource admission and length-prefixed hashes.
+Both ignore ambient layout guards and restore the caller's guard on return.
+The lower-level `core::encoded_frame_len` follows the active layout, matching
+the corresponding layout-aware encoder.
+
 Derive-generated serializers and length diagnostics also enforce
 `MAX_VALUE_NESTING_DEPTH`. Recursive in-memory values therefore return a
 typed `NestingDepthExceeded` error through fallible encoding APIs before native
@@ -279,7 +285,8 @@ hiding beneath a typed outer object or array.
 JSON field dispatch uses one key hash implementation for compile-time constants,
 the scalar parser, and the tape parser. With `crc-key-hash`, the portable
 Castagnoli byte update and runtime-detected ARM CRC or x86 SSE4.2 update use
-the same accumulator convention and final mixing. Without that feature they
+the same raw register seeded with `0xffffffff`, without a final complement,
+before the fixed 64-bit avalanche. Without that feature they
 all use FNV-1a. These hashes select JSON fields internally; they do not alter
 the serialized JSON or binary schema hashes. Key comparisons still guard
 against hash collisions.

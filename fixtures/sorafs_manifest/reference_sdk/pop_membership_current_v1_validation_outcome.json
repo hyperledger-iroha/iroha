@@ -1,0 +1,91 @@
+{
+  "status": "Ok",
+  "code": "SFS-OK-000",
+  "category": "validation",
+  "message": "PoP membership proof accepted",
+  "action": null,
+  "docs_url": "https://docs.iroha.tech/",
+  "telemetry_tags": [
+    "sorafs.reference.pop",
+    "sorafs.reference.pop.membership_proof",
+    "sorafs.reference.code.SFS-OK-000"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "PopMembershipProofV1"
+    },
+    {
+      "key": "version",
+      "value": "1"
+    },
+    {
+      "key": "eligibility_class",
+      "value": "general"
+    },
+    {
+      "key": "commitment_root_hex",
+      "value": "0100000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "key": "commitment_tree_version",
+      "value": "7"
+    },
+    {
+      "key": "revocation_root_hex",
+      "value": "0100000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "key": "revocation_list_version",
+      "value": "3"
+    },
+    {
+      "key": "nullifier_hex",
+      "value": "0100000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "key": "challenge_digest_hex",
+      "value": "4343434343434343434343434343434343434343434343434343434343434343"
+    },
+    {
+      "key": "verifier_context",
+      "value": "structural-sdk-fixture"
+    },
+    {
+      "key": "presentation_binding_digest_hex",
+      "value": "4646464646464646464646464646464646464646464646464646464646464646"
+    },
+    {
+      "key": "proof_system",
+      "value": "halo2_ipa_pasta_v1"
+    },
+    {
+      "key": "membership_circuit_id",
+      "value": "sorafs-pop-membership-halo2-ipa-pasta-v1"
+    },
+    {
+      "key": "membership_parameter_digest_hex",
+      "value": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    {
+      "key": "membership_verifying_key_digest_hex",
+      "value": "4545454545454545454545454545454545454545454545454545454545454545"
+    },
+    {
+      "key": "proof_bytes_len",
+      "value": "64"
+    },
+    {
+      "key": "expires_at_epoch",
+      "value": "2000"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "pop_membership_proof",
+      "path": "pop_membership_current_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 123
+}

@@ -135,24 +135,25 @@ BUILD_ENV_REMOVALS = (
 TAIRA_BUILD_PROFILE = "local-release"
 RUNTIME_SIGNER_DIRECTORY = Path("runtime") / "taira-runtime-signers"
 RUNTIME_SIGNER_FILE_BYTES = 71
-TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = 68_719_476_736
+TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = 1024 * 1024 * 1024
+TAIRA_NEXUS_MAX_WSV_MEMORY_BYTES = 256 * 1024 * 1024
 TAIRA_NEXUS_STORAGE_WEIGHTS = (
     ("kura_blocks_bps", 6_000),
     ("wsv_snapshots_bps", 2_000),
     ("sorafs_bps", 2_000),
 )
 STORAGE_WEIGHT_BASIS_POINTS = 10_000
-TAIRA_SORAFS_MAX_CAPACITY_BYTES = 13_743_895_347
-TAIRA_SORACLOUD_HYDRATION_CONCURRENCY = 4
-TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY = 4
+TAIRA_SORAFS_MAX_CAPACITY_BYTES = TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES // 5
+TAIRA_SORACLOUD_HYDRATION_CONCURRENCY = 1
+TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY = 1
 TAIRA_INROU_IDENTITY_BASE = 70_000
 TAIRA_INROU_IDENTITY_SLOTS = PEER_COUNT
 TAIRA_INROU_IDENTITY_NAME_PREFIX = "iroha-inrou-"
 TAIRA_INROU_VM_CAPACITY = 1
-TAIRA_INROU_MAX_CPU_MILLIS = 8_000
-TAIRA_INROU_MAX_MEMORY_BYTES = 8 * 1024 * 1024 * 1024
-TAIRA_INROU_MAX_STORAGE_BYTES = 64 * 1024 * 1024 * 1024
-TAIRA_INROU_GUEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024 * 1024
+TAIRA_INROU_MAX_CPU_MILLIS = 1_000
+TAIRA_INROU_MAX_MEMORY_BYTES = 768 * 1024 * 1024
+TAIRA_INROU_MAX_STORAGE_BYTES = (1536 + 80) * 1024 * 1024
+TAIRA_INROU_GUEST_IMAGE_MAX_BYTES = 1600 * 1024 * 1024
 TAIRA_INROU_START_GRACE_MS = 30_000
 TAIRA_INROU_STOP_GRACE_MS = 10_000
 TAIRA_INROU_EGRESS_RATE_PER_MINUTE = 600
@@ -3915,7 +3916,7 @@ def _require_canonical_taira_storage_profile(
         config,
         _NEXUS_STORAGE_SECTION,
         nexus,
-        {"local_budget_bytes"},
+        {"local_budget_bytes", "max_wsv_memory_bytes"},
     )
     expected_weight_fields = {key for key, _ in TAIRA_NEXUS_STORAGE_WEIGHTS}
     _require_exact_keys(
@@ -3935,6 +3936,11 @@ def _require_canonical_taira_storage_profile(
         "nexus.storage.local_budget_bytes",
         nexus["local_budget_bytes"],
     )
+    wsv_memory = _canonical_nonnegative_integer(
+        config, "nexus.storage.max_wsv_memory_bytes", nexus["max_wsv_memory_bytes"]
+    )
+    if wsv_memory != TAIRA_NEXUS_MAX_WSV_MEMORY_BYTES:
+        fail(f"peer{peer_index} has the wrong Taira WSV memory budget: {config}")
     parsed_weights = {
         key: _canonical_nonnegative_integer(
             config,

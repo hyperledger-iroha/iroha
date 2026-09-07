@@ -238,7 +238,8 @@ pub struct ComputeSponsorPolicy {
     pub max_daily_cu: NonZeroU64,
 }
 /// Risk classes applied to price families for governance-bound deltas.
-/// JSON object keys use the variant names `Low`, `Balanced`, and `High`.
+///
+/// JSON object keys use the exact variant names: `Low`, `Balanced`, and `High`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "class", content = "value"))]

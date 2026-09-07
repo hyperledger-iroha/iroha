@@ -281,7 +281,7 @@ class PrivacyNativeBridge private constructor() {
             }
             check(nativeAvailable) { "native Exact12 capability validation is unavailable" }
             val code = try {
-                nativeValidateExact12CapabilityManifest(archive)
+                nativeValidateExact12CapabilityManifestForNetworkV1(archive, null)
             } catch (error: RuntimeException) {
                 throw IllegalStateException("native Exact12 capability validation failed", error)
             } catch (error: LinkageError) {
@@ -418,7 +418,9 @@ class PrivacyNativeBridge private constructor() {
 
         internal fun requireExact12CapabilityManifest(
             archive: ByteArray?,
+            expectedNetworkId: NetworkId? = null,
         ): PrivacyExact12CapabilityManifestV1 {
+            check(nativeAvailable) { "native Exact12 capability manifest validation is unavailable" }
             check(
                 archive != null &&
                     archive.isNotEmpty() &&
@@ -427,7 +429,7 @@ class PrivacyNativeBridge private constructor() {
             requireNotNull(archive)
             val snapshot = archive.copyOf()
             check(
-                nativeValidateExact12CapabilityManifest(snapshot) ==
+                nativeValidateExact12CapabilityManifestForNetworkV1(snapshot, expectedNetworkId?.bytes()) ==
                     Exact12CapabilityManifestValidationStatusV1.VALID.code,
             ) { "invalid canonical Exact12 capability manifest" }
             val inspection = nativeInspectExact12CapabilityManifest(snapshot)
@@ -441,6 +443,7 @@ class PrivacyNativeBridge private constructor() {
         internal fun requireExact12CapabilityTuple(
             archive: ByteArray,
             protocolId: PrivacyProtocolIdV1,
+            expectedNetworkId: NetworkId,
         ) {
             check(nativeAvailable) { "native Exact12 capability admission is unavailable" }
             require(archive.isNotEmpty() && archive.size <= EXACT12_CAPABILITY_MANIFEST_MAX_BYTES) {
@@ -448,7 +451,7 @@ class PrivacyNativeBridge private constructor() {
             }
             val snapshot = archive.copyOf()
             try {
-                check(nativeRequireExact12CapabilityTuple(snapshot, protocolId.ordinal)) {
+                check(nativeRequireExact12CapabilityTupleForNetworkV1(snapshot, protocolId.ordinal, expectedNetworkId.bytes())) {
                     "Exact12 protocol is not active, ready, and byte-identical to the local profile"
                 }
             } finally {
@@ -461,6 +464,7 @@ class PrivacyNativeBridge private constructor() {
             archive: ByteArray,
             protocolId: PrivacyProtocolIdV1,
             instructionArchive: ByteArray,
+            expectedNetworkId: NetworkId,
         ) {
             check(nativeAvailable) { "native Exact12 construction admission is unavailable" }
             require(archive.isNotEmpty() && archive.size <= EXACT12_CAPABILITY_MANIFEST_MAX_BYTES) {
@@ -473,10 +477,11 @@ class PrivacyNativeBridge private constructor() {
             val instructionSnapshot = instructionArchive.copyOf()
             try {
                 check(
-                    nativeValidateExact12SubmitProofConstruction(
+                    nativeValidateExact12SubmitProofConstructionForNetworkV1(
                         manifestSnapshot,
                         protocolId.ordinal,
                         instructionSnapshot,
+                        expectedNetworkId.bytes(),
                     ),
                 ) {
                     "Exact12 submit-proof instruction does not match committed/native admission"
@@ -511,11 +516,11 @@ class PrivacyNativeBridge private constructor() {
                 nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
                     nativeConfidentialDerivationContractRevisionV3() ==
                     CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3 &&
-                    nativeValidateExact12CapabilityManifest(null) ==
+                    nativeValidateExact12CapabilityManifestForNetworkV1(null, null) ==
                     Exact12CapabilityManifestValidationStatusV1.NULL_POINTER.code &&
                     nativeInspectExact12CapabilityManifest(null) == null &&
-                    !nativeRequireExact12CapabilityTuple(null, -1) &&
-                    !nativeValidateExact12SubmitProofConstruction(null, -1, null) &&
+                    !nativeRequireExact12CapabilityTupleForNetworkV1(null, -1, ByteArray(32) { 1 }) &&
+                    !nativeValidateExact12SubmitProofConstructionForNetworkV1(null, -1, null, ByteArray(32) { 1 }) &&
                     requireCompiledProfileCatalog(nativeCompiledProfileCatalog()).isNotEmpty() &&
                     requireExact12FixtureBundle(nativeExact12FixtureBundle()).isNotEmpty()
             } catch (_: RuntimeException) {
@@ -580,23 +585,26 @@ class PrivacyNativeBridge private constructor() {
             archive: ByteArray,
         ): Int
 
-        @JvmStatic private external fun nativeValidateExact12CapabilityManifest(
+        @JvmStatic private external fun nativeValidateExact12CapabilityManifestForNetworkV1(
             archive: ByteArray?,
+            expectedNetworkId: ByteArray?,
         ): Int
 
         @JvmStatic private external fun nativeInspectExact12CapabilityManifest(
             archive: ByteArray?,
         ): ByteArray?
 
-        @JvmStatic private external fun nativeRequireExact12CapabilityTuple(
+        @JvmStatic private external fun nativeRequireExact12CapabilityTupleForNetworkV1(
             archive: ByteArray?,
             protocolIndex: Int,
+            expectedNetworkId: ByteArray,
         ): Boolean
 
-        @JvmStatic private external fun nativeValidateExact12SubmitProofConstruction(
+        @JvmStatic private external fun nativeValidateExact12SubmitProofConstructionForNetworkV1(
             manifestArchive: ByteArray?,
             protocolIndex: Int,
             instructionArchive: ByteArray?,
+            expectedNetworkId: ByteArray,
         ): Boolean
 
         @JvmStatic private external fun nativeExact12FixtureBundle(): ByteArray?

@@ -33,9 +33,129 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
+## 2026-09-07 post-reboot checkpoint
+
+The host reboot removed the earlier `/tmp` SoraFS logs and source snapshots and
+interrupted unfinished native captures. The source changes survived. Earlier
+counts below are observations with unavailable raw evidence; they do not qualify
+the current candidate. Replacement logs and result manifests now live under the
+ignored `target/evidence/sorafs-v1/` directory.
+
+The newly rebuilt full manifest library passes **896 tests, zero failures and
+zero ignored**, in 50.83 seconds after a 46.69-second build. Its binary is
+`target/debug/deps/sorafs_manifest-5333f96d02018475`, SHA-256
+`dcc36b862b01a356477d470dea98b134bc108d87c80cd573843cc3deb2c19cb3`.
+`manifest-canonical-identity-suite.log` and
+`manifest-canonical-identity-result.json` retain the output and scoped hashes.
+These are local test results, not a release seal or hardware qualification.
+
+An independent audit extended the canonical-size finding to framed identities
+and signatures: manifest/deal/audit/replication material, finalized retention
+requests, pin-accounting keys, and node reputation, billing and Governance DAG
+persistence/publication. The corrected boundaries use `encode_canonical` and
+real `canonical_frame_len` counting. Explicit bare `codec::Encode` V1 preimages
+remain unchanged. Cross-layout identity/signature and tampering regressions pass
+in the manifest suite. The focused retention-request model selection also passes
+three tests, zero failures/ignored, after an 11m08s build. Its durable result is
+`model-retention-canonical-result.json`; broader model changes owned by other
+tasks and the combined Core/node candidate still need fresh qualification.
+Checkpoint retention must choose the same minimal retained prefix under every
+admitted caller layout. No compatibility decoder or second V1 state format is
+introduced. The earlier 113 Core failures and all four-validator cases remain
+open until fresh execution proves their corrections.
+
+The first fresh node artifact compiles in 4m16s and registers 1,423 tests. Its
+14-test canonical-boundary selection reports **11 passes and three failures**
+in 21.333 seconds (`node-canonical-results.json`). The failures expose a remaining
+ambient encoder in the shared Governance DAG two-slot binding owner and two
+invalid fixture setups: an overlong prefixed billing source ID and a mismatched
+finalized PoR source anchor. Corrections preserve the production ID ceiling and
+fork rejection. A separate decoder review found that the remote governance-head
+path allocated within its finite amplification budget before rejecting forbidden
+compression. Canonical header admission now rejects compression before allocation.
+After one test-only return-type correction, the fresh node retry passes all
+**19 exact regressions**, zero failures/ignored, in 40.489 seconds, including
+all three original failures, two-slot persistence and the compression checks.
+The captured binary SHA-256 is
+`148b3a290aca776a2f193fe07fbd20940ac0b5be5ab6050aea6815be22ad15b1`;
+`node-canonical-retry-results.json` retains each exact test and log hash.
+The full library run against that artifact reports **1,378 passed, 48 failed,
+two ignored**, zero filtered out, in 441.769 seconds; the two ignored cases
+require a real local Kubo deployment. `node-canonical-full-result.json` and
+`node-canonical-full-failures.json` retain the binary/log hashes and diagnostics.
+Failures include stale fixture identities and approval expectations, shared
+test storage/leases and symlinked temporary roots, allocation-budget assertions,
+and replay/recovery cases that still require review. They remain open. The
+empty-multisig assertion now requires the shared verifier's exact rejection;
+that test correction has not yet been rebuilt.
+
+The next bounded Core audit found an orderbook nonce key derived from display
+text instead of canonical account identity, and remaining ambient-framed
+orderbook/reserve/moderation/pin state and reassigned replication order writes.
+These corrections and the SDK reference validators' canonical outer-frame
+admission are being completed before the shared Core/daemon capture. No fallback
+lookup or old state decoder is retained. These source changes and the targeted
+node passes do not establish Core or distributed readiness.
+
+The full current provider/rollout source-contract selection passes 410 checks
+and fails two unfinished-source closure checks in 61.73 seconds. Its retained
+log is `canonical-final-source-contracts.log`; the earlier focused audit's
+pinned-environment context and exact offender inventory remain in
+`canonical-contract-tests/result.json` and `todo-findings.json`.
+The remaining entries concern authenticated MKHE reports,
+the SoraFS signer hardware/state and production-consumer hard cut, curated Torii
+capabilities, and bounded multi-page shard prefixes. No guard, source seal or
+dependency pin was relaxed. The global source-budget audit also fails; new
+canonical regression groups are extracted into small cohesive test files rather
+than enlarging their existing parent modules. Neither source inventories nor
+local test counts establish hardware or reference-deployment readiness.
+
 ## 2026-09-06 execution checkpoint
 
-G01 is active under the [implementation goals](v1_implementation_goals.md).
+The broader native Core checkpoint (2026-09-07) finished **275 passed, 113 failed,
+0 ignored**, across all 388 tests selected by `sorafs`, in 381.64 seconds.
+It uses the same captured Core artifact as the 15 passing targeted security
+regressions. The retained log is
+`/tmp/iroha-sorafs-fresh-core-full-subsystem-tests.log`. Failures include missing
+eligible-provider fixtures, transaction call hashes, canonical consensus hashes,
+validated Kura block results and stale timing/error assertions. A production
+canonical-size defect also surfaced: ambient Norito layout affected query byte
+limits and proof-outcome signer-policy digests. Corrections and fresh native
+qualification remain open; the targeted pass does not qualify the full subsystem.
+
+The canonical-size correction now adds `norito::canonical_frame_len`, preserving
+ambient layout only for the explicitly layout-aware low-level codec. All 17
+SoraFS sizing calls and the proof-outcome policy hash use canonical framing;
+the full 17-test Norito canonical-codec selection passes, including every valid
+ambient flag combination. Provider/rollout source contracts pass 409 tests with
+three existing unfinished-inventory/Apple bootstrap-path failures. Revised Core
+fixtures are queued for one coordinated native rebuild, preserving production
+provider, custody, timing, hash, finality and typed-rejection checks.
+
+The Apple Rustup bootstrap now uses the same shared path-identity resolver as
+its pinned Python bootstrap, retaining executable/regular/non-symlink and copied
+basename checks. The release-automation selection plus the exact path guard
+passes **623 tests**; extracted Bash syntax and actual regular, missing and
+symlink-loop paths pass three cases. This closes that path-resolution failure;
+the two genuine unfinished-source inventory failures remain. No source or
+bootstrap seal was refreshed, and no hardware qualification was inferred.
+
+The corrected `core_api-77e01945b49a2039` harness compiled in 7m35s, SHA-256
+`22e4fefc841dd8bf8f7c7f105f47d49e6a3d998845b948cae2d3cbc363031888`.
+Its strict four-validator repair attempt gets beyond the former stack and disk
+resource failures, but daemon `7924973a…` rejects the newer genesis ZK policy
+hash. The attempt also reveals four retained Tokio `spawn_blocking` status
+queries that inherit a forbidden blocking-SDK context. Rebuild the matched
+daemon and harness with the shared dedicated-thread polling correction before retry. The four status/consensus HTTP calls now use one plain-thread owner
+in `iroha_test_network::read_on_dedicated_thread`; all six integration consumers
+import that owner directly. Its moved regression checks Tokio-context exclusion,
+error propagation and worker panics; native execution of the move remains pending.
+`/tmp/iroha-sorafs-four-peer-repair-bounded-runtime.log` is failure evidence,
+not ledger runtime qualification. The exact test exited 101 after its three
+startup attempts: zero passed, one failed, zero ignored, 372.02 seconds.
+
+G01, G02, G03 and G13 are active under the
+[implementation goals](v1_implementation_goals.md).
 Source inspection confirms that the dependency expectation already contains
 `blake3==1.0.9`, the four native ledger domains and finalized event queries
 exist, and the SDK reference/DAG validators, quarantine AEAD and integer privacy
@@ -72,11 +192,150 @@ focused source-integrity regressions also pass. These are local script/contract
 results; the native CI job, full workspace/SDK matrix and production deployment
 have not been executed by this slice.
 
-The broad release-helper baseline is still being evaluated. Source-budget
-findings, the reviewed-source seal mismatch, provider-ingest contract drift,
-dirty OpenAPI manifests and the software-only custody profile remain explicit
-follow-on work. No production lane, foundational envelope or readiness claim
-is created by these repairs.
+The provider-ingest runtime contract guard now checks scoped restart, counter,
+checkpoint-order and metadata-boundary invariants instead of hashing unrelated
+Rust formatting. All **26 tests** pass, including mutations that disable the
+restart test, substitute comments, reorder phases, change counters or expose
+metadata. This source guard does not replace execution of the native restart test.
+
+G03 exposed a production admission gap: the native Initial executor rejected
+the three repair ISIs before their Core permission/lease/owner checks could run.
+Explicit admission and executor regressions are being validated; the same
+review adds the six orderbook and ten reserve instructions only after checking
+their native owner, governed-account and payload-signature boundaries. The new
+`integration_tests/tests/sorafs_repair_ledger.rs` four-validator scenario covers
+distinct-transaction submission/completion replay, competing claims, permission
+revocation, successor fencing, one terminal journal and same-peer restart.
+Only the exact structured native rejection can satisfy its negative checks.
+The grouped `core_api` integration target now compiles; network execution
+remains pending. This does not establish
+isolated disk replay, provider execution, expiry/slashing or production evidence.
+The successful check follows correction of a test restart-await type error and
+the owning task's concurrent FASTPQ interface repair.
+The orderbook and reserve four-validator scenarios now share that grouped
+harness. Their signed native flows cover distinct-transaction custody races,
+exact authority failures, conservation, committed event/query convergence and
+same-peer restart. Provider ownership is seeded through the documented production
+pre-genesis configuration and queried afterward; no retired owner instruction or
+test-only network state injection is used. The first compilation found four
+orderbook test import/borrow errors, now corrected; recompilation and all network
+execution remain pending.
+Provider-governance proposal intake is also explicitly admitted to Core's current
+bonded-citizen gate, with missing/under-bonded/current-bond and idempotent proposal
+regressions; proposal submission cannot enact ownership.
+
+The authorization audit also found name-only permission checks in moderation,
+PoP registry, proof-outcome policy and several global SoraFS operations. These
+now compare exact canonical tokens, with malformed direct and role grant
+regressions. Orderbook and reserve already compare exact tokens. The deeper
+moderation eligibility fix now spans the PoP proof, Core, node and Torii:
+the required recipient digest is a constrained tenth Halo2 public input and is
+included in authenticated API requests. Core derives the expected binding from
+the immutable appeal intake and authenticated account. The shared per-appeal
+nullifier domain is unchanged. Copied/retargeted proof, duplicate-person and
+actual-schema missing-field rejection regressions are written. A separate bounded
+source review found no additional defect or missing changed call site; native
+test execution and external security qualification remain pending.
+The latest complete manifest library run passed **893 tests**, with no failures
+or ignored tests. The original failures are corrected. New real-signature, canonical archive,
+size-budget and cross-layout regressions pass for PoP, PDP, PoR, PoTR, orderbook,
+provider advertisements, finance and transparency. The transparency correction
+also verifies actual publication Merkle proofs and signatures under every tested
+layout and rejects alternate-layout entry hashes. Strict
+canonical decoding rejects compressed headers before decoding and retains
+composed resource limits.
+The fresh captured Core run passes **all 15 security regressions** with zero
+failures or ignored tests in 74.91 seconds. This validates the repaired registry
+labels and bootstrap-state fixtures, exact direct/role permissions, initial
+executor gates, replay/revocation handling and cross-account PoP rejection.
+The executable SHA-256 is
+`018e5824299745153816b8fa53ca060e4fac29b304dee3f5aa4a920df5745421`;
+it captures the SoraFS changes before later unrelated Kaigi carrier edits and
+is a scoped local result, not a sealed production candidate.
+The recipient-binding helper streams the canonical AccountId frame with explicit
+encoding-error propagation. Its model regression and three node authorization
+tests pass; Torii also passes the three recipient-binding tests, three OpenAPI
+contracts, and account/NFT/RWA query-filter regressions on the captured binary.
+
+The SF-11 signed-manifest gate now requires independently supplied, digest-pinned
+source files. Metadata-only signing claims cannot qualify a canary. Raw Ed25519
+verification authenticates the exact manifest/key/signature snapshots, with
+bounded native executable copies and retained source-directory identities.
+Canonical hardware receipt verification now authenticates a separately signed
+finalized-state observation against independently pinned policy and trust. Eleven
+new tests pass for exact receipts, observer independence, causal observation
+times, replay, revocation, source substitution and bounded canonical documents.
+All **56 native validator CLI tests** and **12 fixture-generator tests** pass.
+The six PoP structural fixtures have been generated and checked; all **30 Python
+fixture-checker tests** pass. Seven actual CLI process checks pass, including a
+complete signed positive and tampered signature/state, wrong deployment,
+revocation, expiry and pinned-policy substitution negatives. These use simulated
+signed observations and do not qualify hardware. The integrated Python source,
+receipt, builder, checker and runner selection passes **360 tests**. It accepts
+only the exact native result, reauthenticates every checker use and binds all
+canary claims to the independently pinned sources and deployment. Both focused
+Kotlin and Java-source PoP tests pass with a freshly
+rebuilt host JNI bridge; their XML reports contain two executed tests and no
+failures, errors or skips. Each exercises the current, missing-binding and
+zero-binding structural fixture. Swift awaits a current Apple bridge artifact.
+A collection dry-run is not qualification.
+
+G02 adds a bounded canonical custody-record verifier in the shared manifest
+signer module, with the daemon duplicate removed. It requires an independently
+pinned attestation authority, exact signer
+and network bindings, current finalized state, explicit time, revocation checks
+and predecessor/sequence matching. The private verified result cannot be decoded
+or constructed by a caller. All **23 native custody tests** pass, covering
+canonical bounded decoding, independent attestation, non-exportability, exact
+bindings, enrollment replay, use after enrollment, revocation, freshness and
+state changes across provider operations. The public receipt verifier adds exact
+four-signature purpose/order, reviewed-manifest, original-custody and finalized
+completion binding. The opaque operation coordinator also
+passes **34 native tests** after migration to the shared public record owner,
+covering private signature staging, operation reservations,
+state-change fences, enrollment, renewal/rotation/revocation ordering and exact
+durable-response recovery. Independent review found and corrected a gap in binding
+the original custody: a renewed coordinator cannot relabel an earlier completed
+response as belonging to its new custody record. The exact reviewed release
+producer stages a durable private receipt before authoritative completion and
+rechecks journal identity and current custody before release. Its exclusive
+directory lease prevents concurrent journal instances or processes from racing
+the aggregate storage bound. Production authoritative-state
+and provider adapters and the atomic consumer/profile replacement remain
+unfinished. The existing software service is not hardware-qualified by these
+interfaces or their simulated providers.
+The shared bounded supervisor-credential reader now has a neutral daemon owner.
+Consensus threshold custody keeps its existing behavior while dropping its
+dependency on software-signer wrapping APIs. All **three native reader tests**
+pass, covering bounds, metadata changes, links and unsafe permissions.
+
+Ten stale SoraFS source-size baselines have been tightened to the smaller
+current files. The fetch CLI's existing test module is now a separate owned file:
+all 50 tests and 144 assertions are retained, and both files meet their default
+5,000/3,000-line limits with the exception removed. The combined source-budget
+and fetch-contract selection passes **41 tests**. No limit was raised; other
+identified SoraFS growth findings still require source refactoring. Other
+tasks have advanced the repository revision during this work, so these results
+cannot serve as evidence for one immutable release candidate.
+
+The broad Python 3.12 release-helper baseline completed with **3,371 passes and
+60 failures** after 3h40m across a changing worktree. Current-source triage
+corrected stale guards for canonical account drafts, registered consolidated
+ledger tests, source-authenticated signed-manifest examples, operator-only route
+catalog entries, and catalog-generated metrics. The expanded release-automation,
+provider-ingest and rollout-contract run passes **1,031 tests with three
+failures**: two unfinished-source inventories and the Apple tool-bootstrap
+path-resolution check. These stay open. The receipt verifier suite is now
+mandatory in the release gate and its source/test changes trigger the workflow.
+Packaging replays with Python 3.12 stop at the unchanged reviewed-source seal;
+the pipeline also rejects its changed signing bootstrap helper. These denials
+are not successful packaging evidence. Source-budget findings, dirty OpenAPI
+manifests, remaining hardware provider/state adapters and atomic custody-profile
+replacement still require closure. The workspace formatting check found the
+receipt CLI's formatting plus unrelated executor/exporter formatting; the
+receipt CLI is now formatted. No other owner's Rust code was reformatted.
+No production lane, foundational envelope or readiness claim is created by
+these repairs.
 
 ## Authority and shared contract
 
@@ -86,8 +345,8 @@ is created by these repairs.
 | V1-C02 | Production policy and behavior come from `iroha_config`; file keys and environment overrides are limited to explicit development/test paths. | All SoraFS daemons, Torii routes, publishers, workers, and deployment bundles. | Config parsing/default tests plus static production-path guards. | Reviewed production config digest with runtime-secret provenance. | open |
 | V1-C03 | Canonical envelopes, bounded inputs, finalized cursors, idempotency, durable outboxes/dead letters, signer rotation/revocation, payload-free logs, and deterministic integer/fixed-point computation. | Common service and ledger boundaries in `crates/iroha_core`, `crates/iroha_torii`, `crates/sorafs_node`, and `crates/sorafs_manifest`. | Unit/property/model, replay, crash, poison, allocation, timestamp, signer, and concurrency negatives. | Four-validator recovery and disaster-recovery records. | open |
 | V1-C04 | Orderbook, reserve/rent, repair, and moderation authority is committed ledger state; daemons reconcile rather than own competing truth. | Native instructions, queries, committed events, Torii projections, and SDK builders. The local-authority removals are listed below. | Atomicity, conservation, uniqueness, finality, fork/retry, and cross-peer duplicate-submission suites. | Identical post-recovery queries, balances, roots, events, and serialized responses on four validators. | open |
-| V1-C05 | Release artifacts are reproducible, mandatory Linux/macOS x86_64/aarch64 binaries are smoke-tested, signing is Ed25519-only, and provenance/SBOM/vulnerability results are verified. | The release workflow closes the exact five-target inventory (mandatory Linux/macOS x86_64/aarch64 plus additional Windows x86_64), replays both inner validator and outer platform archives, uses locked builds, requires byte-identical shared files, and transactionally publishes Ed25519 signature/public-key/receipt outputs with no-follow exclusive creation and signer/manifest snapshots. | Release automation, archive replay, exact version-map/inventory, unsafe permission/hardlink/symlink/signer/key/signature/receipt-race negatives, shell Ed25519 integration, action-pin, and workflow static guards are green locally. | Run the five native host builds and smokes, independently administered external software Ed25519 reference signature, Syft/Grype scans, OIDC/cosign provenance, package-channel canaries, and prove zero critical/high findings. | open |
-| V1-C06 | Promotion uses an explicit clock and one reviewed deployment context; secret material and payload data never enter evidence. | `scripts/run_sorafs_production_readiness.py`, `scripts/check_sorafs_production_readiness.py`, lane checkers, and the private-key-free two-phase builder in `scripts/build_sorafs_foundational_prerequisite.py`. Later sequences require the exact immediately preceding signed envelope; all signing inputs, the nine plural-summary evidence packages, the 17 independently supplied lane-summary files, and output parents are pinned against path replacement. | Builder-to-aggregate acceptance, aggregate positive/replay, plus missing, duplicate, stale, predecessor, signature, mapping, path-swap, and sensitivity negatives. | One external-software-Ed25519-signed monotonic foundational envelope and 17 fresh genuine lane summaries. | local-complete; evidence-pending |
+| V1-C05 | Release artifacts are reproducible, mandatory Linux/macOS x86_64/aarch64 binaries are smoke-tested, signing is Ed25519-only, and provenance/SBOM/vulnerability results are verified. | The release workflow closes the exact five-target inventory (mandatory Linux/macOS x86_64/aarch64 plus additional Windows x86_64), replays both inner validator and outer platform archives, uses locked builds, requires byte-identical shared files, and transactionally publishes Ed25519 signature/public-key/receipt outputs with no-follow exclusive creation and signer/manifest snapshots. | Focused release automation, manifest/receipt verification and publication-race tests pass as scoped above; the current broad source, reviewed-seal, packaging and native-target qualification checks remain open. | Run the five native host builds and smokes, independently administered hardware Ed25519 reference signature with authenticated custody and finalized completion, Syft/Grype scans, OIDC/cosign provenance, package-channel canaries, and prove zero critical/high findings. | open |
+| V1-C06 | Promotion uses an explicit clock and one reviewed deployment context; secret material and payload data never enter evidence. | `scripts/run_sorafs_production_readiness.py`, `scripts/check_sorafs_production_readiness.py`, lane checkers, and the private-key-free two-phase builder in `scripts/build_sorafs_foundational_prerequisite.py`. Later sequences require the exact immediately preceding signed envelope; all signing inputs, the nine plural-summary evidence packages, the 17 independently supplied lane-summary files, and output parents are pinned against path replacement. | Builder-to-aggregate acceptance, aggregate positive/replay, plus missing, duplicate, stale, predecessor, signature, mapping, path-swap, and sensitivity negatives. | One hardware-Ed25519-signed monotonic foundational envelope and 17 fresh genuine lane summaries; migrate the remaining producer and receipt consumers under G02. | open |
 | V1-C07 | The promotion decision is cryptographically bound to the exact reviewed lane summaries and their payload-free evidence. | Each evidence package contains its exact ordered `readiness_summaries` mapping; the builder carries those digests into the signed prerequisite row as `readiness_summary_sha256`, signs all 17 top-level lane digests in canonical aggregate order, and rejects any mismatch. The independent aggregate checker validates the nine-to-17 partition, cross-binds the grouped and top-level signed rows, rehashes the 17 supplied summaries, and rejects substitution. | Singular-package, forged-summary, cross-prerequisite reassignment, grouped/top-level digest mismatch, swapped-summary bytes, omitted/reordered lane, wrong-key, predecessor, path-identity, and deterministic-replay negatives. | Trusted signatures and archive digests for the exact accepted 22-input aggregate set and result: topology summary and signed envelope, resilience receipt, signed lane inventory, foundational envelope, and 17 lane summaries. | local-complete; evidence-pending |
 
 The latest complete pinned-Python run passed all 465 aggregate

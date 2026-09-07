@@ -20,7 +20,7 @@ use halo2_base::{
     QuantumCell::{Constant, Existing},
     gates::{
         GateInstructions as _, RangeInstructions as _,
-        circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
+        circuit::{BaseCircuitParams, BaseConfig, MaybeRangeConfig, builder::BaseCircuitBuilder},
     },
     utils::{BigPrimeField, CurveAffineExt},
 };
@@ -55,7 +55,7 @@ use super::{
         DeferredAccumulator, DeferredLoader, DeferredScalar, KagemushaNativeDeferredBatchV1,
         bind_accumulator_limbs, constrain_reciprocal_native_batch_v1, deferred_field_chips_v1,
         deferred_loader_v1, derive_mint_hash_claim_native_deferred_batch_v1,
-        kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_v1,
+        kagemusha_protocol_structure_digest_v1, load_and_constrain_claim_protocol_native_v1,
         load_native_accumulator, select_accumulator_v1, verify_fold_with_transcript_binding_v1,
         verify_ordinary_proof_with_transcript_binding_at_k_v1,
         verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
@@ -71,6 +71,7 @@ use crate::zk::{
         hash,
     },
     pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1},
+    pasta_native_poseidon::{PastaNativePoseidonConfigV1, PastaNativePoseidonJobsV1},
     pasta_sha256_table8::{BLOCK_SIZE, DIGEST_SIZE, IV},
 };
 
@@ -97,8 +98,50 @@ const CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1: u128 = 3;
 const CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1: usize = 80;
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 const KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1: usize = 2;
+// Two lanes retain the existing 1,008-source envelope with both protocol identities: the
+// current verifier has at least 134 fresh non-protocol sources and at most seven equations,
+// hence at most 1,942 complete permutations and 64,086 rows per lane.
+const KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1: usize = 2;
+// Each ordinary proof contributes 2*k+3 proof-read points; the parent has two additional
+// carrier commitments. Each of the two k16 ZK folds also reads 2*k+3 points. Every read is
+// a fresh witness source (only constants are interned), and transcript identities reject.
+#[cfg(test)]
+const CLAIM_MINIMUM_NON_PROTOCOL_SOURCES_V1: usize = 3
+    * (2 * KAGEMUSHA_RECURSION_IPA_K_V1 as usize + 3)
+    + (2 * KAGEMUSHA_MINT_HASH_SHARD_K_V1 as usize + 3)
+    + 2;
 const SHARD_TO_HISTORY_ZERO_ROUNDS_V1: usize =
     (KAGEMUSHA_RECURSION_IPA_K_V1 - KAGEMUSHA_MINT_HASH_SHARD_K_V1) as usize;
+
+// Keep the completion inventory behind the existing non-shipping profiling surface. In
+// particular, querying the dense planner here must never add a production failure path.
+macro_rules! profile_claim_completion_cells {
+    ($parity:expr, $stage:literal, $builder:expr, $dense_jobs:expr, $eq_audit:expr, $ep_audit:expr, $rlc_rows:expr) => {
+        #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+        if std::env::var_os("IROHA_KAGEMUSHA_PROFILE_CELLS").is_some() {
+            let statistics = $builder.statistics();
+            let dense = $dense_jobs
+                .capacity_profile_with_lanes(KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1);
+            let carrier_lengths = [
+                $eq_audit.carrier_cells_v1().map(|cells| cells.len()),
+                $ep_audit.carrier_cells_v1().map(|cells| cells.len()),
+            ];
+            eprintln!(
+                "KAGEMUSHA_CELLS parity={:?} stage={} gate={:?} lookup={:?} eq_sources={} ep_sources={} active_carrier_lengths={carrier_lengths:?} carrier_capacity={} configured_dense_lanes={} dense_jobs_sources_max_rows={dense:?} rlc_rows={:?} base_params={:?}",
+                $parity,
+                $stage,
+                statistics.gate.total_advice_per_phase,
+                statistics.total_lookup_advice_per_phase,
+                $eq_audit.batch.source_count(),
+                $ep_audit.batch.source_count(),
+                KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+                KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
+                $rlc_rows,
+                $builder.config_params,
+            );
+        }
+    };
+}
 
 // The common-prime carrier binding used to run through BaseCircuitBuilder. At the real claim
 // width, its generic vertical gates occupied another ~4 million advice cells and materialized one
@@ -131,19 +174,36 @@ const CLAIM_RLC_RADIX: u128 = 1_u128 << CLAIM_RLC_RADIX_BITS;
 struct KagemushaClaimCarrierRlcConfigV1 {
     advice: [Column<Advice>; CLAIM_RLC_COLUMNS],
     range_table: TableColumn,
+    owns_range_table: bool,
     mode_bit_0: Column<Fixed>,
     mode_bit_1: Column<Fixed>,
     payload: Column<Fixed>,
 }
 
 impl KagemushaClaimCarrierRlcConfigV1 {
+    #[cfg(test)]
     fn configure<F: KagemushaPoseidonFieldV1>(meta: &mut ConstraintSystem<F>) -> Self {
+        Self::configure_with_base(meta, None)
+    }
+
+    fn configure_with_base<F: KagemushaPoseidonFieldV1>(
+        meta: &mut ConstraintSystem<F>,
+        base: Option<&BaseConfig<F>>,
+    ) -> Self {
         let advice = std::array::from_fn(|_| meta.advice_column());
         meta.enable_equality(advice[CLAIM_RLC_BUS]);
-        // This machine owns its lookup table. BaseCircuitBuilder deliberately removes its range
-        // table when an exact witness happens to require no Base-managed lookup advice, so
-        // borrowing that optional table made the custom circuit shape depend on witness traffic.
-        let range_table = meta.lookup_table_column();
+        // Base synthesis assigns its table before this machine. Share only an actually
+        // configured table with the exact same 15-bit contents, and assign it exactly once.
+        // Base can omit its range table when no Base lookup advice is configured, or use a
+        // different range width; those configurations retain this machine's owned table.
+        let shared_range_table = base.and_then(|base| match &base.base {
+            MaybeRangeConfig::WithRange(range) if range.lookup_bits() == CLAIM_RLC_RADIX_BITS => {
+                Some(range.lookup)
+            }
+            _ => None,
+        });
+        let owns_range_table = shared_range_table.is_none();
+        let range_table = shared_range_table.unwrap_or_else(|| meta.lookup_table_column());
         // Two fixed mode bits select inactive/boundary/preprocess/evaluate rows. The third fixed
         // column is a mode-local payload: a boundary subtype, the preprocess ternary power, or an
         // evaluate-side/load/store opcode. Unassigned rows decode as inactive (0, 0, 0).
@@ -373,6 +433,7 @@ impl KagemushaClaimCarrierRlcConfigV1 {
         Self {
             advice,
             range_table,
+            owns_range_table,
             mode_bit_0,
             mode_bit_1,
             payload,
@@ -383,6 +444,9 @@ impl KagemushaClaimCarrierRlcConfigV1 {
         &self,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), PlonkError> {
+        if !self.owns_range_table {
+            return Ok(());
+        }
         layouter.assign_table(
             || "Kagemusha claim carrier RLC range",
             |mut table| {
@@ -685,16 +749,23 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
             quotient_pack: 0,
             coefficient: 0,
         };
-        rows.push(claim_rlc_state_row_v1(
+        let mut start_a = claim_rlc_state_row_v1(
             state,
             ClaimRlcRowModeV1::StartA,
             Some(ClaimRlcBusBindingV1::Virtual(self.challenge_a)),
-        ));
-        rows.push(claim_rlc_state_row_v1(
+        );
+        // The local challenge state and its equality bus must contain the same value. The bus
+        // copies the original Base challenge cell; leaving it at the generic row's zero value
+        // makes every nonzero challenge fail both the boundary gate and the permutation check.
+        start_a.values[CLAIM_RLC_BUS] = F::from_u128(challenge_a);
+        rows.push(start_a);
+        let mut start_b = claim_rlc_state_row_v1(
             state,
             ClaimRlcRowModeV1::StartB,
             Some(ClaimRlcBusBindingV1::Virtual(self.challenge_b)),
-        ));
+        );
+        start_b.values[CLAIM_RLC_BUS] = F::from_u128(challenge_b);
+        rows.push(start_b);
 
         let mut packs = Vec::with_capacity(
             carrier
@@ -1780,12 +1851,13 @@ pub(crate) struct KagemushaMintHashClaimPairWitnessV1<'a> {
     pub(crate) ep: KagemushaMintHashClaimParityWitnessV1<'a, EpAffine>,
 }
 
-/// Base and reciprocal dense-MSM configuration of the narrow k=16 claim fold.
+/// Base, exact native Poseidon, and reciprocal dense-MSM configuration of the k=16 claim fold.
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaMintHashClaimConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
     carrier_rlc: KagemushaClaimCarrierRlcConfigV1,
     dense: PastaDenseMsmConfigV1,
+    native_poseidon: PastaNativePoseidonConfigV1,
 }
 
 /// Eq/Fp half of the paired claim fold.
@@ -1794,6 +1866,7 @@ pub(crate) struct KagemushaMintHashClaimEqCircuitV1 {
     pub(crate) builder: BaseCircuitBuilder<Fp>,
     carrier_rlc: KagemushaClaimCarrierRlcMachineV1<Fp>,
     dense_jobs: PastaDenseMsmJobsV1<EpAffine>,
+    native_poseidon_jobs: PastaNativePoseidonJobsV1<Fp>,
 }
 
 /// Ep/Fq half of the paired claim fold.
@@ -1802,6 +1875,7 @@ pub(crate) struct KagemushaMintHashClaimEpCircuitV1 {
     pub(crate) builder: BaseCircuitBuilder<Fq>,
     carrier_rlc: KagemushaClaimCarrierRlcMachineV1<Fq>,
     dense_jobs: PastaDenseMsmJobsV1<EqAffine>,
+    native_poseidon_jobs: PastaNativePoseidonJobsV1<Fq>,
 }
 
 macro_rules! impl_claim_circuit {
@@ -1820,6 +1894,7 @@ macro_rules! impl_claim_circuit {
                     builder: self.builder.deep_clone().unknown(true),
                     carrier_rlc: self.carrier_rlc.unknown(),
                     dense_jobs: self.dense_jobs.unknown(),
+                    native_poseidon_jobs: self.native_poseidon_jobs.clone().unknown(),
                 }
             }
 
@@ -1830,12 +1905,18 @@ macro_rules! impl_claim_circuit {
                 let usable_rows = (1_usize << params.k) - MINIMUM_UNUSABLE_ROWS;
                 let mut base = BaseConfig::configure(meta, params);
                 base.set_usable_rows(usable_rows);
+                let carrier_rlc =
+                    KagemushaClaimCarrierRlcConfigV1::configure_with_base(meta, Some(&base));
                 KagemushaMintHashClaimConfigV1 {
                     base,
-                    carrier_rlc: KagemushaClaimCarrierRlcConfigV1::configure(meta),
+                    carrier_rlc,
                     dense: PastaDenseMsmConfigV1::configure_with_lanes::<$opposite>(
                         meta,
                         KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
+                    ),
+                    native_poseidon: PastaNativePoseidonConfigV1::configure::<$field>(
+                        meta,
+                        KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1,
                     ),
                 }
             }
@@ -1865,6 +1946,13 @@ macro_rules! impl_claim_circuit {
                     layouter.namespace(|| concat!($label, " Base")),
                 )?;
                 let usable_rows = (1_usize << self.builder.config_params.k) - MINIMUM_UNUSABLE_ROWS;
+                self.native_poseidon_jobs.synthesize(
+                    &config.native_poseidon,
+                    &mut layouter,
+                    &self.builder.core().copy_manager,
+                    self.builder.witness_gen_only(),
+                    usable_rows,
+                )?;
                 self.carrier_rlc.synthesize(
                     &config.carrier_rlc,
                     &mut layouter,
@@ -1901,11 +1989,12 @@ struct ClaimScalarHalfV1<C>
 where
     C: CurveAffineExt,
     C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
 {
     builder: BaseCircuitBuilder<C::ScalarExt>,
     output: KagemushaNativeDeferredBatchV1<C>,
     common_cells: Vec<AssignedValue<C::ScalarExt>>,
+    native_poseidon_jobs: PastaNativePoseidonJobsV1<C::ScalarExt>,
 }
 
 /// Compact native deferred-audit witnesses discovered before either exact claim circuit is built.
@@ -2849,6 +2938,7 @@ pub(crate) fn derive_kagemusha_mint_hash_claim_deferred_audits_v1(
         builder: eq_builder,
         output: eq_output,
         common_cells: _,
+        native_poseidon_jobs: eq_native_poseidon_jobs,
     } = build_claim_scalar_half_v1::<EqAffine>(
         &eq_carrier_svk,
         &eq_shard_svk,
@@ -2862,13 +2952,14 @@ pub(crate) fn derive_kagemusha_mint_hash_claim_deferred_audits_v1(
         None,
     )?;
     let eq_digest = assigned_digest_bytes_v1(&eq_output.challenge_limbs)?;
-    drop(eq_builder);
+    drop((eq_builder, eq_native_poseidon_jobs));
     halo2_proofs::release_allocator_slack();
 
     let ClaimScalarHalfV1 {
         builder: ep_builder,
         output: ep_output,
         common_cells: _,
+        native_poseidon_jobs: ep_native_poseidon_jobs,
     } = build_claim_scalar_half_v1::<EpAffine>(
         &ep_carrier_svk,
         &ep_shard_svk,
@@ -2882,7 +2973,7 @@ pub(crate) fn derive_kagemusha_mint_hash_claim_deferred_audits_v1(
         None,
     )?;
     let ep_digest = assigned_digest_bytes_v1(&ep_output.challenge_limbs)?;
-    drop(ep_builder);
+    drop((ep_builder, ep_native_poseidon_jobs));
     halo2_proofs::release_allocator_slack();
 
     if eq_output.bound_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_BOUND_VALUE_COUNT_V1
@@ -2949,6 +3040,7 @@ pub(crate) fn build_kagemusha_mint_hash_claim_eq_v1(
         builder: mut eq_builder,
         output: eq_output,
         common_cells: eq_common,
+        native_poseidon_jobs,
     } = build_claim_scalar_half_v1::<EqAffine>(
         &eq_carrier_svk,
         &eq_shard_svk,
@@ -2968,6 +3060,15 @@ pub(crate) fn build_kagemusha_mint_hash_claim_eq_v1(
         "Eq claim Ep audit",
     )?;
     let mut dense_jobs = PastaDenseMsmJobsV1::default();
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Eq,
+        "before_reciprocal_batch",
+        eq_builder,
+        dense_jobs,
+        eq_output,
+        audits.ep,
+        None::<Result<usize, String>>
+    );
     let ep_carrier = constrain_reciprocal_native_batch_v1::<EpAffine>(
         &mut eq_builder,
         &audits.ep,
@@ -2976,6 +3077,15 @@ pub(crate) fn build_kagemusha_mint_hash_claim_eq_v1(
         &mut dense_jobs,
         KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
     )?;
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Eq,
+        "after_reciprocal_batch",
+        eq_builder,
+        dense_jobs,
+        eq_output,
+        audits.ep,
+        None::<Result<usize, String>>
+    );
     let eq_carrier = eq_output
         .carrier_cells_v1()
         .map_err(|error| format!("Eq mint-hash carrier shape is invalid: {error:?}"))?;
@@ -2988,6 +3098,15 @@ pub(crate) fn build_kagemusha_mint_hash_claim_eq_v1(
         .ok_or_else(|| "Eq mint-hash semantic instance column is absent".to_owned())?;
     let [eq_carrier, ep_carrier] =
         pad_assigned_claim_carriers_v1(&mut eq_builder, [eq_carrier, ep_carrier])?;
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Eq,
+        "before_fixed_rlc",
+        eq_builder,
+        dense_jobs,
+        eq_output,
+        audits.ep,
+        None::<Result<usize, String>>
+    );
     let carrier_rlc = constrain_claim_carrier_binding_v1(
         &mut eq_builder,
         &assigned_semantic,
@@ -2996,13 +3115,27 @@ pub(crate) fn build_kagemusha_mint_hash_claim_eq_v1(
     )?;
     eq_builder.assigned_instances.push(eq_carrier);
     eq_builder.assigned_instances.push(ep_carrier);
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut eq_builder, MINIMUM_UNUSABLE_ROWS)?;
     dense_jobs.validate_capacity_with_lanes(
         (1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS,
         KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
     )?;
     carrier_rlc
         .validate_capacity((1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS)?;
+    if native_poseidon_jobs.required_rows()?
+        > (1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS
+    {
+        return Err("mint-hash claim native Poseidon exceeds the fixed row envelope".to_owned());
+    }
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Eq,
+        "after_fixed_rlc",
+        eq_builder,
+        dense_jobs,
+        eq_output,
+        audits.ep,
+        Some(carrier_rlc.required_rows())
+    );
     if assigned_digest_bytes_v1(&eq_output.challenge_limbs)? != audits.eq_digest
         || padded_claim_carrier_u128_values_v1(&eq_output)? != audits.eq_carrier
     {
@@ -3019,6 +3152,7 @@ pub(crate) fn build_kagemusha_mint_hash_claim_eq_v1(
             builder: eq_builder,
             carrier_rlc,
             dense_jobs,
+            native_poseidon_jobs,
         },
         public_instances,
     ))
@@ -3061,6 +3195,7 @@ pub(crate) fn build_kagemusha_mint_hash_claim_ep_v1(
         builder: mut ep_builder,
         output: ep_output,
         common_cells: ep_common,
+        native_poseidon_jobs,
     } = build_claim_scalar_half_v1::<EpAffine>(
         &ep_carrier_svk,
         &ep_shard_svk,
@@ -3080,6 +3215,15 @@ pub(crate) fn build_kagemusha_mint_hash_claim_ep_v1(
         "Ep claim Eq audit",
     )?;
     let mut dense_jobs = PastaDenseMsmJobsV1::default();
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Ep,
+        "before_reciprocal_batch",
+        ep_builder,
+        dense_jobs,
+        audits.eq,
+        ep_output,
+        None::<Result<usize, String>>
+    );
     let eq_carrier = constrain_reciprocal_native_batch_v1::<EqAffine>(
         &mut ep_builder,
         &audits.eq,
@@ -3088,6 +3232,15 @@ pub(crate) fn build_kagemusha_mint_hash_claim_ep_v1(
         &mut dense_jobs,
         KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
     )?;
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Ep,
+        "after_reciprocal_batch",
+        ep_builder,
+        dense_jobs,
+        audits.eq,
+        ep_output,
+        None::<Result<usize, String>>
+    );
     let ep_carrier = ep_output
         .carrier_cells_v1()
         .map_err(|error| format!("Ep mint-hash carrier shape is invalid: {error:?}"))?;
@@ -3100,6 +3253,15 @@ pub(crate) fn build_kagemusha_mint_hash_claim_ep_v1(
         .ok_or_else(|| "Ep mint-hash semantic instance column is absent".to_owned())?;
     let [eq_carrier, ep_carrier] =
         pad_assigned_claim_carriers_v1(&mut ep_builder, [eq_carrier, ep_carrier])?;
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Ep,
+        "before_fixed_rlc",
+        ep_builder,
+        dense_jobs,
+        audits.eq,
+        ep_output,
+        None::<Result<usize, String>>
+    );
     let carrier_rlc = constrain_claim_carrier_binding_v1(
         &mut ep_builder,
         &assigned_semantic,
@@ -3108,13 +3270,27 @@ pub(crate) fn build_kagemusha_mint_hash_claim_ep_v1(
     )?;
     ep_builder.assigned_instances.push(eq_carrier);
     ep_builder.assigned_instances.push(ep_carrier);
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
     dense_jobs.validate_capacity_with_lanes(
         (1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS,
         KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
     )?;
     carrier_rlc
         .validate_capacity((1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS)?;
+    if native_poseidon_jobs.required_rows()?
+        > (1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS
+    {
+        return Err("mint-hash claim native Poseidon exceeds the fixed row envelope".to_owned());
+    }
+    profile_claim_completion_cells!(
+        KagemushaPastaParityV1::Ep,
+        "after_fixed_rlc",
+        ep_builder,
+        dense_jobs,
+        audits.eq,
+        ep_output,
+        Some(carrier_rlc.required_rows())
+    );
     if assigned_digest_bytes_v1(&ep_output.challenge_limbs)? != audits.ep_digest
         || padded_claim_carrier_u128_values_v1(&ep_output)? != audits.ep_carrier
     {
@@ -3131,6 +3307,7 @@ pub(crate) fn build_kagemusha_mint_hash_claim_ep_v1(
             builder: ep_builder,
             carrier_rlc,
             dense_jobs,
+            native_poseidon_jobs,
         },
         public_instances,
     ))
@@ -3156,6 +3333,7 @@ where
 {
     macro_rules! profile_cells {
         ($label:literal, $builder:expr) => {
+            #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
             if std::env::var_os("IROHA_KAGEMUSHA_PROFILE_CELLS").is_some() {
                 let statistics = $builder.statistics();
                 eprintln!(
@@ -3169,6 +3347,7 @@ where
     }
     macro_rules! profile_loader_cells {
         ($label:literal, $loader:expr, $builder:expr) => {
+            #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
             if std::env::var_os("IROHA_KAGEMUSHA_PROFILE_CELLS").is_some() {
                 let gate = $loader.ctx_mut().total_advice();
                 let lookup = $builder.statistics().total_lookup_advice_per_phase;
@@ -3232,6 +3411,10 @@ where
     builder.assigned_instances = vec![public.clone()];
     profile_cells!("public", builder);
 
+    let mut native_poseidon_jobs = PastaNativePoseidonJobsV1::new(
+        KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1,
+        (1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS,
+    )?;
     let (coordinate, scalar_integer) = deferred_field_chips_v1::<C>(&range);
     let loader = deferred_loader_v1(&mut builder, &coordinate, &scalar_integer);
     if carrier_binding.is_some() {
@@ -3260,12 +3443,13 @@ where
         "claim protocol",
     )?;
     let claim_structure = kagemusha_protocol_structure_digest_v1(witness.parent_protocol, parity)?;
-    let loaded_parent = load_and_constrain_parent_protocol_v1(
+    let loaded_parent = load_and_constrain_claim_protocol_native_v1(
         &loader,
         witness.parent_protocol,
         parity,
         claim_structure,
         &expected_claim_protocol,
+        &mut native_poseidon_jobs,
     )
     .map_err(|error| format!("failed to bind mint hash claim protocol: {error:?}"))?;
     profile_loader_cells!("parent_protocol", loader, builder);
@@ -3344,12 +3528,13 @@ where
         "shard protocol",
     )?;
     let shard_structure = kagemusha_protocol_structure_digest_v1(witness.shard_protocol, parity)?;
-    let loaded_shard = load_and_constrain_parent_protocol_v1(
+    let loaded_shard = load_and_constrain_claim_protocol_native_v1(
         &loader,
         witness.shard_protocol,
         parity,
         shard_structure,
         &expected_shard_protocol,
+        &mut native_poseidon_jobs,
     )
     .map_err(|error| format!("failed to bind mint hash shard protocol: {error:?}"))?;
     profile_loader_cells!("shard_protocol", loader, builder);
@@ -3417,6 +3602,14 @@ where
     if parent_equations == 0 || equation_count <= parent_equations {
         return Err("mint hash claim verifier emitted an incomplete equation audit".to_owned());
     }
+    // Regression on the actual emitted graph, not a new production acceptance limit:
+    // two ordinary IPA checks, two fold IPA checks, one parent semantic commitment,
+    // at most one shard instance commitment, and one accumulator selection.
+    #[cfg(test)]
+    assert!(
+        equation_count <= 7,
+        "Claim verifier equation inventory changed: {equation_count} (parent {parent_equations})",
+    );
     let common_cells = common_public_cells_v1(&public);
     let mut tags = vec![CLAIM_PARENT_EQUATION_TAG_V1; parent_equations];
     tags.resize(equation_count, CLAIM_SHARD_EQUATION_TAG_V1);
@@ -3441,9 +3634,29 @@ where
         assigned_selectors,
         &verifier_input_binding,
         &common_cells,
+        &mut native_poseidon_jobs,
     )
     .map_err(|error| format!("failed to finalize mint hash claim audit: {error:?}"))?;
     profile_cells!("deferred_batch", builder);
+    #[cfg(test)]
+    {
+        // Bind the capacity derivation to the real emitted input and source inventory.
+        assert_eq!(common_cells.len(), 58);
+        let protocol_points =
+            witness.parent_protocol.preprocessed.len() + witness.shard_protocol.preprocessed.len();
+        assert!(
+            protocol_points + CLAIM_MINIMUM_NON_PROTOCOL_SOURCES_V1 <= output.batch.source_count(),
+            "Claim proof-read points must remain fresh sources distinct from protocol entries",
+        );
+        assert_eq!(
+            native_poseidon_jobs
+                .required_rows()
+                .expect("complete Claim Poseidon queue"),
+            (39 + output.batch.source_count() + equation_count + protocol_points + 14)
+                .div_ceil(KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1)
+                * 66,
+        );
+    }
     let carrier = output
         .carrier_cells_v1()
         .map_err(|error| format!("failed to build mint hash claim carrier: {error:?}"))?;
@@ -3462,6 +3675,7 @@ where
         builder,
         output,
         common_cells,
+        native_poseidon_jobs,
     })
 }
 
@@ -4558,6 +4772,110 @@ mod tests {
         },
     };
 
+    #[test]
+    fn claim_configuration_retains_native_poseidon_in_both_parities() {
+        macro_rules! check {
+            ($field:ty, $opposite:ty, $circuit:ty) => {{
+                let params = BaseCircuitParams {
+                    k: KAGEMUSHA_RECURSION_IPA_K_V1 as usize,
+                    num_advice_per_phase: vec![1],
+                    num_fixed: 1,
+                    num_lookup_advice_per_phase: vec![1],
+                    lookup_bits: Some(15),
+                    num_instance_columns: 3,
+                };
+                let mut previous = ConstraintSystem::<$field>::default();
+                let base = BaseConfig::configure(&mut previous, params.clone());
+                KagemushaClaimCarrierRlcConfigV1::configure_with_base(&mut previous, Some(&base));
+                PastaDenseMsmConfigV1::configure_with_lanes::<$opposite>(
+                    &mut previous,
+                    KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
+                );
+                let mut actual = ConstraintSystem::<$field>::default();
+                <$circuit as Circuit<$field>>::configure_with_params(&mut actual, params);
+                assert_eq!(
+                    actual.num_advice_columns(),
+                    previous.num_advice_columns() + 7
+                );
+                assert_eq!(actual.num_fixed_columns(), previous.num_fixed_columns() + 5);
+                assert_eq!(
+                    actual.permutation().get_columns().len(),
+                    previous.permutation().get_columns().len() + 1,
+                );
+                assert_eq!(actual.num_selectors(), previous.num_selectors());
+                assert_eq!(previous.degree(), 6);
+                assert_eq!(actual.degree(), 7);
+                assert_eq!(actual.blinding_factors(), previous.blinding_factors());
+                assert_eq!(actual.blinding_factors(), 6);
+                assert_eq!(actual.minimum_rows(), 9);
+                // This is the actual Claim configuration in each parity. Its degree increase
+                // changes the recursively read quotient inventory even though the extended
+                // domain and the existing nine-row reservation stay unchanged. Genuine gadget
+                // key/reload tests separately compile and verify the regenerated protocols.
+                let old_domain = halo2_proofs::poly::EvaluationDomain::<$field>::new(
+                    previous.degree() as u32,
+                    KAGEMUSHA_RECURSION_IPA_K_V1,
+                );
+                let new_domain = halo2_proofs::poly::EvaluationDomain::<$field>::new(
+                    actual.degree() as u32,
+                    KAGEMUSHA_RECURSION_IPA_K_V1,
+                );
+                assert_eq!(old_domain.extended_k(), 19);
+                assert_eq!(new_domain.extended_k(), old_domain.extended_k());
+                assert_eq!(old_domain.get_quotient_poly_degree(), 5);
+                assert_eq!(new_domain.get_quotient_poly_degree(), 6);
+                // Every regenerated parent advice/quotient commitment is still read through
+                // the fresh-source loader and counted within the same complete source cap.
+                assert_eq!(actual.num_advice_columns(), 116);
+                assert_eq!(actual.permutation().get_columns().len(), 9);
+                assert_eq!(KAGEMUSHA_MINT_HASH_CLAIM_MAX_DEFERRED_SOURCES_V1, 1_008);
+            }};
+        }
+        check!(Fp, EpAffine, KagemushaMintHashClaimEqCircuitV1);
+        check!(Fq, EqAffine, KagemushaMintHashClaimEpCircuitV1);
+    }
+
+    #[test]
+    fn claim_native_poseidon_covers_existing_max_source_inventory() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let usable_rows = (1_usize << KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS;
+            let mut builder =
+                BaseCircuitBuilder::<F>::new(false).use_k(KAGEMUSHA_RECURSION_IPA_K_V1 as usize);
+            let gate = halo2_base::gates::GateChip::<F>::default();
+            let mut jobs = PastaNativePoseidonJobsV1::new(
+                KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1,
+                usable_rows,
+            )
+            .expect("fixed native Poseidon envelope");
+            assert_eq!(CLAIM_MINIMUM_NON_PROTOCOL_SOURCES_V1, 134);
+            let maximum_protocol_points = KAGEMUSHA_MINT_HASH_CLAIM_MAX_DEFERRED_SOURCES_V1
+                - CLAIM_MINIMUM_NON_PROTOCOL_SOURCES_V1;
+            assert_eq!(maximum_protocol_points, 874);
+            // Witness-loaded preprocessing entries never intern, even when point values
+            // repeat within or across protocols. Reserve both nonempty protocol identities.
+            for points in [maximum_protocol_points - 1, 1] {
+                let inputs = (0..12 + 2 * points)
+                    .map(|index| builder.main(0).load_witness(F::from(index as u64)))
+                    .collect();
+                jobs.queue_raw(builder.main(0), &gate, inputs, &[])
+                    .expect("complete protocol-identity preimage must fit");
+            }
+            // Six domain fields, four tag/count pairs, five verifier bindings, 58 bound
+            // values, two limbs per source, and tag/selector for all seven equations.
+            let input_count = 77 + 2 * KAGEMUSHA_MINT_HASH_CLAIM_MAX_DEFERRED_SOURCES_V1 + 2 * 7;
+            let inputs = (0..input_count)
+                .map(|index| builder.main(0).load_witness(F::from(index as u64)))
+                .collect();
+            jobs.queue_raw(builder.main(0), &gate, inputs, &[])
+                .expect("existing maximum source inventory must fit without reducing its limit");
+            assert_eq!(jobs.required_rows().unwrap(), 64_086);
+            assert!(jobs.required_rows().unwrap() <= usable_rows);
+            assert_eq!(jobs.clone().unknown().required_rows(), jobs.required_rows());
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
     const CLAIM_RLC_TEST_K: usize = 9;
     const CLAIM_RLC_TEST_CAPACITY: usize = 4;
 
@@ -4572,6 +4890,91 @@ mod tests {
         builder: BaseCircuitBuilder<F>,
         machine: KagemushaClaimCarrierRlcMachineV1<F>,
         tamper_padding: bool,
+        tamper_start_bus: Option<usize>,
+    }
+
+    #[derive(Clone)]
+    struct ClaimRlcSharedTableTestCircuit<F: KagemushaPoseidonFieldV1, const SHARED: bool> {
+        inner: ClaimRlcTestCircuit<F>,
+        tamper_range_limb: bool,
+    }
+
+    impl<F: KagemushaPoseidonFieldV1, const SHARED: bool> Circuit<F>
+        for ClaimRlcSharedTableTestCircuit<F, SHARED>
+    {
+        type Config = ClaimRlcTestConfig<F>;
+        type FloorPlanner = V1;
+        type Params = BaseCircuitParams;
+
+        fn params(&self) -> Self::Params {
+            self.inner.builder.config_params.clone()
+        }
+
+        fn without_witnesses(&self) -> Self {
+            Self {
+                inner: self.inner.without_witnesses(),
+                tamper_range_limb: self.tamper_range_limb,
+            }
+        }
+
+        fn configure_with_params(
+            meta: &mut ConstraintSystem<F>,
+            params: Self::Params,
+        ) -> Self::Config {
+            let usable_rows = (1_usize << params.k) - MINIMUM_UNUSABLE_ROWS;
+            let mut base = BaseConfig::configure(meta, params);
+            base.set_usable_rows(usable_rows);
+            let carrier_rlc = if SHARED {
+                KagemushaClaimCarrierRlcConfigV1::configure_with_base(meta, Some(&base))
+            } else {
+                KagemushaClaimCarrierRlcConfigV1::configure(meta)
+            };
+            assert_eq!(carrier_rlc.owns_range_table, !SHARED);
+            ClaimRlcTestConfig { base, carrier_rlc }
+        }
+
+        fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
+            unreachable!("shared-table RLC test uses Base parameters")
+        }
+
+        fn synthesize_for_measurement(
+            &self,
+            config: Self::Config,
+            layouter: impl Layouter<F>,
+        ) -> Result<(), PlonkError> {
+            let result = self.synthesize(config, layouter);
+            self.inner.builder.reset_synthesis_state();
+            result
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<F>,
+        ) -> Result<(), PlonkError> {
+            <BaseCircuitBuilder<F> as Circuit<F>>::synthesize(
+                &self.inner.builder,
+                config.base,
+                layouter.namespace(|| "shared-table RLC test Base"),
+            )?;
+            config.carrier_rlc.load_range_table(&mut layouter)?;
+            let mut rows = self
+                .inner
+                .machine
+                .build_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                .map_err(|_| PlonkError::Synthesis)?;
+            if self.tamper_range_limb {
+                rows.first_mut().ok_or(PlonkError::Synthesis)?.values[CLAIM_RLC_RANGE_START] =
+                    F::from_u128(CLAIM_RLC_RADIX);
+            }
+            self.inner.machine.synthesize_rows(
+                &config.carrier_rlc,
+                &mut layouter,
+                &self.inner.builder.core().copy_manager,
+                self.inner.builder.witness_gen_only(),
+                &rows,
+            )
+        }
     }
 
     impl<F: KagemushaPoseidonFieldV1> Circuit<F> for ClaimRlcTestCircuit<F> {
@@ -4588,6 +4991,7 @@ mod tests {
                 builder: self.builder.deep_clone().unknown(true),
                 machine: self.machine.unknown(),
                 tamper_padding: self.tamper_padding,
+                tamper_start_bus: self.tamper_start_bus,
             }
         }
 
@@ -4654,6 +5058,19 @@ mod tests {
                     })
                     .ok_or(PlonkError::Synthesis)?;
                 padding.values[CLAIM_RLC_VALUE] = F::ONE;
+            }
+            if let Some(start_index) = self.tamper_start_bus {
+                let start = rows
+                    .iter_mut()
+                    .filter(|row| {
+                        matches!(
+                            row.mode,
+                            ClaimRlcRowModeV1::StartA | ClaimRlcRowModeV1::StartB
+                        )
+                    })
+                    .nth(start_index)
+                    .ok_or(PlonkError::Synthesis)?;
+                start.values[CLAIM_RLC_BUS] += F::ONE;
             }
             self.machine.synthesize_rows(
                 &config.carrier_rlc,
@@ -4737,6 +5154,30 @@ mod tests {
                 use_unknown: false,
             },
             tamper_padding,
+            tamper_start_bus: None,
+        }
+    }
+
+    fn claim_rlc_shared_table_test_circuit_v1<F: KagemushaPoseidonFieldV1, const SHARED: bool>(
+        base_range_value: u64,
+        tamper_expected: bool,
+        tamper_range_limb: bool,
+    ) -> ClaimRlcSharedTableTestCircuit<F, SHARED> {
+        let mut inner = claim_rlc_test_circuit_v1(tamper_expected, false);
+        inner.builder = inner
+            .builder
+            .use_k(16)
+            .use_lookup_bits(CLAIM_RLC_RADIX_BITS);
+        let range = inner.builder.range_chip();
+        let value = inner
+            .builder
+            .main(0)
+            .load_witness(F::from(base_range_value));
+        range.range_check(inner.builder.main(0), value, CLAIM_RLC_RADIX_BITS);
+        inner.builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        ClaimRlcSharedTableTestCircuit {
+            inner,
+            tamper_range_limb,
         }
     }
 
@@ -4896,6 +5337,193 @@ mod tests {
             24_756,
             "the two-carrier custom machine must retain its fully padded row schedule",
         );
+    }
+
+    #[test]
+    fn carrier_rlc_shares_only_an_actual_matching_base_range_table() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            for (lookup_bits, lookup_columns, shared) in [
+                (None, 0, false),
+                (Some(15), 0, false),
+                (Some(14), 1, false),
+                (Some(15), 1, true),
+                (Some(16), 1, false),
+            ] {
+                let mut meta = ConstraintSystem::<F>::default();
+                let base = BaseConfig::configure(
+                    &mut meta,
+                    BaseCircuitParams {
+                        k: 17,
+                        num_advice_per_phase: vec![1],
+                        num_fixed: 1,
+                        num_lookup_advice_per_phase: vec![lookup_columns],
+                        lookup_bits,
+                        num_instance_columns: 3,
+                    },
+                );
+                let before_fixed = meta.num_fixed_columns();
+                let before_advice = meta.num_advice_columns();
+                let before_selectors = meta.num_selectors();
+                let before_permutation = meta.permutation().get_columns().len();
+                let before_lookups = meta.lookups().len();
+                let rlc =
+                    KagemushaClaimCarrierRlcConfigV1::configure_with_base(&mut meta, Some(&base));
+                assert_eq!(rlc.owns_range_table, !shared);
+                if let MaybeRangeConfig::WithRange(range) = &base.base {
+                    assert_eq!(rlc.range_table == range.lookup, shared);
+                }
+                assert_eq!(
+                    meta.num_fixed_columns() - before_fixed,
+                    if shared { 3 } else { 4 }
+                );
+                assert_eq!(meta.num_advice_columns() - before_advice, CLAIM_RLC_COLUMNS);
+                assert_eq!(meta.num_selectors(), before_selectors);
+                assert_eq!(
+                    meta.permutation().get_columns().len() - before_permutation,
+                    1
+                );
+                assert_eq!(
+                    meta.lookups().len() - before_lookups,
+                    CLAIM_RLC_RANGE_LIMBS + 2
+                );
+                assert_eq!(meta.degree(), 6);
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn carrier_rlc_shared_range_preserves_results_and_rejects_both_consumer_overflows() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            // Both variants load the exact full 15-bit table; the shared variant must not
+            // assign it a second time after Base synthesis. Expected RLC results come from
+            // the independent host polynomial used by the existing four-element fixture.
+            MockProver::run(
+                16,
+                &claim_rlc_shared_table_test_circuit_v1::<F, false>(32_767, false, false),
+                vec![],
+            )
+            .expect("owned full-range RLC positive control")
+            .assert_satisfied();
+            MockProver::run(
+                16,
+                &claim_rlc_shared_table_test_circuit_v1::<F, true>(32_767, false, false),
+                vec![],
+            )
+            .expect("shared full-range RLC positive control")
+            .assert_satisfied();
+            assert!(
+                MockProver::run(
+                    16,
+                    &claim_rlc_shared_table_test_circuit_v1::<F, true>(32_767, true, false),
+                    vec![],
+                )
+                .expect("shared-table RLC corrupted result")
+                .verify()
+                .is_err()
+            );
+            for (base_range_value, tamper_range_limb) in [(32_768, false), (32_767, true)] {
+                let failures = MockProver::run(
+                    16,
+                    &claim_rlc_shared_table_test_circuit_v1::<F, true>(
+                        base_range_value,
+                        false,
+                        tamper_range_limb,
+                    ),
+                    vec![],
+                )
+                .expect("shared-table range overflow")
+                .verify()
+                .expect_err("both Base and RLC must reject the first value outside 15 bits");
+                assert!(
+                    failures.iter().any(|failure| matches!(
+                        failure,
+                        halo2_proofs::dev::VerifyFailure::Lookup { .. }
+                    )),
+                    "expected an actual range failure: {failures:?}"
+                );
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn carrier_rlc_shared_range_serialized_key_reduction_matches_actual_geometry() {
+        macro_rules! check_parity {
+            ($curve:ty, $field:ty) => {{
+                let params = ParamsIPA::<$curve>::new(16);
+                let measure = |shared| {
+                    let circuit_params = claim_rlc_shared_table_test_circuit_v1::<$field, true>(
+                        32_767, false, false,
+                    ).params();
+                    let mut meta = ConstraintSystem::<$field>::default();
+                    let config = if shared {
+                        ClaimRlcSharedTableTestCircuit::<$field, true>::configure_with_params(
+                            &mut meta, circuit_params,
+                        )
+                    } else {
+                        ClaimRlcSharedTableTestCircuit::<$field, false>::configure_with_params(
+                            &mut meta, circuit_params,
+                        )
+                    };
+                    let base_table = match &config.base.base {
+                        MaybeRangeConfig::WithRange(range) => range.lookup.inner().index(),
+                        _ => panic!("full-range key fixture must configure Base range"),
+                    };
+                    let rlc_table = config.carrier_rlc.range_table.inner().index();
+                    let (key, profile) = if shared {
+                        halo2_proofs::plonk::keygen_pk2_consuming_with_profile(
+                            &params,
+                            claim_rlc_shared_table_test_circuit_v1::<$field, true>(32_767, false, false),
+                            true,
+                            |_circuit, profile| Ok::<_, String>(profile),
+                        )
+                    } else {
+                        halo2_proofs::plonk::keygen_pk2_consuming_with_profile(
+                            &params,
+                            claim_rlc_shared_table_test_circuit_v1::<$field, false>(32_767, false, false),
+                            true,
+                            |_circuit, profile| Ok::<_, String>(profile),
+                        )
+                    }
+                    .expect("compact full-range RLC proving key");
+                    let vk_bytes = key.get_vk().to_bytes(halo2_proofs::SerdeFormat::Processed).len();
+                    let pk_bytes = key.to_bytes(halo2_proofs::SerdeFormat::Processed).len();
+                    let fixed = profile.configured_fixed_columns + profile.materialized_selector_columns;
+                    let permutation = profile.permutation_columns;
+                    let predicted_vk = 10 + 32 * (fixed + permutation)
+                        + profile.selector_columns * profile.domain_rows.div_ceil(8);
+                    let predicted_pk = predicted_vk + 16
+                        + (2 * fixed + 2 * permutation + 3) * (32 * profile.domain_rows + 4);
+                    assert_eq!(vk_bytes, predicted_vk);
+                    assert_eq!(pk_bytes, predicted_pk);
+                    let table_commitment = key.get_vk().fixed_commitments()[base_table];
+                    assert_eq!(table_commitment, key.get_vk().fixed_commitments()[rlc_table]);
+                    // Only the compact profile, lengths and table commitment survive this
+                    // closure, so each key is dropped before the next one is generated.
+                    (profile, vk_bytes, pk_bytes, table_commitment)
+                };
+                let (owned, owned_vk, owned_pk, owned_table) = measure(false);
+                let (shared, shared_vk, shared_pk, shared_table) = measure(true);
+                assert_eq!(owned_table, shared_table);
+                assert_eq!(owned.advice_columns, shared.advice_columns);
+                assert_eq!(owned.instance_columns, shared.instance_columns);
+                assert_eq!(owned.selector_columns, shared.selector_columns);
+                assert_eq!(owned.materialized_selector_columns, shared.materialized_selector_columns);
+                assert_eq!(owned.permutation_columns, shared.permutation_columns);
+                assert_eq!(owned.configured_fixed_columns, shared.configured_fixed_columns + 1);
+                assert_eq!(owned_vk - shared_vk, 32);
+                assert_eq!(owned_pk - shared_pk, 4_194_344);
+                eprintln!(
+                    "KAGEMUSHA shared RLC range {} owned_pk={owned_pk} shared_pk={shared_pk} owned_vk={owned_vk} shared_vk={shared_vk}",
+                    stringify!($curve)
+                );
+            }};
+        }
+        check_parity!(EqAffine, Fp);
+        check_parity!(EpAffine, Fq);
     }
 
     #[test]
@@ -5220,28 +5848,63 @@ mod tests {
 
     #[test]
     fn carrier_rlc_fixed_machine_rejects_result_and_padding_tampering() {
-        assert!(
-            MockProver::run(
-                CLAIM_RLC_TEST_K as u32,
-                &claim_rlc_test_circuit_v1::<Fp>(true, false),
-                vec![],
-            )
-            .expect("tampered-result carrier RLC mock prover")
-            .verify()
-            .is_err(),
-            "the equality bus must reject a forged public RLC result"
-        );
-        assert!(
-            MockProver::run(
-                CLAIM_RLC_TEST_K as u32,
-                &claim_rlc_test_circuit_v1::<Fq>(false, true),
-                vec![],
-            )
-            .expect("tampered-padding carrier RLC mock prover")
-            .verify()
-            .is_err(),
-            "the fixed zero-coefficient schedule must reject nonzero padding"
-        );
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            for (tamper_expected, tamper_padding) in [(true, false), (false, true)] {
+                assert!(
+                    MockProver::run(
+                        CLAIM_RLC_TEST_K as u32,
+                        &claim_rlc_test_circuit_v1::<F>(tamper_expected, tamper_padding),
+                        vec![],
+                    )
+                    .expect("tampered carrier RLC mock prover")
+                    .verify()
+                    .is_err(),
+                    "the fixed machine must reject a forged result or nonzero padding"
+                );
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn carrier_rlc_fixed_machine_binds_both_start_challenges_for_each_carrier() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let circuit = claim_rlc_test_circuit_v1::<F>(false, false);
+            let rows = circuit
+                .machine
+                .build_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                .expect("honest fixed RLC schedule");
+            let starts = rows
+                .iter()
+                .filter(|row| {
+                    matches!(
+                        row.mode,
+                        ClaimRlcRowModeV1::StartA | ClaimRlcRowModeV1::StartB
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(starts.len(), 4);
+            for (start_index, start) in starts.iter().enumerate() {
+                let challenge_column = if start_index % 2 == 0 {
+                    CLAIM_RLC_CHALLENGE_A
+                } else {
+                    CLAIM_RLC_CHALLENGE_B
+                };
+                assert_eq!(start.values[CLAIM_RLC_BUS], start.values[challenge_column]);
+                let mut substituted = claim_rlc_test_circuit_v1::<F>(false, false);
+                substituted.tamper_start_bus = Some(start_index);
+                assert!(
+                    MockProver::run(CLAIM_RLC_TEST_K as u32, &substituted, vec![])
+                        .expect("substituted start-challenge bus mock prover")
+                        .verify()
+                        .is_err(),
+                    "each start challenge must remain bound to its original Base cell"
+                );
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[test]

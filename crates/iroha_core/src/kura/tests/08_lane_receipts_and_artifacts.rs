@@ -728,8 +728,12 @@ fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evide
 #[test]
 fn autonomous_execution_input_uses_one_exact_typed_source_binding() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (network_id, epoch, payload) =
+    let (network_id, epoch, mut payload) =
         autonomous_lane_payload_for_kura(LaneId::new(1), DataSpaceId::new(2), 1, &signer);
+    payload.origin_proposal.payload_block_hint = None;
+    payload
+        .validate(network_id, epoch)
+        .expect("authenticated hint-free payload");
     assert!(
         payload.origin_proposal.payload_block_hint.is_none(),
         "fixture must exercise hint-free autonomous execution"
@@ -1774,5 +1778,151 @@ fn lane_block_payload_availability_rejects_missing_entrypoint_index() {
     assert_eq!(
         kura.recover_lane_block_payload(&proposal),
         Err(LaneBlockPayloadAvailability::MissingEntrypoint)
+    );
+}
+
+#[test]
+fn receipt_writer_preserves_occupied_corruption_before_any_recovery_mutation() {
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
+    let height =
+        NonZeroUsize::new(usize::try_from(block.header().height().get()).unwrap()).unwrap();
+    kura.store_block(Arc::new(block))
+        .expect("durable canonical carrier");
+    finalize_chain_through_for_eviction(&kura, height);
+    let (data_path, index_path) =
+        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
+    assert!(
+        !data_path.exists() && !index_path.exists(),
+        "genuine receipt absence"
+    );
+    kura.persist_lane_block_application_receipt(&proposal)
+        .expect("publish absent exact receipt");
+    kura.persist_lane_block_application_receipt(&proposal)
+        .expect("healthy exact retry");
+    let exact = kura
+        .read_lane_application_receipt(lane_id, lane_height)
+        .unwrap()
+        .unwrap();
+    let mut competing = proposal.clone();
+    competing.descriptor.lane_block_view += 1;
+    competing.descriptor.descriptor_hash = competing.descriptor.computed_descriptor_hash();
+    competing.proposal_hash = competing.computed_proposal_hash();
+    assert_ne!(exact.proposal, competing);
+    assert_eq!(
+        kura.read_lane_application_receipt(lane_id, lane_height)
+            .unwrap(),
+        Some(exact.clone()),
+        "coordinate authentication does not reject a valid occupied slot because another candidate exists"
+    );
+    assert!(kura.get_block(height).is_some(), "warm optional body cache");
+    let original_data = fs::read(&data_path).unwrap();
+    let original_index = fs::read(&index_path).unwrap();
+    for corrupt_index in [false, true] {
+        fs::write(&data_path, &original_data).unwrap();
+        fs::write(&index_path, &original_index).unwrap();
+        fs::write(
+            if corrupt_index {
+                &index_path
+            } else {
+                &data_path
+            },
+            b"occupied receipt corruption",
+        )
+        .unwrap();
+        let before = snapshot_regular_files_recursively(temp_dir.path());
+        assert!(
+            kura.write_lane_block_application_receipt_artifact(&exact)
+                .is_err()
+        );
+        assert!(
+            kura.persist_lane_block_application_receipt_if_ready(&proposal)
+                .is_err()
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(temp_dir.path()),
+            before,
+            "failed receipt publication must not overwrite corruption or reconcile capacity"
+        );
+    }
+}
+
+#[test]
+fn strict_writer_pending_protocols_recover_only_at_startup() {
+    let (
+        (temp_dir, config, lane_config),
+        (lane_id, lane_entry, lane_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
+    let height =
+        NonZeroUsize::new(usize::try_from(block.header().height().get()).unwrap()).unwrap();
+    kura.store_block(Arc::new(block))
+        .expect("canonical carrier");
+    finalize_chain_through_for_eviction(&kura, height);
+    let artifact = kura
+        .read_lane_block_artifact_read_only(lane_id, lane_height)
+        .unwrap()
+        .unwrap();
+    let expected = kura
+        .recover_lane_block_application_receipt_artifact(&proposal)
+        .unwrap();
+    let (raw_data, raw_index) = Kura::lane_artifact_paths_for_entry(&lane_entry, temp_dir.path());
+    let (receipt_data, receipt_index) =
+        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
+    fail_next_bound_progress_append_data_sync_for_tests();
+    assert!(
+        kura.persist_lane_block_application_receipt_if_ready(&proposal)
+            .is_err()
+    );
+    let intent = Kura::bound_progress_append_intent_path(&receipt_index);
+    assert!(
+        intent.exists(),
+        "real interrupted append retains its authenticated intent"
+    );
+    let raw_data_temp = raw_data.with_extension("norito.tmp");
+    let raw_index_temp = raw_index.with_extension("index.tmp");
+    fs::copy(&raw_data, &raw_data_temp).unwrap();
+    fs::copy(&raw_index, &raw_index_temp).unwrap();
+    for path in [&raw_data_temp, &raw_index_temp] {
+        std::fs::File::open(path).unwrap().sync_all().unwrap();
+    }
+    let pending = snapshot_regular_files_recursively(temp_dir.path());
+    assert!(!kura.persist_recovered_lane_block_artifact(&artifact));
+    assert!(
+        kura.write_lane_block_application_receipt_artifact(&expected)
+            .is_err()
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        pending,
+        "live writers leave recovery ownership unchanged"
+    );
+    drop(kura);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("explicit startup recovers ordinary raw and receipt protocols before any writer");
+    reopened
+        .restore_lane_segments(&lane_config)
+        .expect("restore all committed lane segments before completing startup-owned recovery");
+    assert!(!raw_data_temp.exists() && !raw_index_temp.exists() && !intent.exists());
+    assert!(receipt_data.is_file() && receipt_index.is_file());
+    assert_eq!(
+        reopened
+            .read_lane_block_artifact_read_only(lane_id, lane_height)
+            .unwrap(),
+        Some(artifact)
+    );
+    reopened
+        .persist_lane_block_application_receipt_if_ready(&proposal)
+        .expect("exact retry after startup fixed point");
+    assert_eq!(
+        reopened
+            .read_lane_application_receipt(lane_id, lane_height)
+            .unwrap(),
+        Some(expected)
     );
 }

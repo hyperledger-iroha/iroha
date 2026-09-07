@@ -26,6 +26,8 @@ import {
   NumericV1Error,
 } from "./numericV1.js";
 import { networkIdBytes } from "./networkId.js";
+import { NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
+import { GAME_INSTRUCTION_WIRE_IDS_V1, EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1 } from "./noritoGameCodecs.js";
 
 const COMPACT_LEN_FLAG = 0x02;
 const MALFORMED_PAYLOAD = "malformed_payload";
@@ -74,6 +76,12 @@ const MAX_METADATA_DEPTH = 32;
 const MAX_METADATA_NODES = 4096;
 const MAX_METADATA_KEY_BYTES = 255;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_EXECUTION_PAYLOAD_BYTES = EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1;
+const MAX_EXECUTION_SIGNED_TRANSACTION_BYTES = MAX_EXECUTION_PAYLOAD_BYTES + 4096;
+const LARGE_EXECUTION_WIRE_IDS = new Set([
+  "iroha.instruction.v1::game::SettleGameSessionV1",
+  "iroha.instruction.v1::game::VerifyExecutionProofV1",
+]);
 const MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MAX_VERIFYING_KEY_DRAFT_INSTRUCTION_FIELDS = 256;
 const MAX_SIGNED_TRANSACTION_BYTES = MAX_PAYLOAD_BYTES + 4096;
@@ -101,6 +109,8 @@ const DEFAULT_TRANSACTION_TTL_MS = 100_000;
 const TRANSACTION_ADMISSION_ORDINARY_TAG = 0;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS = new Set([
+  ...GAME_INSTRUCTION_WIRE_IDS_V1,
+  ...NFT_MARKET_INSTRUCTION_WIRE_IDS_V1,
   "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
   "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload",
   "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload",
@@ -1257,6 +1267,32 @@ function normalizeTransferInput(input) {
   };
 }
 
+// The ordinary bound remains unchanged. Only one canonical native execution-proof instruction
+// can enter the larger corridor; batches, WASM, attachments and unrelated instructions cannot.
+function assertTransactionPayloadByteBound(payload) {
+  if (payload.length === 0 || payload.length > MAX_EXECUTION_PAYLOAD_BYTES) {
+    fail(BOUNDS_EXCEEDED, "transaction payload exceeds the compiled browser payload limit");
+  }
+  if (payload.length <= MAX_PAYLOAD_BYTES) return;
+  try {
+    const outer = new Reader(payload, "execution transaction payload");
+    for (const name of ["domain", "authority", "creationTimeMs"]) outer.readField(name);
+    const executable = new Reader(outer.readField("executable"), "execution transaction executable");
+    if (executable.readU32("variant") !== 0) fail(BOUNDS_EXCEEDED, "larger payloads require one native execution-proof instruction");
+    const instructions = new Reader(executable.readField("instructions"), "execution transaction instructions");
+    if (instructions.readU64("count") !== 1n) fail(BOUNDS_EXCEEDED, "larger payloads require one native execution-proof instruction");
+    const archive = instructions.readField("item[0]");
+    const instruction = new Reader(archive, "execution transaction instruction");
+    const wireId = validateStringArchive(instruction.readField("wireId"), "execution instruction wireId", { maxBytes: 256 });
+    if (!LARGE_EXECUTION_WIRE_IDS.has(wireId)) fail(BOUNDS_EXCEEDED, "ordinary transaction payload exceeds one MiB");
+    instructions.assertEof(); executable.assertEof();
+    validateCanonicalInstructionBox(archive, "execution transaction instruction");
+  } catch (error) {
+    if (error instanceof BrowserTransactionCodecError && error.code === BOUNDS_EXCEEDED) throw error;
+    fail(BOUNDS_EXCEEDED, "larger payloads require one canonical native execution-proof instruction");
+  }
+}
+
 function encodeTransactionPayload(normalized, executable) {
   const payload = struct([
     networkTransactionDomainArchive(normalized.networkId),
@@ -1270,9 +1306,7 @@ function encodeTransactionPayload(normalized, executable) {
     metadataArchive(normalized.metadata),
     Buffer.of(0),
   ]);
-  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
-    fail(BOUNDS_EXCEEDED, `transaction payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
-  }
+  assertTransactionPayloadByteBound(payload);
   return payload;
 }
 
@@ -2210,9 +2244,7 @@ function validateTransactionPayloadEnvelope(
   validateExecutable,
   validateFeePayment,
 ) {
-  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
-    fail(BOUNDS_EXCEEDED, `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
-  }
+  assertTransactionPayloadByteBound(payload);
   const assertedAuthority =
     authorityLiteral === null
       ? null
@@ -2305,14 +2337,9 @@ export function inspectCanonicalTransactionPayloadBindings(
   expectedAuthority = null,
 ) {
   const payload = bytes(payloadBytes, "transaction payload", {
-    maxBytes: MAX_PAYLOAD_BYTES,
+    maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
   });
-  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
-    fail(
-      BOUNDS_EXCEEDED,
-      `transaction payload must contain 1..=${MAX_PAYLOAD_BYTES} bytes`,
-    );
-  }
+  assertTransactionPayloadByteBound(payload);
   const reader = new Reader(payload, "transaction payload");
   const networkId = validateNetworkTransactionDomainArchive(
     reader.readField("domain"),
@@ -2683,11 +2710,9 @@ export function buildBrowserExecutableBatchPayload(input) {
  */
 export function browserTransactionPayloadHashHex(payloadBytes) {
   const payload = bytes(payloadBytes, "payloadBytes", {
-    maxBytes: MAX_PAYLOAD_BYTES,
+    maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
   });
-  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
-    fail(BOUNDS_EXCEEDED, `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
-  }
+  assertTransactionPayloadByteBound(payload);
   return irohaHash(payload).toString(HEX_ENCODING);
 }
 
@@ -2731,7 +2756,7 @@ function validateBrowserTransactionSignable(
     fail(UNSUPPORTED_ALGORITHM, SIGNABLE_ALGORITHM_MESSAGE);
   }
   const payload = bytes(signable.payloadBytes, SIGNABLE_PAYLOAD_BYTES_CONTEXT, {
-    maxBytes: MAX_PAYLOAD_BYTES,
+    maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
   });
   const expectedNetworkId = exactNetworkId(
     signable.networkId,
@@ -2863,7 +2888,7 @@ function finalizeBrowserTransaction(
     fail(UNSUPPORTED_ALGORITHM, SIGNABLE_ALGORITHM_MESSAGE);
   }
   const payload = bytes(signable.payloadBytes, SIGNABLE_PAYLOAD_BYTES_CONTEXT, {
-    maxBytes: MAX_PAYLOAD_BYTES,
+    maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
   });
   const expectedNetworkId = exactNetworkId(
     signable.networkId,
@@ -2969,11 +2994,11 @@ export function finalizeBrowserExecutableBatchTransaction(
  */
 export function browserSignedTransactionHashHex(signedTransaction) {
   const versioned = bytes(signedTransaction, "signedTransaction", {
-    maxBytes: MAX_SIGNED_TRANSACTION_BYTES,
+    maxBytes: MAX_EXECUTION_SIGNED_TRANSACTION_BYTES,
   });
   if (
     versioned.length < 2 ||
-    versioned.length > MAX_SIGNED_TRANSACTION_BYTES ||
+    versioned.length > MAX_EXECUTION_SIGNED_TRANSACTION_BYTES ||
     versioned[0] !== 1
   ) {
     fail(
@@ -2997,7 +3022,7 @@ export function browserSignedTransactionHashHex(signedTransaction) {
     rawSignature.length !== 64 ||
     !multisig.equals(Buffer.of(0)) ||
     payload.length === 0 ||
-    payload.length > MAX_PAYLOAD_BYTES
+    payload.length > MAX_EXECUTION_PAYLOAD_BYTES
   ) {
     fail(
       MALFORMED_SIGNED_TRANSACTION,

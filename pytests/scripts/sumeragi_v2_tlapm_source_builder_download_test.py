@@ -19,6 +19,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from typing import Iterator
 
 import pytest
@@ -32,7 +33,7 @@ PAYLOAD = bytes(range(256)) * 256
 CUTOFF = 8192
 RETRY_FLAG = re.compile(r"--retry(?:\b|=)")
 FROZEN_BUILDER_SHA256 = (
-    "370f51fb84902544d7bd70ebdc37ebdf83cf1801c224ded5861ed452da2a98c0"
+    "05d5676396c0fab4c702cc4431611c602615e0a77200b09d18150dbed0530f2b"
 )
 
 
@@ -103,7 +104,7 @@ def _assert_vcs_build_source_contract(source: str) -> None:
 
     assert hashlib.sha256(helpers.encode()).hexdigest() == "182a8338f62b69348d0a1d28c95595e294e2bbf34f474906b1cd91fd94874f67"
     assert hashlib.sha256(lifecycle.encode()).hexdigest() == "8e0e7c3aec75067ab2cffec5a2bff1164fde3c995043046fe59bfe0201fff0e1"
-    assert hashlib.sha256(identity_gates.encode()).hexdigest() == "436886d45aa3fa0b124ab6cd6a3a5b07acf4d02d51ee49d06a54a260767370e8"
+    assert hashlib.sha256(identity_gates.encode()).hexdigest() == "6dbef28db6adf2b7c330c646613e2bd63fd9ef7092db1368f9243d875920230e"
     assert normalized.count(local_checkout) == 1
     for marker in ("TLAPM source\"", local_checkout, "seal_build_source_checkout", "opam repository"):
         assert marker in normalized_lifecycle
@@ -255,14 +256,29 @@ clean_command() {
     previous="$argument"
   done
   case "$TEST_CURL_MODE" in
-    real)
+    real|real-short-inactivity|real-dns-interruption)
+      if [[ "$TEST_CURL_MODE" == real-dns-interruption && \
+        "$(/usr/bin/awk '$0 == "curl" { count++ } END { print count }' "$TEST_EVENT_LOG")" == 2 ]]; then
+        # Exercise curl's real resolver failure without touching the partial.
+        # The reserved .invalid name never refers to a live download endpoint.
+        "$TEST_CURL_BIN" --disable --noproxy '*' \
+          --connect-timeout 2 --max-time 3 --silent --show-error \
+          --write-out '%{http_code}' --output /dev/null \
+          http://tlapm-dns-interruption.invalid/artifact
+        return
+      fi
       local transformed=()
+      previous=""
       for argument in "$@"; do
-        if [[ "$argument" == =https ]]; then
+        if [[ "$TEST_CURL_MODE" == real-short-inactivity && "$previous" == --speed-time ]]; then
+          [[ "$argument" == 60 ]] || return 2
+          transformed+=(1)
+        elif [[ "$argument" == =https ]]; then
           transformed+=(=http)
         else
           transformed+=("$argument")
         fi
+        previous="$argument"
       done
       "$TEST_CURL_BIN" "${transformed[@]}"
       ;;
@@ -374,6 +390,14 @@ class _RangeHandler(BaseHTTPRequestHandler):
             assert range_header.startswith("bytes=") and range_header.endswith("-")
             start = int(range_header.removeprefix("bytes=").removesuffix("-"))
         mode = self.fixture.mode
+        if mode == "stall-resume" and range_header is None:
+            self._headers(200, len(PAYLOAD))
+            self.wfile.write(PAYLOAD[:16])
+            self.wfile.flush()
+            time.sleep(10)
+            return
+        if mode == "stall-resume":
+            mode = "resume"
 
         if mode == "normal":
             self._headers(200, len(PAYLOAD))
@@ -887,6 +911,7 @@ def test_local_exact_checkout_preserves_vcs_identity_while_archive_loses_it(
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_CEILING_DIRECTORIES": str(fixture),
         "GIT_AUTHOR_DATE": "2026-07-19T10:03:28Z",
         "GIT_COMMITTER_DATE": "2026-07-19T10:03:28Z",
     }
@@ -1051,13 +1076,14 @@ def test_download_resume_static_contract_is_exact() -> None:
     normalized = " ".join(BUILDER_SOURCE.replace("\\\n", "").split())
     _assert_frozen_builder(BUILDER_SOURCE)
     assert hashlib.sha256(DOWNLOAD_BOUNDARY_SOURCE.encode()).hexdigest() == (
-        "2fbda6879085a14e2241ea406cde7ffb12ef2e3ae25985c95a9562bfc92637dd"
+        "fa307504e99be9d2c6edc7a2c45272a9df8008236e25fe2b3450d5e31b8c6485"
     )
-    assert "18|28|35|52|55|56) return 0" in normalized
+    assert "6|18|28|35|52|55|56) return 0" in normalized
     assert "local -r max_attempts=4" in BUILDER_SOURCE
     assert "1|2|4) /bin/sleep" in normalized
     assert "--disable --proto '=https' --proto-redir '=https'" in normalized
     assert "--tlsv1.2 --fail --location" in normalized
+    assert "--connect-timeout 30 --speed-limit 1024 --speed-time 60 --max-time 3600" in normalized
     assert "--continue-at -" in BUILDER_SOURCE
     assert "--write-out '%{http_code}'" in BUILDER_SOURCE
     assert RETRY_FLAG.search(BUILDER_SOURCE) is None
@@ -1197,6 +1223,44 @@ def test_download_checked_completes_normal_and_resumed_range(
         assert _events(event_log) == ["curl", "sleep:1", "curl"]
 
 
+def test_download_checked_times_out_stalled_stream_and_resumes_exact_bytes(
+    tmp_path: Path,
+) -> None:
+    # Keep the real curl transport and the production byte/hash/HTTP boundary.
+    # Only shorten the fixed inactivity interval from 60 seconds to one second.
+    with _server("stall-resume") as server:
+        result, destination, event_log, _ = _run_harness(
+            tmp_path,
+            url=f"http://127.0.0.1:{server.server_port}/artifact",
+            mode="real-short-inactivity",
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert "Operation too slow" in result.stderr
+    assert destination.read_bytes() == PAYLOAD
+    assert server.requests == [None, "bytes=16-"]
+    assert _events(event_log) == ["curl", "sleep:1", "curl"]
+
+
+def test_download_checked_preserves_partial_across_real_dns_failure(
+    tmp_path: Path,
+) -> None:
+    with _server("resume") as server:
+        result, destination, event_log, _ = _run_harness(
+            tmp_path,
+            url=f"http://127.0.0.1:{server.server_port}/artifact",
+            mode="real-dns-interruption",
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert "Could not resolve host: tlapm-dns-interruption.invalid" in result.stderr
+    assert "transient curl 6; retrying in 2s" in result.stderr
+    assert destination.read_bytes() == PAYLOAD
+    assert destination.stat().st_mode & 0o777 == 0o400
+    assert server.requests == [None, f"bytes={CUTOFF}-"]
+    assert _events(event_log) == ["curl", "sleep:1", "curl", "sleep:2", "curl"]
+
+
 def test_download_checked_stops_at_exact_attempt_cap(tmp_path: Path) -> None:
     with _server("cap") as server:
         url = f"http://127.0.0.1:{server.server_port}/artifact"
@@ -1222,7 +1286,7 @@ def test_download_checked_stops_at_exact_attempt_cap(tmp_path: Path) -> None:
     assert "exhausted 4 bounded download attempts" in result.stderr
 
 
-@pytest.mark.parametrize("status", (18, 28, 35, 52, 55, 56))
+@pytest.mark.parametrize("status", (6, 18, 28, 35, 52, 55, 56))
 def test_download_checked_retries_only_each_allowlisted_transport_class(
     tmp_path: Path,
     status: int,
@@ -1311,7 +1375,6 @@ def test_download_checked_rejects_http_range_and_hash_failures(
 @pytest.mark.parametrize(
     "status,http_status",
     (
-        (6, "000"),
         (7, "000"),
         (16, "000"),
         (22, "503"),

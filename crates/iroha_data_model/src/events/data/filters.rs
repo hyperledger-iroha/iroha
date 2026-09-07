@@ -66,6 +66,8 @@ mod model {
         /// Matches governance lifecycle events
         #[cfg(feature = "governance")]
         Governance(GovernanceEventFilter),
+        /// Native race events, optionally restricted to one race identifier.
+        GameSession(Option<iroha_crypto::Hash>),
     }
     /// An event filter for [`super::proof::ProofEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
@@ -1501,7 +1503,8 @@ impl DataEventFilter {
                 updated |= replace_selector(&mut filter.seller_matcher);
                 updated |= replace_selector(&mut filter.buyer_matcher);
             }
-            Self::Any
+            Self::GameSession(_)
+            | Self::Any
             | Self::Peer(_)
             | Self::Domain(_)
             | Self::AssetDefinition(_)
@@ -1602,6 +1605,9 @@ impl EventFilter for DataEventFilter {
             }
             (DataEventFilter::SpaceDirectory(filter), DataEvent::SpaceDirectory(space_event)) => {
                 filter.matches(space_event)
+            }
+            (DataEventFilter::GameSession(id), DataEvent::GameSession(event)) => {
+                id.as_ref().is_none_or(|id| id == &event.session_id)
             }
             (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
                 filter.matches(escrow_event)

@@ -1199,7 +1199,7 @@ fn apply_proof_success_penalty(
     }
 }
 fn hash_norito<T: norito::NoritoSerialize>(value: &T) -> Result<[u8; 32], NoritoError> {
-    let bytes = norito::to_bytes(value)?;
+    let bytes = norito::encode_canonical(value)?;
     Ok(hash_to_array(blake3::hash(&bytes)))
 }
 fn hash_to_array(hash: Hash) -> [u8; 32] {

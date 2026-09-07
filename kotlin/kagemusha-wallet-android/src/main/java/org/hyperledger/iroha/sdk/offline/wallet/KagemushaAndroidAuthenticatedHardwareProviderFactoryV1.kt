@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.offline.KagemushaAndroidAuthenticatedDeviceTran
 import org.hyperledger.iroha.sdk.offline.KagemushaAuthenticatedHardwareProviderV1
 import org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
 import org.hyperledger.iroha.sdk.offline.KagemushaHardwareProviderV1
+import org.hyperledger.iroha.sdk.offline.KagemushaOperationIntentStoreV1
 import org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorFactoryV1
 
 /**
@@ -30,7 +31,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 internal constructo
         ).iterator()
     })
 
-    override fun open(bridge: KagemushaDeviceLifecycleBridgeV1): KagemushaHardwareProviderV1 {
+    override fun open(bridge: KagemushaDeviceLifecycleBridgeV1, intentStore: KagemushaOperationIntentStoreV1, authorizeBootstrap: () -> Unit): KagemushaHardwareProviderV1 {
         val transport = KagemushaAndroidAuthenticatedDeviceTransportV1(bridge)
         val coordinatorFactory = loadExactlyOneCoordinatorFactory()
         val coordinator = try {
@@ -48,7 +49,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 internal constructo
                 error,
             )
         }
-        return KagemushaAuthenticatedHardwareProviderV1(transport, coordinator)
+        return KagemushaAuthenticatedHardwareProviderV1(transport, coordinator, intentStore, authorizeBootstrap)
     }
 
     private fun loadExactlyOneCoordinatorFactory(): KagemushaNativeCoreCoordinatorFactoryV1 {

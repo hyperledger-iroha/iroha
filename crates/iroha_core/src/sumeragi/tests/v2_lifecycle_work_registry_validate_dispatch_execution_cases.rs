@@ -606,13 +606,14 @@ fn validated_completion_atomically_publishes_exact_ready_carrier() {
 #[cfg(feature = "bls")]
 #[test]
 fn validated_completion_rejects_conflicting_inherited_commitment_intact() {
-    let inherited_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"inherited commitment parent"),
-        Hash::new(b"inherited commitment post"),
-        Hash::new(b"inherited commitment writes"),
-        1,
-        Hash::new(b"inherited commitment wire"),
-    );
+    let inherited_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"inherited commitment parent"),
+            Hash::new(b"inherited commitment post"),
+            Hash::new(b"inherited commitment writes"),
+            1,
+            Hash::new(b"inherited commitment wire"),
+        );
     assert!(inherited_commitment.validate().is_ok());
     let (mut fixture, _directory, mut store, durable) =
         durable_validate_store_fixture_at_view_with_commitment(0xCD, 2, Some(inherited_commitment));
@@ -1540,10 +1541,7 @@ fn direct_cached_validate_successor_releases_retry_ordinal_fixture() {
         .dispatch_ready_validate_successor_for_test(
             &mut services,
             &mut executor,
-            super::ReadyValidateSuccessorV1::from_validated(
-                published,
-                physical_completion,
-            ),
+            super::ReadyValidateSuccessorV1::from_validated(published, physical_completion),
             0,
         )
         .expect("resolve the direct cached Validate successor");
@@ -2839,7 +2837,10 @@ fn pre_timeout_physical_local_validate_completion_reaches_proposal_intent_before
     let handle = std::thread::Builder::new()
         .name("pre-timeout-physical-local-validate-completion".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(pre_timeout_physical_local_validate_completion_fixture)
+        .spawn(|| {
+            pre_timeout_physical_local_validate_completion_fixture(false);
+            pre_timeout_physical_local_validate_completion_fixture(true);
+        })
         .expect("spawn pre-timeout physical local Validate completion fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -2848,7 +2849,7 @@ fn pre_timeout_physical_local_validate_completion_reaches_proposal_intent_before
 
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
-fn pre_timeout_physical_local_validate_completion_fixture() {
+fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadline: bool) {
     let marker = 0xDF;
     let (mut fixture, _body_directory, body_store, durable) =
         durable_local_validate_store_fixture_at_view(marker, 0);
@@ -2896,7 +2897,11 @@ fn pre_timeout_physical_local_validate_completion_fixture() {
     .expect("open pre-timeout local Validate adapter");
     assert!(startup.is_empty());
     let started = std::time::Instant::now();
-    let round_timeout = std::time::Duration::from_secs(10);
+    let round_timeout = if completes_after_deadline {
+        std::time::Duration::from_millis(10)
+    } else {
+        std::time::Duration::from_secs(10)
+    };
     let (runtime, startup) =
         crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
             adapter,
@@ -2985,6 +2990,14 @@ fn pre_timeout_physical_local_validate_completion_fixture() {
         }
     );
 
+    let deadline = started + round_timeout;
+    if completes_after_deadline {
+        std::thread::sleep(
+            deadline.saturating_duration_since(std::time::Instant::now())
+                + std::time::Duration::from_millis(1),
+        );
+        assert!(std::time::Instant::now() > deadline);
+    }
     planner_io.activate_one_lifecycle_validate();
     assert_eq!(
         planner_io.execute_held_lifecycle_validate_fixture(
@@ -2994,19 +3007,30 @@ fn pre_timeout_physical_local_validate_completion_fixture() {
         1,
         "the real worker must execute the local body before publishing completion"
     );
+    if !completes_after_deadline {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the guarded worker must actually retain its result before the deadline"
+        );
+    }
     let physical_completion = planner_io.lifecycle_validate_io_snapshot();
     assert_eq!(physical_completion.completion_pending(), 1);
     assert_eq!(physical_completion.completion_owners(), 1);
     let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
 
-    let deadline = started + round_timeout;
-    assert_eq!(
-        launched
-            .freeze_due_timeout_for_ready_sign_test(deadline)
-            .expect("freeze the production deadline after physical completion"),
-        false,
-        "the clean local fixture has no unchanged-lock PrepareQC exception"
-    );
+    if !completes_after_deadline {
+        assert_eq!(
+            launched
+                .freeze_due_timeout_for_ready_sign_test(deadline)
+                .expect("freeze the production deadline after physical completion"),
+            false,
+            "the clean local fixture has no unchanged-lock PrepareQC exception"
+        );
+    }
+    // The late branch deliberately publishes both Completion successors
+    // before Runtime first observes its elapsed absolute deadline. Its Ready
+    // admission ordinal therefore precedes the future Timeout owner, but
+    // neither that ordinal nor an old lifecycle root proves timely work.
 
     let (published, after_validate_publication) =
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
@@ -3084,13 +3108,28 @@ fn pre_timeout_physical_local_validate_completion_fixture() {
         launched
             .runtime_step_observation_for_ready_sign_test()
             .and_then(|observation| observation.selected()),
-        Some(crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady),
-        "a Validate completion physically queued before the timeout freeze must retain one bounded ProposalIntent handoff"
+        Some(if completes_after_deadline {
+            crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::Timeout
+        } else {
+            crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady
+        }),
+        "only the genuinely timely guarded worker completion may precede Timeout"
     );
-    assert!(
-        launched.has_pending_live_wal_sign_for_ready_sign_test(),
-        "ProposalIntent must be fsynced before the still-due TimeoutIntent"
-    );
+    if completes_after_deadline {
+        assert_eq!(
+            launched
+                .runtime_queue_snapshot_for_ready_sign_test(deadline)
+                .completion
+                .depth,
+            1,
+            "Timeout leaves the exact late Ready owner queued for ordinary service"
+        );
+    } else {
+        assert!(
+            launched.has_pending_live_wal_sign_for_ready_sign_test(),
+            "ProposalIntent must be fsynced before the still-due TimeoutIntent"
+        );
+    }
     assert!(!output_guard.restart_required());
 }
 

@@ -471,15 +471,7 @@ fn lifecycle_decision_apply_completion_accounting_is_stable_by_exact_key() {
     let key = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 2);
     admission.retain_completion(false, None, None, None, None, None, None);
-    admission.retain_completion(
-        true,
-        Some(7),
-        Some(key),
-        None,
-        None,
-        None,
-        None,
-    );
+    admission.retain_completion(true, Some(7), Some(key), None, None, None, None);
     admission.retain_completion(false, Some(8), None, None, None, None, None);
     assert!(admission.lifecycle_decision_apply_completion_is_exact(key));
     assert!(
@@ -507,15 +499,7 @@ fn lifecycle_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
     let key = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = LifecycleDecisionApplyDispatchKeyV1::for_test(7, 2);
     admission.retain_completion(false, None, None, None, None, None, None);
-    admission.retain_completion(
-        true,
-        Some(7),
-        Some(key),
-        None,
-        None,
-        None,
-        None,
-    );
+    admission.retain_completion(true, Some(7), Some(key), None, None, None, None);
     admission.retain_completion(
         true,
         Some(7),
@@ -567,15 +551,7 @@ fn lifecycle_decision_apply_retry_unavailable_preserves_pending_owner() {
         .try_send(V2IoCommand::Shutdown)
         .expect("fill the sole physical queue position");
     let key = LifecycleDecisionApplyDispatchKeyV1::for_test(11, 3);
-    admission.retain_completion(
-        true,
-        Some(11),
-        Some(key),
-        None,
-        None,
-        None,
-        None,
-    );
+    admission.retain_completion(true, Some(11), Some(key), None, None, None, None);
     command_tx.queue.lock().lifecycle_decision_applies.insert(
         key,
         V2IoTrackedLifecycleDecisionApplyV1 {
@@ -1143,6 +1119,26 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         context,
         held_validate: None,
     }
+}
+/// Bind a manually paired Completion-only service to its actual runtime WAL.
+/// The caller verifies the exact owner context before moving the runtime into
+/// the executor. This fixture has no network ingress gate; production launch
+/// still opens the exact WAL-adjacent gate and enforces monotone advancement.
+pub(in crate::sumeragi) fn install_completion_runtime_wal_authority_for_test(
+    services: &mut ProductionV2Services,
+    authority: crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority,
+) {
+    assert_eq!(
+        authority.consumer_tag().height(),
+        services.context.height,
+        "Completion fixture WAL authority must belong to its service height"
+    );
+    services
+        .leader_wire_ingress
+        .ensure_closed_drained_cut()
+        .expect("a manually paired Completion fixture cannot replace live ingress ownership");
+    services.active_tag = authority.consumer_tag();
+    services.leader_wire_recovery_authority = authority;
 }
 /// Install the exact private signer matching the test service's local peer.
 pub(in crate::sumeragi) fn install_local_signer_for_test(

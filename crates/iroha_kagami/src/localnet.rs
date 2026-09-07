@@ -402,8 +402,9 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
 }
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const TAIRA_TESTNET_PEERS: u16 = 4;
-const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = 4;
-const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 = 4;
+const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = taira_defaults::HYDRATION_CONCURRENCY as i64;
+const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 =
+    taira_defaults::PREPARED_RUNTIME_CACHE_CAPACITY as i64;
 const TAIRA_RUNTIME_SIGNER_SEED_DOMAIN: &[u8] = b"iroha:kagami:taira:runtime-signer:v1|";
 const TAIRA_RUNTIME_SIGNER_REVISION: u64 = 1;
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN: &[u8] =
@@ -2540,6 +2541,13 @@ fn render_peer_config(
             ),
         );
         if taira {
+            storage.insert(
+                "max_wsv_memory_bytes".into(),
+                Value::Integer(
+                    i64::try_from(taira_defaults::NEXUS_MAX_WSV_MEMORY_BYTES)
+                        .expect("Taira WSV memory fits i64"),
+                ),
+            );
             let weights = TAIRA_NEXUS_STORAGE_WEIGHTS
                 .into_iter()
                 .map(|(name, value)| (name.to_owned(), Value::Integer(i64::from(value))))

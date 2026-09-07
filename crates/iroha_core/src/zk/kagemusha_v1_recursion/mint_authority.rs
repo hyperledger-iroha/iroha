@@ -503,7 +503,7 @@ pub(super) fn build_kagemusha_mint_authority_eq_v1(
         &mut eq_dense,
     )?;
 
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut eq_builder, MINIMUM_UNUSABLE_ROWS)?;
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
     eq_dense.validate_capacity(usable_rows)?;
     Ok(KagemushaMintAuthorityEqCircuitV1 {
@@ -567,7 +567,7 @@ pub(super) fn build_kagemusha_mint_authority_ep_v1(
         &mut ep_dense,
     )?;
 
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
     ep_dense.validate_capacity(usable_rows)?;
     Ok(KagemushaMintAuthorityEpCircuitV1 {

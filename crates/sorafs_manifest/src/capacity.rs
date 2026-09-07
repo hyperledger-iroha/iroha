@@ -652,7 +652,7 @@ impl SignedReplicationOrderV1 {
     /// The payload excludes `signature` so signers and verifiers use stable bytes
     /// before and after the signature is attached.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
-        norito::to_bytes(&ReplicationOrderSigningPayloadV1::from(self))
+        norito::encode_canonical(&ReplicationOrderSigningPayloadV1::from(self))
     }
     /// Verifies an Ed25519 signature over the canonical order signing payload.
     pub fn verify_signature(&self) -> Result<(), ReplicationOrderSignatureVerificationError> {
@@ -1442,6 +1442,33 @@ mod tests {
         let signature = signing_key.sign(&payload_bytes);
         envelope.signature.signature = signature.to_bytes().to_vec();
         envelope
+    }
+    #[test]
+    fn replication_signature_ignores_ambient_norito_layout() {
+        let envelope = sign_replication_order(base_replication_order(), &[0x31; 32]);
+        let payload = ReplicationOrderSigningPayloadV1::from(&envelope);
+        let canonical = norito::encode_canonical(&payload).expect("canonical signing payload");
+        let mut tampered = envelope.clone();
+        tampered.order.deadline_at += 1;
+        let mut distinct_layout = false;
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let before = norito::to_bytes(&payload).expect("ambient signing payload");
+            distinct_layout |= before != canonical;
+            assert_eq!(
+                envelope.signature_payload_bytes().expect("signing bytes"),
+                canonical
+            );
+            envelope
+                .verify_signature()
+                .expect("same signature under every layout");
+            assert!(
+                tampered.verify_signature().is_err(),
+                "changed order must not verify"
+            );
+            assert_eq!(norito::to_bytes(&payload).expect("restored layout"), before);
+        }
+        assert!(distinct_layout);
     }
     fn base_declaration() -> CapacityDeclarationV1 {
         CapacityDeclarationV1 {

@@ -21,6 +21,237 @@ fn canonical_decode_rejects_trailing_and_compressed_bytes() {
     assert!(decode_canonical::<CheckpointBodyV1>(&compressed, "checkpoint").is_err());
 }
 #[test]
+fn service_decoder_rejects_compression_before_allocation() {
+    let source = signed_source(1, 0x31, 1_800_000_000);
+    macro_rules! check_signed_frame {
+        ($value:expr, $ty:ty) => {{
+            let value = $value;
+            let canonical = norito::encode_canonical(value).unwrap();
+            assert_eq!(decode_canonical::<$ty>(&canonical, "signed frame").unwrap(), *value);
+            let compressed = norito::to_compressed_bytes(value, Some(norito::CompressionConfig::default())).unwrap();
+            assert_eq!(norito::decode_from_bytes::<$ty>(&compressed).unwrap(), *value);
+            let mut tagged = canonical.clone();
+            let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+            let compression_offset = header.magic.len() + 2 + header.schema.len();
+            tagged[compression_offset] = norito::Compression::Zstd as u8;
+            let mut oversized_header = tagged[..norito::core::Header::SIZE].to_vec();
+            oversized_header[compression_offset + 1..compression_offset + 9]
+                .copy_from_slice(&u64::MAX.to_le_bytes());
+            assert_eq!(norito::core::Header::read(tagged.as_slice()).unwrap().compression, norito::Compression::Zstd);
+            let oversized = norito::core::Header::read(oversized_header.as_slice()).unwrap();
+            assert_eq!(oversized.compression, norito::Compression::Zstd);
+            assert_eq!(oversized.length, u64::MAX);
+            let no_allocation = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+            for flags in governance_service_caller_layouts() {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                for bytes in [&compressed, &tagged, &oversized_header] {
+                    let error = norito::with_decode_limits_scope(no_allocation, || {
+                        decode_canonical::<$ty>(bytes, "signed frame")
+                    }).expect_err("compression must fail before the zero allocation limit");
+                    assert!(matches!(error, GovernanceDagServiceError::Source(ref message)
+                        if message == "signed frame is not canonical Norito"));
+                }
+                let error = norito::with_decode_limits_scope(no_allocation, || {
+                    decode_canonical::<$ty>(&canonical, "signed frame")
+                }).expect_err("valid control must reach the active zero allocation limit");
+                assert!(matches!(error, GovernanceDagServiceError::Source(ref message)
+                    if message.contains("allocation") && message.contains("decode failed")));
+                assert_eq!(norito::core::get_decode_flags(), flags);
+            }
+        }};
+    }
+    check_signed_frame!(&source.blocks[0].block, GovernanceDagBlockV1);
+    check_signed_frame!(&source.head, GovernanceDagHeadV1);
+}
+#[test]
+fn service_source_bytes_and_full_frame_boundary_ignore_caller_layout() {
+    let limit = GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1;
+    let mut value = settlement(0, 1_800_000_000);
+    value.audit_notes = Some("source byte identity".to_owned());
+    let baseline = norito::encode_canonical(&value).unwrap();
+    let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(value.clone()));
+    for flags in governance_service_caller_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(canonical_source_payload_bytes(&payload).unwrap(), baseline);
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+    // Test framing admission, not the separate semantic limit on audit notes.
+    value.audit_notes = Some("x".repeat(limit));
+    let initial_len = norito::encode_canonical(&value).unwrap().len();
+    let note_len = limit - (initial_len - limit);
+    value.audit_notes.as_mut().unwrap().truncate(note_len - 1);
+    for expected_len in [limit - 1, limit, limit + 1] {
+        let baseline = norito::encode_canonical(&value).unwrap();
+        assert_eq!(baseline.len(), expected_len);
+        let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(value.clone()));
+        for flags in governance_service_caller_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            if expected_len <= limit {
+                assert_eq!(canonical_source_payload_bytes(&payload).unwrap(), baseline);
+            } else {
+                assert!(baseline.len() - norito::core::Header::SIZE < limit);
+                let error = canonical_source_payload_bytes(&payload)
+                    .expect_err("a fitting bare payload cannot authorize an oversized frame");
+                assert!(error.to_string().contains("exceeds the V1 ceiling"));
+            }
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        value.audit_notes.as_mut().unwrap().push('x');
+    }
+}
+#[test]
+fn sealed_service_records_and_commitments_ignore_caller_layout() {
+    let source = signed_source(2, 0x36, 1_800_000_000);
+    let checkpoint = checkpoint_from_source(&source);
+    let intent = intent_from_source(&source);
+    let checkpoint_bytes = norito::encode_canonical(&checkpoint).unwrap();
+    let intent_bytes = norito::encode_canonical(&intent).unwrap();
+    let expected_checkpoint = GovernanceDagSealedStateRecord::new(
+        GovernanceDagSealedStateSlot::Checkpoint,
+        checkpoint.generation,
+        checkpoint_bytes.clone(),
+    );
+    let expected_intent = GovernanceDagSealedStateRecord::new(
+        GovernanceDagSealedStateSlot::PublishIntent,
+        intent.generation,
+        intent_bytes.clone(),
+    );
+    let mirror = MirrorIndexStorePayloadV1::empty();
+    let mirror_bytes = norito::encode_canonical(&mirror).unwrap();
+    let mut alternate_frames = 0;
+    for flags in governance_service_caller_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let store = test_checkpoint_store(provider.clone());
+        assert_eq!(
+            save_checkpoint(&store, None, &checkpoint).unwrap(),
+            expected_checkpoint.revision
+        );
+        assert_eq!(
+            save_publish_intent(&store, None, &intent).unwrap(),
+            expected_intent.revision
+        );
+        {
+            let inner = provider.inner.lock().unwrap();
+            assert_eq!(inner.checkpoint.as_ref(), Some(&expected_checkpoint));
+            assert_eq!(inner.publish_intent.as_ref(), Some(&expected_intent));
+        }
+        assert_eq!(load_checkpoint(&store).unwrap().0, Some(checkpoint.clone()));
+        assert_eq!(load_publish_intent(&store).unwrap().0, Some(intent.clone()));
+        let commitment =
+            checkpoint_commitment(Some(&checkpoint), Some(expected_checkpoint.revision))
+                .expect("commitment binds independently encoded canonical bytes");
+        assert_eq!(
+            commitment.digest,
+            *blake3::hash(&checkpoint_bytes).as_bytes()
+        );
+        assert_eq!(commitment.revision, expected_checkpoint.revision);
+        assert!(checkpoint_commitment(Some(&checkpoint), Some([0x73; 32])).is_err());
+        assert_eq!(
+            encode_mirror_index_store_payload(&mirror).unwrap(),
+            mirror_bytes
+        );
+        assert_eq!(
+            decode_mirror_index_store_payload(&mirror_bytes).unwrap(),
+            mirror
+        );
+        assert_eq!(
+            decode_canonical::<CheckpointBodyV1>(&checkpoint_bytes, "checkpoint").unwrap(),
+            checkpoint
+        );
+        let alternate_checkpoint = norito::core::to_bytes(&checkpoint).unwrap();
+        let alternate_intent = norito::core::to_bytes(&intent).unwrap();
+        let alternate_mirror = norito::core::to_bytes(&mirror).unwrap();
+        if alternate_checkpoint != checkpoint_bytes {
+            alternate_frames += 1;
+            assert_eq!(
+                norito::decode_from_bytes::<CheckpointBodyV1>(&alternate_checkpoint).unwrap(),
+                checkpoint
+            );
+            assert!(
+                decode_canonical::<CheckpointBodyV1>(&alternate_checkpoint, "checkpoint").is_err()
+            );
+            // Recompute the outer revision, so rejection cannot be attributed to stale metadata.
+            provider.inner.lock().unwrap().checkpoint = Some(GovernanceDagSealedStateRecord::new(
+                GovernanceDagSealedStateSlot::Checkpoint,
+                checkpoint.generation,
+                alternate_checkpoint,
+            ));
+            let error = load_checkpoint(&store).expect_err("alternate sealed checkpoint frame");
+            assert!(error.to_string().contains("encoding is not canonical"));
+        }
+        if alternate_intent != intent_bytes {
+            assert_eq!(
+                norito::decode_from_bytes::<PublishIntentBodyV1>(&alternate_intent).unwrap(),
+                intent
+            );
+            provider.inner.lock().unwrap().publish_intent =
+                Some(GovernanceDagSealedStateRecord::new(
+                    GovernanceDagSealedStateSlot::PublishIntent,
+                    intent.generation,
+                    alternate_intent,
+                ));
+            let error = load_publish_intent(&store).expect_err("alternate sealed intent frame");
+            assert!(error.to_string().contains("encoding is not canonical"));
+        }
+        if alternate_mirror != mirror_bytes {
+            assert_eq!(
+                norito::decode_from_bytes::<MirrorIndexStorePayloadV1>(&alternate_mirror).unwrap(),
+                mirror
+            );
+            assert!(decode_mirror_index_store_payload(&alternate_mirror).is_err());
+        }
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+    assert!(alternate_frames > 0);
+}
+#[test]
+fn signed_block_archive_decode_and_publication_ignore_caller_layout() {
+    let source = signed_source(2, 0x37, 1_800_000_000);
+    let endpoint = block_prefix_archive_test_endpoint();
+    let (archive, _, head) = signed_block_prefix_archive_fixture(
+        &source,
+        0,
+        2,
+        BlockPrefixArchiveHeadV1::empty(),
+        &endpoint,
+    );
+    let baseline = norito::encode_canonical(&archive).unwrap();
+    assert_eq!(head.digest, *blake3::hash(&baseline).as_bytes());
+    assert_eq!(head.ipfs_cid, canonical_raw_sha256_cid(&baseline));
+    let mut alternate_frames = 0;
+    for flags in governance_service_caller_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            decode_signed_block_prefix_archive(&baseline, baseline.len() as u64).unwrap(),
+            archive
+        );
+        assert!(decode_signed_block_prefix_archive(&baseline, baseline.len() as u64 - 1).is_err());
+        verify_block_prefix_archive_publication(&archive, &baseline, &head)
+            .expect("the publication signature still binds exact canonical archive bytes");
+        let alternate = norito::core::to_bytes(&archive).unwrap();
+        if alternate != baseline {
+            alternate_frames += 1;
+            assert_eq!(
+                norito::decode_from_bytes::<SignedBlockPrefixArchiveV1>(&alternate).unwrap(),
+                archive
+            );
+            let error = decode_signed_block_prefix_archive(&alternate, alternate.len() as u64)
+                .expect_err("a structurally valid alternate archive frame is not canonical");
+            assert!(error.to_string().contains("encoding is not canonical"));
+            let mut substituted = head.clone();
+            substituted.digest = *blake3::hash(&alternate).as_bytes();
+            substituted.ipfs_cid = canonical_raw_sha256_cid(&alternate);
+            assert!(
+                verify_block_prefix_archive_publication(&archive, &alternate, &substituted)
+                    .is_err()
+            );
+        }
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+    assert!(alternate_frames > 0);
+}
+#[test]
 fn bounded_norito_decode_rejects_sequence_allocation_bomb() {
     let encoded = norito::to_bytes(&vec![7_u64; 64]).expect("encode bounded vector");
     let limits = DecodeLimits::new(4, encoded.len(), 8, encoded.len() * 2, 16);

@@ -3205,6 +3205,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -4947,6 +4948,7 @@ dependencies = [
  "displaydoc",
  "expect-test",
  "eyre",
+ "fastpq_isi",
  "fastpq_prover",
  "ff",
  "futures",
@@ -6351,6 +6353,7 @@ dependencies = [
  "iroha_crypto",
  "poseidon-primitives",
  "rand_core 0.6.4",
+ "zeroize",
 ]
 
 [[package]]

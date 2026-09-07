@@ -70,13 +70,17 @@ pub const TAIRA_CHAIN_DISCRIMINANT_V1: u16 = 369;
 /// Exact first-release Taira validator count.
 pub const TAIRA_VALIDATOR_COUNT_V1: usize = 4;
 /// Exact aggregate Inrou CPU ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 = 8_000;
+pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 =
+    iroha_config::parameters::defaults::taira::INROU_MAX_CPU_MILLIS;
 /// Exact aggregate Inrou memory ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_MAX_MEMORY_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
+pub const TAIRA_INROU_MAX_MEMORY_BYTES_V1: u64 =
+    iroha_config::parameters::defaults::taira::INROU_MAX_MEMORY_BYTES;
 /// Exact aggregate Inrou writable-storage ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_MAX_STORAGE_BYTES_V1: u64 = 64 * 1024 * 1024 * 1024;
+pub const TAIRA_INROU_MAX_STORAGE_BYTES_V1: u64 =
+    iroha_config::parameters::defaults::taira::INROU_MAX_STORAGE_BYTES;
 /// Exact immutable Inrou guest-image ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+pub const TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1: u64 =
+    iroha_config::parameters::defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES;
 /// Exact Inrou startup grace for one first-release Taira validator.
 pub const TAIRA_INROU_START_GRACE_MS_V1: u64 = 30_000;
 /// Exact Inrou shutdown grace for one first-release Taira validator.
@@ -127,9 +131,16 @@ fn validate_taira_launcher_profile_v1(
     if !runtime.production_mode {
         return Err("Taira launcher requires Soracloud production mode".to_owned());
     }
-    if runtime.hydration_concurrency != soracloud_runtime_defaults::HYDRATION_CONCURRENCY
+    if runtime.hydration_concurrency
+        != std::num::NonZeroUsize::new(
+            iroha_config::parameters::defaults::taira::HYDRATION_CONCURRENCY,
+        )
+        .expect("nonzero Taira worker capacity")
         || runtime.prepared_runtime_cache_capacity
-            != soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY
+            != std::num::NonZeroUsize::new(
+                iroha_config::parameters::defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY,
+            )
+            .expect("nonzero Taira worker capacity")
     {
         return Err(
             "Taira launcher requires the exact V1 hydration-worker and prepared-runtime capacities"
@@ -222,6 +233,11 @@ fn validate_taira_storage_profile_v1(
 }
 
 fn validate_taira_launcher_config_v1(config: &Config) -> Result<(), String> {
+    if config.nexus.storage.max_wsv_memory_bytes.get()
+        != iroha_config::parameters::defaults::taira::NEXUS_MAX_WSV_MEMORY_BYTES
+    {
+        return Err("Taira launcher requires the exact bounded WSV memory budget".to_owned());
+    }
     let trusted_peers = config.common.trusted_peers.value();
     validate_taira_launcher_profile_v1(
         config.common.chain.as_ref(),
@@ -589,9 +605,14 @@ mod tests {
     fn canonical_runtime_profile() -> SoracloudRuntime {
         let mut runtime = SoracloudRuntime::default();
         runtime.production_mode = true;
-        runtime.hydration_concurrency = soracloud_runtime_defaults::HYDRATION_CONCURRENCY;
-        runtime.prepared_runtime_cache_capacity =
-            soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY;
+        runtime.hydration_concurrency = std::num::NonZeroUsize::new(
+            iroha_config::parameters::defaults::taira::HYDRATION_CONCURRENCY,
+        )
+        .expect("nonzero Taira worker capacity");
+        runtime.prepared_runtime_cache_capacity = std::num::NonZeroUsize::new(
+            iroha_config::parameters::defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY,
+        )
+        .expect("nonzero Taira worker capacity");
         runtime.inrou.enabled = true;
         runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
@@ -726,14 +747,25 @@ mod tests {
         };
 
         let mut changed = runtime.clone();
-        changed.hydration_concurrency =
-            NonZeroUsize::new(soracloud_runtime_defaults::HYDRATION_CONCURRENCY.get() + 1)
-                .expect("changed hydration-worker count is nonzero");
+        changed.hydration_concurrency = NonZeroUsize::new(
+            std::num::NonZeroUsize::new(
+                iroha_config::parameters::defaults::taira::HYDRATION_CONCURRENCY,
+            )
+            .expect("nonzero Taira worker capacity")
+            .get()
+                + 1,
+        )
+        .expect("changed hydration-worker count is nonzero");
         assert_rejected(&changed);
 
         let mut changed = runtime.clone();
         changed.prepared_runtime_cache_capacity = NonZeroUsize::new(
-            soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY.get() + 1,
+            std::num::NonZeroUsize::new(
+                iroha_config::parameters::defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY,
+            )
+            .expect("nonzero Taira worker capacity")
+            .get()
+                + 1,
         )
         .expect("changed prepared-runtime capacity is nonzero");
         assert_rejected(&changed);

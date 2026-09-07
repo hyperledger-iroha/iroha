@@ -306,10 +306,19 @@ and verifier both used `x = omega^j`. They now use
 that the former `omega` calculation does not.
 
 The generic native verifier still does not turn `blowup_log2` into an explicit
-initial degree bound or authenticate a bounded-degree terminal polynomial.
-Consequently this audit does not assign the advertised proximity/security claim
-to private explicit-AIR generic proofs. The verifier-owned Binding profile is
-separately protected by exact canonical trace-root reconstruction.
+initial degree bound for hidden trace columns. It does authenticate the final
+folded value and require it to be the zero Fp4 element. This consistency check
+does not establish the missing hidden-trace proximity argument.
+
+Current production callers do not rely on that argument: the verifier-owned
+Binding profile reconstructs the complete canonical trace and zero-composition
+roots, while Explicit verification reconstructs both roots from required full
+trace material. The BFV verifier and both Soracloud structural-precheck callers
+require this full-material replay before acceptance. The public-only BFV
+entrypoint fails closed. Dedicated ZK-ACE and aggregate transparent engines use
+their own DEEP/FRI and terminal-degree verifiers; they do not enter the generic
+Binding or Explicit verifier. No generic hidden-witness acceptance path was
+identified in this callsite review.
 
 Geometry prevalidation now computes the binary layer count directly and
 rejects all invalid wire exponents/arities before any shift. Domain-point
@@ -423,6 +432,21 @@ reconstructs and exactly matches every trace row, composition value, trace root,
 and composition root. Re-enabling public-only verification requires separately
 committing every hidden trace polynomial, proving its degree bound, and binding
 those commitments into the sampled composition relation.
+
+The Core arithmetic conformance suite previously generated local reviewer keys
+and expected a signed test package to qualify production execution. The production
+gate correctly rejected all eight dependent BFV tests. Deterministic construction
+now resides only in a crypto unit-test module, which calls crate-private arithmetic
+and asserts that both audited wrappers still reject that local package with
+`MissingRegisteredHeOrgLatticeNoiseAndQromEvidence`. The two generator tests pass.
+Only canonical two-slot arithmetic material is exported; the 807,864-byte fixture
+contains no audit package or reviewer signing key. Core consumes it through strict
+complete-material validation and exact re-encoding, preserving every adversarial
+assertion. The current actual Core native-STARK suite passes all 63 tests,
+including the ten BFV-prefixed cases, in 849.78 seconds with command-local
+opt-level 3 for `fastpq_isi`, `fastpq_prover`, and `iroha_crypto`. This test seam
+adds no production API or qualification switch. See the
+[fixture record](../fixtures/soracloud/bfv_full_bootstrap_conformance_v1.md).
 
 ### ZK-AUDIT-15: Secret STARK buffers used optimizable ordinary overwrites
 
@@ -633,8 +657,9 @@ regression preloads a valid cache sentinel, submits a fully valid FASTPQ proof,
 and proves the proof map, cache contents, and cache slot remain unchanged.
 
 Specialized callsites have distinct trust analyses. Verified lane-relay
-registration independently matches the proven roots and transaction set to a
-finalized lane execution commitment. Fee-sponsor vault allocation is checked
+registration matches the proven roots and transaction set to a lane execution
+commitment, but its transaction-order and authoritative state-root construction
+remain unresolved under ZK-AUDIT-30. Fee-sponsor vault allocation is checked
 against authenticated owner/delegation and current authoritative vault/policy
 state. Those paths do not derive authority from generic syscall success. The
 issuer-signed asset handle path is narrower but not release-qualified: its
@@ -649,8 +674,8 @@ authoritative finalized source-state statement.
 
 Severity: High; inconsistent AIR quotient and honest-proof rejection.
 
-Status: Shared trace-stride calculation implemented; full-proof qualification
-pending. The sole V1 profile has an 8x LDE and a 16-element FRI terminal
+Status: Shared trace-stride calculation implemented; all 26 dedicated Core
+ZK-ACE tests pass, including the full proof roundtrip. The sole V1 profile has an 8x LDE and a 16-element FRI terminal
 domain. Composition construction used `index + 16`, while query openings and
 the DEEP relation used `index + 8` and multiplication by the trace generator.
 The composition therefore committed a different next-row polynomial.
@@ -658,9 +683,17 @@ The composition therefore committed a different next-row polynomial.
 Composition, query construction, and verification now share
 `trace_next_lde_index_v1`; the vanishing-residue schedule also uses the 8x
 trace stride. Independent subgroup translation and synthetic `f(X) = X`
-quotient regressions cover interior indices and wraparound. The exact-shape
-full-proof roundtrip remains required in addition to these local checks.
-Production activation remains unavailable under ZK-AUDIT-03.
+quotient regressions pass in the Core test binary, covering interior indices and
+wraparound. The field/witness erasure regression also passes. The complete
+2,131,222-byte proof roundtrip, canonical re-encoding, second randomized proof,
+raw-witness exclusion, terminal degree, and replay-mutation tests pass in the
+combined Core binary. The refreshed 26-test run includes the shared prepared-frame
+hashing refactor and unused SHA helper removal; it passes in 562.73 seconds with
+command-local opt-level 3 for `fastpq_isi`, `fastpq_prover`, and `iroha_crypto`.
+The actual executable is `iroha_core-e31551a426162592`, SHA-256
+`88bb869aef878c6981e50f1acf0fb1a0a38de2d3b0299c0055d8ae086156adf6`.
+This is scoped implementation evidence; it predates later unrelated SoraFS and
+SDK changes. Production activation remains unavailable under ZK-AUDIT-03.
 
 ### ZK-AUDIT-27: FASTPQ transcript layout and Fp4 wire were not fixed
 
@@ -678,16 +711,218 @@ The V1 Fp4 codec now writes exactly four little-endian canonical coefficients
 rejects truncation and the removed struct-framed carrier. Slice decoding
 reports exactly 32 consumed bytes so the enclosing decoder owns suffix checks.
 Seven field tests, two proof codec tests, the typed FRI commitment-binding
-regression, and four canonical-preflight tests pass locally. Fixture
-regeneration and combined downstream validation remain separate obligations;
-these tests do not establish independent cryptographic qualification.
+regression, and four canonical-preflight tests pass locally. The sole active
+64-row raw-transcript fixture was regenerated and its standard Cargo replay
+test passes with exact byte equality. These tests do not establish independent
+cryptographic qualification.
 
 The generic native-STARK `GoldilocksFp4V1` carrier now delegates to the same
 exact field codec. It also rejects noncanonical coefficients on serialization.
-Three extracted-source regressions pass against the built FASTPQ/Norito
-dependencies, covering byte equality, archive/slice canonicality, truncation,
-and rejection of the removed struct frame under the same schema name. A
-combined Core build remains required to qualify integration.
+Three regressions pass in the combined Core test binary, covering byte equality,
+archive/slice canonicality, truncation, and rejection of the removed struct
+frame under the same schema name. The new exhaustive exponent/arity, hostile
+opening geometry, and subgroup-order tests also pass in that binary.
+
+### ZK-AUDIT-28: AIR composition replay used the auxiliary tree domain
+
+Severity: High; honest generic and explicit AIR proofs were rejected.
+
+Status: AIR composition root reconstruction now uses the AIR composition role.
+The prover committed composition evaluations under `air-composition`, but the
+shared root-reconstruction helper used `auxiliary-composition`. Generic prover
+self-verification enters the Explicit context, so even an honest proof failed
+before reaching the Binding verifier. Governed Soracloud root checks also use
+that helper and encountered the same mismatch.
+
+The helper now reconstructs the exact AIR composition root. The separate
+auxiliary-composition path helper retains its own role. The named regression
+`air_composition_root_uses_its_own_role_for_every_tree_level` covers singleton
+leaves and trees with internal nodes, requires equality with the AIR builder,
+and rejects equality with the auxiliary builder. The pre-existing constant-zero
+root-equivalence test independently detects this mismatch. Exact-module tests
+reproduced honest-proof rejection before the fix and acceptance afterward.
+A caller linked to the rebuilt production Core library also passes the public
+AIR prove/self-verify/verify roundtrip (6,197 bytes). A probe of the complete current
+native module using the final Core build's dependencies, with both `fastpq_isi`
+and `fastpq_prover` at opt-level 3, produces byte-identical output. Its SHA-256 is
+`a0d3bda0df5dadeb515da9a8bb1bc6664e8f967490b49a585e7fdf12ef427549`.
+This is scoped CPU build parity, not GPU evidence or a rebuilt whole-Core library.
+The subsequent combined Core unit binary passes all 54 non-BFV native tests,
+including the new role regression and all 14 earlier AIR-domain failures.
+That run's eight BFV tests reached the separate domain-length defect in
+ZK-AUDIT-31. After its correction, the refreshed actual Core binary passes all
+63 native tests, including the BFV cases and these AIR regressions.
+
+### ZK-AUDIT-29: Native FASTPQ proof execution could report an unused GPU path
+
+Severity: High for hardware qualification and operator-visible execution claims.
+
+Status: Native-V1 proof admission now rejects explicit GPU requirements before
+statement or witness processing. The six-lane proof pipeline used CPU work even
+when its mode resolution reported GPU. An optional parity test consequently
+compared two CPU executions and did not establish GPU proof parity.
+
+`NativeV1GpuUnavailable` is enforced at prover construction and proof entrypoints;
+automatic execution resolves and reports CPU for both execution and Poseidon
+work. Core syscall 315 now uses the native-V1 GPU preflight, which returns false.
+The standalone scalar-kernel preflight cannot qualify the six-lane proof engine.
+The misleading optional parity test was replaced by an unconditional rejection
+test, with additional tests for error precedence and actual execution reporting.
+Six native-V1 admission regressions pass under Cargo, including byte equality
+between CPU and automatic execution. Seven observer tests also pass. The
+GPU-feature admission regression also passes with `fastpq-gpu` enabled; it
+asserts rejection despite scalar-kernel availability.
+
+The bounded message-by-six-lane frame API and lane-specific Metal/CUDA kernels
+now exist. The M1 Ultra kernel matches the independent Python SHAKE256/integer
+reference for 12 frames and 72 lanes; the Rust-to-Metal host-frame parity test
+also passes. The shared Merkle executor routes every tree role and absolute
+index through bounded typed frames. A required real Metal test matches every
+level and root across empty, singleton, odd shapes and FRI rounds 0 and 7
+(2.63 seconds); injected-failure, executor, and preprocessing tests also pass.
+Public KAT failure quarantines a backend, and secret host staging plus device
+cleanup erase buffers after completion.
+
+This is partial hash/Merkle execution evidence. Native proof constructors and
+preflight remain unavailable for GPU: leaf hashes, FFT/LDE/FRI arithmetic, and
+transcripts remain on CPU, and CUDA compilation/device qualification is absent.
+Complete proof integration and exact deterministic CPU/GPU proof equality are
+still required. No complete GPU proof qualification follows from these slices.
+
+### ZK-AUDIT-30: AXT source-state and ordered-set authority were incomplete
+
+Severity: Critical release qualification blocker at the state-authorization boundary.
+
+Status: Ordered-wire producers and an anchor-bound verifier are corrected in
+source. Six anchor-verifier tests and seven focused Core producer, lane, state,
+and sealed-reveal regressions pass; runtime AXT release remains unavailable.
+Full FASTPQ replay establishes consistency of the supplied transfer batch. It
+does not make a locally reconstructed balance tree the finalized world-state tree.
+This finding does not assert an exploit of an enabled release path.
+
+Both Core block execution paths previously sorted execution-call identities before
+applying `tx_set_hash_from_ordered_hashes`. They now use the shared
+`axt_ordered_transaction_set_digest_v1` over exact ordered
+`TransactionEntrypoint::encode_wire_v1` bytes, including time-trigger entrypoints.
+The commitment binds the domain, count, each wire length, and every complete wire.
+Its counting pass enforces the consensus 256 MiB wire ceiling, and its streaming
+pass must reproduce the count and each wire length exactly. The 65,536-entry
+anchored-proof witness limit belongs to that verifier rather than to the general
+block commitment helper. Missing or
+zero block-owned transaction-set context is rejected instead of reconstructed from
+raw transcripts. The model no longer equates a per-execution `source_tx_commitment`
+to the whole-set digest.
+
+`verify_axt_proof_envelope_against_anchor_v1` checks exact ordered-wire commitment,
+exactly-once execution identity membership, transfer-only semantics, and equality
+of proof roots, transaction set, dataspace, DA commitment, and expiry with the
+supplied anchor. For sealed reveals the membership identity is derived from the
+exact outer wire. The caller must still authenticate that anchor through finalized
+ledger state, QC/committee facts, issuer signatures, successful source execution,
+transfer facts, and nonce consumption. This helper does not authorize a spend by
+itself. `TrustedBlockProofAnchor::from_untrusted_finality_artifact` can authenticate
+the signed artifact, complete executed block, and retained transcript map, but its
+cryptographic checks are relative to the supplied roster. The future AXT resolver
+must first pin the expected network and height context from immutable trusted WSV
+state, using the `BridgeFinalityVerifier` trust boundary; artifact self-consistency
+alone is insufficient. The six passing tests cover a real transfer proof with a fabricated test
+anchor, exact root/set/dataspace bytes, DA/expiry/profile/cap rejection, wire order,
+exactly-once membership, and sealed-reveal identity. The complete AXT module suite
+passes 76 tests, including those six regressions. The seven Core regressions
+passed in 5.55 seconds in the actual `iroha_core-64e142613562998b` test executable;
+that executable predates the later shared hash-frame refactor. These fixtures do
+not prove authoritative finalized WSV or runtime authorization.
+
+The root foundation also requires replacement on the consensus side.
+`ordinary_execution_roots` and `parent_state_from_witness` in
+[Core execution commitments](../crates/iroha_core/src/sumeragi/exec.rs) use only
+witnessed writes and their pre-values, or witnessed reads when there are no writes.
+[The SMT constructor](../crates/iroha_core/src/sumeragi/smt.rs) fills absent siblings
+with its empty hash. These roots commit to those projections, not the full persisted
+WSV. Canonical executed-block bytes and QC authentication do not change that root
+meaning. An authoritative root resolver cannot treat this projection as an existing
+full-WSV commitment; the persisted commitment design and state proofs remain required.
+
+`batch_from_transcripts` constructs SMT witnesses from the bundle's touched
+balances and overwrites the supplied `old_root` and `new_root` with those local
+roots. Binding that result to a caller-carried batch and transcript does not prove
+that either root is the authoritative finalized WSV root. Transcript binding of
+`PublicIO.tx_set_hash` alone also supplies no entry-membership relation.
+
+Closure still requires the Core finalized state witness, authoritative resolver,
+and nonce integration to establish and consume those exact facts. A helper or
+verifier regression alone cannot qualify the complete runtime path; independent
+FASTPQ qualification under ZK-AUDIT-25 is also still required.
+
+### ZK-AUDIT-31: The retired domain-length ceiling rejected full BFV digests
+
+Severity: High; every honest BFV native-STARK proof failed parameter validation.
+
+Status: The native domain ceiling now derives from twice the typed six-lane digest
+byte length. The BFV domain helper already returned the complete 48-byte digest as
+96 lowercase hexadecimal characters, but generic Core admission still capped the
+string at the retired 32-byte digest's 64-character encoding. Once conformance
+material reached real BFV proving, all eight dependent tests exposed this mismatch.
+The same Core run passed the other 54 native tests, including the AIR-role repair.
+
+The new ceiling is exactly 96 bytes. A named BFV regression admits the full canonical
+domain, rejects a 97th character, and preserves a caller's stricter bound. No digest
+limb is truncated or re-encoded through an alternate carrier. The stale crypto
+regression also expected a 32-byte BLAKE2 digest; it now pins two complete domain
+vectors independently reproduced with the separate public six-lane implementation
+and explicit BFV domain fields. The corrected crypto regression passes under Cargo
+and reproduced failure before the correction. The final actual Core suite passes
+all 63 native tests, including the ten BFV-prefixed cases. The arithmetic-only
+conformance fixture and production qualification gate remain unchanged.
+
+A supplementary exact-native-module probe using the actual Core dependency
+selections generated, fully verified, and canonically re-encoded both BFV slots
+in two independent processes. Each proof is 737,089 bytes and repeats exactly;
+slot SHA-256 digests are
+`fc0e9ff79c781cafb77c8291dc2dfa096992748336841666014db0abc2c4c5c2`
+and `69a17c3c0fc851d825da35cd0e04b84cf892d05d642f67a80e7616254e376e61`.
+The 6,197-byte generic native proof also matches its saved earlier actual-Core
+public-API output exactly. BFV repetition is a determinism check, not a comparison
+against an unoptimized BFV build or device execution.
+
+
+### ZK-AUDIT-32: Archived SDK capability bytes could acquire admission authority
+
+Severity: High at the SDK construction boundary; no enabled transaction bypass
+is demonstrated.
+
+Status: The JavaScript decoder is now inspection-only. Previously it bound a
+private admission callback to every native-valid archive, including bytes loaded
+offline. Its fetch helper also accepted a caller-defined symbol method without
+proving that an actual Torii client owned the transport. A fully qualified archive
+could therefore supply the public guard's missing transport provenance. The
+current production qualification gates remain closed, and no retained transaction
+builder consuming this guard was identified.
+
+Only an actual Node Torii client's constructor-registered transport can now issue
+a receipt. Its private fetch requires canonical request authentication, HTTPS,
+exact response URL without redirects, and a no-store request. It takes the expected
+network from the immutable local signing context. The helper consumes the receipt
+once and binds admission to that exact manifest object, origin, and network;
+copying or re-decoding the archive loses admission authority. Capability fetching
+also uses private request, authentication, status, header, and bounded-body helpers;
+overriding public client methods cannot replace the authenticated response bytes.
+Explicit configured custom fetch implementations remain trusted transport
+dependencies and must preserve these authentication and response-metadata requirements.
+
+The native tuple call now requires expected network bytes and compares both the
+signed deployment network and genesis hash, while retaining complete archive,
+qualification, activation, and local compiled-profile checks. JavaScript controls
+cover archived qualified manifests, forged clients, network substitution, HTTP,
+redirects, other-origin responses, native rejection, and exact success values.
+The fifteen Exact12 controls use an explicit mock native validator to isolate
+flow control; they do not fabricate cryptographic qualification. The mutable-helper
+regression reproduced failure before the private-path correction and passes after
+it. The combined selection, including canonical request authentication, catalog,
+FFI, and package-type parity, passes 62 tests with no skips. Native regression
+validation and a current provenance-checked local native package are pending.
+This finding does not claim that transport provenance alone grants production
+readiness or authorizes a transaction.
 
 ## Dependency Assumptions
 
@@ -839,7 +1074,8 @@ policy commitments, source receipt id, target dataspaces, effect type, corridor,
 seal, transfer transitions, and transfer transcripts. `RegisterVerifiedLaneRelay`
 then checks lane envelope verification, proof payload digest, height/expiry, source
 dataspace, effect type, lane relay claim digest, and FASTPQ proof result before
-recording a verified lane relay.
+recording a verified lane relay. These metadata checks do not establish the missing
+ordered entry membership or authoritative WSV witness relation in ZK-AUDIT-30.
 
 ## Formal Model
 
@@ -866,8 +1102,8 @@ counterexamples.
 | IPA metadata binding | Satisfied for Iroha-owned wrapper | generator DST, transcript limits, shape checks, canonical outer schema, strict ZK1 carrier, VK/envelope checks |
 | Trusted setup fail-closed | Satisfied in audited policy | registry and runtime label rejection |
 | Diagnostic endpoint not ledger-grade | Satisfied in code; documentation risk | Torii attachment/prover worker are report-only; see ZK-AUDIT-02 |
-| FASTPQ transfer replay and lane claim binding | Satisfied only with mandatory full verifier replay; standalone IVM admission unavailable | `ensure_public_io_matches`, transcript/SMT replay, `verify_batch_matches_binding`, finalized lane claim checks; see ZK-AUDIT-25 |
-| AXT remote-spend authorization strength | Unavailable for release; generic proof admission fails closed and handle intent/amount binding depends on unqualified FASTPQ | non-mutating `AXT_VERIFY_DS_PROOF` rejection, inline authenticated-handle tests, missing source anchor and independent proof qualification; see ZK-AUDIT-25 |
+| FASTPQ transfer replay and lane claim binding | Local transfer replay and anchor-relative ordered entry membership implemented; authoritative source-state binding unresolved | `ensure_public_io_matches`, transcript/SMT replay, `verify_batch_matches_binding`, and the anchor-bound verifier; authenticating that anchor against finalized WSV remains open under ZK-AUDIT-25 and ZK-AUDIT-30 |
+| AXT remote-spend authorization strength | Unavailable for release; generic proof admission fails closed and handle intent/amount binding depends on unqualified FASTPQ | non-mutating `AXT_VERIFY_DS_PROOF` rejection, inline authenticated-handle tests, missing authoritative state witness and resolver/nonce integration, and independent proof qualification; see ZK-AUDIT-25 and ZK-AUDIT-30 |
 
 ## Verification Plan
 
@@ -897,11 +1133,11 @@ regressions only for newly confirmed gaps.
 
 ## Conclusion
 
-Iroha's normal ZK verifier admission architecture is sound at the control-plane
-binding layer. Active VK registry policy, envelope metadata, backend guardrails,
-public-input binding, and proof dispatch are consistently tied together. Native
-STARK/FRI and FASTPQ verification include meaningful malformed-proof rejection and
-statement-binding checks.
+The reviewed ZK admission paths bind active VK registry policy, envelope metadata,
+backend guardrails, public inputs, and proof dispatch. Native STARK/FRI and FASTPQ
+also contain malformed-proof rejection and statement-binding checks. These scoped
+properties do not close the protocol qualification, authoritative source-state,
+hardware, or deployment obligations recorded above.
 
 ZK-ACE now carries a quantitative compiled-profile certificate and fixed proof
 wire instead of the historical caller-selected PoC parameters. Independent

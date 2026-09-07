@@ -412,10 +412,19 @@ fn indexed_log_entrypoint(
         .with_executable(Executable::Batch(
             vec![iroha_data_model::transaction::ExecutableBatchItem::Instruction(operation)].into(),
         ))
+        .with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        )
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     TransactionEntrypoint::External(transaction)
 }
 fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> MergeLedgerEntry {
+    merge_entry_with_indexed_entrypoint_reservation(entrypoint, 0)
+}
+fn merge_entry_with_indexed_entrypoint_reservation(
+    entrypoint: TransactionEntrypoint,
+    reservation_salt: u8,
+) -> MergeLedgerEntry {
     let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
     let results = vec![TransactionResult::from(Ok(DataTriggerSequence::default()))];
     let result_hashes = results
@@ -461,17 +470,71 @@ fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> Mer
     proposal.proposal_hash = proposal.computed_proposal_hash();
     crate::lane_consensus::validate_lane_block_proposal(&proposal)
         .expect("merge-index fixture proposal must satisfy production ingress validation");
-    let lane_qc = |phase| LaneBlockQcV1 {
-        body: proposal.vote_body(phase),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set: validator_set.clone(),
-        signers_bitmap: Vec::new(),
-        bls_aggregate_signature: Vec::new(),
-        payload_availability_qc: None,
+    let TransactionEntrypoint::External(transaction) = &entrypoint else {
+        panic!("the operation-index fixture requires an external entrypoint")
     };
-    let prepare_qc = lane_qc(CertPhase::Prepare);
-    let commit_qc = lane_qc(CertPhase::Commit);
+    let network_id = *transaction
+        .network_id()
+        .expect("the operation-index fixture has an explicit network");
+    let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
+        proposal.descriptor.lane_id,
+        proposal.descriptor.dataspace_id,
+    ));
+    let reservation = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
+        entrypoint_hash: entrypoint.hash(),
+        queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+            b"kura-queue-plan-admission-binding",
+            &[reservation_salt],
+        ]),
+        routing_plan_digest: routing_plan.digest(),
+        coordinator_leg: routing_plan.coordinator_leg(),
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        proposal_height: proposal.descriptor.proposal_height,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        reservation_owner_hash: Hash::new([reservation_salt]),
+        proposal_identity_hash: proposal.proposal_hash,
+    };
+    let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+        network_id,
+        0,
+        proposal.clone(),
+        vec![entrypoint.clone()],
+        vec![reservation],
+        vec![routing_plan],
+        vec![None],
+        PeerId::new(validator.public_key().clone()),
+        validator.private_key(),
+    )
+    .expect("sign the exact index fixture payload and reservation");
+    let availability = durable_lane_payload_availability_for_kura(&payload, &proposal, &validator);
+    let (mut session, signer_pops) =
+        committed_lane_block_session_for_kura_proposal(&proposal, &validator);
+    session.prepare_qc = availability.certificate.clone();
+    let bundle = AutonomousLaneMergeBundleV1 {
+        version: AutonomousLaneMergeBundleV1::VERSION,
+        autonomous: AutonomousLaneBlockArtifact {
+            format: AutonomousLaneBlockArtifactFormat::Current,
+            executable_payload: payload.clone(),
+            availability_certificate: Some(availability),
+            view_checkpoint: None,
+            new_view_certificates: Vec::new(),
+        },
+        certified: CertifiedLaneBlockArtifact::new(session, signer_pops.clone()),
+    };
+    Kura::validate_autonomous_lane_merge_bundle(&bundle, network_id, 0)
+        .expect("index fixture source satisfies production bundle authentication");
+    let source_bundle = bundle
+        .encode_framed()
+        .expect("frame the authenticated index bundle");
+    let source_bundle_hash = bundle
+        .bundle_hash()
+        .expect("hash the exact framed index bundle");
+    let input = Kura::autonomous_lane_block_execution_input_candidate(&payload, network_id, 0)
+        .expect("derive the authenticated index execution input");
     let settlement_commitment = LaneBlockCommitment {
         block_height: 1,
         lane_id: LaneId::SINGLE,
@@ -488,22 +551,38 @@ fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> Mer
         native_amx_receipts: Vec::new(),
     };
     let execution = MergeLaneExecution {
-        source_bundle: vec![1],
-        source_bundle_hash: Hash::new(b"kura-index-refresh-source"),
+        source_bundle,
+        source_bundle_hash,
         proposal: proposal.clone(),
         origin_proposal: proposal,
-        prepare_qc,
-        commit_qc,
-        signer_proofs: Vec::new(),
-        autonomous_network_id: test_network_id(b"kura-index-refresh-genesis"),
-        autonomous_epoch: 0,
-        autonomous_payload_hash: Hash::new(b"kura-index-refresh-payload"),
-        entrypoint_hashes,
+        prepare_qc: bundle.certified.prepare_qc.clone(),
+        commit_qc: bundle.certified.commit_qc.clone(),
+        signer_proofs: signer_pops
+            .into_iter()
+            .map(|(public_key, proof_of_possession)| {
+                iroha_data_model::merge::MergeLaneSignerProof {
+                    public_key,
+                    proof_of_possession,
+                }
+            })
+            .collect(),
+        autonomous_network_id: network_id,
+        autonomous_epoch: payload.epoch,
+        autonomous_payload_hash: payload.payload_hash,
+        entrypoint_hashes: input.entrypoint_hashes,
         authenticated_signed_replay_aliases: vec![None],
-        entrypoints: vec![entrypoint],
-        reservation_keys: vec![vec![1]],
-        routing_plans: vec![vec![2]],
-        native_amx_receipts: vec![None],
+        entrypoints: input.entrypoints,
+        reservation_keys: input
+            .reservation_keys
+            .iter()
+            .map(|key| norito::to_bytes(key).expect("encode authenticated index reservation"))
+            .collect(),
+        routing_plans: input
+            .routing_plans
+            .iter()
+            .map(|plan| norito::to_bytes(plan).expect("encode authenticated index route"))
+            .collect(),
+        native_amx_receipts: input.native_amx_receipts,
         result_hashes,
         results,
         settlement_hash: iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
@@ -562,40 +641,16 @@ fn merge_entry_with_indexed_reservation(
 ) {
     let entrypoint = indexed_log_entrypoint([salt; 32], [salt.saturating_add(1); 32]);
     let entrypoint_hash = entrypoint.hash();
-    let mut entry = merge_entry_with_indexed_entrypoint(entrypoint.clone());
+    let mut entry = merge_entry_with_indexed_entrypoint_reservation(entrypoint, salt);
     entry.epoch_id = epoch;
     let execution = entry
         .execution_batch
-        .as_mut()
-        .and_then(|batch| batch.lanes.first_mut())
+        .as_ref()
+        .and_then(|batch| batch.lanes.first())
         .expect("reservation fixture has one execution");
-    let descriptor = &execution.proposal.descriptor;
-    let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
-        descriptor.lane_id,
-        descriptor.dataspace_id,
-    ));
-    let reservation = LaneQueueReservationKeyV1 {
-        version: LaneQueueReservationKeyV1::VERSION,
-        entrypoint_hash: entrypoint.hash(),
-        queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
-            b"kura-queue-plan-admission-binding",
-            &[salt],
-        ]),
-        routing_plan_digest: routing_plan.digest(),
-        coordinator_leg: routing_plan.coordinator_leg(),
-        lane_id: descriptor.lane_id,
-        dataspace_id: descriptor.dataspace_id,
-        lane_incarnation: descriptor.lane_incarnation,
-        proposal_height: descriptor.proposal_height,
-        lane_block_height: descriptor.lane_block_height,
-        lane_block_view: descriptor.lane_block_view,
-        reservation_owner_hash: Hash::new([salt]),
-        proposal_identity_hash: execution.proposal.proposal_hash,
-    };
-    execution.reservation_keys =
-        vec![norito::to_bytes(&reservation).expect("encode canonical indexed reservation fixture")];
-    execution.routing_plans =
-        vec![norito::to_bytes(&routing_plan).expect("encode canonical routing fixture")];
+    let reservation =
+        norito::decode_from_bytes::<LaneQueueReservationKeyV1>(&execution.reservation_keys[0])
+            .expect("read the same reservation authenticated by the signed source bundle");
     (entry, entrypoint_hash, reservation)
 }
 fn store_indexed_reservation_carrier(
@@ -607,8 +662,8 @@ fn store_indexed_reservation_carrier(
     MergeLedgerFrameIndex,
 ) {
     let mut blocks = DummyBlocks::new();
-    let genesis = blocks.next();
-    let raw_carrier = blocks.next();
+    let genesis = blocks.next_with_results();
+    let raw_carrier = blocks.next_with_results();
     let (mut entry, entrypoint_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
     let batch = entry
         .execution_batch
@@ -627,8 +682,11 @@ fn store_indexed_reservation_carrier(
     let lane_entry = kura
         .lane_storage_entry(descriptor.lane_id)
         .expect("reservation fixture targets an active lane");
-    kura.install_lane_incarnation_marker_for_test(&lane_entry, descriptor.lane_incarnation, 0)
-        .expect("install reservation fixture lane incarnation");
+    publish_initial_configured_lane_geometry_for_test(
+        kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::from([(lane_entry.lane_id, descriptor.lane_incarnation)]),
+    );
     let mut executed_carrier = raw_carrier.as_ref().clone();
     attach_ok_results_to_block(&mut executed_carrier);
     let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut entry);
@@ -714,6 +772,19 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
     mut execution_commitment: ExecutionCommitment,
     merge_carrier: Option<iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1>,
 ) -> V2FinalityArtifact {
+    use crate::zk::kagemusha_v1_recursion::{
+        KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
+        sign_kagemusha_mint_finality_seal_v1, verify_kagemusha_mint_finality_seal_bundle_v1,
+    };
+    use iroha_data_model::{
+        block::consensus_v2::{
+            KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1, Vote,
+            encode_kagemusha_consensus_signature_envelope_v1,
+        },
+        isi::kagemusha_v1::KagemushaMintFinalitySealBundleV1,
+    };
+    use norito::codec::Encode as _;
+
     let roster = keypairs
         .iter()
         .map(|keypair| ValidatorPower {
@@ -782,9 +853,16 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         signers: vec![0, 1, 2],
         aggregate_signature: vec![1],
     };
-    let preimage = commit_qc
-        .signer_preimage(&context, 0)
-        .expect("valid Kura finality fixture signer");
+    let unsigned_vote = Vote {
+        round,
+        proposal_round: round,
+        phase: GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let preimage = unsigned_vote.signature_preimage();
     let signatures = commit_qc
         .signers
         .iter()
@@ -799,8 +877,42 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         })
         .collect::<Vec<_>>();
     let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+    let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .expect("aggregate Kura finality fixture votes");
+    let epoch = &context.kagemusha_mint_finality_epoch_roster;
+    commit_qc.aggregate_signature = if let Some(message) =
+        build_kagemusha_mint_finality_seal_message_v1(epoch, &context, &unsigned_vote)
+            .expect("derive exact Kura fixture mint-finality message")
+    {
+        let seals = commit_qc
+            .signers
+            .iter()
+            .map(|index| {
+                // Match the deterministic keys admitted by mint_finality_roster_and_id.
+                let seed_byte = 0xA0_u8
+                    .wrapping_add(u8::try_from(*index).expect("fixture signer fits one byte"));
+                let signer = KagemushaMintFinalitySignerV1::from_seed(
+                    zeroize::Zeroizing::new([seed_byte; 32]),
+                    *index,
+                    epoch,
+                )
+                .expect("admit deterministic Kura fixture mint-finality signer");
+                sign_kagemusha_mint_finality_seal_v1(&signer, &message)
+                    .expect("sign actual Kura fixture mint-finality statement")
+            })
+            .collect();
+        let bundle = KagemushaMintFinalitySealBundleV1 { message, seals };
+        verify_kagemusha_mint_finality_seal_bundle_v1(epoch, &context, &commit_qc, &bundle)
+            .expect("verify exact-quorum paired-Pasta Kura fixture seals");
+        encode_kagemusha_consensus_signature_envelope_v1(
+            KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+            &aggregate_signature,
+            &bundle.encode(),
+        )
+        .expect("frame both consensus signatures in the required CommitQC envelope")
+    } else {
+        aggregate_signature
+    };
     let validator_set_pops = keypairs
         .iter()
         .map(|keypair| {
@@ -876,7 +988,8 @@ fn assert_v2_finality_telemetry(metrics: &Metrics, artifact: &V2FinalityArtifact
             .expect("fixture roster length fits u64")
     );
 }
-pub(super) fn persist_v2_finality_chain_through(
+/// Persist actual four-validator signed finality over the exact retained fixture chain.
+pub(crate) fn persist_v2_finality_chain_through(
     kura: &Kura,
     height: NonZeroUsize,
 ) -> Vec<V2FinalityArtifact> {
@@ -1097,13 +1210,73 @@ fn parliament_casting_binding(
         release_identity: None,
     }
 }
+fn parliament_registration_corpus_fixture()
+-> iroha_data_model::parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
+    use iroha_crypto::{
+        timed_ovn::{
+            TimedOvnRegistrationSecretV1, TimedOvnRegistrationV1, TimedOvnSessionV1,
+            timed_ovn_parameter_hash_v1,
+        },
+        tle::TleMasterPublicKey,
+    };
+    use iroha_data_model::{
+        parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1,
+        parliament_types::PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+    };
+    use rand::{SeedableRng as _, rngs::StdRng};
+
+    // This storage-capacity fixture needs a real canonical record, not 1,000 new
+    // registration proofs. The cached corpus supplies only an exact compact commitment;
+    // the sidecar test does not claim per-ballot registration admission.
+    static CORPUS: std::sync::OnceLock<ParliamentTimedOvnRegistrationCorpusCommitmentV1> =
+        std::sync::OnceLock::new();
+    *CORPUS.get_or_init(|| {
+        let key = KeyPair::from_seed(vec![0xA6; 32], Algorithm::BlsSmall);
+        let master = TleMasterPublicKey::from_bytes([0xA7; 32], key.public_key().to_bytes().1)
+            .expect("canonical non-identity diagnostic TLE public key");
+        let session = TimedOvnSessionV1::new(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            [5; 32],
+            timed_ovn_parameter_hash_v1(),
+            master,
+        )
+        .expect("fixed-profile diagnostic registration session");
+        let participant = [0xA5; 32];
+        let mut rng = StdRng::from_seed([0xA8; 32]);
+        let (secret, registration) =
+            TimedOvnRegistrationSecretV1::generate_with_rng(&session, participant, &mut rng)
+                .expect("generate real diagnostic registration proofs");
+        drop(secret);
+        let record = registration.to_bytes();
+        // The fixed V1 layout is magic + session + participant + three GT keys,
+        // three GT commitments, and three scalar responses. Keep this arithmetic
+        // independent of the data-model width constant and producer's serializer.
+        assert_eq!(record.len(), 8 + 32 + 32 + 3 * (576 + 576 + 32));
+        assert_eq!(
+            record.len(),
+            PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1
+        );
+        assert_eq!(&record[..8], b"ITOVREG1");
+        assert_eq!(&record[8..40], session.digest().as_slice());
+        assert_eq!(&record[40..72], participant.as_slice());
+        let verified = TimedOvnRegistrationV1::from_bytes(&session, &record)
+            .expect("fully decode and verify all registration proof equations");
+        assert_eq!(verified.to_bytes(), record);
+        let corpus = ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&[record])
+            .expect("single canonical-record casting corpus commitment");
+        assert_eq!(corpus.record_count, 1);
+        corpus
+    })
+}
 fn parliament_frozen_casting_binding(
     height: u64,
     ballot_index: u32,
 ) -> iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1 {
     use iroha_data_model::parliament_casting::{
-        ParliamentTimedOvnCastingPhaseV1, ParliamentTimedOvnRegistrationCorpusCommitmentV1,
-        ParliamentTimedOvnReleaseBindingV1,
+        ParliamentTimedOvnCastingPhaseV1, ParliamentTimedOvnReleaseBindingV1,
     };
 
     assert!(height >= 3, "frozen fixture needs three schedule heights");
@@ -1114,9 +1287,7 @@ fn parliament_frozen_casting_binding(
     binding.survivor_freeze_height = height;
     binding.commitment_close_height = height + 1;
     binding.target_finalized_height = height + 2;
-    binding.registration_corpus =
-        ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&[vec![0xA5]])
-            .expect("single-record casting corpus commitment");
+    binding.registration_corpus = parliament_registration_corpus_fixture();
     binding.survivor_count = Some(1);
     binding.dropout_root = Some([9; 32]);
     binding.release_identity = Some(ParliamentTimedOvnReleaseBindingV1 {
@@ -1153,6 +1324,86 @@ fn active_receiver_sidecar_decode_budget_is_protocol_bounded() {
         limits.max_nesting_depth(),
         MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH
     );
+    for wire_bytes in [
+        0,
+        1,
+        26_228,
+        64 * 1024,
+        MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
+        usize::MAX,
+    ] {
+        let limits = kagemusha_finality_decode_limits(wire_bytes);
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            norito::canonical_decode_limits(wire_bytes)
+                .max_total_allocated_bytes()
+                .min(MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES)
+        );
+        assert_eq!(limits.max_field_bytes(), wire_bytes);
+        assert_eq!(limits.max_sequence_elements(), 1_000);
+        assert_eq!(
+            limits.max_total_elements(),
+            MAX_KAGEMUSHA_FINALITY_DECODE_TOTAL_ELEMENTS
+        );
+        assert_eq!(
+            limits.max_nesting_depth(),
+            MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH
+        );
+    }
+}
+
+fn assert_kagemusha_sidecar_resource_rejections(
+    staged: &StagedKagemushaFinalitySidecarV1,
+    finalized: &KagemushaFinalitySidecarV1,
+) {
+    assert_eq!(staged.kagemusha_reserve_receipts.len(), 1);
+    assert_eq!(finalized.kagemusha_reserve_receipts.len(), 1);
+    for allocation_bomb in [false, true] {
+        let mut staged = staged.clone();
+        let mut finalized = finalized.clone();
+        if allocation_bomb {
+            // Each legal-sized receipt contains its own 256-hash SMT path.
+            // The nested copies/plans exceed the allocation cap even though
+            // the complete wire and every individual sequence remain bounded.
+            let receipts = vec![staged.kagemusha_reserve_receipts[0].clone(); 128];
+            staged.kagemusha_reserve_receipts = receipts.clone();
+            finalized.kagemusha_reserve_receipts = receipts;
+        } else {
+            let bindings = vec![parliament_casting_binding(staged.height, 1); 1_001];
+            staged.parliament_timed_ovn_casting_bindings = bindings.clone();
+            finalized.parliament_timed_ovn_casting_bindings = bindings;
+        }
+        for (is_final, bytes) in [(false, staged.encode()), (true, finalized.encode())] {
+            assert!(bytes.len() <= MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES);
+            let error = if is_final {
+                kagemusha_finality_decode::decode_finalized(&bytes).map(|_| ())
+            } else {
+                kagemusha_finality_decode::decode_staged(&bytes).map(|_| ())
+            }
+            .expect_err("corrupt sidecar must fail inside its bounded decoder");
+            if allocation_bomb {
+                assert!(
+                    matches!(
+                        error,
+                        norito::Error::TotalAllocationExceeded { limit, .. }
+                            if limit == MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES as u64
+                    ),
+                    "unexpected allocation-bomb error: {error}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        error,
+                        norito::Error::SequenceLengthExceeded {
+                            length: 1_001,
+                            limit: 1_000
+                        }
+                    ),
+                    "unexpected oversized-sequence error: {error}"
+                );
+            }
+        }
+    }
 }
 #[test]
 fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
@@ -1164,8 +1415,43 @@ fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
     assert!(bindings.iter().all(|binding| binding.is_valid()));
     let (witness, execution_commitment) =
         kagemusha_finality_witness_with_casting(height, &bindings);
-    let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
+    let temp_dir = TempDir::new().expect("create persistent maximum-casting Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open maximum-casting Kura");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        Hash::prehashed([0xC7; Hash::LENGTH]),
+        LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
+    )
+    .expect("bind maximum-casting fixture to the configured primary lane");
+    let mut generator = DummyBlocks::new();
+    let keypairs = v2_finality_fixture_keys();
+    let mut parent = None;
+    for _ in 1..height {
+        let block = generator.next();
+        let artifact = v2_finality_artifact_for_block_with_keys(
+            &block,
+            parent.as_ref(),
+            &keypairs,
+            v2_finality_fixture_execution_commitment(),
+        );
+        kura.store_block(block).expect("store predecessor block");
+        let _receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store predecessor finality");
+        parent = Some(artifact);
+    }
+    let block = generator.next();
+    assert_eq!(block.header().height().get(), height);
+    let artifact = v2_finality_artifact_for_block_with_keys(
+        &block,
+        parent.as_ref(),
+        &keypairs,
+        execution_commitment,
+    );
+    let execution_commitment = artifact.commit_qc.execution_commitment;
     kura.stage_kagemusha_finality_sidecar(
         height,
         block.hash(),
@@ -1174,14 +1460,221 @@ fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
         &bindings,
     )
     .expect("maximum casting set fits the staged sidecar");
-    let encoded_len = std::fs::metadata(kura.kagemusha_finality_staging_path(height))
-        .expect("maximum casting sidecar metadata")
-        .len();
-    assert!(
-        encoded_len
-            <= u64::try_from(MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES)
-                .expect("sidecar byte bound fits u64")
+    let staged_path = kura.kagemusha_finality_staging_path(height);
+    let (staged, staged_snapshot) = kura
+        .decode_staged_kagemusha_finality(&staged_path)
+        .expect("decode maximum staged set within the 4 MiB allocation cap")
+        .expect("maximum staged set exists");
+    assert_eq!(staged.parliament_timed_ovn_casting_bindings, bindings);
+    assert_eq!(staged.encode(), staged_snapshot.bytes);
+    assert!(staged_snapshot.bytes.len() <= MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES);
+    kura.stage_kagemusha_finality_sidecar(
+        height,
+        block.hash(),
+        &witness,
+        execution_commitment,
+        &bindings,
+    )
+    .expect("maximum staged retry is idempotent");
+    assert_eq!(
+        fs::read(&staged_path).expect("read staged retry"),
+        staged_snapshot.bytes
     );
+    kura.store_block(block)
+        .expect("store maximum-casting block");
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store maximum-casting finality");
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
+        .expect("promote maximum frozen set within the same allocation cap");
+    let final_path = kura.kagemusha_finality_sidecar_path(height);
+    let (finalized, final_snapshot) = kura
+        .decode_kagemusha_finality_sidecar(&final_path)
+        .expect("decode maximum finalized set after field alignment changes")
+        .expect("maximum finalized set exists");
+    assert_eq!(finalized.parliament_timed_ovn_casting_bindings, bindings);
+    assert_eq!(finalized.encode(), final_snapshot.bytes);
+    assert!(final_snapshot.bytes.len() <= MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES);
+    assert!(!staged_path.exists());
+    let ballot = bindings.last().expect("full binding set").ballot_attempt_id;
+    let expected = kura
+        .parliament_timed_ovn_finalized_casting_proof_v1(height, ballot)
+        .expect("read membership at the end of the full set")
+        .expect("last binding exists");
+    assert!(expected.verify(execution_commitment.ordinary_writes_root));
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
+        .expect("maximum final promotion retry is idempotent");
+    assert_eq!(
+        fs::read(&final_path).expect("read final retry"),
+        final_snapshot.bytes
+    );
+    drop(kura);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart maximum-casting Kura");
+    assert_eq!(
+        reopened
+            .parliament_timed_ovn_finalized_casting_proof_v1(height, ballot)
+            .expect("recover full-set membership after restart")
+            .expect("last binding survives restart"),
+        expected
+    );
+    assert_eq!(
+        fs::read(&final_path).expect("read restarted sidecar"),
+        final_snapshot.bytes
+    );
+}
+
+fn kagemusha_borrowed_decode_fixture()
+-> (StagedKagemushaFinalitySidecarV1, KagemushaFinalitySidecarV1) {
+    use iroha_data_model::parliament_casting::ParliamentTimedOvnCastingPhaseV1;
+
+    let height = 3;
+    let registered = parliament_casting_binding(height, 1);
+    let mut closed = parliament_casting_binding(height, 2);
+    closed.phase = ParliamentTimedOvnCastingPhaseV1::RegistrationClosed;
+    closed.registration_opened_at_finalized_height = height - 1;
+    closed.registration_close_height = height;
+    closed.registration_corpus = parliament_registration_corpus_fixture();
+    let frozen = parliament_frozen_casting_binding(height, 3);
+    let bindings = vec![registered, closed, frozen];
+    assert!(bindings.iter().all(|binding| binding.is_valid()));
+    let (witness, commitment) = kagemusha_finality_witness_with_casting(height, &bindings);
+    let (validation_fee_policy_witness, _) =
+        crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(&witness)
+            .expect("fixture validation-fee proof");
+    let (parliament_timed_ovn_casting_witness, _) =
+        crate::receiver_snapshot::parliament_timed_ovn_casting_witness_proof_v1(&witness)
+            .expect("fixture casting proof");
+    // This fixture checks only codec equivalence. The maximum-set test above
+    // obtains its finality hash from real verified durable finality instead.
+    let staged = StagedKagemushaFinalitySidecarV1 {
+        version: KagemushaFinalitySidecarV1::VERSION,
+        height,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"codec-only block identity")),
+        ordinary_writes_root: commitment.ordinary_writes_root,
+        post_state_root: commitment.post_state_root,
+        validation_fee_policy_witness,
+        parliament_timed_ovn_casting_witness,
+        parliament_timed_ovn_casting_bindings: bindings,
+        kagemusha_reserve_receipts: Vec::new(),
+    };
+    let finalized = KagemushaFinalitySidecarV1 {
+        version: staged.version,
+        height: staged.height,
+        block_hash: staged.block_hash,
+        ordinary_writes_root: staged.ordinary_writes_root,
+        post_state_root: staged.post_state_root,
+        finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"codec-only finality identity",
+        )),
+        validation_fee_policy_witness: staged.validation_fee_policy_witness.clone(),
+        parliament_timed_ovn_casting_witness: staged.parliament_timed_ovn_casting_witness.clone(),
+        parliament_timed_ovn_casting_bindings: staged.parliament_timed_ovn_casting_bindings.clone(),
+        kagemusha_reserve_receipts: staged.kagemusha_reserve_receipts.clone(),
+    };
+    (staged, finalized)
+}
+
+#[test]
+fn kagemusha_borrowed_sidecar_decoder_matches_derived_v1_in_every_casting_phase() {
+    let (staged, finalized) = kagemusha_borrowed_decode_fixture();
+    let staged_bytes = staged.encode();
+    let finalized_bytes = finalized.encode();
+    assert_eq!(
+        StagedKagemushaFinalitySidecarV1::decode_all(&mut staged_bytes.as_slice())
+            .expect("independent derived staged decoder"),
+        staged
+    );
+    assert_eq!(
+        KagemushaFinalitySidecarV1::decode_all(&mut finalized_bytes.as_slice())
+            .expect("independent derived final decoder"),
+        finalized
+    );
+    // The fixed bare V1 payload is independent of a caller's framed layout.
+    let ambient = norito::core::header_flags::PACKED_SEQ
+        | norito::core::header_flags::PACKED_STRUCT
+        | norito::core::header_flags::COMPACT_LEN;
+    let _flags = norito::core::DecodeFlagsGuard::enter(ambient);
+    let _payload = norito::core::PayloadCtxGuard::enter_with_flags(&[0xAA], ambient);
+    let decoded_staged = kagemusha_finality_decode::decode_staged(&staged_bytes)
+        .expect("borrowed staged decoder uses fixed V1 flags");
+    let decoded_final = kagemusha_finality_decode::decode_finalized(&finalized_bytes)
+        .expect("borrowed final decoder uses fixed V1 flags");
+    assert_eq!(norito::core::get_decode_flags(), ambient);
+    assert_eq!(decoded_staged, staged);
+    assert_eq!(decoded_final, finalized);
+    assert_eq!(decoded_staged.encode(), staged_bytes);
+    assert_eq!(decoded_final.encode(), finalized_bytes);
+}
+
+#[test]
+fn kagemusha_borrowed_sidecar_decoder_rejects_layout_lengths_variants_and_trailing_bytes() {
+    let (staged, finalized) = kagemusha_borrowed_decode_fixture();
+    for (is_final, bytes) in [(false, staged.encode()), (true, finalized.encode())] {
+        let decode = |bytes: &[u8]| {
+            if is_final {
+                kagemusha_finality_decode::decode_finalized(bytes).map(|_| ())
+            } else {
+                kagemusha_finality_decode::decode_staged(bytes).map(|_| ())
+            }
+        };
+        for end in [0, 1, 2, 3, 11, bytes.len() / 2, bytes.len() - 1] {
+            assert!(
+                decode(&bytes[..end]).is_err(),
+                "accepted truncation at {end}"
+            );
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode(&trailing).is_err());
+        let mut version = bytes.clone();
+        assert_eq!(&version[..3], &[2, 1, 0]);
+        version[1] = 2;
+        assert!(decode(&version).is_err());
+        let mut overlong = vec![0x82, 0];
+        overlong.extend_from_slice(&bytes[1..]);
+        assert!(decode(&overlong).is_err());
+        for prefix in [&[0xFF; 10][..], &[0xFF, 0xFF, 0x7F][..]] {
+            let mut invalid_length = prefix.to_vec();
+            invalid_length.extend_from_slice(&bytes[1..]);
+            assert!(decode(&invalid_length).is_err());
+        }
+        let binding_bytes = staged.parliament_timed_ovn_casting_bindings[2].encode();
+        let binding_start = bytes
+            .windows(binding_bytes.len())
+            .position(|window| window == binding_bytes)
+            .expect("exact frozen binding bytes occur inside sidecar");
+        let mut field_start = 0;
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::header_flags::COMPACT_LEN);
+        for index in 0..21 {
+            let (field_len, prefix_len) =
+                norito::core::inspect_len_from_slice(&binding_bytes[field_start..])
+                    .expect("inspect known canonical binding field");
+            if [2, 18, 19, 20].contains(&index) {
+                // Enum phase and each optional field keep their ordinary
+                // canonical Norito decoder; unknown discriminants must fail.
+                let mut bad_variant = bytes.clone();
+                bad_variant[binding_start + field_start + prefix_len] = 0xFF;
+                assert!(
+                    decode(&bad_variant).is_err(),
+                    "accepted field {index} discriminant"
+                );
+            }
+            field_start += prefix_len + field_len;
+        }
+        assert_eq!(field_start, binding_bytes.len());
+    }
+    for flags in [
+        0,
+        norito::core::header_flags::COMPACT_LEN | norito::core::header_flags::PACKED_SEQ,
+        norito::core::header_flags::COMPACT_LEN | norito::core::header_flags::PACKED_STRUCT,
+    ] {
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        let (staged_bytes, _) = norito::codec::encode_with_header_flags(&staged);
+        let (finalized_bytes, _) = norito::codec::encode_with_header_flags(&finalized);
+        assert!(kagemusha_finality_decode::decode_staged(&staged_bytes).is_err());
+        assert!(kagemusha_finality_decode::decode_finalized(&finalized_bytes).is_err());
+    }
 }
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {
@@ -1691,6 +2184,10 @@ fn kagemusha_receipt_survives_finality_restart_and_retry() {
         &[],
     )
     .expect("stage Kagemusha witness before finality");
+    let (staged_sidecar, _) = kura
+        .decode_staged_kagemusha_finality(&kura.kagemusha_finality_staging_path(artifact.height))
+        .expect("decode complete staged receipt graph")
+        .expect("staged receipt graph exists");
     kura.store_block(Arc::clone(&block))
         .expect("persist authoritative block");
     let receipt = kura
@@ -1698,6 +2195,21 @@ fn kagemusha_receipt_survives_finality_restart_and_retry() {
         .expect("persist authoritative finality artifact");
     kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
         .expect("promote Kagemusha witness after finality");
+    let final_path = kura.kagemusha_finality_sidecar_path(artifact.height);
+    let (final_sidecar, final_snapshot) = kura
+        .decode_kagemusha_finality_sidecar(&final_path)
+        .expect("decode complete finalized receipt graph after alignment changes")
+        .expect("finalized receipt graph exists");
+    assert_eq!(
+        final_sidecar.kagemusha_reserve_receipts,
+        staged_sidecar.kagemusha_reserve_receipts
+    );
+    assert_kagemusha_sidecar_resource_rejections(&staged_sidecar, &final_sidecar);
+    assert!(
+        !kura
+            .kagemusha_finality_staging_path(artifact.height)
+            .exists()
+    );
     let expected_operation_finality = kura
         .kagemusha_operation_finality_v1(artifact.height, operation_id)
         .expect("read promoted Kagemusha receipt finality")
@@ -1723,6 +2235,10 @@ fn kagemusha_receipt_survives_finality_restart_and_retry() {
     );
     kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
         .expect("exact promotion retry is idempotent");
+    assert_eq!(
+        fs::read(&final_path).expect("read final sidecar after retry"),
+        final_snapshot.bytes
+    );
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen persistent Kura");
@@ -1731,6 +2247,10 @@ fn kagemusha_receipt_survives_finality_restart_and_retry() {
         .expect("read Kagemusha receipt finality after restart")
         .expect("Kagemusha receipt finality survives restart");
     assert_eq!(recovered_operation_finality, expected_operation_finality);
+    assert_eq!(
+        fs::read(&final_path).expect("read final sidecar after restart"),
+        final_snapshot.bytes
+    );
     assert!(
         reopened
             .kagemusha_mint_outbox_entry_v1(operation_id)

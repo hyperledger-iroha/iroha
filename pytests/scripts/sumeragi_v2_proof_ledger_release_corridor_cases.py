@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 866
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 881
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20"
+        "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "7d459864dd96825152e4d1dc75c7c66e6216127cc2e296e380554b969bc04851"
+        "e9d14ff4c001fc37cf1a71ef24e065d50d0a058581bad92b3656bd0ec5900d94"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 522
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 523
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 531
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 532
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9"
+        "d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
@@ -246,9 +246,9 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 866
-    assert receipt_module._G_UNIT_TEST_COUNT == 522
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 866
+    assert receipt_module._PRODUCTION_TEST_COUNT == 881
+    assert receipt_module._G_UNIT_TEST_COUNT == 531
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 881
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
@@ -256,21 +256,22 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["kura::tests"] == 18
     assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 42
     assert receipt_module_counts["queue::tests"] == 1
-    assert receipt_module_counts["sumeragi::v2::tests"] == 49
+    assert receipt_module_counts["native_amx::participant_application_role_tests"] == 6
+    assert receipt_module_counts["sumeragi::v2::tests"] == 52
     assert receipt_module_counts["sumeragi::v2_effects::tests"] == 66
-    assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 63
+    assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 65
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 65
     assert receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"] == 13
-    assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 43
+    assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 45
     assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
     assert receipt_module_counts["network::tests"] == 84
     assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 2
-    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 90
+    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 92
     assert receipt_module_counts["block::consensus_v2::tests"] == 3
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 522
+        == 531
     )
 
 @pytest.mark.parametrize(
@@ -2147,8 +2148,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 866
-    assert len(set(production_inventory)) == 866
+    assert len(production_inventory) == 881
+    assert len(set(production_inventory)) == 881
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -2302,8 +2303,8 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     assert replica_disposition_regression in production_inventory
     assert replica_disposition_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 453
-    assert "readonly expected_production_liveness_test_count=866" in release_source
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 465
+    assert "readonly expected_production_liveness_test_count=881" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2313,7 +2314,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 866" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 881" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2323,7 +2324,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 866
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 881
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2335,7 +2336,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 83
+        == 84
     )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
@@ -2729,17 +2730,35 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-proof-fidelity",\n                "pytest",\n                5507,'
         in receipt_source
     )
-    assert "did not run exactly 27 passing tests" in release_source
-    assert "preflight-formal-launcher pytest 27" in release_source
+    assert "did not run exactly 55 passing tests" in release_source
+    assert "preflight-formal-launcher pytest 55" in release_source
     assert (
-        "^27 passed in [0-9]+([.][0-9]+)?s( "
+        "^55 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
     assert (
-        '"preflight-formal-launcher",\n                "pytest",\n                27,'
+        '"preflight-formal-launcher",\n                "pytest",\n                55,'
         in receipt_source
     )
+    formal_launcher_runner_nodes = tuple(
+        line.strip()
+        for line in release_source.split("formal_launcher_contract_files=(\n", 1)[1]
+        .split("\n)", 1)[0].splitlines()
+        if line.strip()
+    )
+    assert formal_launcher_runner_nodes == (
+        "pytests/scripts/sumeragi_v2_formal_release_test.py",
+        "scripts/tests/sumeragi_v2_tlc_artifacts_test.py",
+    )
+    formal_launcher_legs = [
+        leg for leg in receipt_module._corridor_legs()
+        if leg[0] == "preflight-formal-launcher"
+    ]
+    assert formal_launcher_legs == [(
+        "preflight-formal-launcher", "pytest", 55,
+        proof_fidelity_command_prefix + " ".join(formal_launcher_runner_nodes),
+    )]
     assert (
         "expected_corridor_leg_count="
         f"{module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT}"
@@ -3515,9 +3534,9 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=866"
-    canonical_module_declaration = "readonly canonical_production_module_count=42"
-    canonical_corridor_declaration = "readonly canonical_corridor_leg_count=83"
+    canonical_declaration = "readonly canonical_production_test_count=881"
+    canonical_module_declaration = "readonly canonical_production_module_count=43"
+    canonical_corridor_declaration = "readonly canonical_corridor_leg_count=84"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3548,7 +3567,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=866"
+    canonical = "readonly expected_production_liveness_test_count=881"
     weakened = "readonly expected_production_liveness_test_count=860"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
@@ -3600,7 +3619,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         (
             canonical_declaration,
             "readonly canonical_production_test_count=860",
-            "must seal exactly 866 production tests",
+            "must seal exactly 881 production tests",
         ),
         (
             canonical_module_declaration,
@@ -3628,12 +3647,12 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "independent inventory guard source SHA-256 must equal",
         ),
         (
-            '    "sumeragi::v2_lane_work::tests": 63,',
+            '    "sumeragi::v2_lane_work::tests": 65,',
             '    "sumeragi::v2_lane_work::tests": 62,',
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "47a818de4cc0793664977d5e0f4b7e56"',
+            '    "6045ac0993327ed787010c6262275808"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
@@ -4993,3 +5012,114 @@ def test_tlapm_publication_is_atomic_no_replace_and_preserves_winner(
     )
     assert second_install.returncode == 3
     assert (install / "winner").read_bytes() == b"first\n"
+
+
+def test_prospective_native_wal_serve_release_registrations_are_exact_and_nonignored() -> None:
+    """Registration is source inventory, independent of Rust execution evidence."""
+    module = load_checker()
+    source = (ROOT_DIR / "scripts/run_sumeragi_v2_release_gates.sh").read_text(encoding="utf-8")
+    inventory = source.split("required_production_liveness_tests=(\n", 1)[1].split("\n)", 1)[0].split()
+    registrations = (
+        ('native_amx::participant_application_role_tests::participant_application_role_classifies_exact_routes_and_incarnations', 'crates/iroha_core/src/native_amx/participant_application_role_tests.rs'),
+        ('native_amx::participant_application_role_tests::participant_application_role_keeps_each_route_coordinate_distinct', 'crates/iroha_core/src/native_amx/participant_application_role_tests.rs'),
+        ('native_amx::participant_application_role_tests::participant_application_role_rejects_independent_prepare_and_commit_identity_drift', 'crates/iroha_core/src/native_amx/participant_application_role_tests.rs'),
+        ('native_amx::participant_application_role_tests::participant_application_role_rejects_coherent_same_route_coordinator_drift', 'crates/iroha_core/src/native_amx/participant_application_role_tests.rs'),
+        ('native_amx::participant_application_role_tests::participant_application_role_rejects_settlement_identity_and_content_tampering', 'crates/iroha_core/src/native_amx/participant_application_role_tests.rs'),
+        ('native_amx::participant_application_role_tests::participant_application_lookup_validates_later_legs_after_an_exact_match', 'crates/iroha_core/src/native_amx/participant_application_role_tests.rs'),
+        ('sumeragi::v2::tests::ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit', 'crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs'),
+        ('sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::certified_serve_worker_rejects_corrupt_owned_body_after_receipt_mint', 'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs'),
+        ('sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::terminal_owner_faults_on_corrupt_payload_after_worker_readback', 'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs'),
+        ('sumeragi::v2_worker::tests::production_exact_output_observes_finality_only_after_state_commit', 'crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_retirement_cases.rs'),
+        ('sumeragi::v2_worker::tests::applied_height_finality_releases_only_ticketless_global_topology_target', 'crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_retirement_cases.rs'),
+    )
+    for qualified, relative in registrations:
+        assert inventory.count(qualified) == 1
+        assert module._PRODUCTION_LIVENESS_NEW_REGRESSIONS.count(qualified) == 1
+        rust_source = (ROOT_DIR / relative).read_text(encoding="utf-8")
+        tests = module.rust_items(rust_source, qualified.rsplit("::", 1)[1])
+        assert len(tests) == 1, qualified
+        assert tests[0].brace_context == (), qualified
+        assert tuple(module.rust_code_tokens(attribute) for attribute in tests[0].attributes) == (
+            module.rust_code_tokens("#[test]"),
+        ), qualified
+    assert module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS.count((
+        "production-native-amx-participant-application",
+        "native_amx::participant_application_role_tests", 6,
+    )) == 1
+    native_parent = (ROOT_DIR / "crates/iroha_core/src/native_amx.rs").read_text(encoding="utf-8")
+    assert native_parent.count(
+        '#[cfg(test)]\n#[path = "native_amx/participant_application_role_tests.rs"]\nmod participant_application_role_tests;'
+    ) == 1
+    ledger_parent = (ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs").read_text(encoding="utf-8")
+    assert '#[cfg(feature = "bls")]' in ledger_parent
+    assert 'pub(crate) mod durable_ready_fetch_recovery {' in ledger_parent
+    assert 'include!("v2_lifecycle_ledger_tests_durable_recovery_02.rs");' in ledger_parent
+
+
+def test_prospective_kagemusha_boundary_registrations_are_exact_and_feature_bound() -> None:
+    """The nested BLS tests are registered source, not passing execution evidence."""
+    module = load_checker()
+    runner_source = (
+        ROOT_DIR / "scripts/run_sumeragi_v2_release_gates.sh"
+    ).read_text(encoding="utf-8")
+    inventory = runner_source.split(
+        "required_production_liveness_tests=(\n", 1
+    )[1].split("\n)", 1)[0].split()
+    test_source = (
+        ROOT_DIR / "crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs"
+    ).read_text(encoding="utf-8")
+    module_declaration = (
+        '#[cfg(feature = "bls")]\nmod kagemusha_finality_boundary {'
+    )
+    assert test_source.count(module_declaration) == 1
+    expected_context = (
+        module.rust_code_tokens(module_declaration.removesuffix(" {")),
+    )
+    for name in (
+        "commit_vote_binds_round_statement_signer_and_both_signatures",
+        "commit_qc_binds_round_statement_exact_quorum_and_both_signatures",
+    ):
+        qualified = f"sumeragi::v2::tests::kagemusha_finality_boundary::{name}"
+        assert inventory.count(qualified) == 1
+        assert module._PRODUCTION_LIVENESS_NEW_REGRESSIONS.count(qualified) == 1
+        items = module.rust_items(test_source, name)
+        assert len(items) == 1, qualified
+        assert items[0].brace_context == expected_context, qualified
+        assert items[0].attributes == ("#[test]",), qualified
+    assert module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS.count(
+        ("production-v2-adapter", "sumeragi::v2::tests", 52)
+    ) == 1
+
+
+
+def test_prospective_historical_hydration_registrations_and_declaration_controls() -> None:
+    """Two current Rust declarations are prospective inventory, not runtime evidence."""
+    module = load_checker()
+    errors: list[str] = []
+    path, source = module._read_reviewed_rust_source(
+        ROOT_DIR, "crates/iroha_core/src/sumeragi/v2_lane_work.rs", errors,
+        "prospective historical hydration registration",
+    )
+    assert not errors, errors
+    assert module._historical_hydration_registration_source_errors(path, source) == []
+    runner = (ROOT_DIR / "scripts/run_sumeragi_v2_release_gates.sh").read_text(encoding="utf-8")
+    inventory = runner.split("required_production_liveness_tests=(\n", 1)[1].split("\n)", 1)[0].split()
+    for name in (
+        "historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity",
+        "historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity",
+    ):
+        qualified = "sumeragi::v2_lane_work::tests::" + name
+        assert inventory.count(qualified) == 1
+        assert module._PRODUCTION_LIVENESS_NEW_REGRESSIONS.count(qualified) == 1
+        items = module.rust_items(source, name)
+        assert len(items) == 1
+        item = items[0]
+        for mutated in (
+            source.replace(item.source, "", 1),
+            source.replace(item.source, "#[ignore]\n" + item.source, 1),
+            source.replace(item.source, '#[cfg(feature = "unqualified")]\n' + item.source, 1),
+        ):
+            assert module._historical_hydration_registration_source_errors(path, mutated)
+    assert module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS.count(
+        ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 65)
+    ) == 1

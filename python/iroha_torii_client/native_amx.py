@@ -1,8 +1,8 @@
 """Canonical Native AMX V2 hashing and participant-identity helpers.
 
 The routines in this module intentionally mirror the Rust data-model encodings
-used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and Native AMX
-participant settlements. They are private SDK plumbing, not a second wire
+used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and nonrecursive Native participant
+settlement commitments.  They are private SDK plumbing, not a second wire
 format.
 """
 
@@ -36,10 +36,8 @@ _DESCRIPTOR_PREIMAGE_TYPE = (
 _PROPOSAL_PREIMAGE_TYPE = (
     "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
 )
-_SETTLEMENT_TYPE = (
-    "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
-)
-_SETTLEMENT_HASH_DOMAIN = b"iroha.consensus.native-amx.participant-settlement.v1"
+_SETTLEMENT_TYPE = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+_SETTLEMENT_HASH_DOMAIN = b"iroha:native-amx:participant-settlement:v1"
 _APPLICATION_MANIFEST_LEAF_DOMAIN = b"iroha:merkle:leaf:v1\0"
 
 
@@ -386,78 +384,84 @@ def compute_native_amx_proposal_hash(descriptor: Mapping[str, Any]) -> str:
     return _hash_literal(_norito_frame(_PROPOSAL_PREIMAGE_TYPE, payload))
 
 
-def _signed_little_endian(value: int) -> bytes:
-    if value == 0:
-        return b""
-    length = max(1, (value.bit_length() + 7) // 8)
-    encoded = value.to_bytes(length, "little", signed=False)
-    if encoded[-1] & 0x80:
-        encoded += b"\x00"
-    return encoded
+def parse_native_amx_participant_settlement(value: Any) -> dict[str, Any]:
+    """Validate the sole seven-field Native AMX participant settlement schema.
 
-
-def _quantity(value: str) -> bytes:
-    whole, separator, fraction = value.partition(".")
-    scale = len(fraction) if separator else 0
-    mantissa = int(whole + fraction)
-    bigint = _signed_little_endian(mantissa)
-    return _struct((_u32(len(bigint)) + bigint, _u32(scale)))
-
-
-def _settlement_receipt(receipt: Mapping[str, Any]) -> bytes:
-    return _struct(
-        (
-            bytes.fromhex(receipt["source_id"]),
-            _quantity(receipt["local_amount"]),
-            _quantity(receipt["xor_due"]),
-            _quantity(receipt["xor_after_haircut"]),
-            _quantity(receipt["xor_variance"]),
-            _u64(receipt["timestamp_ms"]),
-        )
+    Source IDs retain candidate order. Economic and nested settlement fields
+    are unknown fields and are rejected even when empty or zero.
+    """
+    fields = (
+        "lane_id", "dataspace_id", "lane_incarnation",
+        "participant_lane_block_height", "authority_context_height",
+        "previous_native_settlement_hash", "source_ids",
     )
-
-
-def compute_native_amx_participant_settlement_hash(
-    settlement: Mapping[str, Any],
-) -> str:
-    """Hash the nonrecursive ``NativeAmxParticipantSettlement`` exactly as Rust."""
-
-    expected_fields = {
-        "block_height",
-        "lane_id",
-        "lane_incarnation",
-        "dataspace_id",
-        "tx_count",
-        "total_local_amount",
-        "total_xor_due",
-        "total_xor_after_haircut",
-        "total_xor_variance",
-        "swap_metadata",
-        "receipts",
-        "nexus_fee_receipts",
+    if not isinstance(value, Mapping):
+        raise TypeError("Native AMX participant settlement must be an object")
+    if set(value) != set(fields):
+        raise ValueError("Native AMX participant settlement requires exactly its seven fields")
+    parsed: dict[str, Any] = {}
+    for field, bits, positive in (
+        ("lane_id", 32, False), ("dataspace_id", 64, False),
+        ("participant_lane_block_height", 64, True), ("authority_context_height", 64, True),
+    ):
+        integer = value[field]
+        if isinstance(integer, bool) or not isinstance(integer, int):
+            raise TypeError(f"Native AMX participant settlement {field} must be an unsigned integer")
+        if not (int(positive) <= integer < 1 << bits):
+            raise ValueError(f"Native AMX participant settlement {field} is outside its protocol bound")
+        parsed[field] = integer
+    incarnation = value["lane_incarnation"]
+    if not isinstance(incarnation, str) or _HASH_LITERAL_RE.fullmatch(incarnation) is None:
+        raise ValueError("Native AMX participant settlement incarnation must be a canonical hash")
+    body = _hash_literal_bytes(incarnation)
+    checksum = _crc16_ccitt_false(incarnation[:69].encode("ascii"))
+    if body == bytes(31) + b"\x01" or not any(body) or body[-1] & 1 == 0 or int(incarnation[70:], 16) != checksum:
+        raise ValueError("Native AMX participant settlement incarnation is not a valid nonzero hash")
+    previous = value["previous_native_settlement_hash"]
+    if previous is not None:
+        if not isinstance(previous, str) or _HASH_LITERAL_RE.fullmatch(previous) is None:
+            raise ValueError("Native AMX previous settlement hash must be canonical or null")
+        previous_body = _hash_literal_bytes(previous)
+        previous_checksum = _crc16_ccitt_false(previous[:69].encode("ascii"))
+        if (previous_body == bytes(31) + b"\x01" or not any(previous_body)
+                or previous_body[-1] & 1 == 0 or int(previous[70:], 16) != previous_checksum):
+            raise ValueError("Native AMX previous settlement hash must be nonzero and canonical")
+        if parsed["participant_lane_block_height"] == 1:
+            raise ValueError("Native AMX previous settlement hash must be null at participant height one")
+    sources = value["source_ids"]
+    if not isinstance(sources, (list, tuple)) or not 1 <= len(sources) <= 4096:
+        raise ValueError("Native AMX participant settlement source_ids must contain 1..4096 sources")
+    for source in sources:
+        if not isinstance(source, str) or re.fullmatch(r"[0-9A-F]{64}", source) is None:
+            raise ValueError("Native AMX participant settlement source_ids must be canonical uppercase 32-byte hex")
+        if source == "00" * 32:
+            raise ValueError("Native AMX participant settlement source_ids must be nonzero")
+    if len(set(sources)) != len(sources):
+        raise ValueError("Native AMX participant settlement source_ids must be unique")
+    return {
+        "lane_id": parsed["lane_id"],
+        "dataspace_id": parsed["dataspace_id"],
+        "lane_incarnation": incarnation,
+        "participant_lane_block_height": parsed["participant_lane_block_height"],
+        "authority_context_height": parsed["authority_context_height"],
+        "previous_native_settlement_hash": previous,
+        "source_ids": list(sources),
     }
-    if set(settlement) != expected_fields:
-        raise ValueError("Native AMX participant settlement must contain exactly its 12 fields")
 
-    if settlement.get("swap_metadata") is not None:
-        raise ValueError("Native AMX participant settlement must not contain swap metadata")
-    if settlement.get("nexus_fee_receipts"):
-        raise ValueError("Native AMX participant settlement must not contain fee receipts")
-    payload = _struct(
-        (
-            _u64(settlement["block_height"]),
-            _lane_id(settlement["lane_id"]),
-            _hash_literal_bytes(settlement["lane_incarnation"]),
-            _dataspace_id(settlement["dataspace_id"]),
-            _u64(settlement["tx_count"]),
-            _quantity(settlement["total_local_amount"]),
-            _quantity(settlement["total_xor_due"]),
-            _quantity(settlement["total_xor_after_haircut"]),
-            _quantity(settlement["total_xor_variance"]),
-            b"\x00",
-            _vector(settlement["receipts"], _settlement_receipt),
-            _vector((), lambda value: value),
-        )
-    )
+
+def compute_native_amx_participant_settlement_hash(settlement: Mapping[str, Any]) -> str:
+    """Hash the validated nonrecursive participant settlement exactly as Rust."""
+    settlement = parse_native_amx_participant_settlement(settlement)
+    payload = _struct((
+        _lane_id(settlement["lane_id"]),
+        _dataspace_id(settlement["dataspace_id"]),
+        _hash_literal_bytes(settlement["lane_incarnation"]),
+        _u64(settlement["participant_lane_block_height"]),
+        _u64(settlement["authority_context_height"]),
+        _optional_hash(settlement["previous_native_settlement_hash"]),
+        # Norito [u8; 32] frames each byte, unlike the raw Hash representation.
+        _vector(settlement["source_ids"], lambda source:
+                _struct(bytes([byte]) for byte in bytes.fromhex(source))),
+    ))
     frame = _norito_frame(_SETTLEMENT_TYPE, payload)
     return _hash_literal(_u64(len(_SETTLEMENT_HASH_DOMAIN)) + _SETTLEMENT_HASH_DOMAIN + frame)

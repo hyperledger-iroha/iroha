@@ -448,7 +448,13 @@ def test_qc_reference_rejects_retired_top_up_anchor_fields() -> None:
     execution_commitment["topup_anchor_root"] = _canonical_hash(0x55)
     execution_commitment["topup_anchor_count"] = 1
 
-    with pytest.raises(ValueError, match="unknown field `topup_anchor_count`"):
+    with pytest.raises(
+        TypeError,
+        match=(
+            r"^test_qc\.execution_commitment contains unsupported fields: "
+            r"topup_anchor_count, topup_anchor_root$"
+        ),
+    ):
         client_module.SumeragiV2QuorumCertificateRef.from_payload(
             payload,
             "test_qc",

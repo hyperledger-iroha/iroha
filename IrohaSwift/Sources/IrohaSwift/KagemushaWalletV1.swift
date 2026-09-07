@@ -155,9 +155,13 @@ public struct KagemushaStagedPaymentV1: Equatable, Sendable {
 
 /// Mandatory non-forking secure-device boundary. There is no software fallback.
 public protocol KagemushaHardwareProviderV1: AnyObject {
+  /// Shared by every provider/client for the same durable account/runtime owner.
+  var operationLock: NSRecursiveLock { get }
+  func acknowledgeDurableResult(operationID: Data, canonicalResult: Data) throws
   func qualification() throws -> KagemushaHardwareQualificationV1
   func recover() throws -> KagemushaHardwareRecoveryV1
-  func bootstrapState() throws -> Data
+  /// Recheck live new-work admission immediately before device dispatch, after durable reservation.
+  func bootstrapState(allowBootstrap: () throws -> Bool) throws -> Data
   func journalRevision() throws -> KagemushaUInt128V1
 
   func createPaymentRequest(
@@ -240,7 +244,7 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
 /// Aggregate-balance KAGEMUSHA V1 orchestration over the authoritative hardware boundary.
 public final class KagemushaWalletV1: @unchecked Sendable {
   private let provider: KagemushaHardwareProviderV1
-  private let lock = KagemushaForegroundGateV1()
+  private let lock: KagemushaForegroundGateV1
   private var qualificationValue: KagemushaHardwareQualificationV1
   private var aggregateStateValue: KagemushaAggregateStateCommitmentV1
   private var journalRevisionValue: KagemushaUInt128V1
@@ -252,16 +256,26 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     journalRevision: KagemushaUInt128V1
   ) {
     self.provider = provider
+    lock = KagemushaForegroundGateV1(sharedLock: provider.operationLock)
     qualificationValue = qualification
     aggregateStateValue = aggregateState
     journalRevisionValue = journalRevision
   }
 
-  public static func open(provider: KagemushaHardwareProviderV1) throws -> KagemushaWalletV1 {
-    let snapshot = try authoritativeRecoverySnapshot(provider: provider, allowBootstrap: true)
-    return KagemushaWalletV1(
-      provider: provider, qualification: snapshot.qualification,
-      aggregateState: snapshot.state, journalRevision: snapshot.recovery.journalRevision)
+  public static func open(provider: KagemushaHardwareProviderV1,
+    allowBootstrap: () throws -> Bool) throws -> KagemushaWalletV1 {
+    try provider.operationLock.withLock {
+      let snapshot = try authoritativeRecoverySnapshot(provider: provider, allowBootstrap: allowBootstrap)
+      return KagemushaWalletV1(
+        provider: provider, qualification: snapshot.qualification,
+        aggregateState: snapshot.state, journalRevision: snapshot.recovery.journalRevision)
+    }
+  }
+
+  public func acknowledgeDurableResult(operationID: Data, canonicalResult: Data) throws {
+    try lock.withLock {
+      try provider.acknowledgeDurableResult(operationID: operationID, canonicalResult: canonicalResult)
+    }
   }
 
   public func qualification() -> KagemushaHardwareQualificationV1 {
@@ -280,7 +294,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
   public func recover() throws -> KagemushaHardwareRecoveryV1 {
     try lock.withLock {
       let snapshot = try Self.authoritativeRecoverySnapshot(
-        provider: provider, allowBootstrap: false)
+        provider: provider, allowBootstrap: { false })
       guard sameBalanceIdentity(aggregateStateValue, snapshot.state, includingRelease: false),
         snapshot.qualification.credential.laneCommitment
           == qualificationValue.credential.laneCommitment
@@ -304,7 +318,9 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     }
   }
 
-  /// Create a signed positive exact-amount request. It never binds the receiver balance head.
+  /// Create or recover the exact signed request admitted by the provider's durable reservation.
+  /// The provider verifies its original governed credential through native Core; an exact retry
+  /// may carry the retained pre-rotation credential while the stable wallet lane stays unchanged.
   public func createPaymentRequest(
     operationID: Data,
     recipient: KagemushaAccountIDV1,
@@ -321,13 +337,12 @@ public final class KagemushaWalletV1: @unchecked Sendable {
           recipient: recipient, amount: amount, validityWindowMS: validityWindowMS))
       guard request.requestID == operationID, request.recipient == recipient, request.amount == amount,
         request.expiresAtMS - request.issuedAtMS == validityWindowMS,
-        request.releaseID == aggregateStateValue.releaseID,
         request.networkID == aggregateStateValue.networkID,
         request.asset == aggregateStateValue.asset,
         request.assetIncarnation == aggregateStateValue.assetIncarnation,
         request.scale == aggregateStateValue.scale,
         request.liabilityPoolID == aggregateStateValue.liabilityPoolID,
-        request.hardwareCredential == qualificationValue.credential
+        request.hardwareCredential.laneCommitment == qualificationValue.credential.laneCommitment
       else { throw invalid("request binding") }
       return request
     }
@@ -696,7 +711,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
   }
 
   private static func authoritativeRecoverySnapshot(
-    provider: KagemushaHardwareProviderV1, allowBootstrap: Bool
+    provider: KagemushaHardwareProviderV1, allowBootstrap: () throws -> Bool
   ) throws -> (
     qualification: KagemushaHardwareQualificationV1,
     recovery: KagemushaHardwareRecoveryV1,
@@ -706,8 +721,8 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     var recovery = try provider.recover()
     var qualification = try provider.qualification()
     if recovery.aggregateState == nil {
-      guard allowBootstrap else { throw invalid("recovery lost durable state") }
-      let bootstrapped = try provider.bootstrapState()
+      guard try allowBootstrap() else { throw invalid("bootstrap is not admitted") }
+      let bootstrapped = try provider.bootstrapState(allowBootstrap: allowBootstrap)
       recovery = try provider.recover()
       qualification = try provider.qualification()
       guard recovery.aggregateState == bootstrapped
@@ -758,6 +773,8 @@ public final class KagemushaWalletV1: @unchecked Sendable {
 
 /// Private host scheduling only: one monetary transition at a time.
 private final class KagemushaForegroundGateV1 {
+  private let sharedLock: NSRecursiveLock
+  init(sharedLock: NSRecursiveLock) { self.sharedLock = sharedLock }
   private let condition = NSCondition()
   private var occupied = false
   private var foregroundWaiters = 0
@@ -783,6 +800,8 @@ private final class KagemushaForegroundGateV1 {
       condition.broadcast()
       condition.unlock()
     }
+    sharedLock.lock()
+    defer { sharedLock.unlock() }
     return try body()
   }
 }

@@ -41,6 +41,7 @@ export const SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS = Object.freeze([
   "getSumeragiDiagnosticsTyped rejects impossible queue snapshots",
   "getSumeragiDiagnosticsTyped requires every canonical lane array",
   "getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipts",
+  "getSumeragiDiagnosticsTyped preserves FIFO native AMX order and route-local participant groups",
   "getSumeragiDiagnosticsTyped accepts the canonical first participant-lane block",
   "getSumeragiDiagnosticsTyped accepts mixed-role proposals without the current entrypoint",
   "getSumeragiDiagnosticsTyped keeps global and coordinator views independent",

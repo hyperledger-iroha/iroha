@@ -702,7 +702,7 @@ fn fast_init_rejects_an_unmarked_tip_hash_without_mutation() {
 #[test]
 fn hash_journal_reader_rejects_an_unmarked_entry() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 2);
+    populate_raw_block_store(&temp_dir, 2);
     let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
     let mut hash_bytes = std::fs::read(&hash_path).expect("read committed hash journal");
     hash_bytes[Hash::LENGTH - 1] &= !1;
@@ -1530,4 +1530,85 @@ fn writer_loop_records_periodic_fsync_failure_without_panic() {
         !kura.block_store.lock().fsync_pending_for_tests(),
         "failed writer fsync must roll back instead of publishing after the caller unwinds"
     );
+}
+
+#[test]
+fn local_full_wsv_observation_requires_complete_exact_manifest_and_finality_binding() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let blocks_dir = kura.active_blocks_dir.lock().clone();
+    let read = |artifact: &V2FinalityArtifact| {
+        Kura::local_wsv_checkpoint_hash_for_tests(&blocks_dir, artifact)
+    };
+    assert_eq!(read(&artifact).expect("absent sidecars"), None);
+    let state_hash = Hash::new(b"complete World including generic game assets and NFT reserves");
+    kura.store_wsv_checkpoint(1, block.hash(), state_hash)
+        .expect("store unbound checkpoint");
+    assert_eq!(read(&artifact).expect("pending manifest"), None);
+    let manifest = CommitManifest::new(1, block.hash(), None, None, state_hash, None)
+        .with_authenticated_v2_commit_authority(&artifact);
+    kura.store_commit_manifest(manifest.clone())
+        .expect("store complete manifest");
+    let checkpoint_path = kura.wsv_checkpoint_path(1);
+    let manifest_path = kura.commit_manifest_path(1);
+    let checkpoint_bytes = fs::read(&checkpoint_path).expect("checkpoint bytes");
+    let manifest_bytes = fs::read(&manifest_path).expect("manifest bytes");
+    assert_eq!(
+        read(&artifact).expect("complete sidecars"),
+        Some(state_hash)
+    );
+    assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_bytes);
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest_bytes);
+
+    let mut changed_artifact = artifact.clone();
+    changed_artifact
+        .commit_qc
+        .execution_commitment
+        .post_state_root = Hash::new(b"substitution");
+    assert!(read(&changed_artifact).is_err());
+    changed_artifact = artifact.clone();
+    changed_artifact.subject.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"other block"));
+    assert!(read(&changed_artifact).is_err());
+
+    let original = kura.wsv_checkpoint(1).unwrap().unwrap();
+    for changed in [
+        WsvCheckpoint {
+            height: 2,
+            ..original.clone()
+        },
+        WsvCheckpoint {
+            state_hash: Hash::new(b"different full World"),
+            ..original.clone()
+        },
+        WsvCheckpoint {
+            commit_manifest_hash: Some(Hash::new(b"different manifest")),
+            ..original.clone()
+        },
+    ] {
+        fs::write(&checkpoint_path, changed.encode()).unwrap();
+        assert!(read(&artifact).is_err());
+    }
+    fs::write(&checkpoint_path, &checkpoint_bytes).unwrap();
+    let changed_manifest = CommitManifest {
+        commit_authority_hash: None,
+        ..manifest
+    };
+    fs::write(&manifest_path, changed_manifest.encode()).unwrap();
+    assert!(read(&artifact).is_err());
+    fs::write(&manifest_path, &manifest_bytes).unwrap();
+    fs::remove_file(&manifest_path).unwrap();
+    assert!(
+        read(&artifact).is_err(),
+        "published manifest cannot disappear"
+    );
+    fs::write(&manifest_path, &manifest_bytes).unwrap();
+    fs::remove_file(&checkpoint_path).unwrap();
+    assert!(
+        read(&artifact).is_err(),
+        "complete manifest needs its checkpoint"
+    );
+    fs::write(&checkpoint_path, &checkpoint_bytes).unwrap();
+    assert_eq!(read(&artifact).unwrap(), Some(state_hash));
 }

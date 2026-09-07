@@ -1449,6 +1449,14 @@ mod tests {
         fn for_epoch(epoch: u64) -> Self {
             let mut fixture = Self::new();
             fixture.context.epoch = epoch;
+            (
+                fixture.context.kagemusha_mint_finality_epoch_id,
+                fixture.context.kagemusha_mint_finality_epoch_roster,
+            ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                fixture.context.network_id,
+                epoch,
+                &fixture.context.roster,
+            );
             fixture
                 .context
                 .validate()

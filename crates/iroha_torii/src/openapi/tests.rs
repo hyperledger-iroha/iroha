@@ -2904,5 +2904,6 @@ include!("tests/prepared_account_contracts.rs");
 include!("tests/private_settlement_contract.rs");
 include!("tests/soracloud_lease_contracts.rs");
 include!("tests/sorafs_contracts.rs");
+include!("tests/sorafs_pop_contracts.rs");
 include!("tests/vpn_da.rs");
 mod catalog_and_contracts;

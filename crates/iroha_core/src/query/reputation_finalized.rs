@@ -2720,8 +2720,16 @@ impl ReputationFinalizedArchive {
             // Approval freezes the compaction, not subsequent committed captures.
             // Accept later generations only with this exact approved checkpoint
             // and a contiguous, Kura-authenticated retained successor chain.
-            authenticate_approval_checkpoint_against_kura(&candidate.persisted, &index, kura)?;
+            let coverage =
+                authenticate_approval_checkpoint_against_kura(&candidate.persisted, &index, kura)?;
             require_exact_retention_readback(binding, authority, network_id, &approval)?;
+            if coverage == ApprovedCheckpointCoverage::AwaitingCapture {
+                // A crash after Kura commits but before archive capture and a
+                // lost trailing suffix have the same local shape. Preserve
+                // recovery evidence until authenticated capture restores full
+                // coverage; opening a handle does not qualify a lagging archive.
+                return Ok(());
+            }
             if let Err(error) = self.finish_checkpoint_cleanup(&index) {
                 self.reconcile_checkpoint_index(&mut index)?;
                 return Err(error);
@@ -6147,11 +6155,17 @@ fn compare_and_read_back_retention_approval(
     }
     Err(ReputationFinalizedArchiveError::RetentionAuthorityEquivocation)
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovedCheckpointCoverage {
+    Complete,
+    AwaitingCapture,
+}
+
 fn authenticate_approval_checkpoint_against_kura(
     checkpoint: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
     index: &ArchiveIndex,
     kura: &Kura,
-) -> Result<(), ReputationFinalizedArchiveError> {
+) -> Result<ApprovedCheckpointCoverage, ReputationFinalizedArchiveError> {
     let material = &checkpoint.checkpoint;
     let boundary = kura.exact_replay_boundary().map_err(|error| {
         ReputationFinalizedArchiveError::KuraAuthentication {
@@ -6187,8 +6201,10 @@ fn authenticate_approval_checkpoint_against_kura(
             }),
     );
     validate_contiguous_archive_coverage(&material.retention_floor.network_id, &retained_anchors)?;
+    let mut retained_tip_height = material.retention_floor.height;
     for (key, finalized_at_unix_ms) in retained_anchors.iter().skip(1) {
         authenticate_archive_anchor_against_kura(key, *finalized_at_unix_ms, kura, &boundary)?;
+        retained_tip_height = key.height;
     }
     let (artifact, _) = kura
         .v2_finality_artifact_with_receipt(material.retention_floor.height)
@@ -6223,7 +6239,13 @@ fn authenticate_approval_checkpoint_against_kura(
             ReputationFinalizedArchiveError::QualificationBoundaryChanged { boundary: "Kura" },
         );
     }
-    Ok(())
+    Ok(if retained_tip_height == boundary.count {
+        ApprovedCheckpointCoverage::Complete
+    } else {
+        // Every retained anchor was authenticated against this exact boundary,
+        // so the remaining difference is an uncaptured trailing suffix.
+        ApprovedCheckpointCoverage::AwaitingCapture
+    })
 }
 fn history_pruned_error(
     checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,

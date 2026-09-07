@@ -2541,6 +2541,43 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     assert!(!queue.txs.contains_key(&keys[0].entrypoint_hash));
     assert!(queue.txs.contains_key(&keys[1].entrypoint_hash));
     assert!(queue.txs.contains_key(&keys[2].entrypoint_hash));
+    let consumed = keys[0].entrypoint_hash;
+    assert!(!queue.fifo_order_by_hash.contains_key(&consumed));
+    assert!(!queue.durable_plan_claims.contains_key(&consumed));
+    assert!(
+        queue
+            .lane_reservations
+            .lock()
+            .plan_tombstoned
+            .contains(&keys[0])
+    );
+    let durable_before = std::fs::read(dir.path().join("queue-plans-for-reservations.norito"))
+        .expect("retain the exact QueuePlan tombstone history");
+    // Missing FIFO is valid only for the exact durable marked terminal cut.
+    queue
+        .lane_reservations
+        .lock()
+        .plan_tombstoned
+        .retain(|key| key != &keys[0]);
+    assert!(matches!(
+        queue.commit_lane_reservation_group(&keys),
+        Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash })
+            if hash == consumed
+    ));
+    queue.lane_reservations.lock().plan_tombstoned.push(keys[0]);
+    // An otherwise consumed member cannot retain another queue ownership index.
+    queue.tx_encoded_len.insert(consumed, 1);
+    assert!(matches!(
+        queue.commit_lane_reservation_group(&keys),
+        Err(LaneQueueReservationError::Conflict { hash }) if hash == consumed
+    ));
+    queue.tx_encoded_len.remove(&consumed);
+    assert_eq!(queue.lane_reservation_commit_barriers(), expected_barriers);
+    assert_eq!(
+        std::fs::read(dir.path().join("queue-plans-for-reservations.norito")).unwrap(),
+        durable_before,
+        "rejected terminal-cut substitutions must not rewrite QueuePlan history"
+    );
     assert_eq!(
         queue
             .commit_lane_reservation_group(&keys)

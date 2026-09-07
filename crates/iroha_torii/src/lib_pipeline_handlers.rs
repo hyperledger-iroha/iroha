@@ -769,6 +769,10 @@ fn encode_fastpq_recovery_batch(
     reconstructed: bool,
     artifact_bytes: &mut usize,
 ) -> Result<(String, bool), Error> {
+    // Pin both bounded passes to the same canonical V1 layout, independent of
+    // any request-local Norito decode flags on this thread.
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let bytes =
         match norito::core::to_bytes_bounded(batch, PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES) {
             Ok(bytes) => bytes,

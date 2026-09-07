@@ -452,6 +452,28 @@ pub struct VerifiedMintStageV1 {
 }
 
 impl VerifiedMintStageV1 {
+    /// Consume concrete genuine-proof diagnostic evidence for the test-only state corridor.
+    ///
+    /// The sealed token has no unchecked constructor. Its owner verifies the actual generated
+    /// authorization and finality proofs and their exact instances/histories before creating it.
+    /// This entry is absent from runtime builds and does not qualify a hardware provider.
+    #[cfg(all(test, unix, feature = "zk-halo2-ipa"))]
+    pub(crate) fn from_genuine_diagnostic_proofs(
+        reservation: MintInboxReservationV1,
+        credit: KagemushaMintCreditV1,
+        proof: crate::zk::kagemusha_v1_recursion::DiagnosticMintStageProofV1,
+    ) -> Result<Self, KagemushaStateErrorV1> {
+        validate_mint_inputs(&reservation, &credit)?;
+        let envelope_digest = mint_envelope_digest_v1(&credit)?;
+        let mint_finality = proof.into_finality(&reservation, &credit)?;
+        Ok(Self {
+            reservation,
+            credit,
+            envelope_digest,
+            mint_finality,
+        })
+    }
+
     /// Exact reservation which state operations must match against their authenticated journal.
     pub fn reservation(&self) -> &MintInboxReservationV1 {
         &self.reservation

@@ -127,8 +127,16 @@ fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
 
     let exact_output_drive = source_region(
         worker_source,
-        "fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput)",
+        "fn drive_pending_exact_output(",
         "fn enqueue_exact_fanout_while_guarded(",
+    );
+    assert_required_source_tokens(
+        exact_output_drive,
+        &[
+            "&self",
+            "pending: &mut PendingExactOutput",
+            "released_kura_replica_advert_heights: &mut BTreeSet<u64>",
+        ],
     );
     assert_source_tokens_in_order(
         exact_output_drive,
@@ -149,7 +157,9 @@ fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
             "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)",
             "let terminal_exact_output_pending =\n                    retry_exact_output_and_apply_sidecar_admissions(",
             "Ok((executor.ready_to_finish(), terminal_exact_output_pending))",
-            "let ready = ready_to_finish && !terminal_exact_output_pending",
+            "let ready = ready_to_finish",
+            "&& !terminal_exact_output_pending",
+            "&& !block_sync_server.has_pending_historical_body_serve()",
             "if !ready",
             "wake_rx.recv_timeout(IDLE_POLL)",
         ],
@@ -212,6 +222,17 @@ fn pending_kura_terminal_height_authenticates_after_closed_drain_without_a_succe
             "drain_finalized_lane_relay_prefix(",
             "ensure_closed_drained_cut()",
             "if context.height == u64::MAX",
+        ],
+    );
+    // A shutdown signal may correctly exit the preceding drain loop. Only
+    // the terminal-height branch must authenticate finality before shutdown.
+    let terminal_height = terminal
+        .split_once("if context.height == u64::MAX {")
+        .expect("terminal-height branch follows the closed drain")
+        .1;
+    assert_source_tokens_in_order(
+        terminal_height,
+        &[
             "executor.durable_finality()",
             "authenticate_terminal_complete_tip(",
             "activated.into_clean_shutdown(&mut active_runner)?",

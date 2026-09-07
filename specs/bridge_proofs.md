@@ -41,15 +41,18 @@ corridor profiles are:
 | `sora-taira` | `0x40` | 0 | canonical Taira Sumeragi-v2 chain id |
 | `ethereum-mainnet` | `0x41` | 1 | EIP-155 chain id 1 |
 | `bsc-mainnet` | `0x42` | 2 | EIP-155 chain id 56 |
-| `tron-mainnet` | `0x43` | 3 | mainnet network magic `0x2b6653dc` |
+| `tron-mainnet` | `0x43` | 5 | mainnet network magic `0x2b6653dc` |
 | `ton-mainnet` | `0x44` | 4 | global id `-239` and the canonical mainnet zero state |
 
 These five profiles are the complete final-V1 network inventory. Every former
-testnet, staging, or Solana profile and every old sparse numeric tag is
-unrepresentable and rejected; there is no compatibility decoder. Network tags
-and transfer/circuit domain ids are separate typed namespaces and must not be
-conflated. TON mainnet is mandatory, with a native masterchain source proof and
-BLS12-381 outbound proof path.
+testnet, staging, or Solana profile is unrepresentable and rejected; there is
+no compatibility decoder. Network tags, transfer domains, payload codecs, and
+union discriminants are separate typed namespaces. Their identifiers are not
+renumbered when a profile or variant is removed. The canonical payload codecs
+are text `1`, EVM address `2`, TRON address `5`, and TON account `7`; the
+transfer payload discriminant is `2` and the transfer hub-message kind is `5`.
+Compact aliases, including TRON domain `3`, fail closed. TON mainnet is mandatory,
+with a native masterchain source proof and BLS12-381 outbound proof path.
 
 The closed network enum represents `sora-taira` as its sole SORA endpoint;
 `sora-nexus` has no SCCP V1 representation. Every value-moving governed V1

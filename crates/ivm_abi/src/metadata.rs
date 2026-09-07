@@ -11,6 +11,7 @@ use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractErrorCodeDescriptor, EntryPointKind, EntrypointDescriptor,
     KotobaTranslationEntry, TriggerDescriptor,
 };
+pub use iroha_data_model::smart_contract::{CONTRACT_CODE_HASH_DOMAIN, contract_code_hash};
 use norito::{
     Decode, Encode,
     core::{
@@ -19,20 +20,6 @@ use norito::{
     },
 };
 use std::io::Write;
-/// Domain separator for the canonical deployable contract artifact hash.
-///
-/// The hash deliberately covers the complete `.to` image, including the fixed
-/// execution header. Contract debug information belongs in a sidecar and is
-/// therefore not part of a deployable artifact.
-pub const CONTRACT_CODE_HASH_DOMAIN: &[u8] = b"iroha:ivm:contract-artifact:v1\0";
-/// Compute the canonical identity of a deployable IVM contract artifact.
-///
-/// Unlike the pre-release body-only hash, this binds every execution-relevant
-/// header field as well as embedded interface metadata, literals, and code.
-#[must_use]
-pub fn contract_code_hash(artifact: &[u8]) -> iroha_crypto::Hash {
-    iroha_crypto::Hash::new_from_chunks(&[CONTRACT_CODE_HASH_DOMAIN, artifact])
-}
 /// Maximum accepted logical vector length for admission.
 pub const VECTOR_LENGTH_MAX: u8 = 64;
 /// Magic prefix identifying IVM bytecode.

@@ -1,0 +1,27 @@
+{
+  "status": "Error",
+  "code": "SFS-NORITO-001",
+  "category": "norito",
+  "message": "failed to decode PopMembershipProofV1 Norito payload: length mismatch",
+  "action": "Re-encode the PoP payload with the canonical SoraFS Norito schema.",
+  "docs_url": "https://docs.iroha.tech/",
+  "telemetry_tags": [
+    "sorafs.reference.pop",
+    "sorafs.reference.pop.membership_proof",
+    "sorafs.reference.code.SFS-NORITO-001"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "PopMembershipProofV1"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "pop_membership_proof",
+      "path": "pop_membership_missing_binding_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 123
+}

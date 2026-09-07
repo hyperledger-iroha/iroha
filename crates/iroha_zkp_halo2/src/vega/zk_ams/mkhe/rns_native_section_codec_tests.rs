@@ -411,12 +411,14 @@ fn identity_challenge_root_and_proof_mutations_are_rejected() {
 
     let mut changed = fixture.cross_lookup.clone();
     changed[COMMON_PREFIX_BYTES_V1 + 3 + 2 * 32] ^= 1;
+    // The cross-lookup split validates transport integrity before binding
+    // its provisional context to the final transcript.
     assert!(matches!(
         ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::from_canonical_bytes_exact_v1(
             &changed,
             &fixture.transcript,
         ),
-        Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)
+        Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::Integrity)
     ));
 
     let mut changed = fixture.zero_padding.clone();
@@ -429,6 +431,52 @@ fn identity_challenge_root_and_proof_mutations_are_rejected() {
         ),
         Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::Integrity)
     ));
+}
+
+#[test]
+fn cross_lookup_context_mutations_with_valid_integrity_fail_final_binding() {
+    let fixture = codec_fixture(2);
+    let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
+    let context_offset = COMMON_PREFIX_BYTES_V1 + 3;
+    for (field, offset) in [
+        ("transcript", COMMON_PREFIX_BYTES_V1 - 32),
+        ("cross-field challenge", context_offset),
+        ("global-lookup challenge", context_offset + 32),
+        ("cross-field root", context_offset + 2 * 32),
+        ("global-lookup root", context_offset + 3 * 32),
+    ] {
+        let mut changed = fixture.cross_lookup.clone();
+        changed[offset] ^= 1;
+        assert!(
+            matches!(
+                decode_unbound_cross_field_global_lookup_v1(&changed),
+                Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::Integrity)
+            ),
+            "unsealed mutation of {field} must fail transport integrity"
+        );
+        let prefix_bytes = changed.len() - CODEC_DIGEST_BYTES_V1;
+        let digest = codec_digest_v1(kind, &changed[..prefix_bytes]);
+        changed[prefix_bytes..].copy_from_slice(&digest);
+        let unbound = decode_unbound_cross_field_global_lookup_v1(&changed)
+            .expect("a resealed context mutation remains transport-valid");
+        assert!(
+            matches!(
+                unbound.bind_final_context_v1(&fixture.transcript),
+                Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)
+            ),
+            "transport integrity cannot authorize a mutated {field}"
+        );
+        assert!(
+            matches!(
+                ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::from_canonical_bytes_exact_v1(
+                    &changed,
+                    &fixture.transcript,
+                ),
+                Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)
+            ),
+            "the public decoder must enforce final binding of {field}"
+        );
+    }
 }
 
 #[test]

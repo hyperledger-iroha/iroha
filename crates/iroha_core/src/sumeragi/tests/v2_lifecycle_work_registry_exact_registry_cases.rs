@@ -592,3 +592,25 @@ fn recovered_single_child_transitions_store_only_exact_staged_bound_successors()
         assert!(source.contains(bound_type));
     }
 }
+
+#[test]
+fn registry_entries_bound_inline_carrier_storage() {
+    // A large retained Apply or Broadcast must not inflate every BTree row.
+    // The genuine nonzero-view restart test exercises publication on the
+    // default libtest stack; this bound also catches future layout regressions.
+    let inline = std::mem::size_of::<ConcreteLifecycleWork>();
+    let broadcast = std::mem::size_of::<DurableRecoveredLifecycleSignedBroadcastWork>();
+    let apply = std::mem::size_of::<DurableRecoveredDecisionApplyWork>();
+    assert!(
+        inline <= 32 * 1024,
+        "registry entry uses {inline} inline bytes"
+    );
+    assert!(
+        inline < broadcast,
+        "Broadcast lineage must stay out of BTree values"
+    );
+    assert!(
+        inline < apply,
+        "Apply lineage must stay out of BTree values"
+    );
+}

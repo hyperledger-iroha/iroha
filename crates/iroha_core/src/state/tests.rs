@@ -121,6 +121,19 @@ use std::{
 mod committed_hash_journal_tests;
 macro_rules! let_row { ($($tokens:tt)*) => { let $($tokens)*; }; }
 macro_rules! state_test {
+    (consensus_stack $name:ident $($body:tt)*) => {
+        #[test]
+        fn $name() {
+            let handle = crate::sumeragi::sumeragi_thread_builder(concat!(
+                "state-consensus-", stringify!($name),
+            ))
+            .spawn(move || { $($body)* })
+            .expect("spawn State integration test on the production consensus stack");
+            if let Err(payload) = handle.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    };
     (sync $name:ident $($body:tt)*) => {
         #[test]
         fn $name() { $($body)* }
@@ -2215,13 +2228,21 @@ fn axt_proof_blob_for_with_profile(
                     .to_vec()
             };
             batch.push(fastpq_prover::StateTransition::new(
-                format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(
+                    &delta.asset_definition,
+                    &delta.from_account,
+                )
+                .expect("canonical balance key"),
                 balance_bytes(&delta.from_balance_before),
                 balance_bytes(&delta.from_balance_after),
                 fastpq_prover::OperationKind::Transfer,
             ));
             batch.push(fastpq_prover::StateTransition::new(
-                format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(
+                    &delta.asset_definition,
+                    &delta.to_account,
+                )
+                .expect("canonical balance key"),
                 balance_bytes(&delta.to_balance_before),
                 balance_bytes(&delta.to_balance_after),
                 fastpq_prover::OperationKind::Transfer,
@@ -7452,8 +7473,8 @@ state_test! { sync native_amx_participant_receipt_requires_exact_v2_frontier_con
     let incarnation = Hash::new(b"native-frontier-receipt-incarnation");
     let_row! { (session, _) = sample_committed_lane_block_session_with_payload_for_state_test( lane_id, dataspace_id, incarnation, 73, 2, vec![0], vec![Hash::new(b"native-frontier-receipt-entrypoint")], ) };
     let proposal = session.proposal;
-    let_row! { settlement = NativeAmxParticipantSettlement { block_height: proposal.descriptor.lane_block_height, lane_id, lane_incarnation: incarnation, dataspace_id, tx_count: 0, total_local_amount: "0".parse().expect("zero quantity"), total_xor_due: "0".parse().expect("zero quantity"), total_xor_after_haircut: "0".parse().expect("zero quantity"), total_xor_variance: "0".parse().expect("zero quantity"), swap_metadata: None, receipts: Vec::new(), nexus_fee_receipts: Vec::new(), } };
-    let_row! { settlement_hash = iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(&settlement).expect("fixture participant settlement encodes canonically") };
+    let_row! { settlement = iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(lane_id, dataspace_id, incarnation, proposal.descriptor.lane_block_height, proposal.descriptor.proposal_height, None, vec![[0xA5; Hash::LENGTH]]).expect("valid Native participant control") };
+    let_row! { settlement_hash = settlement.computed_hash().expect("hash test settlement") };
     let_row! { application_block_hash = HashOf::from_untyped_unchecked(Hash::new(b"native-frontier-receipt-application")) };
     let_row! { receipt = crate::kura::NativeAmxParticipantApplicationReceiptArtifact { version: 2, participant_proposal: proposal.clone(), participant_settlement: settlement, participant_settlement_hash: settlement_hash, application_block_height: 73, application_block_hash, executed_block_wire_hash: Hash::new(b"native-frontier-receipt-executed-wire"), finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new( b"native-frontier-receipt-finality", )), manifest_artifact_hash: HashOf::from_untyped_unchecked(Hash::new( b"native-frontier-receipt-manifest", )), source_ids: vec![[0xA5; Hash::LENGTH]], entrypoint_indices: Vec::new(), entrypoint_hashes: Vec::new(), result_hashes: Vec::new(), results: Vec::new(), } };
     let descriptor = &proposal.descriptor;
@@ -7623,15 +7644,13 @@ state_test! { sync mixed_role_native_amx_state_projections_reject_same_route_ide
         coordinator_leg.participant_proposal.proposal_hash = coordinator_leg
             .participant_proposal
             .computed_proposal_hash();
-        coordinator_leg.participant_settlement.lane_incarnation = coordinator_leg
+        coordinator_leg.participant_settlement = iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(coordinator_leg.participant_settlement.lane_id(), coordinator_leg.participant_settlement.dataspace_id(), coordinator_leg
             .participant_proposal
             .descriptor
-            .lane_incarnation;
+            .lane_incarnation, coordinator_leg.participant_settlement.participant_lane_block_height(), coordinator_leg.participant_settlement.authority_context_height(), coordinator_leg.participant_settlement.previous_native_settlement_hash(), coordinator_leg.participant_settlement.source_ids().to_vec()).expect("valid conflicting Native control identity");
         coordinator_leg.participant_settlement_hash =
-            iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
-                &coordinator_leg.participant_settlement,
-            )
-            .expect("fixture participant settlement encodes canonically");
+            coordinator_leg.participant_settlement.computed_hash()
+            .expect("hash stale same-route settlement");
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,
@@ -7642,7 +7661,7 @@ state_test! { sync mixed_role_native_amx_state_projections_reject_same_route_ide
                 .lane_incarnation;
             body.participant_proposal_hash = coordinator_leg.participant_proposal.proposal_hash;
             body.participant_settlement_commitment =
-                coordinator_leg.participant_settlement_hash;
+                Hash::from(coordinator_leg.participant_settlement_hash);
         }
         assert!(matches!(
             State::native_amx_participant_application_diagnostic_rows_from_native_receipt(
@@ -7756,7 +7775,7 @@ state_test! { sync native_amx_participant_frontier_rejects_legacy_hash_only_layo
         lane_block_height: u64,
         lane_block_descriptor_hash: Hash,
         participant_proposal_hash: Hash,
-        participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
+        participant_settlement_hash: HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
         application_block_height: u64,
         application_block_hash: HashOf<BlockHeader>,
         source_count: u64,
@@ -7773,9 +7792,10 @@ state_test! { sync native_amx_participant_frontier_rejects_legacy_hash_only_layo
     ));
 }
 state_test! { sync native_derived_drain_frontier_rejects_missing_durable_application_evidence
-    let lane_id = LaneId::new(7);
-    let dataspace_id = DataSpaceId::new(9);
-    let lane_incarnation = Hash::new(b"drain-native-missing-evidence-incarnation");
+    let (state, kura) = blank_test_state_with_kura();
+    let lane_id = LaneId::SINGLE;
+    let dataspace_id = DataSpaceId::UNIVERSAL;
+    let lane_incarnation = state.lane_incarnation(lane_id).expect("configured active primary incarnation");
     let descriptor_hash = Hash::new(b"drain-native-missing-evidence-descriptor");
     let_row! { marker = AppliedNativeAmxParticipantFrontierMarker { version: 2, lane_id, dataspace_id, lane_incarnation, lane_block_height: 1, participant_view: 0, previous_lane_block_height: 0, previous_lane_block_descriptor_hash: None, lane_block_descriptor_hash: descriptor_hash, participant_proposal_hash: Hash::new(b"drain-native-missing-evidence-proposal"), participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new( b"drain-native-missing-evidence-settlement", )), application_block_height: 3, application_block_hash: HashOf::from_untyped_unchecked(Hash::new( b"drain-native-missing-evidence-application", )), source_count: 1, } };
     let_row! { (native_key, native_payload) = State::encode_native_amx_participant_frontier_marker(marker) .expect("encode Native frontier marker") };
@@ -7785,7 +7805,6 @@ state_test! { sync native_derived_drain_frontier_rejects_missing_durable_applica
         .smart_contract_state
         .insert(native_key, native_payload);
     world.smart_contract_state.insert(merge_key, merge_payload);
-    let kura = Kura::blank_kura_for_testing();
     let_row! { error = State::evidence_aware_lane_drain_frontier_from_world( &world.view(), &kura, lane_id, dataspace_id, lane_incarnation, ) .expect_err("Native-derived drain frontier without sidecars must fail closed") };
     assert!(matches!(
         error,
@@ -22031,13 +22050,13 @@ state_test! { sync lane_lifecycle_same_lane_policy_change_rejects_unapplied_cert
     kura.persist_committed_lane_block_session(&stale_session, &stale_signer_pops)
         .expect("persist old-incarnation certified lane block");
     assert_eq!(
-        state.unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL),
+        state.unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL).expect("authenticate certified storage"),
         Some(old_block_height),
         "test setup should expose the old certified sidecar before lane reset"
     );
     assert_eq!(
         state
-            .unapplied_certified_lane_block_heights_snapshot_cached()
+            .unapplied_certified_lane_block_heights_snapshot_cached().expect("authenticate certified storage")
             .get(&(recreated_lane_id, DataSpaceId::UNIVERSAL))
             .copied(),
         Some(old_block_height),
@@ -22050,7 +22069,7 @@ state_test! { sync lane_lifecycle_same_lane_policy_change_rejects_unapplied_cert
     );
     assert_eq!(
         state
-            .certified_lane_block_tips_snapshot_cached()
+            .certified_lane_block_tips_snapshot_cached().expect("authenticate certified storage")
             .into_iter()
             .map(|(_, _, _, height, _)| height)
             .collect::<Vec<_>>(),
@@ -22112,7 +22131,7 @@ state_test! { sync lane_lifecycle_same_lane_policy_change_rejects_unapplied_cert
         "rejected reset must preserve the certified sidecar"
     );
     assert_eq!(
-        state.unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL),
+        state.unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL).expect("authenticate certified storage"),
         Some(old_block_height),
         "rejected reset must keep pending work visible to scale-in safety checks"
     );
@@ -22123,7 +22142,7 @@ state_test! { sync lane_lifecycle_same_lane_policy_change_rejects_unapplied_cert
     );
     assert_eq!(
         state
-            .certified_lane_block_tips_snapshot_cached()
+            .certified_lane_block_tips_snapshot_cached().expect("authenticate certified storage")
             .into_iter()
             .map(|(_, _, _, height, _)| height)
             .collect::<Vec<_>>(),
@@ -22132,7 +22151,7 @@ state_test! { sync lane_lifecycle_same_lane_policy_change_rejects_unapplied_cert
     );
     assert_eq!(
         state
-            .unapplied_certified_lane_block_heights_snapshot_cached()
+            .unapplied_certified_lane_block_heights_snapshot_cached().expect("authenticate certified storage")
             .get(&(recreated_lane_id, DataSpaceId::UNIVERSAL))
             .copied(),
         Some(old_block_height),
@@ -22161,14 +22180,14 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         .expect("persist same-incarnation pre-reset certified block");
     assert_eq!(
         state
-            .certified_lane_block_tips_snapshot_cached()
+            .certified_lane_block_tips_snapshot_cached().expect("authenticate certified storage")
             .into_iter()
             .map(|(_, _, _, height, _)| height)
             .collect::<Vec<_>>(),
         vec![stale_lane_block_height]
     );
     assert_eq!(
-        state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL),
+        state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL).expect("authenticate certified storage"),
         Some(stale_lane_block_height)
     );
     assert!(
@@ -22179,7 +22198,7 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         .da_shard_cursors
         .write()
         .mark_lanes_canonically_reset(&BTreeSet::from([lane_id]), reset_height);
-    assert!(state.certified_lane_block_tips_snapshot_cached().is_empty());
+    assert!(state.certified_lane_block_tips_snapshot_cached().expect("authenticate certified storage").is_empty());
     assert!(
         state
             .certified_lane_block_sessions_snapshot_cached(8)
@@ -22187,11 +22206,11 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
     );
     assert!(
         state
-            .unapplied_certified_lane_block_heights_snapshot_cached()
+            .unapplied_certified_lane_block_heights_snapshot_cached().expect("authenticate certified storage")
             .is_empty()
     );
     assert_eq!(
-        state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL),
+        state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL).expect("authenticate certified storage"),
         None
     );
     assert!(!state.has_pending_merge_execution_sources(ConsensusMode::Permissioned));
@@ -22226,7 +22245,7 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
     );
     assert_eq!(
         state
-            .certified_lane_block_tips_snapshot_cached()
+            .certified_lane_block_tips_snapshot_cached().expect("authenticate certified storage")
             .into_iter()
             .map(|(_, _, _, height, _)| height)
             .collect::<Vec<_>>(),
@@ -22242,13 +22261,13 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
     );
     assert_eq!(
         state
-            .unapplied_certified_lane_block_heights_snapshot_cached()
+            .unapplied_certified_lane_block_heights_snapshot_cached().expect("authenticate certified storage")
             .get(&(lane_id, DataSpaceId::UNIVERSAL))
             .copied(),
         Some(fresh_lane_block_height)
     );
     assert_eq!(
-        state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL),
+        state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL).expect("authenticate certified storage"),
         Some(fresh_lane_block_height)
     );
     assert!(
@@ -43146,3 +43165,35 @@ include!("trigger_execution_and_delta_merge_tests.rs");
 include!("view_projection_tests.rs");
 include!("musubi_snapshot_validation_tests.rs");
 include!("lane_authority_exactness_tests.rs");
+
+state_test! { sync certified_snapshot_corruption_cannot_become_an_empty_lane
+    let lane_id = LaneId::new(1);
+    let lane = LaneConfig { id: lane_id, alias: "strict-certified-snapshot".to_owned(), ..LaneConfig::default() };
+    let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane]).expect("two lanes");
+    let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = blank_test_state_from_kura(&kura);
+    state.set_nexus(iroha_config::parameters::actual::Nexus {
+        lane_catalog: catalog, lane_config: lane_config.clone(), ..Default::default()
+    }).expect("install authoritative lane geometry");
+    assert!(state.certified_lane_block_tips_snapshot_cached().expect("empty tips").is_empty());
+    let incarnation = state.lane_incarnation(lane_id).expect("active incarnation");
+    let (session, pops) = sample_committed_lane_block_session_for_state_test(
+        lane_id, DataSpaceId::UNIVERSAL, incarnation, 1, 1,
+    );
+    kura.persist_committed_lane_block_session(&session, &pops).expect("persist certified ownership");
+    assert_eq!(state.certified_lane_block_tips_snapshot_cached().expect("warm exact tip").len(), 1);
+    let directory = lane_config.entry(lane_id).expect("lane directory")
+        .blocks_dir(kura.store_root()).join("lane_artifacts");
+    for file in ["certified_blocks.norito", "latest_certified_frontier.norito"] {
+        let path = directory.join(file);
+        let healthy = std::fs::read(&path).expect("read actual certified evidence");
+        let damaged = vec![0xA5; healthy.len()];
+        std::fs::write(&path, &damaged).expect("corrupt occupied evidence with same indexed length");
+        assert!(state.certified_lane_block_tips_snapshot_cached().is_err());
+        assert!(state.unapplied_certified_lane_block_heights_snapshot_cached().is_err());
+        assert!(state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL).is_err());
+        assert_eq!(std::fs::read(&path).expect("retained corruption"), damaged);
+        std::fs::write(&path, healthy).expect("restore fixture evidence");
+    }
+}

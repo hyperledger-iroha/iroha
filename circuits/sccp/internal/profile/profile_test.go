@@ -32,6 +32,11 @@ func TestCatalogueIsClosedAndIndependentlyKeyed(t *testing.T) {
 }
 
 func TestCatalogueUsesTheClosedWireDomainAndCodecInventory(t *testing.T) {
+	if SoraDomain != 0 || EthereumDomain != 1 || BSCDomain != 2 || TRONDomain != 5 || TONDomain != 4 ||
+		CanonicalTextCodec != 1 || EVMAddress20Codec != 2 || TRONAddress21Codec != 5 || TONAccount36Codec != 7 ||
+		TransferPayloadDiscriminant != 2 || TransferHubMessageKind != 5 {
+		t.Fatal("canonical Rust wire namespace was compacted or renumbered")
+	}
 	expected := map[string]struct {
 		domain  uint32
 		backend byte

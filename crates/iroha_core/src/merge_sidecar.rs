@@ -3290,6 +3290,7 @@ pub(crate) const fn reliable_flush_topic_tag(topic: Topic) -> u8 {
         Topic::TrustGossip => 10,
         Topic::Health => 11,
         Topic::Other => 12,
+        Topic::Connect => 13,
     }
 }
 #[derive(Debug)]

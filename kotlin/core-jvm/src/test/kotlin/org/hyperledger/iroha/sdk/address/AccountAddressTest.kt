@@ -1,13 +1,97 @@
 package org.hyperledger.iroha.sdk.address
 
+import java.io.File
+import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertContentEquals
+import kotlin.test.assertTrue
 
 class AccountAddressTest {
+    @Test
+    fun multisigConstructionMatchesFullRustPoliciesForEveryMemberOrder() {
+        val path = "fixtures/account/address_vectors.json"
+        val file = generateSequence(File(".").canonicalFile) { it.parentFile }
+            .map { File(it, path) }.first(File::isFile)
+        val fixture = JsonParser.parse(file.readText(Charsets.UTF_8)) as Map<*, *>
+        val cases = ((fixture["cases"] as Map<*, *>)["positive"] as List<*>)
+            .map { it as Map<*, *> }.filter { it["category"] == "multisig" }
+        assertTrue(cases.isNotEmpty())
+        for (vector in cases) {
+            val controller = vector["controller"] as Map<*, *>
+            val original = (controller["members"] as List<*>).map {
+                val member = it as Map<*, *>
+                MultisigMemberPayload(1, (member["weight"] as Number).toInt(), hex(member["public_key_hex"] as String))
+            }
+            val encodings = vector["encodings"] as Map<*, *>
+            val canonical = hex(encodings["canonical_hex"] as String)
+            val i105 = (encodings["i105"] as Map<*, *>)["string"] as String
+            for (rotation in original.indices) {
+                for (members in listOf(original.drop(rotation) + original.take(rotation),
+                    (original.drop(rotation) + original.take(rotation)).reversed())) {
+                    val callerMembers = members.toMutableList()
+                    val policy = MultisigPolicyPayload.of(1, (controller["threshold"] as Number).toInt(), callerMembers)
+                    val address = AccountAddress.fromMultisigPolicy(policy)
+                    assertContentEquals(canonical, address.canonicalBytes)
+                    assertEquals(i105, address.toI105Default())
+                    assertEquals(members, callerMembers)
+                    assertEquals(members, policy.members)
+                    val decoded = assertNotNull(address.multisigPolicyPayload())
+                    assertEquals(original.map { it.weight }, decoded.members.map { it.weight })
+                    original.zip(decoded.members).forEach { (expected, actual) ->
+                        assertContentEquals(expected.publicKey, actual.publicKey)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun multisigExternalEncodingsRejectReorderedDuplicatedAndUnsupportedPolicies() {
+        val members = listOf(
+            MultisigMemberPayload(1, 1, TestEd25519Keys.publicKey(0x11)),
+            MultisigMemberPayload(1, 2, TestEd25519Keys.publicKey(0x22)),
+        )
+        val canonical = AccountAddress.fromMultisigPolicy(MultisigPolicyPayload.of(1, 2, members)).canonicalBytes
+        val header = canonical.copyOfRange(0, 7)
+        val first = canonical.copyOfRange(7, 44)
+        val second = canonical.copyOfRange(44, 81)
+        for (malformed in listOf(header + second + first, header + first + first,
+            canonical.copyOf().also { it[2] = 2 })) {
+            assertFailsWith<AccountAddressException> { AccountAddress.fromCanonicalBytes(malformed) }
+        }
+        for (version in listOf(0, 2, 257)) {
+            assertFailsWith<AccountAddressException> {
+                AccountAddress.fromMultisigPolicy(MultisigPolicyPayload.of(version, 2, members))
+            }
+        }
+        assertFailsWith<AccountAddressException> {
+            AccountAddress.fromMultisigPolicy(MultisigPolicyPayload.of(1, 65537, members))
+        }
+        for (duplicateWeight in listOf(1, 2)) {
+            assertFailsWith<AccountAddressException> {
+                AccountAddress.fromMultisigPolicy(MultisigPolicyPayload.of(1, 2,
+                    listOf(members[0], MultisigMemberPayload(1, duplicateWeight, members[0].publicKey))))
+            }
+        }
+    }
+
+    @Test
+    fun multisigKeyOrderingUsesAlgorithmNamesAndUnsignedFullPayloads() {
+        val ed = MultisigMemberPayload(1, 1, byteArrayOf(0x7f, 1))
+        val bls = MultisigMemberPayload(3, 1, byteArrayOf(0xff.toByte()))
+        assertTrue(compareMultisigMemberKeys(bls, ed) < 0)
+        assertTrue(compareMultisigMemberKeys(ed, MultisigMemberPayload(1, 1, byteArrayOf(0x80.toByte()))) < 0)
+        assertTrue(compareMultisigMemberKeys(ed, MultisigMemberPayload(1, 1, byteArrayOf(0x7f, 2))) < 0)
+        assertEquals(0, compareMultisigMemberKeys(ed, MultisigMemberPayload(1, 7, ed.publicKey)))
+    }
+
+    private fun hex(value: String): ByteArray = value.removePrefix("0x").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
     @Test
     fun mixedI105LiteralRoundTripsToOriginalCanonicalPayload() {
         val literal =

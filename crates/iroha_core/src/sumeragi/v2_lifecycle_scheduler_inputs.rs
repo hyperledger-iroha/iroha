@@ -3779,9 +3779,10 @@ impl ProductionLifecycleOwnerV1 {
             return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired);
         }
         output.commit_after_publication();
-        // TODO: Consume the still-live Broadcast only in the authenticated
-        // applied-height output handoff/owner rollover transaction. Process-
-        // local actor admission is not a durable terminal receipt.
+        // Keep Broadcast live until rollover_outputs authenticates the
+        // applied-height output handoff and retire_lifecycle_stores fsyncs the
+        // all-row successor before consuming the exact owner census. Actor
+        // admission alone cannot publish a durable terminal receipt.
         Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned { ordinal })
     }
     /// Wake and reclaim one externally parked recovered Fetch, then publish

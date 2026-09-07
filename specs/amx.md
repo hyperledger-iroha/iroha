@@ -205,6 +205,25 @@ both issuer signatures. Until that shared resolver and durable nonce ledger are
 wired into all admission paths, handle-backed authorization remains
 release-blocked.
 
+The ordered transaction-set digest is computed by the shared
+`axt_ordered_transaction_set_digest_v1` over each complete
+`TransactionEntrypoint::encode_wire_v1()` in execution order: external entries
+first, then time-trigger entries. Its preimage is
+`iroha:axt:ordered-transaction-wire-set:v1\0 || count_u64_le ||
+each(wire_length_u64_le || exact_wire_bytes)`. The complete wires retain every
+authorization proof. Sealed reveals retain their outer canonical wire here;
+their separate execution identity is derived from that wire when checking the
+exact source claim. Sorting execution hashes or replacing this commitment with
+a transcript-derived set is invalid. Core's two execution pipelines use this
+shared contract, and FASTPQ jobs reject a missing block-owned commitment.
+
+Ordered-wire membership does not establish successful execution or authenticate
+state updates. The immutable source resolver must also verify the finalized
+result and exact transfer facts for the selected entry. Current per-bundle
+transfer trees cover touched balances; they cannot replace authoritative WSV
+roots in an anchor. Anchored admission remains unavailable until the proof
+witnesses establish the required membership and updates against those roots.
+
 The proof metadata also always contains `axt_fastpq_expiry_slot_v1` as an
 eight-byte little-endian `u64`, where zero means authenticated `None` and any
 non-zero value means `Some(slot)`. The manifest and DA keys are required even

@@ -19,7 +19,8 @@ fn synthetic_higher_round_same_subject_retires_origin_bound_stages_before_raw_ca
         )
         .expect("retain and stage the exact-origin locked body");
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: original_tag,
                 round: fixture.manifest.round,
@@ -42,7 +43,8 @@ fn synthetic_higher_round_same_subject_retires_origin_bound_stages_before_raw_ca
     timeout.groups[0].highest_prepare_qc = Some(replacement.clone());
     let replacement_tag = EventTag::new(1, 2, Generation::new(72));
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: replacement_tag,
                 certificate: timeout,
@@ -58,7 +60,8 @@ fn synthetic_higher_round_same_subject_retires_origin_bound_stages_before_raw_ca
     assert_eq!(executor.ready_body_bytes, body_len);
     let sources = certified_sources(&fixture, &replacement);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: replacement_tag,
                 round: replacement.round,

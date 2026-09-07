@@ -1,7 +1,8 @@
 //! Tests for compute economics governance bounds and sponsor caps.
-use iroha_config::parameters::{actual::ComputeEconomics, defaults};
+use iroha_config::parameters::{actual::ComputeEconomics, defaults, user};
+use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use iroha_data_model::{
-    compute::{ComputeGovernanceError, ComputePriceWeights},
+    compute::{ComputeGovernanceError, ComputePriceRiskClass, ComputePriceWeights},
     name::Name,
 };
 use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
@@ -18,6 +19,55 @@ fn default_economics() -> ComputeEconomics {
         price_risk_classes: defaults::compute::price_risk_classes(),
         price_family_baseline: default_price_families(),
         price_amplifiers: defaults::compute::price_amplifiers(),
+    }
+}
+#[test]
+fn price_bounds_read_risk_class_object_keys() {
+    let table = r"
+[price_bounds.Low]
+max_cycles_delta_bps = 500
+max_egress_delta_bps = 600
+[price_bounds.Balanced]
+max_cycles_delta_bps = 1500
+max_egress_delta_bps = 1600
+[price_bounds.High]
+max_cycles_delta_bps = 2500
+max_egress_delta_bps = 2600
+"
+    .parse()
+    .expect("price bounds TOML");
+    let economics = ConfigReader::new()
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<user::ComputeEconomics>()
+        .expect("risk class keys must deserialize through ConfigReader");
+    assert_eq!(economics.price_bounds.len(), 3);
+    for (class, cycles, egress) in [
+        (ComputePriceRiskClass::Low, 500, 600),
+        (ComputePriceRiskClass::Balanced, 1500, 1600),
+        (ComputePriceRiskClass::High, 2500, 2600),
+    ] {
+        let bounds = &economics.price_bounds[&class];
+        assert_eq!(bounds.max_cycles_delta_bps.get(), cycles);
+        assert_eq!(bounds.max_egress_delta_bps.get(), egress);
+    }
+}
+#[test]
+fn price_bounds_reject_noncanonical_risk_class_object_keys() {
+    for key in ["Unknown", "low", "balanced", "high", "LOW", " Low", "Low "] {
+        let table = format!(
+            r#"
+[price_bounds."{key}"]
+max_cycles_delta_bps = 500
+max_egress_delta_bps = 600
+"#
+        )
+        .parse()
+        .expect("price bounds TOML");
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::ComputeEconomics>()
+            .expect_err("noncanonical risk class keys must fail");
+        assert!(format!("{error:?}").contains("price_bounds"), "key {key:?}");
     }
 }
 #[test]
