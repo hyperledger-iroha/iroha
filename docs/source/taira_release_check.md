@@ -7,10 +7,12 @@ reports build, stage and test durations. Python 3.11+ and the repository Rust
 and Cargo toolchain are required. Use an existing `CARGO_TARGET_DIR` only for
 an established separate native build lane; no clean or per-run target is needed.
 
-The check runs 13 regressions for secure inherited configuration FDs,
+The check runs 14 regressions for secure inherited configuration FDs,
 network-369 inventory decoding, aggregate timeout admission before custody,
-generated stages frozen to 0400 and their native consumers, and preseed receipt
-ordering and all five read-only host preflights. Linux also runs a real OpenSSH
+generated stages frozen to 0400 and their native consumers, preseed receipt
+ordering, KVM ioctl error preservation on a regular file, and all five read-only
+host preflights. The KVM regression needs no KVM device or root access and runs
+on macOS and Linux. Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test
 must exist and execute exactly once. Missing,

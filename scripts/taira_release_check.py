@@ -46,6 +46,9 @@ STAGES = (
     ("preseed receipt ordering", (
         "taira_public_reset::host::tests::preseed_receipt_targets_follow_receipt_order_for_reversed_stores",
     )),
+    ("KVM ioctl error handling", (
+        "taira_public_reset::host::tests::kvm_api_query_preserves_notty_for_regular_files",
+    )),
     ("read-only host preflight", (
         "taira_public_reset::host::tests::preflight_dispatches_five_read_only_hosts_without_runtime_custody",
     )),

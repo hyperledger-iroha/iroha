@@ -4179,17 +4179,44 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 #[allow(
     unsafe_code,
-    reason = "KVM_GET_API_VERSION is the fixed Linux host preflight ABI"
+    reason = "KVM_GET_API_VERSION requires a zero operand and returns its version directly"
 )]
-fn require_kvm_api_v12() -> Result<()> {
-    use std::os::fd::AsRawFd as _;
-    unsafe extern "C" {
-        fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
+fn kvm_api_version(file: &File) -> rustix::io::Result<rustix::ioctl::IoctlOutput> {
+    struct KvmGetApiVersion;
+
+    // SAFETY: the fixed KVM query takes no memory operand, writes no userspace
+    // memory, and returns the API version in the syscall result. NoArg discards
+    // that result, so this request must preserve it for the exact version check.
+    unsafe impl rustix::ioctl::Ioctl for KvmGetApiVersion {
+        type Output = rustix::ioctl::IoctlOutput;
+        const IS_MUTATING: bool = false;
+
+        fn opcode(&self) -> rustix::ioctl::Opcode {
+            0xAE00
+        }
+
+        fn as_ptr(&mut self) -> *mut std::ffi::c_void {
+            std::ptr::null_mut()
+        }
+
+        unsafe fn output_from_ptr(
+            output: rustix::ioctl::IoctlOutput,
+            _: *mut std::ffi::c_void,
+        ) -> rustix::io::Result<Self::Output> {
+            Ok(output)
+        }
     }
-    const KVM_GET_API_VERSION: std::ffi::c_ulong = 0xAE00;
+
+    // SAFETY: production passes the fixed /dev/kvm descriptor. The Unix test
+    // passes a regular file, where this operand-free query must return ENOTTY.
+    unsafe { rustix::ioctl::ioctl(file, KvmGetApiVersion) }
+}
+
+#[cfg(target_os = "linux")]
+fn require_kvm_api_v12() -> Result<()> {
     let file = File::from(
         rustix::fs::open(
             "/dev/kvm",
@@ -4198,8 +4225,11 @@ fn require_kvm_api_v12() -> Result<()> {
         )
         .wrap_err("failed to open fixed /dev/kvm")?,
     );
-    if unsafe { ioctl(file.as_raw_fd(), KVM_GET_API_VERSION) } != 12 {
-        return Err(eyre!("validator KVM API version is not exact 12"));
+    let version = kvm_api_version(&file).wrap_err("KVM_GET_API_VERSION ioctl failed")?;
+    if version != 12 {
+        return Err(eyre!(
+            "validator KVM API version is {version}; expected exact 12"
+        ));
     }
     Ok(())
 }
@@ -21397,6 +21427,13 @@ mod tests {
             .expect("durable retry accepts the same admitted prior inode");
         assert_eq!(route.metadata().expect("durable config inode").ino(), inode);
         assert_eq!(fs::read(&route).expect("durable prior bytes"), bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kvm_api_query_preserves_notty_for_regular_files() {
+        let file = tempfile::tempfile().expect("disposable regular-file descriptor");
+        assert_eq!(kvm_api_version(&file), Err(rustix::io::Errno::NOTTY));
     }
 
     #[cfg(unix)]
