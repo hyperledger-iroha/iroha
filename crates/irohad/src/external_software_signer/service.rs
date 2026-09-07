@@ -12,11 +12,10 @@ use super::{
         AdminCommandV1, AdminRequestV1, AdminResponseV1, AdminStatusV1, ExternalSignerBackendV1,
         SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1,
         SIGNER_PUBLIC_BINDING_MAGIC_V1, SignRequestV1, SignResponseV1, SignStatusV1,
-        SoftwareSignerKeyAlgorithmV1, SoftwareSignerLiveProvenanceV1,
-        SoftwareSignerPublicBindingV1, SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
-        admin_request_digest, admin_response_digest, digest_canonical, payload_digest,
-        public_key_digest, sign_request_digest, sign_response_digest, valid_identity,
-        valid_software_signer_handle,
+        SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, SoftwareSignerLiveProvenanceV1,
+        SoftwareSignerPublicBindingV1, admin_request_digest, admin_response_digest,
+        digest_canonical, payload_digest, public_key_digest, sign_request_digest,
+        sign_response_digest, valid_identity, valid_software_signer_handle,
     },
 };
 use iroha_crypto::{KeyPair, Signature};
@@ -62,11 +61,11 @@ pub struct SoftwareSignerProvisioningV1 {
     /// Exact administrator UID.
     pub administrator_uid: u32,
     /// Least-privilege `SoraFS` signing role.
-    pub role: SoftwareSignerRoleV1,
+    pub role: SignerRoleV1,
     /// Exact public authority admitted for purpose-separated payloads.
-    pub purpose_binding: SoftwareSignerPurposeBindingV1,
+    pub purpose_binding: SignerPurposeBindingV1,
     /// Initial signature algorithm.
-    pub algorithm: SoftwareSignerKeyAlgorithmV1,
+    pub algorithm: SignerKeyAlgorithmV1,
     /// Initial monotonic key generation.
     pub key_revision: u64,
     /// Initial monotonic policy generation.
@@ -355,15 +354,15 @@ impl SoftwareSignerServiceV1 {
             return state.sign_success_response(request, SignStatusV1::Replayed, commit);
         }
         let signing_message = match state.binding.role {
-            SoftwareSignerRoleV1::Promotion => {
-                if state.binding.key_algorithm != SoftwareSignerKeyAlgorithmV1::Ed25519
+            SignerRoleV1::Promotion => {
+                if state.binding.key_algorithm != SignerKeyAlgorithmV1::Ed25519
                     || !valid_promotion_payload(&request.payload)
                 {
                     return state.sign_error_response(request, SignStatusV1::Rejected);
                 }
                 request.payload.clone()
             }
-            role if role.native_role().is_some() => {
+            role if super::protocol::native_role(role).is_some() => {
                 let builder = TransactionBuilder::decode_payload(&request.payload)
                     .map_err(|_| SoftwareSignerErrorV1::Rejected)?;
                 let expected_authority = AccountId::new(state.binding.public_key.clone());
@@ -766,7 +765,7 @@ fn valid_promotion_payload(payload: &[u8]) -> bool {
 }
 
 pub(super) fn native_payload_matches_role(
-    role: SoftwareSignerRoleV1,
+    role: SignerRoleV1,
     payload: &TransactionPayload,
 ) -> bool {
     let Executable::Instructions(instructions) = payload.instructions() else {
@@ -777,10 +776,10 @@ pub(super) fn native_payload_matches_role(
     };
     let instruction = instruction.as_any();
     match role {
-        SoftwareSignerRoleV1::ProofOutcome => instruction
+        SignerRoleV1::ProofOutcome => instruction
             .downcast_ref::<SubmitSorafsProofOutcome>()
             .is_some(),
-        SoftwareSignerRoleV1::Repair => {
+        SignerRoleV1::Repair => {
             instruction
                 .downcast_ref::<SubmitSorafsRepairTask>()
                 .is_some()
@@ -791,7 +790,7 @@ pub(super) fn native_payload_matches_role(
                     .downcast_ref::<SubmitSorafsRepairAppeal>()
                     .is_some()
         }
-        SoftwareSignerRoleV1::Reserve => {
+        SignerRoleV1::Reserve => {
             instruction
                 .downcast_ref::<RegisterSorafsReserveAccount>()
                 .is_some()
@@ -820,7 +819,7 @@ pub(super) fn native_payload_matches_role(
                     .downcast_ref::<DecideSorafsReserveAppeal>()
                     .is_some()
         }
-        SoftwareSignerRoleV1::Orderbook => {
+        SignerRoleV1::Orderbook => {
             instruction.downcast_ref::<MatchSorafsOrderbook>().is_some()
                 || instruction
                     .downcast_ref::<MaintainSorafsOrderbook>()
@@ -829,14 +828,15 @@ pub(super) fn native_payload_matches_role(
                     .downcast_ref::<RecordSorafsOrderbookSettlementReceipt>()
                     .is_some()
         }
-        SoftwareSignerRoleV1::Promotion
-        | SoftwareSignerRoleV1::GovernanceDag
-        | SoftwareSignerRoleV1::PotrGateway
-        | SoftwareSignerRoleV1::PotrProvider
-        | SoftwareSignerRoleV1::BillingStatement
-        | SoftwareSignerRoleV1::EvidenceViewer
-        | SoftwareSignerRoleV1::StreamToken
-        | SoftwareSignerRoleV1::PopCredentials => false,
+        SignerRoleV1::Promotion
+        | SignerRoleV1::GovernanceDag
+        | SignerRoleV1::PotrGateway
+        | SignerRoleV1::PotrProvider
+        | SignerRoleV1::BillingStatement
+        | SignerRoleV1::EvidenceViewer
+        | SignerRoleV1::StreamToken
+        | SignerRoleV1::PopCredentials
+        | SignerRoleV1::ReleaseManifest => false,
     }
 }
 fn binding_from_recovered(

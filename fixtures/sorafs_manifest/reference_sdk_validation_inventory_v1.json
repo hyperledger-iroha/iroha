@@ -670,6 +670,33 @@
       "sha256": "1d5ec1a5ce450a7df7833849e1b26536517d5b568d64e67069e00899d92171de"
     },
     {
+      "path": "reference_sdk/pop_membership_current_v1.to",
+      "domain": "pop",
+      "kind": "pop_membership_proof",
+      "encoding": "norito",
+      "expectation": "valid_structural_only",
+      "byte_length": 459,
+      "sha256": "b0c0a95de3599ecf240ffba3420bc708e604b23ee7954c5d04f1334094d90dd3"
+    },
+    {
+      "path": "reference_sdk/pop_membership_missing_binding_v1.to",
+      "domain": "pop",
+      "kind": "pop_membership_proof",
+      "encoding": "norito",
+      "expectation": "invalid_missing_presentation_binding",
+      "byte_length": 426,
+      "sha256": "762e8594bb8a9db0ce5f36c810324412a09e40c7a344a47a058d932212448f53"
+    },
+    {
+      "path": "reference_sdk/pop_membership_zero_binding_v1.to",
+      "domain": "pop",
+      "kind": "pop_membership_proof",
+      "encoding": "norito",
+      "expectation": "invalid_zero_presentation_binding",
+      "byte_length": 459,
+      "sha256": "9eb0aa32a787209be6db0afb8cfac49e7fe9650c292da40f4fdef3b4dd5a88e3"
+    },
+    {
       "path": "repair/negative/task_manifest_mismatch_v1.json",
       "domain": "repair",
       "kind": "repair_task_record",
@@ -1030,6 +1057,33 @@
       "code": "SFS-OK-000",
       "byte_length": 838,
       "sha256": "4ba735cb12700982f0d8895253e1a682a370febeeabbeb3c2c1e87d70cd2eac9"
+    },
+    {
+      "path": "reference_sdk/pop_membership_current_v1_validation_outcome.json",
+      "domain": "pop",
+      "scenario": "membership_current_structural_only",
+      "status": "Ok",
+      "code": "SFS-OK-000",
+      "byte_length": 2194,
+      "sha256": "605383a5e1cbd4357b1fa952882bf09ab6194ed513873ae5c48785bcd1cdbc4e"
+    },
+    {
+      "path": "reference_sdk/pop_membership_missing_binding_v1_validation_outcome.json",
+      "domain": "pop",
+      "scenario": "membership_missing_presentation_binding",
+      "status": "Error",
+      "code": "SFS-NORITO-001",
+      "byte_length": 683,
+      "sha256": "4ddbb6fb733ef4443cd3c88133ba3792955b8de079889785ecd47298c708ed47"
+    },
+    {
+      "path": "reference_sdk/pop_membership_zero_binding_v1_validation_outcome.json",
+      "domain": "pop",
+      "scenario": "membership_zero_presentation_binding",
+      "status": "Error",
+      "code": "SFS-VAL-001",
+      "byte_length": 2480,
+      "sha256": "559bb866a12807589aadf4745c2b1cbcc361993c054ad2758026e0a91c98cc75"
     }
   ],
   "signature": {
@@ -1037,6 +1091,6 @@
     "key_usage": "test_only_reference_sdk_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "5c288b60d620cf259d06fa3709df7701f7950f04efe0948e1d6f0915d0e81b1887c076d29db04046bf4a086cb9daad03aeb3f96d8ea97311647c6b00841db60c"
+    "signature_hex": "ec319ca9afc72011b35fac31bd57615dfe4ba3634d0aac9799a7eb9ced789e92bdd908f1d929d05efad5f37a6d50abb16b02dc6983d7e18e954a248c324ad504"
   }
 }

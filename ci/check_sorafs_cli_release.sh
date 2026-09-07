@@ -87,6 +87,7 @@ python3 -m pytest -q \
   scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py \
   scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py \
   scripts/tests/sorafs_reference_sdk_supply_chain_test.py \
+  scripts/tests/sorafs_reference_sdk_signed_manifest_test.py \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \
   scripts/tests/build_sorafs_foundational_prerequisite_test.py \

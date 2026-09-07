@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Collect and verify SoraFS reference SDK release evidence."""
+"""Collect and verify SoraFS reference SDK release evidence.
+
+Every selection needs the independently pinned signed-manifest source context
+and a signed-manifest artifact. A dry-run checks the closed command plan only;
+the checker authenticates sources through the required native ReleaseManifest
+hardware receipt verifier, rejecting missing support.
+"""
 
 from __future__ import annotations
 
@@ -61,6 +67,8 @@ from sorafs_runner_preflight import (  # noqa: E402
 from sorafs_topology_qualification import (  # noqa: E402
     add_signed_topology_qualification_arguments,
 )
+from sorafs_evidence_json import read_evidence_bytes  # noqa: E402
+from sorafs_reference_sdk_signed_manifest import MAX_SOURCE_CONTEXT_BYTES  # noqa: E402
 
 PLAN_SCHEMA = "sorafs.reference_sdk.release_evidence_collection_plan.v1"
 PLAN_FIELDS = frozenset(
@@ -72,6 +80,7 @@ PLAN_FIELDS = frozenset(
         "external_evidence",
         "evidence_contract",
         "supply_chain_source",
+        "signed_manifest_source",
         "topology_qualification",
         "steps",
     }
@@ -193,7 +202,7 @@ def canonical_nonzero_sha256(value: Any) -> str | None:
     if (
         not isinstance(value, str)
         or len(value) != 64
-        or value != value.lower()
+        or any(character not in "0123456789abcdef" for character in value)
     ):
         return None
     try:
@@ -226,6 +235,32 @@ def topology_qualification_plan(args: argparse.Namespace) -> dict[str, object]:
             args.topology_qualification_signer_policy_digest_hex
         ),
     }
+
+
+def signed_manifest_source_plan(args: argparse.Namespace) -> dict[str, str]:
+    """Bind the independent context path/hash without copying its source contents."""
+    return {
+        "context_path": str(args.signed_manifest_source_context),
+        "context_sha256": args.signed_manifest_source_context_sha256,
+    }
+
+
+def validate_signed_manifest_source_inputs(args: argparse.Namespace, errors: list[str]) -> None:
+    """Check bounded context bytes against the independent pin before planning."""
+    path = args.signed_manifest_source_context
+    digest = canonical_nonzero_sha256(args.signed_manifest_source_context_sha256)
+    if not isinstance(path, Path) or not path.is_absolute() or ".." in path.parts or canonical_runner_plan_string(str(path)) is None:
+        errors.append("--signed-manifest-source-context must be an exact absolute path")
+        return
+    if digest is None:
+        errors.append("--signed-manifest-source-context-sha256 must be a canonical nonzero SHA-256")
+        return
+    try:
+        payload = read_evidence_bytes(path, MAX_SOURCE_CONTEXT_BYTES)
+        if not secrets.compare_digest(hashlib.sha256(payload).hexdigest(), digest):
+            errors.append("signed-manifest source context does not match the independent pin")
+    except (OSError, ValueError, RuntimeError):
+        errors.append("signed-manifest source context cannot be read safely within its byte bound")
 
 
 def supply_chain_source_plan(args: argparse.Namespace) -> dict[str, object]:
@@ -375,6 +410,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 
     for kind, paths in paths_by_kind.items():
         errors.extend(require_existing_files(paths, EVIDENCE_FLAGS_BY_KIND[kind], seen=seen_input_files))
+    errors.extend(require_existing_files([args.signed_manifest_source_context], "--signed-manifest-source-context", seen=seen_input_files))
 
     errors.extend(
         require_existing_files(
@@ -408,6 +444,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     )
     validate_topology_qualification_inputs(args, errors)
     validate_supply_chain_source_inputs(args, errors)
+    validate_signed_manifest_source_inputs(args, errors)
     return errors
 
 
@@ -455,6 +492,10 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         ]
     )
     verifier_command.extend(["--now-unix", str(args.now_unix)])
+    verifier_command.extend([
+        "--signed-manifest-source-context", str(args.signed_manifest_source_context),
+        "--signed-manifest-source-context-sha256", args.signed_manifest_source_context_sha256,
+    ])
     if supply_chain_source_required(args):
         verifier_command.extend(
             [
@@ -519,6 +560,7 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "external_evidence": external_evidence(args),
         "evidence_contract": evidence_contract(args),
         "supply_chain_source": supply_chain_source_plan(args),
+        "signed_manifest_source": signed_manifest_source_plan(args),
         "topology_qualification": topology_qualification_plan(args),
         "steps": [
             {
@@ -557,6 +599,14 @@ def validate_plan_json(
     )
     if not isinstance(rendered, Mapping):
         return errors
+    manifest_source = rendered.get("signed_manifest_source")
+    if (
+        not isinstance(manifest_source, Mapping)
+        or set(manifest_source) != {"context_path", "context_sha256"}
+        or manifest_source != signed_manifest_source_plan(args)
+        or canonical_nonzero_sha256(manifest_source.get("context_sha256")) is None
+    ):
+        errors.append("reference SDK release runner plan signed_manifest_source must match the exact independent context path/hash")
     topology = rendered.get("topology_qualification")
     if not isinstance(topology, Mapping):
         errors.append(
@@ -695,6 +745,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             help=f"Existing JSON artifact for `{kind}` release evidence.",
         )
     parser.add_argument("--now-unix", type=positive_int_arg, required=True)
+    parser.add_argument("--signed-manifest-source-context", type=Path, required=True,
+                        help="Absolute independent signed-manifest source context path.")
+    parser.add_argument("--signed-manifest-source-context-sha256", required=True,
+                        help="Independently reviewed exact source context SHA-256.")
     parser.add_argument(
         "--max-evidence-age-secs",
         type=non_negative_int_arg,
@@ -747,6 +801,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             allowed_kinds=KIND_BY_NAME,
             default_required=DEFAULT_REQUIRED_KINDS,
         )
+        if "signed_manifest" not in args.required_kinds:
+            args.required_kinds = ("signed_manifest", *args.required_kinds)
     except ValueError as error:
         emit_runner_exception(error)
         raise SystemExit(2) from error

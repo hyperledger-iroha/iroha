@@ -7,6 +7,17 @@ pub enum Error {
     /// The batch references a parameter set that does not exist.
     #[error("unknown FASTPQ parameter `{0}`")]
     UnknownParameter(String),
+    /// The requested GPU mode has no complete final-V1 native proof implementation.
+    #[error(
+        "FASTPQ final V1 GPU proof backend unavailable: six-lane commitments and the proof FFT/LDE pipeline execute on CPU"
+    )]
+    NativeV1GpuUnavailable,
+    /// Explicit native-digest execution failed without substituting another backend.
+    #[error("native digest execution failed: {details}")]
+    NativeDigestExecution {
+        /// Public diagnostic; staged frame contents are never included.
+        details: String,
+    },
     /// Batch parameter does not match the prover configuration.
     #[error("parameter mismatch: expected `{expected}`, got `{actual}`")]
     ParameterMismatch {

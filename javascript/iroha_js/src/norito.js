@@ -279,6 +279,9 @@ const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(
   "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
   "hex",
 );
+const PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1 = /* @__PURE__ */ Object.freeze([
+  0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0,
+]);
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
@@ -2187,6 +2190,12 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   }
   if (!envelopeFields.catalog_commitment.equals(PRIVACY_EXACT12_CATALOG_COMMITMENT_V1)) {
     throw new TypeError(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
+  }
+  for (const field of ["proof_system_id", "engine_id"]) {
+    if (decodeU32Value(envelopeFields[field], `${context}.${field}`) !==
+        PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1[rowIndex]) {
+      throw new TypeError(`${context}.envelopeNorito carries a substituted ${field}`);
+    }
   }
   if (
     decodeU32Value(

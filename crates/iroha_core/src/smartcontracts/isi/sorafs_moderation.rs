@@ -65,9 +65,9 @@ use iroha_data_model::{
             ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1, ModerationSortitionAnchorV1,
             ModerationSortitionError, ModerationVoteCountsV1,
             is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
-            sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
-            sorafs_moderation_select_panel_v1, sorafs_moderation_sortition_digest_v1,
-            sorafs_moderation_sortition_seed_v1,
+            sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_presentation_binding_v1,
+            sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
+            sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
         },
     },
     state_path::StatePath,
@@ -293,23 +293,19 @@ fn require_manage_permission(
     if state_transaction._curr_block.is_genesis() {
         return Ok(());
     }
+    let required = iroha_data_model::permission::Permission::from(
+        iroha_executor_data_model::permission::sorafs::CanManageSorafsModeration,
+    );
     let direct = state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|permissions| {
-            permissions
-                .iter()
-                .any(|candidate| candidate.name() == MANAGE_PERMISSION)
-        });
+        .is_some_and(|permissions| permissions.iter().any(|candidate| candidate == &required));
     let role = state_transaction
         .world
         .account_roles_iter(authority)
         .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-        .any(|role| {
-            role.permissions()
-                .any(|candidate| candidate.name() == MANAGE_PERMISSION)
-        });
+        .any(|role| role.permissions().any(|candidate| candidate == &required));
     let permitted = direct || role;
     if permitted {
         Ok(())
@@ -3495,12 +3491,18 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
         let challenge =
             sorafs_moderation_pop_challenge_v1(appeal.intake_digest, appeal.pop_snapshot_digest);
         let verifier_context = sorafs_moderation_pop_verifier_context_v1(appeal.intake_digest);
+        let presentation_binding =
+            sorafs_moderation_pop_presentation_binding_v1(appeal.intake_digest, authority)
+                .map_err(|error| {
+                    invalid_parameter(format!("moderation juror binding encoding failed: {error}"))
+                })?;
         verify_pop_membership_proof_v1(
             &proof,
             &pinned.root,
             &pinned.revocations,
             challenge,
             &verifier_context,
+            presentation_binding,
             now_epoch,
             &[],
         )
@@ -6524,6 +6526,99 @@ mod tests {
     fn account(keypair: &KeyPair) -> AccountId {
         AccountId::new(keypair.public_key().clone())
     }
+    fn execute_initial(
+        transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: impl Into<iroha_data_model::isi::InstructionBox>,
+    ) -> Result<(), InstructionExecutionError> {
+        crate::executor::Executor::Initial
+            .execute_instruction(transaction, authority, instruction.into())
+            .map_err(|error| match error {
+                iroha_data_model::ValidationFail::InstructionFailed(error) => error,
+                other => panic!("moderation must reach its exact native handler: {other:?}"),
+            })
+    }
+    #[test]
+    fn moderation_manager_permission_requires_exact_direct_and_role_tokens() {
+        use crate::role::RoleIdWithOwner;
+        use iroha_data_model::role::Role;
+
+        let manager = account(&keypair(0xA1));
+        let malformed = Permission::new(MANAGE_PERMISSION.to_owned(), Json::new("forged"));
+        let canonical = Permission::from(
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsModeration,
+        );
+        for through_role in [false, true] {
+            for (permission, expected) in [(malformed.clone(), false), (canonical.clone(), true)] {
+                let mut world =
+                    World::with([], [Account::new(manager.clone()).build(&manager)], []);
+                if through_role {
+                    let role_id: iroha_data_model::role::RoleId =
+                        "moderation_manager".parse().expect("role id");
+                    let role = Role::new(role_id.clone(), manager.clone())
+                        .add_permission(permission)
+                        .build(&manager);
+                    world.roles.insert(role_id.clone(), role);
+                    world
+                        .account_roles
+                        .insert(RoleIdWithOwner::new(manager.clone(), role_id), ());
+                } else {
+                    world
+                        .account_permissions
+                        .insert(manager.clone(), [permission].into_iter().collect());
+                }
+                let state = State::new_for_testing(
+                    world,
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                );
+                state
+                    .block(header(1, 999))
+                    .commit_empty_block_for_testing()
+                    .expect("commit the stored bootstrap block before checking non-genesis grants");
+                let mut block = state.block(BlockHeader::new(
+                    NonZeroU64::new(2).expect("non-genesis height"),
+                    None,
+                    None,
+                    None,
+                    1_000,
+                    0,
+                ));
+                let mut transaction = block.transaction();
+                let state_before = transaction
+                    .world
+                    .smart_contract_state
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>();
+                let result = execute_initial(
+                    &mut transaction,
+                    &manager,
+                    SetSorafsModerationPolicy::new(policy()),
+                );
+                assert_eq!(result.is_ok(), expected, "role={through_role}: {result:?}");
+                assert_eq!(
+                    read_policy(transaction.world()).unwrap().is_some(),
+                    expected
+                );
+                if let Err(error) = result {
+                    assert!(
+                        matches!(error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(ref message)) if message.contains(MANAGE_PERMISSION))
+                    );
+                    assert_eq!(
+                        transaction
+                            .world
+                            .smart_contract_state
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<Vec<_>>(),
+                        state_before,
+                        "rejected permission must preserve the complete bootstrap state"
+                    );
+                }
+            }
+        }
+    }
     fn policy() -> ModerationLedgerPolicyV1 {
         ModerationLedgerPolicyV1 {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -7063,6 +7158,7 @@ mod tests {
             &self,
             challenge: [u8; 32],
             verifier_context: &str,
+            presentation_binding: [u8; 32],
             now_epoch: u64,
         ) -> PopMembershipProofV1 {
             let witness = PopMembershipWitnessV1 {
@@ -7077,6 +7173,7 @@ mod tests {
                 &witness,
                 challenge,
                 verifier_context,
+                presentation_binding,
                 now_epoch,
             )
             .expect("create moderation PoP proof")
@@ -7099,8 +7196,10 @@ mod tests {
             }],
             issuer_id: "pop-issuer-sora-foundation".to_owned(),
             issued_at_epoch: 900,
-            expires_at_epoch: 2_000,
-            renewal_at_epoch: 1_800,
+            // Eligibility must outlive the mandatory challenge-resolution grace
+            // interval and reveal deadline, not only the registration window.
+            expires_at_epoch: 900 + 2 * 24 * 60 * 60,
+            renewal_at_epoch: 900 + 24 * 60 * 60,
             revocation_nonce: nonce,
             commitment_root: scalar(1),
             commitment_tree_version: 1,
@@ -7168,16 +7267,27 @@ mod tests {
         static MATERIAL: std::sync::OnceLock<PopMaterial> = std::sync::OnceLock::new();
         MATERIAL.get_or_init(|| pop_material(&keypair(0x51)))
     }
-    fn proof_for_appeal(appeal: &ModerationAppealRecordV1) -> PopMembershipProofV1 {
+    fn proof_for_appeal(
+        appeal: &ModerationAppealRecordV1,
+        juror: &AccountId,
+    ) -> PopMembershipProofV1 {
         static PROOF: std::sync::OnceLock<PopMembershipProofV1> = std::sync::OnceLock::new();
         let challenge =
             sorafs_moderation_pop_challenge_v1(appeal.intake_digest, appeal.pop_snapshot_digest);
         let context = sorafs_moderation_pop_verifier_context_v1(appeal.intake_digest);
+        let binding = sorafs_moderation_pop_presentation_binding_v1(appeal.intake_digest, juror)
+            .expect("canonical authenticated juror binding");
         let proof = PROOF.get_or_init(|| {
-            shared_pop_material().proof(challenge, &context, appeal.submitted_at_unix_ms / 1_000)
+            shared_pop_material().proof(
+                challenge,
+                &context,
+                binding,
+                appeal.submitted_at_unix_ms / 1_000,
+            )
         });
         assert_eq!(proof.challenge_digest, challenge);
         assert_eq!(proof.verifier_context, context);
+        assert_eq!(proof.presentation_binding_digest, binding);
         proof.clone()
     }
     fn pop_policy(issuer: &KeyPair) -> PopIssuerPolicyV1 {
@@ -7190,7 +7300,7 @@ mod tests {
             issuer_public_key: public_key_bytes(issuer),
             max_credentials_per_batch: 16,
             max_revocations_per_publication: 16,
-            max_credential_lifetime_secs: 10_000,
+            max_credential_lifetime_secs: 2 * 24 * 60 * 60,
             max_future_clock_skew_secs: 5,
             paused: false,
         }
@@ -7344,8 +7454,8 @@ mod tests {
                 .expect("panel appeal query")
         }
         fn register_juror(&mut self) {
-            let proof = proof_for_appeal(&self.appeal());
             let juror = self.juror_id();
+            let proof = proof_for_appeal(&self.appeal(), &juror);
             self.run(1_002_000, |transaction| {
                 RegisterSorafsModerationJurorEligibility::new(
                     "panel-case".to_owned(),
@@ -7590,7 +7700,7 @@ mod tests {
     fn moderation_membership_proof_decoder_rejects_alternate_norito_layout() {
         let mut fixture = PanelFixture::new();
         fixture.submit(1, 0, 1);
-        let proof = proof_for_appeal(&fixture.appeal());
+        let proof = proof_for_appeal(&fixture.appeal(), &fixture.juror_id());
         let canonical = encode(&proof);
         let alternate = encode_alternate_layout(&proof);
         assert_ne!(
@@ -7608,6 +7718,188 @@ mod tests {
                 .contains("membership proof is not exact canonical Norito"),
             "unexpected alternate-layout proof rejection: {error:?}"
         );
+    }
+    #[test]
+    fn moderation_juror_registration_rejects_proof_bound_to_another_account() {
+        let mut fixture = PanelFixture::new();
+        fixture.submit(1, 0, 1);
+        let before = fixture.appeal();
+        let proof = proof_for_appeal(&before, &fixture.juror_id());
+        let outsider = fixture.outsider_id();
+        let error = fixture
+            .run(1_002_000, |transaction| {
+                execute_initial(
+                    transaction,
+                    &outsider,
+                    RegisterSorafsModerationJurorEligibility::new(
+                        "panel-case".to_owned(),
+                        "round-1".to_owned(),
+                        encode(&proof),
+                    ),
+                )
+            })
+            .expect_err("copied proof must not let another account steal panel eligibility");
+        assert!(
+            matches!(error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(ref message)) if message.contains("presentation binding")),
+            "unexpected copied-proof rejection: {error:?}"
+        );
+        assert_eq!(
+            fixture.appeal(),
+            before,
+            "rejected copied proof changed panel eligibility"
+        );
+        let juror = fixture.juror_id();
+        fixture
+            .run(1_002_000, |transaction| {
+                execute_initial(
+                    transaction,
+                    &juror,
+                    RegisterSorafsModerationJurorEligibility::new(
+                        "panel-case".to_owned(),
+                        "round-1".to_owned(),
+                        encode(&proof),
+                    ),
+                )
+            })
+            .expect("the exact proof recipient reaches native eligibility through Initial");
+        assert_eq!(fixture.appeal().eligible_jurors, vec![fixture.juror_id()]);
+    }
+
+    #[test]
+    fn moderation_initial_executor_preserves_governance_and_signed_participant_gates() {
+        use iroha_data_model::isi::InstructionBox;
+
+        let mut fixture = PanelFixture::new();
+        let outsider = fixture.outsider_id();
+        let manager = fixture.manager_id();
+        let juror = fixture.juror_id();
+        let case = spec(vec![juror.clone()], 1);
+        let ballot = reveal(&case, &juror, SoraFsModerationVoteChoice::Uphold, 0xA5);
+        let mut probes: Vec<(AccountId, InstructionBox, &str)> = Vec::new();
+        for instruction in [
+            InstructionBox::from(FinalizeSorafsModerationSortition::new(
+                "absent".to_owned(),
+                "round-1".to_owned(),
+                [1; 32],
+                [2; 32],
+                vec![juror.clone()],
+                vec![],
+            )),
+            ActivateSorafsModerationCase::new("absent".to_owned(), "round-1".to_owned(), [3; 32])
+                .into(),
+            ResolveSorafsModerationChallenge::new(
+                "absent".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+                ModerationChallengeDecisionV1::Rejected,
+            )
+            .into(),
+            FinalizeSorafsModerationCase::new("absent".to_owned(), "round-1".to_owned()).into(),
+        ] {
+            probes.push((outsider.clone(), instruction.clone(), MANAGE_PERMISSION));
+            probes.push((manager.clone(), instruction, "does not exist"));
+        }
+        probes.extend([
+            (
+                outsider.clone(),
+                SubmitSorafsModerationCommit::new(encode(&commit(&ballot))).into(),
+                "juror must equal the transaction authority",
+            ),
+            (
+                outsider.clone(),
+                SubmitSorafsModerationReveal::new(encode(&ballot)).into(),
+                "juror must equal the transaction authority",
+            ),
+            (
+                juror.clone(),
+                AcceptSorafsModerationJurorAssignment::new(
+                    "absent".to_owned(),
+                    "round-1".to_owned(),
+                    [3; 32],
+                )
+                .into(),
+                "does not exist",
+            ),
+            (
+                outsider.clone(),
+                RaiseSorafsModerationChallenge::new(
+                    "absent".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-1".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [4; 32],
+                    "evidence-mismatch".to_owned(),
+                )
+                .into(),
+                "does not exist",
+            ),
+            (
+                outsider.clone(),
+                ExpireSorafsModerationChallenge::new(
+                    "absent".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-1".to_owned(),
+                )
+                .into(),
+                "does not exist",
+            ),
+        ]);
+        for (authority, instruction, marker) in probes {
+            let before = fixture
+                .state
+                .view()
+                .world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let error = fixture
+                .run(1_001_000, |transaction| {
+                    execute_initial(transaction, &authority, instruction)
+                })
+                .expect_err("Initial must preserve native authority and lifecycle rejection");
+            assert!(
+                matches!(error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(ref message)) if message.contains(marker)),
+                "expected native {marker:?}, got {error:?}"
+            );
+            assert_eq!(
+                fixture
+                    .state
+                    .view()
+                    .world()
+                    .smart_contract_state()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                before
+            );
+        }
+        let intake = panel_intake(&fixture.appellant, "panel-case", 1, 0, 1, 0x91);
+        let error = fixture
+            .run(1_001_000, |transaction| {
+                execute_initial(
+                    transaction,
+                    &outsider,
+                    SubmitSorafsModerationAppeal::new(intake.clone()),
+                )
+            })
+            .expect_err("appellant cannot be substituted");
+        assert!(
+            matches!(error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(ref message)) if message.contains("appellant must equal the transaction authority"))
+        );
+        let appellant = fixture.appellant_id();
+        fixture
+            .run(1_001_000, |transaction| {
+                execute_initial(
+                    transaction,
+                    &appellant,
+                    SubmitSorafsModerationAppeal::new(intake),
+                )
+            })
+            .expect("authenticated appellant reaches native intake");
+        assert_eq!(fixture.appeal().submitted_by, appellant);
+        assert!(fixture.appeal().eligible_jurors.is_empty());
     }
     fn seed_activated_case(
         transaction: &mut StateTransaction<'_, '_>,

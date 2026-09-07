@@ -19,6 +19,7 @@ use iroha_data_model::{
     isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
     metadata::Metadata,
     permission::Permission,
+    prelude::QueryBuilderExt,
     privacy::{
         PrivacyCapabilityReadinessV1, PrivacyCapabilityRowV1, PrivacyCapabilityUnavailableReasonV1,
         PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
@@ -26,7 +27,10 @@ use iroha_data_model::{
         PrivacyParameterDigestV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
+    query::transaction::prelude::FindTransactions,
+    transaction::{
+        FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent, TransactionEntrypoint,
+    },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -56,6 +60,67 @@ const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(900);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CANONICAL_GENESIS_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+fn exact_applied_transaction_visible(
+    client: &Client,
+    transaction: &SignedTransaction,
+) -> Result<bool> {
+    let expected_hash = transaction.hash_as_entrypoint();
+    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+    let transactions = client
+        .query(FindTransactions::new())
+        .execute_all()
+        .wrap_err("query finalized transactions")?;
+    let Some(committed) = transactions
+        .iter()
+        .find(|committed| committed.entrypoint_hash() == &expected_hash)
+    else {
+        return Ok(false);
+    };
+    ensure!(
+        committed.entrypoint() == &expected_entrypoint,
+        "entrypoint hash matched different transaction bytes"
+    );
+    ensure!(
+        committed.result().0.is_ok(),
+        "exact-12 catch-up sentinel is visible but finalized as rejected"
+    );
+    Ok(true)
+}
+/// Wait for the exact successful finalized transaction on every supplied peer.
+pub(super) async fn wait_for_transaction_on_peers(
+    clients: &[Client],
+    transaction: &SignedTransaction,
+    context: &str,
+    convergence_timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + convergence_timeout;
+    let mut last_observed = Vec::new();
+    loop {
+        let mut visible = 0_usize;
+        last_observed.clear();
+        for (index, client) in clients.iter().enumerate() {
+            match exact_applied_transaction_visible(client, transaction) {
+                Ok(true) => {
+                    visible += 1;
+                    last_observed.push(format!("peer {index}: exact transaction visible"));
+                }
+                Ok(false) => last_observed.push(format!("peer {index}: transaction absent")),
+                Err(error) => last_observed.push(format!("peer {index}: {error}")),
+            }
+        }
+        if visible == clients.len() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "{context}: finalized transaction did not converge within \
+                 {convergence_timeout:?}; {}",
+                last_observed.join("; ")
+            ));
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
 fn bounded_client(mut client: Client) -> Client {
     client.transaction_status_timeout = SUBMISSION_TIMEOUT;
     client.transaction_ttl = Some(TRANSACTION_TTL);
@@ -516,6 +581,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             &preflight_clients,
             &queue_plan_transaction,
             "QueuePlanSynced preflight terminal visibility",
+            PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
         let queue_plan_end_height =

@@ -50470,24 +50470,13 @@ impl<'state> StateBlock<'state> {
                 .collect();
             let has_fastpq =
                 !witness.fastpq_transcripts.is_empty() || !witness.fastpq_batches.is_empty();
-            let tx_set_hash = if witness.fastpq_transcripts.is_empty()
-                && witness.fastpq_batches.is_empty()
-            {
-                None
+            // Only block execution owns the complete ordered canonical wires.
+            // Transcript identities cannot reconstruct that commitment; leave
+            // missing authority absent so the prover job rejects it.
+            let tx_set_hash = if has_fastpq {
+                self.fastpq_tx_set_hash
             } else {
-                Some(self.fastpq_tx_set_hash.unwrap_or_else(|| {
-                    if witness.fastpq_transcripts.is_empty() {
-                        [0u8; 32]
-                    } else {
-                        let mut entry_hashes: Vec<Hash> = witness
-                            .fastpq_transcripts
-                            .iter()
-                            .map(|bundle| bundle.entry_hash)
-                            .collect();
-                        entry_hashes.sort_unstable();
-                        crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied())
-                    }
-                }))
+                None
             };
             let perm_root =
                 if witness.fastpq_transcripts.is_empty() && witness.fastpq_batches.is_empty() {
@@ -59100,9 +59089,14 @@ mod fastpq_tx_set_hash_tests {
         let _ = new_block
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
-        let mut entry_hashes = [tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint()];
-        entry_hashes.sort_unstable();
-        let expected = crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied());
+        let entrypoints = [
+            TransactionEntrypoint::External(tx1),
+            TransactionEntrypoint::External(tx2),
+        ];
+        let expected: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
+                .expect("canonical ordered transaction set")
+                .into();
         assert_eq!(state_block.fastpq_tx_set_hash, Some(expected));
     }
     #[test]
@@ -59170,6 +59164,16 @@ mod fastpq_tx_set_hash_tests {
             .expect("FASTPQ context");
         assert!(witness.fastpq_batches.is_empty());
         assert_eq!(context.tx_set_hash, Some(tx_set_hash));
+        // A second capture with no block-owned commitment must not synthesize
+        // one from the transcript's execution identity.
+        state_block.fastpq_tx_set_hash = None;
+        crate::sumeragi::witness::start_block();
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        state_block.capture_exec_witness();
+        let missing = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert_eq!(missing.tx_set_hash, None);
     }
     #[test]
     fn capture_exec_witness_skips_replay_blocks_and_clears_active_capture() {

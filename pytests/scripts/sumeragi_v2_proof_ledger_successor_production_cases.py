@@ -610,17 +610,17 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-        "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
+        "fn prepare_recovered_decision_fetch_from_selected_cut(",
         "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
         "PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence",
-        "queue-owned recovered Decision Fetch selector must preserve exact production order",
+        "queue-owned recovered Decision Fetch selected family must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-        "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-        "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
-        "true",
-        "queue-owned recovered Decision Fetch selector must preserve exact production order",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+        "crate::sumeragi::v2_effects::v2_ingress_head_can_drain(",
+        "admit_without_exact_drain_preflight(",
+        "queue-owned recovered Decision Fetch live driver must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/mod.rs",
@@ -1163,16 +1163,16 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-        "pub(super) fn capture_next_ingress_turn_cut(",
+        "fn capture_next_ingress_turn_cut_at(",
         "let service_guard = self.service_lock.lock();",
         "let service_guard = self.state.lock();",
         "queue-owned fair winner capture",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-        "pub(super) fn capture_next_ingress_turn_cut(",
+        "fn capture_next_ingress_turn_cut_at(",
         "select_fair_v2_ingress_candidate(",
-        "select_next_admissible_ordinal(",
+        "select_unreviewed_ingress_candidate(",
         "queue-owned fair winner capture",
     ),
     (
@@ -3894,3 +3894,61 @@ def test_borrow_bound_outer_ingress_reordering_fails_closed(tmp_path: Path) -> N
         "serialized advance_executor turn before the single ingress owner" in error
         for error in errors
     ), errors
+
+
+def test_recovered_fetch_canonical_selector_owner_gates_accept_current_source() -> None:
+    module = load_checker()
+    prefix = ROOT_DIR / "crates/iroha_core/src/sumeragi"
+    sources = [
+        (prefix / name).read_text(encoding="utf-8")
+        for name in (
+            "v2_lifecycle_selector.rs", "v2_lifecycle_ingress_position.rs",
+            "v2_lifecycle_turn_driver.rs",
+        )
+    ]
+    assert module._recovered_fetch_canonical_selector_owner_errors(*sources) == []
+
+
+@pytest.mark.parametrize(
+    ("source_index", "owner"),
+    (
+        (0, "classify_selected_certified_response_priority"),
+        (0, "prepare_recovered_decision_fetch_from_selected_cut"),
+        (1, "capture_next_ingress_turn_cut"),
+        (1, "narrow_to_lifecycle"),
+        (2, "drive_ingress_turn"),
+        (0, "prepare_next_recovered_decision_fetch_ingress_selector"),
+    ),
+)
+def test_recovered_fetch_canonical_selector_owner_gates_reject_mutations(
+    source_index: int, owner: str,
+) -> None:
+    module = load_checker()
+    prefix = ROOT_DIR / "crates/iroha_core/src/sumeragi"
+    sources = [
+        (prefix / name).read_text(encoding="utf-8")
+        for name in (
+            "v2_lifecycle_selector.rs", "v2_lifecycle_ingress_position.rs",
+            "v2_lifecycle_turn_driver.rs",
+        )
+    ]
+    assert module._recovered_fetch_canonical_selector_owner_errors(*sources) == []
+    source = sources[source_index]
+    items = module.rust_items(source, owner)
+    if owner == "drive_ingress_turn":
+        items = tuple(item for item in items if item.brace_context == (
+            ("impl", "LaunchedProductionLifecycleV1"),
+        ))
+    assert len(items) == 1
+    item_start = source.index(items[0].source)
+    declaration = source.index("fn " + owner, item_start)
+    declaration_start = source.rfind("\n", 0, declaration) + 1
+    if owner == "prepare_next_recovered_decision_fetch_ingress_selector":
+        gate = source.rfind("#[cfg(test)]", 0, declaration_start)
+        assert gate >= 0
+        assert source[gate:declaration_start].strip() == "#[cfg(test)]"
+        sources[source_index] = source[:gate] + source[gate:].replace("#[cfg(test)]", "", 1)
+    else:
+        sources[source_index] = source[:declaration_start] + "    #[cfg(test)]\n" + source[declaration_start:]
+    errors = module._recovered_fetch_canonical_selector_owner_errors(*sources)
+    assert errors, owner

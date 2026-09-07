@@ -2869,23 +2869,25 @@ fn periodic_proposal_retry_does_not_duplicate_a_pending_atomic_batch() {
 #[test]
 fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
     let (mut service, keys) = fixture_with_block_payload();
+    let mut wal = WorkerViewWalFixture::new(&mut service, None);
     let old_round = wire::ConsensusRound {
         context_id: service.context.id(),
         height: service.context.height,
         view: service.active_tag.view(),
     };
     assert!(service.fast_path_proposals.insert(old_round));
-    let new_tag = EventTag::new(
-        service.active_tag.height(),
-        service.active_tag.view() + 1,
-        Generation::new(service.active_tag.generation().get() + 1),
+    let (new_tag, certificate, protected_lock) =
+        wal.stage_timeout(worker_view_timeout_certificate(old_round, None, &keys));
+    assert!(
+        service
+            .entered_view(new_tag, certificate.clone(), protected_lock)
+            .is_err(),
+        "a durable view cannot prune service work before authority publication"
     );
+    assert!(service.fast_path_proposals.contains(&old_round));
+    wal.publish(&mut service);
     service
-        .entered_view(
-            new_tag,
-            timeout_certificate_at_view(&service, old_round.view),
-            None,
-        )
+        .entered_view(new_tag, certificate.clone(), protected_lock)
         .expect("install certified successor view");
     assert!(service.fast_path_proposals.is_empty());
     let (_, payload) = proposal_body_and_payload_at_view(&service.context, &keys, new_tag.view());
@@ -2896,7 +2898,7 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         subject: manifest.subject,
         manifest: manifest.clone(),
         justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
-            timeout_certificate: timeout_certificate_at_view(&service, old_round.view),
+            timeout_certificate: certificate,
             highest_prepare_qc: None,
         }),
         signature: vec![0xA5; 48],

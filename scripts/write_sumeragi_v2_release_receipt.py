@@ -61,10 +61,10 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "5de112cad5f1eef2ebeb0225c854e69183aab977262733c226000179861728d7"
+        "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
+        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
         "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
@@ -192,7 +192,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "99e0b382c1c4960ffed95f34dc3cd347d5a225df6a8d85d1caf2ae1429cc0ef2"
+    "fe65c02642f1eba64e6ad356e12eaf4120c7ac42bb389d10cb7a14b609de2705"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -241,13 +241,13 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "5de112cad5f1eef2ebeb0225c854e69183aab977262733c226000179861728d7"
+        "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
+        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
         "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
@@ -255,7 +255,7 @@ _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "f5593c473235d24df71ed42ca3ab74f7a8421aae6601aebb148c7e0b6e4aeab0"
+        "d1cf09532bdbf00d3ed259d42895692c44aaf635899d325316488b4e42ffda56"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -354,7 +354,7 @@ _APALACHE_REFINEMENT_RESULTS = (
         "autonomous-reservation-carrier",
         "SumeragiV2AutonomousReservationCarrier",
         "multilane_autonomous_reservation_carrier_fixed.cfg",
-        "10",
+        "12",
     ),
     (
         "queue-plan-admission-registry",
@@ -504,14 +504,14 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 866
-_G_UNIT_TEST_COUNT = 522
+_PRODUCTION_TEST_COUNT = 881
+_G_UNIT_TEST_COUNT = 526
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        316,
+        320,
         "lib",
     ),
     (
@@ -589,6 +589,7 @@ _PRODUCTION_MODULES = (
         42,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
+    ("production-native-amx-participant-application", "native_amx::participant_application_role_tests", 6),
     ("production-state-governance-unlock-audit", "state::tests", 1),
     ("production-queue-replica-disposition", "queue::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -613,7 +614,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 49),
+    ("production-v2-adapter", "sumeragi::v2::tests", 52),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     (
         "production-v2-certified-serve-payload-store",
@@ -623,7 +624,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 65),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -635,7 +636,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-        43,
+        45,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     (
@@ -643,7 +644,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::v2_runner::lifecycle_height_driver::tests",
         2,
     ),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 92),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -752,10 +753,10 @@ _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 _NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 63),
-    ("javascript", 61),
+    ("python", 65),
+    ("javascript", 63),
     ("swift", 5),
-    ("kotlin", 7),
+    ("kotlin", 8),
     ("java", 6),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
@@ -764,7 +765,7 @@ _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
     ("javascript", 88),
     ("swift", 34),
     ("kotlin", 50),
-    ("java", 48),
+    ("java", 59),
 )
 _SDK_SOURCE_CLOSURE_RESOLVER = "ci/resolve_sumeragi_v2_sdk_source_closure.py"
 _SDK_SOURCE_CLOSURE_MANIFEST = "ci/sumeragi_v2_sdk_source_closure.json"

@@ -14433,6 +14433,8 @@ impl V2LaneWorkAdapter {
                     .to_owned(),
             ));
         }
+        let mut recovered_historical_records = BTreeMap::new();
+        let mut historical_ready_records = Vec::new();
         for record in historical_records {
             validate_historical_autonomous_lane_recovery_record(
                 self.state.as_ref(),
@@ -14441,6 +14443,18 @@ impl V2LaneWorkAdapter {
             )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             let proposal = &record.payload.origin_proposal;
+            let key = AutonomousLanePayloadKey::from(proposal);
+            if self
+                .historical_autonomous_recovery_records
+                .get(&key)
+                .is_some_and(|existing| existing != &record)
+            {
+                self.output_guard.close_admission_for_restart();
+                return Err(V2LaneWorkError::InvalidContext(
+                    "historical autonomous recovery slot has conflicting immutable records"
+                        .to_owned(),
+                ));
+            }
             if self.kura.lane_block_application_receipt_available(proposal) {
                 continue;
             }
@@ -14494,8 +14508,7 @@ impl V2LaneWorkAdapter {
                 }
                 continue;
             }
-            let key = AutonomousLanePayloadKey::from(proposal);
-            match self.historical_autonomous_recovery_records.entry(key) {
+            match recovered_historical_records.entry(key) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(record.clone());
                 }
@@ -14508,15 +14521,7 @@ impl V2LaneWorkAdapter {
                     ));
                 }
             }
-            self.lane_sessions
-                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone())
-                .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
-            self.authorize_autonomous_ready_from_durable_input(
-                &record.payload,
-                proposal,
-                record.historical_context_id,
-            )
-            .map_err(V2LaneWorkError::InvalidContext)?;
+            historical_ready_records.push(record);
         }
         let current_height = self.context.height;
         let current_epoch = self.context.epoch;
@@ -14550,6 +14555,8 @@ impl V2LaneWorkAdapter {
                 "durable autonomous route count exceeds bounded hydration capacity".to_owned(),
             ));
         }
+        let mut pending_autonomous_anchor_payloads =
+            self.pending_autonomous_anchor_payloads.clone();
         for (artifact, _) in recovered_autonomous {
             let payload = artifact.executable_payload;
             let proposal = &payload.origin_proposal;
@@ -14584,7 +14591,7 @@ impl V2LaneWorkAdapter {
                 continue;
             }
             let key = AutonomousLanePayloadKey::from(proposal);
-            match self.pending_autonomous_anchor_payloads.entry(key) {
+            match pending_autonomous_anchor_payloads.entry(key) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(payload);
                 }
@@ -14603,10 +14610,9 @@ impl V2LaneWorkAdapter {
                 }
             }
         }
-        if self
-            .pending_autonomous_anchor_payloads
+        if pending_autonomous_anchor_payloads
             .len()
-            .saturating_add(self.historical_autonomous_recovery_records.len())
+            .saturating_add(recovered_historical_records.len())
             > hydration_capacity
         {
             self.output_guard.close_admission_for_restart();
@@ -14634,8 +14640,6 @@ impl V2LaneWorkAdapter {
             self.state
                 .unapplied_lane_block_artifact_heights_snapshot_cached(),
         )?;
-        let ordinary_hydration_capacity =
-            hydration_capacity.saturating_sub(self.lane_sessions.len());
         let mut raw_proposals = Vec::new();
         let mut raw_slots = BTreeSet::new();
         for ((lane_id, dataspace_id), tip_height) in pending {
@@ -14649,9 +14653,7 @@ impl V2LaneWorkAdapter {
                             .to_owned(),
                     ));
                 }
-                if raw_proposals.len().saturating_add(route_chain.len())
-                    >= ordinary_hydration_capacity
-                {
+                if raw_proposals.len().saturating_add(route_chain.len()) >= hydration_capacity {
                     self.output_guard.close_admission_for_restart();
                     return Err(V2LaneWorkError::InvalidContext(
                         "canonical raw lane hydration exceeds bounded session capacity".to_owned(),
@@ -14755,6 +14757,11 @@ impl V2LaneWorkAdapter {
             route_chain.reverse();
             raw_proposals.extend(route_chain);
         }
+        raw_proposals.extend(
+            historical_ready_records
+                .iter()
+                .map(|record| record.payload.origin_proposal.clone()),
+        );
         raw_proposals.sort_by_key(|proposal| {
             let descriptor = &proposal.descriptor;
             (
@@ -14765,15 +14772,26 @@ impl V2LaneWorkAdapter {
                 proposal.proposal_hash,
             )
         });
-        for proposal in raw_proposals {
-            self.lane_sessions
-                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal)
-                .map_err(|error| {
-                    self.output_guard.close_admission_for_restart();
-                    V2LaneWorkError::InvalidContext(format!(
-                        "canonical raw lane hydration conflicts with retained session state: {error}"
-                    ))
-                })?;
+        self.lane_sessions
+            .insert_recovered_proposals(&raw_proposals)
+            .map_err(|error| {
+                self.output_guard.close_admission_for_restart();
+                V2LaneWorkError::InvalidContext(format!(
+                    "canonical lane hydration conflicts with retained recovery sources: {error}"
+                ))
+            })?;
+        self.historical_autonomous_recovery_records = recovered_historical_records;
+        self.pending_autonomous_anchor_payloads = pending_autonomous_anchor_payloads;
+        for record in historical_ready_records {
+            self.authorize_autonomous_ready_from_durable_input(
+                &record.payload,
+                &record.payload.origin_proposal,
+                record.historical_context_id,
+            )
+            .map_err(|error| {
+                self.output_guard.close_admission_for_restart();
+                V2LaneWorkError::InvalidContext(error)
+            })?;
         }
         Ok(())
     }
@@ -25986,6 +26004,8 @@ pub(super) mod tests {
     #[test]
     fn globally_applied_lane_body_without_certificate_remains_recoverable() {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        adapter.limits.session_capacity = NonZeroUsize::new(1).expect("one exact recovery slot");
+        adapter.lane_sessions = LaneBlockSessionCache::new(1);
         let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
         assert!(
             adapter
@@ -26048,6 +26068,32 @@ pub(super) mod tests {
                 .any(|pending| pending == &proposal),
             "rollover must rehydrate ownership which arrived after adapter construction"
         );
+        assert_eq!(adapter.lane_sessions.len(), 1);
+        assert_eq!(
+            adapter
+                .state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .expect("the receipt-free source remains in the durable recovery inventory")
+                .get(&(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.dataspace_id
+                )),
+            Some(&proposal.descriptor.lane_block_height)
+        );
+        let exact_recovered_cache = adapter.lane_sessions.clone();
+        for _ in 0..2 {
+            assert_eq!(
+                adapter
+                    .persist_anchored_sessions()
+                    .expect("repeat persistence must not charge an exact cached recovery twice"),
+                0
+            );
+            adapter
+                .hydrate_canonical_lane_artifacts()
+                .expect("direct hydration remains idempotent at its exact capacity");
+            assert_eq!(adapter.lane_sessions, exact_recovered_cache);
+            assert!(!adapter.output_guard.restart_required());
+        }
         let retained_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
         let retained_prepare_pops = adapter.pops_for_lane_qc(&retained_prepare_qc);
         assert_eq!(

@@ -2123,9 +2123,15 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
     let mut kat = Keccak256::new();
-    kat.update(b"iroha.zk-ams.v1.phase23.encrypted-tiny-complete-kat");
+    let mut kat_frame = b"iroha.zk-ams.v1.phase23.encrypted-tiny-complete-kat".to_vec();
+    kat.update(&kat_frame);
     for map in [&map_a, &map_b, &map_c, &g_map, &h_map] {
+        let wire = map.to_canonical_bytes().unwrap();
+        let mut frame = PHASE23_SPARSE_MAP_DOMAIN_V1.to_vec();
+        frame.extend_from_slice(&wire[..wire.len() - 32]);
+        assert_eq!(keccak256(&frame), map.digest);
         kat.update(&map.digest);
+        kat_frame.extend_from_slice(&map.digest);
     }
     for values in [
         &decrypted_cross,
@@ -2138,16 +2144,28 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
         &r_w,
     ] {
         kat.update(&(values.len() as u32).to_be_bytes());
+        kat_frame.extend_from_slice(&(values.len() as u32).to_be_bytes());
         for value in values {
             kat.update(&value.to_be_bytes());
+            kat_frame.extend_from_slice(&value.to_be_bytes());
         }
     }
+    let mut materialized_frame = PHASE23_MATERIALIZED_DOMAIN_V1.to_vec();
+    materialized_frame.extend_from_slice(&materialized_wire[..materialized_wire.len() - 32]);
+    assert_eq!(keccak256(&materialized_frame), materialized.digest);
     kat.update(&materialized.digest);
+    kat_frame.extend_from_slice(&materialized.digest);
+    let kat_digest = kat.finalize();
+    assert_eq!(keccak256(&kat_frame), kat_digest);
+    // Independently reproduced with PyCryptodome Keccak-256 over all five
+    // complete map frames, the 830-byte materialized frame, and this 547-byte
+    // KAT frame. Materialization binds the release BGV profile; the tiny ring
+    // remains the encrypted-equation oracle and does not supply that identity.
     assert_eq!(
-        kat.finalize(),
+        kat_digest,
         [
-            62, 190, 250, 154, 107, 168, 20, 80, 59, 34, 205, 32, 194, 3, 115, 133, 219, 184, 176,
-            147, 16, 127, 141, 96, 41, 69, 239, 167, 223, 43, 124, 181,
+            86, 24, 103, 190, 161, 236, 131, 110, 113, 93, 98, 108, 202, 60, 80, 241, 15, 3, 33,
+            157, 107, 124, 136, 39, 251, 96, 88, 180, 76, 161, 161, 81,
         ],
         "the independently checked two-party encrypted Phase-II/III KAT drifted"
     );

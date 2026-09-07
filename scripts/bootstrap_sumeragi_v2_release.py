@@ -160,13 +160,13 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "5de112cad5f1eef2ebeb0225c854e69183aab977262733c226000179861728d7"
+        "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
+        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
         "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
@@ -177,7 +177,7 @@ _BOOTSTRAP_COMPONENT_FILES = (
 )
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "f5593c473235d24df71ed42ca3ab74f7a8421aae6601aebb148c7e0b6e4aeab0"
+        "d1cf09532bdbf00d3ed259d42895692c44aaf635899d325316488b4e42ffda56"
     ),
 }
 _APPROVAL_CLASS_IDS = (

@@ -380,9 +380,9 @@ _OFFLINE_TOOLCHAIN_SDK_PLANS = (
         "operation:g-unit-production-867.v1",
     ),
     _planned(
-        "g-unit-focused-522",
+        "g-unit-focused-526",
         "release-runner",
-        "operation:g-unit-focused-522.v1",
+        "operation:g-unit-focused-526.v1",
     ),
     _planned(
         "offline-workspace-clippy",

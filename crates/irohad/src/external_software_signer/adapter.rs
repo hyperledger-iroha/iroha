@@ -1,6 +1,6 @@
 //! Adapters from the external-signer protocol to existing Torii provider traits.
 use super::{
-    protocol::{SoftwareSignerPublicBindingV1, SoftwareSignerRoleV1, digest_parts},
+    protocol::{SignerRoleV1, SoftwareSignerPublicBindingV1, digest_parts},
     unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
 };
 use iroha_crypto::{PublicKey, Signature};
@@ -38,9 +38,7 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
         client: SoftwareSignerClientV1,
     ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {
         let binding = client.expected_binding().clone();
-        let native_role = binding
-            .role
-            .native_role()
+        let native_role = super::protocol::native_role(binding.role)
             .ok_or(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch)?;
         let first = client.qualify().map_err(map_client_error)?;
         let second = client.qualify().map_err(map_client_error)?;
@@ -73,7 +71,7 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
     }
     fn sign_native(
         &self,
-        expected_role: SoftwareSignerRoleV1,
+        expected_role: SignerRoleV1,
         payload: &TransactionPayload,
     ) -> Result<SignedTransaction, ExternalSoftwareSignerAdapterErrorV1> {
         if self.binding.role != expected_role {
@@ -124,9 +122,7 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
 }
 impl SorafsNativeTransactionSignerProviderV1 for ExternalSoftwareSignerNativeAdapterV1 {
     fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
-        self.binding
-            .role
-            .native_role()
+        super::protocol::native_role(self.binding.role)
             .expect("native adapter construction excludes promotion role")
     }
     fn handle(&self) -> &str {
@@ -176,22 +172,22 @@ macro_rules! impl_role_signer {
 impl_role_signer!(
     SoraFsProofOutcomeTransactionSigner,
     SoraFsProofOutcomeSigningError,
-    SoftwareSignerRoleV1::ProofOutcome
+    SignerRoleV1::ProofOutcome
 );
 impl_role_signer!(
     SoraFsRepairTransactionSigner,
     SoraFsRepairTransactionSigningError,
-    SoftwareSignerRoleV1::Repair
+    SignerRoleV1::Repair
 );
 impl_role_signer!(
     SoraFsReserveTransactionSigner,
     SoraFsReserveTransactionSigningError,
-    SoftwareSignerRoleV1::Reserve
+    SignerRoleV1::Reserve
 );
 impl_role_signer!(
     SoraFsOrderbookTransactionSigner,
     SoraFsOrderbookTransactionSigningError,
-    SoftwareSignerRoleV1::Orderbook
+    SignerRoleV1::Orderbook
 );
 /// Role-indexed set that attaches external signers to the existing broker API.
 #[derive(Clone, Default)]
@@ -222,18 +218,19 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
         adapter: Arc<ExternalSoftwareSignerNativeAdapterV1>,
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         let slot = match adapter.binding.role {
-            SoftwareSignerRoleV1::ProofOutcome => &mut self.proof_outcome,
-            SoftwareSignerRoleV1::Repair => &mut self.repair,
-            SoftwareSignerRoleV1::Reserve => &mut self.reserve,
-            SoftwareSignerRoleV1::Orderbook => &mut self.orderbook,
-            SoftwareSignerRoleV1::Promotion
-            | SoftwareSignerRoleV1::GovernanceDag
-            | SoftwareSignerRoleV1::PotrGateway
-            | SoftwareSignerRoleV1::PotrProvider
-            | SoftwareSignerRoleV1::BillingStatement
-            | SoftwareSignerRoleV1::EvidenceViewer
-            | SoftwareSignerRoleV1::StreamToken
-            | SoftwareSignerRoleV1::PopCredentials => {
+            SignerRoleV1::ProofOutcome => &mut self.proof_outcome,
+            SignerRoleV1::Repair => &mut self.repair,
+            SignerRoleV1::Reserve => &mut self.reserve,
+            SignerRoleV1::Orderbook => &mut self.orderbook,
+            SignerRoleV1::Promotion
+            | SignerRoleV1::GovernanceDag
+            | SignerRoleV1::PotrGateway
+            | SignerRoleV1::PotrProvider
+            | SignerRoleV1::BillingStatement
+            | SignerRoleV1::EvidenceViewer
+            | SignerRoleV1::StreamToken
+            | SignerRoleV1::PopCredentials
+            | SignerRoleV1::ReleaseManifest => {
                 return Err(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch);
             }
         };

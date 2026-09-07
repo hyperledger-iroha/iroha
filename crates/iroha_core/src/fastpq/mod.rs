@@ -34,7 +34,6 @@ use std::{
 };
 use thiserror::Error;
 const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
-const TX_SET_HASH_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
 const PERMISSION_TABLE_NODE_DOMAIN: &[u8] = b"fastpq:v1:poseidon_node";
 /// Metadata key storing the originating entry hash for a batch.
 pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
@@ -129,6 +128,9 @@ pub enum TranscriptBatchError {
     /// Execution witness does not carry precomputed FASTPQ batches.
     #[error("execution witness missing fastpq batches with public inputs")]
     MissingFastpqBatches,
+    /// Block execution did not supply a non-zero ordered canonical transaction-wire commitment.
+    #[error("execution witness missing authoritative ordered transaction-wire commitment")]
+    MissingTransactionSetCommitment,
     /// Precomputed batches do not align one-for-one with transcript bundles.
     #[error(
         "execution witness FASTPQ batch cardinality mismatch: {bundle_count} bundles, {batch_count} batches"
@@ -747,26 +749,6 @@ fn public_inputs_from_template(
     tx_set_hash: [u8; 32],
 ) -> FastpqPublicInputs {
     template.with_tx_set_hash(tx_set_hash)
-}
-/// Compute a transaction set commitment from ordered FASTPQ execution-call identities.
-///
-/// These identities are the canonical outer entrypoint hashes except for sealed reveals, whose
-/// execution-scoped evidence is keyed by the revealed inner signed transaction hash.
-pub(crate) fn tx_set_hash_from_ordered_hashes<I, H>(hashes: I) -> [u8; 32]
-where
-    I: IntoIterator<Item = H>,
-    H: AsRef<[u8; 32]>,
-{
-    let iter = hashes.into_iter();
-    let (lower, _) = iter.size_hint();
-    let mut payload =
-        Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + lower.saturating_mul(Hash::LENGTH));
-    payload.extend_from_slice(TX_SET_HASH_DOMAIN);
-    for hash in iter {
-        let bytes = hash.as_ref();
-        payload.extend_from_slice(bytes);
-    }
-    Hash::new(payload).into()
 }
 /// Convert a collection of transfer transcripts into a canonical FASTPQ transition batch.
 ///
@@ -1514,20 +1496,6 @@ mod tests {
         assert_eq!(inputs.old_root, template.old_root);
         assert_eq!(inputs.new_root, template.new_root);
         assert_eq!(inputs.perm_root, template.perm_root);
-    }
-    #[test]
-    fn tx_set_hash_from_ordered_hashes_matches_domain() {
-        let first = Hash::prehashed([0x11; 32]);
-        let second = Hash::prehashed([0x22; 32]);
-        let tx_set_hash = tx_set_hash_from_ordered_hashes([first, second]);
-        let mut payload = Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + 2 * Hash::LENGTH);
-        payload.extend_from_slice(TX_SET_HASH_DOMAIN);
-        payload.extend_from_slice(first.as_ref());
-        payload.extend_from_slice(second.as_ref());
-        let expected: [u8; 32] = Hash::new(payload).into();
-        assert_eq!(tx_set_hash, expected);
-        let reversed = tx_set_hash_from_ordered_hashes([second, first]);
-        assert_ne!(tx_set_hash, reversed);
     }
     #[test]
     fn batch_from_transcripts_builds_transfer_rows() {

@@ -2606,13 +2606,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 866
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 83
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 881
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 84
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20"
+    "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "7d459864dd96825152e4d1dc75c7c66e6216127cc2e296e380554b969bc04851"
+    "c97cb21de7e1d8ac2134df9ffc02c51282d51a5c4bae03d8cf3f044ed5a23825"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2623,10 +2623,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 522
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 523
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 526
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 527
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9"
+    "15f6b8abd9f1f0afb270d4f457318baf4d5dca5f21e238e9689004a180f0c654"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2692,8 +2692,13 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "16d63fc190b78d104323b18a59c572be62506ef3428a6fecd61a10ad3b54d392"
     ),
 }
+_PRODUCTION_LANE_RECOVERY_CACHE_ITEM_SHA256 = {
+    "insert_recovered_proposals": "d6dba6556eaf78980000a00a38e2efc41fe87aac2f3bdeb0626677884bb8f3f2",
+    "preflight_trusted_proposal_replacement": "521b66525b3a19a6464e484c81b16f9afe865053ba779527eed29cc6cb0e48f8",
+    "insert_trusted_proposal_replacing_uncommitted_conflict": "88253c470c7d00e0c0ae0e17c78b4b0143b083a00e54e9b2db52434881ef2453",
+}
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
-    "604a95487484ce18054c37fa211a64e47ec6bf9f347075b0c71e2794963e860b"
+    "4acdfce3df1deeb4551dab6bc612bc1090168cd7724148c89d562ebf9e168390"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 18),
@@ -2705,6 +2710,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         42,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
+    ("production-native-amx-participant-application", "native_amx::participant_application_role_tests", 6),
     ("production-state-governance-unlock-audit", "state::tests", 1),
     ("production-queue-replica-disposition", "queue::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -2729,7 +2735,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 49),
+    ("production-v2-adapter", "sumeragi::v2::tests", 52),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     (
         "production-v2-certified-serve-payload-store",
@@ -2739,7 +2745,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 65),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -2751,7 +2757,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-        43,
+        45,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     (
@@ -2759,7 +2765,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::v2_runner::lifecycle_height_driver::tests",
         2,
     ),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 92),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -3325,6 +3331,19 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2::tests::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate",
     "sumeragi::v2_runner::lifecycle_height_driver::tests::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign",
     "queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay",
+    "native_amx::participant_application_role_tests::participant_application_role_classifies_exact_routes_and_incarnations",
+    "native_amx::participant_application_role_tests::participant_application_role_keeps_each_route_coordinate_distinct",
+    "native_amx::participant_application_role_tests::participant_application_role_rejects_independent_prepare_and_commit_identity_drift",
+    "native_amx::participant_application_role_tests::participant_application_role_rejects_coherent_same_route_coordinator_drift",
+    "native_amx::participant_application_role_tests::participant_application_role_rejects_settlement_identity_and_content_tampering",
+    "native_amx::participant_application_role_tests::participant_application_lookup_validates_later_legs_after_an_exact_match",
+    "sumeragi::v2::tests::ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::certified_serve_worker_rejects_corrupt_owned_body_after_receipt_mint",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::terminal_owner_faults_on_corrupt_payload_after_worker_readback",
+    "sumeragi::v2::tests::kagemusha_finality_boundary::commit_vote_binds_round_statement_signer_and_both_signatures",
+    "sumeragi::v2::tests::kagemusha_finality_boundary::commit_qc_binds_round_statement_exact_quorum_and_both_signatures",
+    "sumeragi::v2_lane_work::tests::historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity",
+    "sumeragi::v2_lane_work::tests::historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -4294,13 +4313,13 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::stranded_retryable_sidecar_control_index": "09ed26efa19aefc39d448b1bee81d5b070c272557137e89a51c4f1dc6334419b",
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "1747e8032e4ceb6f2c71a1411f7688c42792eda0e5f8b64ddbdc76c516baed60",
-    "V2LaneWorkAdapter::persist_anchored_sessions": "ac81d09b993cf6c83cfcf157d87de1873395bfb240bdc256159243dc05387ee1",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "5ef30045eba8ee0973512c1cb78975873a48dbee3e6a2f41bacad7ac75719f4f",
+    "V2LaneWorkAdapter::persist_anchored_sessions": "ff777d58fc49a028cffd61866dbfd59e2f352fd10028e8b372f126dd8a420eb8",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "9a40579664a5c2306d65100830e7d247a7d89b3c301492d99a635951b4ecaa56",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
-    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "af90f5ebe15136bfc8255dc8d1a8aeac7101d4226c79ef8a94e4821eeeb0d78a",
+    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "9a952a9ee41d5ad85c2b18ccd9ea270745f06cb4a27e49550c6eeee4189733b4",
     "V2LaneWorkAdapter::preflight_effect_insertion": "a2b3369f2c20c49bfa9e30bb6dc2b66c466aec9e83bf6793b49a7966ea7163e0",
     "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
@@ -4777,7 +4796,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "bcab2428b4a2d43dd23989bebe917077e84b069c4e120808f6b25ce4503ce52f"
     ),
     "reconstruct_durable_lane_certificate": (
-        "d0f552b3786458048dfb987c161bc37f3a55e92680a92d1818a11b658f64396b"
+        "229bc98b62691be671374442c767ceba685f07a49612bd6f662cb67eddf236f1"
     ),
     "reply_routes_are_live_for_peer": (
         "cdca18bef9df99c77e3698622c9cf6941dd249967bb587f60e9fd381a4f8b235"

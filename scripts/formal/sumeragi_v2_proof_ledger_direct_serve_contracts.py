@@ -1,6 +1,291 @@
 """Coordinator-owned Certified-Serve production source-fidelity contracts."""
 
 
+
+def _lane_recovery_cache_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Check the independent production cache owner and its complete method seals."""
+
+    errors: list[str] = []
+    cache_path, source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/lane_consensus.rs",
+        errors,
+        "transactional canonical lane recovery cache source",
+    )
+    items = {}
+    for name, digest in _PRODUCTION_LANE_RECOVERY_CACHE_ITEM_SHA256.items():
+        item = _require_qualified_rust_item(
+            cache_path, source, "LaneBlockSessionCache", name, errors,
+            f"lane recovery cache owner {name}",
+        )
+        items[name] = item
+        _require_rust_item_token_sha256(cache_path, item, digest, name, errors)
+    _require_lane_recovery_cache_source_contracts(cache_path, items, errors)
+    return errors
+
+
+def _require_lane_recovery_cache_source_contracts(
+    cache_path: Path, cache_items: dict, errors: list[str],
+) -> None:
+    """Bind bounded, original-quorum-preserving recovery before atomic publication."""
+
+    batch = cache_items.get("insert_recovered_proposals")
+    preflight = cache_items.get("preflight_trusted_proposal_replacement")
+    trusted = cache_items.get("insert_trusted_proposal_replacing_uncommitted_conflict")
+    for expected, description in (
+        (
+            """
+pub(crate) fn insert_recovered_proposals(
+    &mut self,
+    proposals: &[LaneBlockProposalV1],
+) -> Result<(), LaneBlockSessionError> {
+    let mut required = BTreeMap::new();
+    let mut required_slots = BTreeMap::new();
+    let mut ordered_required = Vec::new();
+    for proposal in proposals {
+        self.preflight_trusted_proposal_replacement(proposal)?;
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        let slot = LaneBlockSlotKey::from_session_key(key);
+        match required.insert(key, proposal) {
+            Some(previous) if previous != proposal => {
+                return Err(LaneBlockSessionError::ConflictingProposal);
+            }
+            Some(_) => {}
+            None => ordered_required.push(proposal),
+        }
+""",
+            "lane recovery cache must preflight every input against original quorum evidence and preserve exact first-occurrence caller order",
+        ),
+        (
+            """
+if required_slots
+    .insert(slot, key.proposal_hash)
+    .is_some_and(|previous| previous != key.proposal_hash)
+{
+    return Err(LaneBlockSessionError::ConflictingProposal);
+}
+if required.len() > self.capacity {
+    return Err(LaneBlockSessionError::RecoveryCapacityExceeded);
+}
+}
+let mut next = self.clone();
+for proposal in &ordered_required {
+    let key = LaneBlockSessionKey::from_proposal(proposal);
+    if next.sessions.contains_key(&key) {
+        next.touch(key);
+    }
+}
+""",
+            "lane recovery cache must bound the unique consistent required union before cloning and touch required survivors before insertion",
+        ),
+        (
+            """
+for proposal in &ordered_required {
+    let key = LaneBlockSessionKey::from_proposal(proposal);
+    if next.sessions.contains_key(&key) {
+        next.touch(key);
+    }
+}
+for proposal in ordered_required {
+    next.insert_trusted_proposal_replacing_uncommitted_conflict(proposal.clone())?;
+    next.touch(LaneBlockSessionKey::from_proposal(proposal));
+}
+if required.iter().any(|(key, proposal)| {
+    next.sessions.get(key).and_then(|session| session.proposal.as_ref()) != Some(*proposal)
+}) {
+    return Err(LaneBlockSessionError::RecoveryCapacityExceeded);
+}
+*self = next;
+Ok(())
+}
+""",
+            "lane recovery cache must use trusted insertion in caller order and verify the full exact retained set before atomic publication",
+        ),
+        (
+            "self.clone()",
+            "lane recovery cache must stage exactly one cache clone",
+        ),
+        (
+            "*self = next;",
+            "lane recovery cache must publish exactly once after required-set verification",
+        ),
+    ):
+        _require_rust_token_sequence(cache_path, batch, expected, description, errors)
+
+    _require_rust_token_sequence(
+        cache_path,
+        preflight,
+        """
+fn preflight_trusted_proposal_replacement(
+    &self,
+    proposal: &LaneBlockProposalV1,
+) -> Result<(), LaneBlockSessionError> {
+    validate_lane_block_proposal(proposal).map_err(LaneBlockSessionError::InvalidProposal)?;
+    let key = LaneBlockSessionKey::from_proposal(proposal);
+    let first = LaneBlockSessionKey {
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        ..key
+    };
+    let last = LaneBlockSessionKey {
+        proposal_hash: Hash::prehashed([u8::MAX; Hash::LENGTH]),
+        ..key
+    };
+    if self.sessions.range(first..=last).any(|(retained_key, session)| {
+        retained_key.proposal_hash != key.proposal_hash && session_has_quorum_certificate(session)
+    }) {
+        return Err(LaneBlockSessionError::ConflictingProposal);
+    }
+    Ok(())
+}
+""",
+        "lane recovery replacement preflight must validate the proposal and protect any original same-slot quorum including proposal-less evidence",
+        errors,
+    )
+    _require_rust_token_sequence(
+        cache_path,
+        trusted,
+        """
+fn insert_trusted_proposal_replacing_uncommitted_conflict(
+    &mut self,
+    proposal: LaneBlockProposalV1,
+) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
+    self.preflight_trusted_proposal_replacement(&proposal)?;
+    let key = LaneBlockSessionKey::from_proposal(&proposal);
+""",
+        "trusted lane proposal replacement must share the original-quorum preflight before every mutation",
+        errors,
+    )
+
+
+def _require_lane_public_certificate_source_contracts(
+    lane_path: Path, lane_ack_items: dict, lane_items: dict, errors: list[str],
+) -> None:
+    """Bind public observer certificates without granting committee custody."""
+
+    persist = lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions")
+    reconstruct = lane_items.get("reconstruct_durable_lane_certificate")
+    for expected, description in (
+        (
+            """
+let pops = self.pops_for_lane_session(&session);
+let candidate = CertifiedLaneBlockArtifact::new(session.clone(), pops.clone());
+Kura::validate_certified_lane_block_artifact(&candidate).map_err(|message| {
+    V2LaneWorkError::Persistence(format!(
+        "pending committed lane certificate is invalid: {message}"
+    ))
+})?;
+let descriptor = &session.proposal.descriptor;
+let autonomous_anchor =
+    self.canonical_autonomous_anchor_matches_kura(&session.proposal);
+let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(
+    &session.prepare_qc,
+    autonomous_anchor,
+)?;
+if autonomous_certificate && !self.local_can_own_autonomous_payload(&session.proposal) {
+""",
+            "anchored lane persistence must derive autonomous execution authority from the checked PrepareQC role",
+        ),
+        (
+            """
+if autonomous_certificate && !self.local_can_own_autonomous_payload(&session.proposal) {
+    let replica = self
+        .kura
+        .persist_canonical_autonomous_lane_replica(&candidate)
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+    if !certified_lane_artifacts_certify_same_decision(
+        &replica.bundle.certified,
+        &candidate,
+    ) || replica.bundle.executable_payload().origin_proposal != session.proposal
+    {
+        return Err(V2LaneWorkError::Persistence(
+            "canonical autonomous replica changed its certified lane decision"
+                .to_owned(),
+        ));
+    }
+    persisted = persisted.saturating_add(1);
+    continue;
+}
+self.persist_autonomous_prepare_availability(&session.proposal, &session.prepare_qc)
+    .map_err(V2LaneWorkError::Persistence)?;
+let durable_exact_proposal = self
+    .kura
+    .read_certified_lane_block_artifact(
+        descriptor.lane_id,
+        descriptor.lane_block_height,
+    )
+    .filter(|durable| durable.proposal == session.proposal);
+""",
+            "public observer persistence must verify its separate exact replica and retire before committee READY or certified-slot access",
+        ),
+        (
+            "self.persist_autonomous_prepare_availability(&session.proposal, &session.prepare_qc)",
+            "anchored lane persistence must have exactly one committee READY persistence call after observer retirement",
+        ),
+    ):
+        _require_rust_token_sequence(lane_path, persist, expected, description, errors)
+
+    for expected, description in (
+        (
+            """
+let artifact = self.kura.read_certified_lane_block_artifact(
+    proposal.descriptor.lane_id,
+    proposal.descriptor.lane_block_height,
+);
+let Some(artifact) = artifact else {
+    return Ok(None);
+};
+if artifact.proposal != *proposal {
+    return Ok(None);
+}
+let requester_is_current_validator = self
+""",
+            "lane recovery reconstruction must begin from the exact certified Kura artifact",
+        ),
+        (
+            """
+let requester_is_current_validator = self
+    .context
+    .roster
+    .iter()
+    .any(|entry| &entry.validator == sender);
+let requester_is_historical_lane_validator =
+    artifact.commit_qc.validator_set.contains(sender);
+let requester_observes_finalized_public_autonomous_carrier =
+    !requester_is_current_validator
+        && !requester_is_historical_lane_validator
+        && self
+            .canonical_finalized_autonomous_payload_for_proposal(proposal)
+            .map_err(|error| {
+                iroha_logger::error!(
+                    %error,
+                    height = proposal.descriptor.proposal_height,
+                    lane = proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = proposal.descriptor.lane_block_height,
+                    "failed to validate finalized public carrier for cross-roster certificate recovery"
+                );
+                self.output_guard.close_admission_for_restart();
+            })?
+            .is_some();
+if !requester_is_current_validator
+    && !requester_is_historical_lane_validator
+    && !requester_observes_finalized_public_autonomous_carrier
+{
+    return Err(());
+}
+Ok(Some(LaneBlockCertificateV1 {
+    proposal: artifact.proposal,
+    prepare_qc: artifact.prepare_qc,
+    commit_qc: artifact.commit_qc,
+}))
+""",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality and fail stop on authority errors",
+        ),
+    ):
+        _require_rust_token_sequence(lane_path, reconstruct, expected, description, errors)
+
+
 def _lifecycle_certified_serve_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -680,10 +965,15 @@ fn proposal_predecessor_is_ready_for_progress(
     &self,
     proposal: &LaneBlockProposalV1
 ) -> bool {
+    let finalized_observer = !self.local_can_own_autonomous_payload(proposal)
+        && self
+            .canonical_finalized_autonomous_payload_for_proposal(proposal)
+            .is_ok_and(|payload| payload.is_some());
     if self
         .historical_autonomous_recovery_record_for_proposal(proposal)
         .is_some()
         || self.autonomous_payload_is_expected_for(proposal)
+        || finalized_observer
     {
         self.state
             .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)
@@ -802,6 +1092,128 @@ if !self.proposal_predecessor_is_ready_for_progress(proposal) {
     for expected, description in (
         (
             """
+if historical_records.len() > hydration_capacity {
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "historical autonomous recovery inventory exceeds bounded session capacity".to_owned(),
+    ));
+}
+let mut recovered_historical_records = BTreeMap::new();
+let mut historical_ready_records = Vec::new();
+for record in historical_records {
+    validate_historical_autonomous_lane_recovery_record(
+        self.state.as_ref(),
+        self.kura.as_ref(),
+        &record,
+    )
+    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+""",
+            "historical lane hydration must bound and authenticate every recovery record before using its proposal",
+        ),
+        (
+            """
+let proposal = &record.payload.origin_proposal;
+let key = AutonomousLanePayloadKey::from(proposal);
+if self
+    .historical_autonomous_recovery_records
+    .get(&key)
+    .is_some_and(|existing| existing != &record)
+{
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "historical autonomous recovery slot has conflicting immutable records".to_owned(),
+    ));
+}
+if self.kura.lane_block_application_receipt_available(proposal) {
+    continue;
+}
+self.kura
+    .validate_historical_autonomous_lane_recovery_record_dependencies(&record)
+    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+""",
+            "historical lane hydration must compare retained immutable identity before terminal skipping and validate pending dependencies",
+        ),
+        (
+            """
+if committed != 0 && committed != record.reservation_group.ordered_keys.len() {
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "historical autonomous recovery FIFO group is only partially committed".to_owned(),
+    ));
+}
+if committed == record.reservation_group.ordered_keys.len() {
+    continue;
+}
+""",
+            "historical lane hydration must reject partially committed FIFO groups and skip only complete groups",
+        ),
+        (
+            """
+if certified.proposal != *proposal
+    || Kura::validate_certified_lane_block_artifact(&certified).is_err()
+    || certified.signer_pops.iter().any(|(key, pop)| {
+        descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer.public_key() == key)
+            .and_then(|index| record.validator_pops.get(index))
+            != Some(pop)
+    })
+{
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "historical autonomous recovery record conflicts with its certified slot".to_owned(),
+    ));
+}
+continue;
+""",
+            "historical lane hydration must authenticate the entire certified proposal and exact signer proofs before skipping its slot",
+        ),
+        (
+            """
+match recovered_historical_records.entry(key) {
+std::collections::btree_map::Entry::Vacant(entry) => {
+    entry.insert(record.clone());
+}
+std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &record => {}
+std::collections::btree_map::Entry::Occupied(_) => {
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "historical autonomous recovery slot has conflicting immutable records".to_owned(),
+    ));
+}
+}
+historical_ready_records.push(record);
+""",
+            "historical lane hydration must preserve immutable record identity in the staged required inventory",
+        ),
+        (
+            """
+if pending_autonomous_anchor_payloads
+    .len()
+    .saturating_add(recovered_historical_records.len())
+    > hydration_capacity
+{
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "current and historical autonomous hydration exceeds bounded capacity".to_owned(),
+    ));
+}
+""",
+            "historical and current autonomous payloads must share the exact bounded hydration inventory",
+        ),
+        (
+            """
+let pending = self.consensus_storage_read(
+    self.state.unapplied_lane_block_artifact_heights_snapshot_cached(),
+)?;
+let mut raw_proposals = Vec::new();
+let mut raw_slots = BTreeSet::new();
+""",
+            "lane hydration must stage required proposals independently of retained cache occupancy and propagate storage failure",
+        ),
+        (
+            """
 if !raw_slots.insert((lane_id, lane_block_height)) {
     self.output_guard.close_admission_for_restart();
     return Err(V2LaneWorkError::InvalidContext(
@@ -814,7 +1226,7 @@ if !raw_slots.insert((lane_id, lane_block_height)) {
         (
             """
 if raw_proposals.len().saturating_add(route_chain.len())
-    >= ordinary_hydration_capacity
+    >= hydration_capacity
 {
     self.output_guard.close_admission_for_restart();
     return Err(V2LaneWorkError::InvalidContext(
@@ -822,8 +1234,10 @@ if raw_proposals.len().saturating_add(route_chain.len())
     ));
 }
 let artifact = self
-    .kura
-    .read_lane_block_artifact_without_sidecar_repair(lane_id, lane_block_height)
+    .consensus_storage_read(
+        self.kura
+            .read_lane_block_artifact_read_only(lane_id, lane_block_height),
+    )?
     .ok_or_else(|| {
         self.output_guard.close_admission_for_restart();
         V2LaneWorkError::Persistence(
@@ -885,6 +1299,11 @@ raw_proposals.extend(route_chain);
         ),
         (
             """
+raw_proposals.extend(
+    historical_ready_records
+        .iter()
+        .map(|record| record.payload.origin_proposal.clone()),
+);
 raw_proposals.sort_by_key(|proposal| {
     let descriptor = &proposal.descriptor;
     (
@@ -895,9 +1314,46 @@ raw_proposals.sort_by_key(|proposal| {
         proposal.proposal_hash,
     )
 });
-for proposal in raw_proposals {
+self.lane_sessions
+    .insert_recovered_proposals(&raw_proposals)
+    .map_err(|error| {
+        self.output_guard.close_admission_for_restart();
+        V2LaneWorkError::InvalidContext(format!(
+            "canonical lane hydration conflicts with retained recovery sources: {error}"
+        ))
+    })?;
+self.historical_autonomous_recovery_records = recovered_historical_records;
+self.pending_autonomous_anchor_payloads = pending_autonomous_anchor_payloads;
+for record in historical_ready_records {
+    self.authorize_autonomous_ready_from_durable_input(
+        &record.payload,
+        &record.payload.origin_proposal,
+        record.historical_context_id,
+    )
+    .map_err(|error| {
+        self.output_guard.close_admission_for_restart();
+        V2LaneWorkError::InvalidContext(error)
+    })?;
+}
+Ok(())
 """,
-            "raw lane hydration must install independent chains in canonical deterministic order",
+            "raw lane hydration must install independent chains in canonical deterministic order as one complete bounded recovery batch before publishing payloads or historical READY",
+        ),
+        (
+            "self.authorize_autonomous_ready_from_durable_input(",
+            "lane hydration must authorize historical READY exactly once after complete batch installation",
+        ),
+        (
+            "self.historical_autonomous_recovery_records =",
+            "lane hydration must publish the fresh historical inventory exactly once after complete batch installation",
+        ),
+        (
+            "self.pending_autonomous_anchor_payloads =",
+            "lane hydration must publish pending payloads exactly once after complete batch installation",
+        ),
+        (
+            "self.lane_sessions",
+            "lane hydration must change the session cache exactly once through the complete recovery batch owner",
         ),
     ):
         _require_rust_token_sequence(lane_path, hydration, expected, description, errors)

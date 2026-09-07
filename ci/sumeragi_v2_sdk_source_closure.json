@@ -76,6 +76,7 @@
       "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsParsingTests.java",
       "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiStatusModelsTests.java",
       "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTests.java",
+      "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireOwnershipTest.java",
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/SumeragiHttpTransportContractTest.kt",
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModelsTest.kt",
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiStatusModelsTest.kt",

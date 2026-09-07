@@ -39252,3 +39252,6 @@ mod tests;
 
 #[cfg(test)]
 mod captured_schema_tests;
+
+#[cfg(test)]
+mod conformance;

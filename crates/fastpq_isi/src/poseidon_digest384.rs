@@ -70,6 +70,159 @@ pub struct GoldilocksDigestDomainV1<'a> {
     pub counter: u64,
 }
 
+/// Borrowed canonical input frame shared by CPU and hardware digest backends.
+///
+/// Construction does not copy or allocate payload data. The complete frame
+/// includes the final `1` element and, when needed, one zero rate-padding word.
+/// Every lane consumes the same frame except for the word at
+/// [`Self::lane_word_index`]. Hardware backends must additionally use that
+/// lane's independently generated initial state and round constants.
+#[derive(Clone, Copy)]
+pub struct GoldilocksDigest384FrameV1<'a> {
+    domain: GoldilocksDigestDomainV1<'a>,
+    fields: &'a [&'a [u8]],
+    word_count: usize,
+    lane_word_index: usize,
+}
+
+impl fmt::Debug for GoldilocksDigest384FrameV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GoldilocksDigest384FrameV1")
+            .field("field_count", &self.fields.len())
+            .field("word_count", &self.word_count)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> GoldilocksDigest384FrameV1<'a> {
+    /// Validate a typed domain and ordered byte fields without allocating.
+    ///
+    /// Returns `None` when a field or field count exceeds the canonical 32-bit
+    /// limit, or the total framed word count cannot be represented by `usize`.
+    #[must_use]
+    pub fn new(domain: GoldilocksDigestDomainV1<'a>, fields: &'a [&'a [u8]]) -> Option<Self> {
+        if fields.len() > MAX_FRAMED_FIELD_BYTES_V1 {
+            return None;
+        }
+        let mut word_count = 0_usize;
+        for field in [
+            MESSAGE_FRAME_DOMAIN_V1,
+            domain.catalog,
+            domain.protocol,
+            domain.profile,
+            domain.role,
+            domain.phase,
+        ] {
+            word_count = word_count.checked_add(framed_byte_word_count_v1(field.len())?)?;
+        }
+        // Level, index, and counter precede the lane's eight-byte field.
+        word_count = word_count.checked_add(3 * framed_byte_word_count_v1(8)?)?;
+        let lane_word_index = word_count.checked_add(2)?;
+        word_count = word_count.checked_add(framed_byte_word_count_v1(8)?)?;
+        word_count = word_count.checked_add(2)?; // Field-count tag and value.
+        for field in fields {
+            word_count = word_count.checked_add(framed_byte_word_count_v1(field.len())?)?;
+        }
+        word_count = word_count.checked_add(1)?; // Final frame terminator.
+        word_count = word_count.checked_add(word_count % RATE)?;
+        Some(Self {
+            domain,
+            fields,
+            word_count,
+            lane_word_index,
+        })
+    }
+
+    /// Exact number of canonical words, including complete rate padding.
+    ///
+    /// A backend must apply its own batch/resource limit before allocating a
+    /// buffer of this size; a valid protocol frame is not an allocation budget.
+    #[must_use]
+    pub const fn word_count(&self) -> usize {
+        self.word_count
+    }
+
+    /// Offset of the only frame word that differs between the six lanes.
+    ///
+    /// This word equals the lane index in `0..6`. The lane's eight-byte field
+    /// length, remaining byte and field terminator remain identical.
+    #[must_use]
+    pub const fn lane_word_index(&self) -> usize {
+        self.lane_word_index
+    }
+
+    /// Write the complete canonical frame for one lane into an exact buffer.
+    ///
+    /// Returns `false` without modifying the buffer for an invalid lane or
+    /// incorrect buffer length. The caller owns the output and must erase it
+    /// when it contains secret witness data.
+    #[must_use]
+    pub fn write_lane_words(&self, lane: usize, output: &mut [u64]) -> bool {
+        if lane >= GOLDILOCKS_DIGEST384_LANES_V1 || output.len() != self.word_count {
+            return false;
+        }
+        let mut position = 0;
+        self.emit_lane_words(lane, &mut |word| {
+            output[position] = word;
+            position += 1;
+        });
+        debug_assert_eq!(position, output.len());
+        true
+    }
+
+    /// Compute all six lanes with the canonical CPU permutation.
+    #[must_use]
+    pub fn hash(&self) -> GoldilocksDigest384V1 {
+        let words = core::array::from_fn(|lane| {
+            let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[lane]);
+            self.emit_lane_words(lane, &mut |word| sponge.absorb(word));
+            debug_assert_eq!(sponge.pending_len, 0);
+            // The emitted frame already includes termination and rate padding.
+            sponge.state[0]
+        });
+        GoldilocksDigest384V1::new(words)
+            .expect("Poseidon permutations preserve canonical Goldilocks elements")
+    }
+
+    fn emit_lane_words(&self, lane: usize, emit: &mut impl FnMut(u64)) {
+        let mut emitted = 0;
+        let mut counted_emit = |word| {
+            emitted += 1;
+            emit(word);
+        };
+        emit_domain_v1(
+            self.domain,
+            u64::try_from(lane).expect("six-lane index fits u64"),
+            &mut counted_emit,
+        )
+        .expect("typed frame validated domain lengths");
+        counted_emit(11);
+        counted_emit(u64::try_from(self.fields.len()).expect("validated field count fits u64"));
+        for (index, field) in self.fields.iter().enumerate() {
+            emit_byte_field_v1(
+                12 + u64::try_from(index).expect("validated field index fits u64"),
+                field,
+                &mut counted_emit,
+            )
+            .expect("typed frame validated field lengths");
+        }
+        counted_emit(1);
+        debug_assert!(emitted <= self.word_count && self.word_count - emitted < RATE);
+        if emitted != self.word_count {
+            emit(0);
+        }
+    }
+}
+
+fn framed_byte_word_count_v1(byte_count: usize) -> Option<usize> {
+    if byte_count > MAX_FRAMED_FIELD_BYTES_V1 {
+        return None;
+    }
+    // Tag, length, complete seven-byte chunks, and one terminated remainder.
+    (byte_count / 7).checked_add(3)
+}
+
 /// Canonical six-field-element Goldilocks digest.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GoldilocksDigest384V1([u64; GOLDILOCKS_DIGEST384_LANES_V1]);
@@ -168,7 +321,7 @@ impl std::error::Error for GoldilocksDigest384LastFieldStreamErrorV1 {}
 /// The domain, all preceding fields, and the exact final-field byte length are
 /// bound by [`Self::new`]. The builder keeps only the six lane permutation
 /// states plus one shared rate block and one shared seven-byte input chunk.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct GoldilocksDigest384LastFieldStreamV1 {
     lane_states: [[u64; STATE_WIDTH]; GOLDILOCKS_DIGEST384_LANES_V1],
     pending: [u64; RATE],
@@ -179,6 +332,16 @@ pub struct GoldilocksDigest384LastFieldStreamV1 {
     received_final_field_len: usize,
 }
 
+impl fmt::Debug for GoldilocksDigest384LastFieldStreamV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GoldilocksDigest384LastFieldStreamV1")
+            .field("expected_len", &self.expected_len())
+            .field("received_len", &self.received_len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Read-only AIR handoff for one canonical digest lane after the typed prefix.
 ///
 /// `state` includes any already-buffered rate words, while
@@ -186,10 +349,19 @@ pub struct GoldilocksDigest384LastFieldStreamV1 {
 /// field must be added.  The next permutation is performed when that position
 /// advances to the rate.  Keeping the fields private prevents callers from
 /// constructing an invalid prefix snapshot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GoldilocksDigest384LanePrefixV1 {
     state: [u64; STATE_WIDTH],
     next_rate_position: usize,
+}
+
+impl fmt::Debug for GoldilocksDigest384LanePrefixV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GoldilocksDigest384LanePrefixV1")
+            .field("next_rate_position", &self.next_rate_position)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GoldilocksDigest384LanePrefixV1 {
@@ -536,53 +708,43 @@ impl<'a> LaneSpongeV1<'a> {
         self.pending = [0; RATE];
         self.pending_len = 0;
     }
-
-    fn finish(mut self) -> u64 {
-        // A final element equal to one makes the field-element stream
-        // prefix-free, including when the pending rate block is empty.
-        self.absorb(1);
-        if self.pending_len != 0 {
-            self.flush();
-        }
-        self.state[0]
-    }
 }
 
-fn absorb_byte_field_v1(sponge: &mut LaneSpongeV1<'_>, tag: u64, bytes: &[u8]) -> Option<()> {
+fn emit_byte_field_v1(tag: u64, bytes: &[u8], emit: &mut impl FnMut(u64)) -> Option<()> {
     if bytes.len() > MAX_FRAMED_FIELD_BYTES_V1 {
         return None;
     }
-    sponge.absorb(tag);
-    sponge.absorb(u64::try_from(bytes.len()).ok()?);
+    emit(tag);
+    emit(u64::try_from(bytes.len()).ok()?);
     let mut chunks = bytes.chunks_exact(7);
     for chunk in &mut chunks {
         let mut word = [0_u8; 8];
         word[..7].copy_from_slice(chunk);
-        sponge.absorb(u64::from_le_bytes(word));
+        emit(u64::from_le_bytes(word));
     }
     let remainder = chunks.remainder();
     let mut terminal = [0_u8; 8];
     terminal[..remainder.len()].copy_from_slice(remainder);
     terminal[remainder.len()] = 1;
-    sponge.absorb(u64::from_le_bytes(terminal));
+    emit(u64::from_le_bytes(terminal));
     Some(())
 }
 
-fn absorb_domain_v1(
-    sponge: &mut LaneSpongeV1<'_>,
+fn emit_domain_v1(
     domain: GoldilocksDigestDomainV1<'_>,
     lane: u64,
+    emit: &mut impl FnMut(u64),
 ) -> Option<()> {
-    absorb_byte_field_v1(sponge, 1, MESSAGE_FRAME_DOMAIN_V1)?;
-    absorb_byte_field_v1(sponge, 2, domain.catalog)?;
-    absorb_byte_field_v1(sponge, 3, domain.protocol)?;
-    absorb_byte_field_v1(sponge, 4, domain.profile)?;
-    absorb_byte_field_v1(sponge, 5, domain.role)?;
-    absorb_byte_field_v1(sponge, 6, domain.phase)?;
-    absorb_byte_field_v1(sponge, 7, &domain.level.to_le_bytes())?;
-    absorb_byte_field_v1(sponge, 8, &domain.index.to_le_bytes())?;
-    absorb_byte_field_v1(sponge, 9, &domain.counter.to_le_bytes())?;
-    absorb_byte_field_v1(sponge, 10, &lane.to_le_bytes())?;
+    emit_byte_field_v1(1, MESSAGE_FRAME_DOMAIN_V1, emit)?;
+    emit_byte_field_v1(2, domain.catalog, emit)?;
+    emit_byte_field_v1(3, domain.protocol, emit)?;
+    emit_byte_field_v1(4, domain.profile, emit)?;
+    emit_byte_field_v1(5, domain.role, emit)?;
+    emit_byte_field_v1(6, domain.phase, emit)?;
+    emit_byte_field_v1(7, &domain.level.to_le_bytes(), emit)?;
+    emit_byte_field_v1(8, &domain.index.to_le_bytes(), emit)?;
+    emit_byte_field_v1(9, &domain.counter.to_le_bytes(), emit)?;
+    emit_byte_field_v1(10, &lane.to_le_bytes(), emit)?;
     Some(())
 }
 
@@ -629,10 +791,10 @@ impl GoldilocksDigest384LastFieldStreamV1 {
         let lanes: [LaneSpongeV1<'_>; GOLDILOCKS_DIGEST384_LANES_V1] =
             core::array::from_fn(|lane| {
                 let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[lane]);
-                absorb_domain_v1(
-                    &mut sponge,
+                emit_domain_v1(
                     domain,
                     u64::try_from(lane).expect("six-lane index fits u64"),
+                    &mut |word| sponge.absorb(word),
                 )
                 .expect("domain fields passed the shared size check");
                 sponge
@@ -773,7 +935,7 @@ impl GoldilocksDigest384LastFieldStreamV1 {
         terminal[..self.byte_chunk_len].copy_from_slice(&self.byte_chunk[..self.byte_chunk_len]);
         terminal[self.byte_chunk_len] = 1;
         self.absorb_element(u64::from_le_bytes(terminal));
-        // Match `LaneSpongeV1::finish`: a final field element equal to one
+        // Match the complete typed frame: a final field element equal to one
         // makes the complete field-element stream prefix-free.
         self.absorb_element(1);
         if self.pending_len != 0 {
@@ -785,22 +947,8 @@ impl GoldilocksDigest384LastFieldStreamV1 {
     }
 
     fn absorb_framed_byte_field(&mut self, tag: u64, bytes: &[u8]) {
-        debug_assert!(bytes.len() <= MAX_FRAMED_FIELD_BYTES_V1);
-        self.absorb_element(tag);
-        self.absorb_element(
-            u64::try_from(bytes.len()).expect("byte field length passed the framing ceiling"),
-        );
-        let mut chunks = bytes.chunks_exact(7);
-        for chunk in &mut chunks {
-            let mut word = [0_u8; 8];
-            word[..7].copy_from_slice(chunk);
-            self.absorb_element(u64::from_le_bytes(word));
-        }
-        let remainder = chunks.remainder();
-        let mut terminal = [0_u8; 8];
-        terminal[..remainder.len()].copy_from_slice(remainder);
-        terminal[remainder.len()] = 1;
-        self.absorb_element(u64::from_le_bytes(terminal));
+        emit_byte_field_v1(tag, bytes, &mut |word| self.absorb_element(word))
+            .expect("byte field length passed the framing ceiling");
     }
 
     fn absorb_element(&mut self, value: u64) {
@@ -829,48 +977,14 @@ impl GoldilocksDigest384LastFieldStreamV1 {
 /// Hash a typed domain and ordered byte fields into six independent lanes.
 ///
 /// Returns `None` only if the part count or one field length exceeds the
-/// canonical 32-bit framing ceiling.
+/// canonical 32-bit framing ceiling, or the complete frame's word count
+/// overflows `usize`.
 #[must_use]
 pub fn hash_bytes_384_v1(
     domain: GoldilocksDigestDomainV1<'_>,
     fields: &[&[u8]],
 ) -> Option<GoldilocksDigest384V1> {
-    let domain_fields = [
-        domain.catalog,
-        domain.protocol,
-        domain.profile,
-        domain.role,
-        domain.phase,
-    ];
-    if fields.len() > MAX_FRAMED_FIELD_BYTES_V1
-        || fields
-            .iter()
-            .chain(domain_fields.iter())
-            .any(|field| field.len() > MAX_FRAMED_FIELD_BYTES_V1)
-    {
-        return None;
-    }
-    let words = core::array::from_fn(|lane| {
-        let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[lane]);
-        absorb_domain_v1(
-            &mut sponge,
-            domain,
-            u64::try_from(lane).expect("six-lane index fits u64"),
-        )
-        .expect("domain fields passed the shared size check");
-        sponge.absorb(11);
-        sponge.absorb(u64::try_from(fields.len()).expect("field count passed the framing ceiling"));
-        for (index, field) in fields.iter().enumerate() {
-            absorb_byte_field_v1(
-                &mut sponge,
-                12 + u64::try_from(index).expect("field count fits u64"),
-                field,
-            )
-            .expect("field length was checked for every lane");
-        }
-        sponge.finish()
-    });
-    GoldilocksDigest384V1::new(words)
+    Some(GoldilocksDigest384FrameV1::new(domain, fields)?.hash())
 }
 
 #[cfg(test)]
@@ -1045,6 +1159,145 @@ mod tests {
                 state[0] = pow7_v1(state[0]);
             }
             apply_mds_v1(state);
+        }
+    }
+
+    #[test]
+    fn prepared_frames_match_streaming_and_lane_parameter_replay() {
+        for length in (0..=16).chain([27, 28, 29, 48, 63, 64, 65]) {
+            let payload = patterned_bytes(length);
+            let prefix_fields: [&[u8]; 2] = [b"", b"1234567"];
+            let fields: [&[u8]; 3] = [prefix_fields[0], prefix_fields[1], &payload];
+            let mut digest_domain = domain();
+            digest_domain.level = u64::MAX;
+            digest_domain.index = FIELD_MODULUS;
+            digest_domain.counter = 1 << 63;
+            let frame = GoldilocksDigest384FrameV1::new(digest_domain, &fields).unwrap();
+            let mut stream = GoldilocksDigest384LastFieldStreamV1::new(
+                digest_domain,
+                &prefix_fields,
+                payload.len(),
+            )
+            .unwrap();
+            stream.update(&payload).unwrap();
+            let expected = stream.finalize().unwrap();
+            assert_eq!(frame.hash(), expected, "payload length {length}");
+            assert_eq!(frame.word_count() % RATE, 0);
+            let mut common = vec![0; frame.word_count()];
+            assert!(frame.write_lane_words(0, &mut common));
+            assert_eq!(common[frame.lane_word_index()], 0);
+            for lane in 0..GOLDILOCKS_DIGEST384_LANES_V1 {
+                let mut lane_words = vec![0; frame.word_count()];
+                assert!(frame.write_lane_words(lane, &mut lane_words));
+                common[frame.lane_word_index()] = u64::try_from(lane).unwrap();
+                assert_eq!(lane_words, common, "exact one-word lane substitution");
+                assert!(lane_words.iter().all(|word| *word < FIELD_MODULUS));
+                let mut state = goldilocks_digest384_lane_initial_state_v1(lane).unwrap();
+                for block in lane_words.chunks_exact(RATE) {
+                    for (word, input) in state.iter_mut().zip(block) {
+                        *word = add_v1(*word, *input);
+                    }
+                    permute_from_public_parameters(lane, &mut state);
+                }
+                assert_eq!(state[0], expected.words()[lane]);
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_frame_rejects_invalid_output_atomically_and_redacts_payload() {
+        let fields: [&[u8]; 1] = [b"private witness bytes"];
+        let frame = GoldilocksDigest384FrameV1::new(domain(), &fields).unwrap();
+        for length in [0, frame.word_count() - 1, frame.word_count() + 1] {
+            let mut output = vec![u64::MAX; length];
+            assert!(!frame.write_lane_words(0, &mut output));
+            assert!(output.iter().all(|word| *word == u64::MAX));
+        }
+        for lane in [GOLDILOCKS_DIGEST384_LANES_V1, usize::MAX] {
+            let mut output = vec![u64::MAX; frame.word_count()];
+            assert!(!frame.write_lane_words(lane, &mut output));
+            assert!(output.iter().all(|word| *word == u64::MAX));
+        }
+        assert_eq!(
+            format!("{frame:?}"),
+            format!(
+                "GoldilocksDigest384FrameV1 {{ field_count: 1, word_count: {}, .. }}",
+                frame.word_count()
+            )
+        );
+        assert_ne!(
+            GoldilocksDigest384FrameV1::new(domain(), &[])
+                .unwrap()
+                .hash(),
+            GoldilocksDigest384FrameV1::new(domain(), &[b""])
+                .unwrap()
+                .hash(),
+            "an absent field and one empty field are distinct frames"
+        );
+    }
+
+    #[test]
+    fn framed_word_counts_preserve_exact_32_bit_field_limit() {
+        assert_eq!(framed_byte_word_count_v1(0), Some(3));
+        assert_eq!(framed_byte_word_count_v1(6), Some(3));
+        assert_eq!(framed_byte_word_count_v1(7), Some(4));
+        assert_eq!(framed_byte_word_count_v1(8), Some(4));
+        assert_eq!(
+            framed_byte_word_count_v1(MAX_FRAMED_FIELD_BYTES_V1),
+            Some(MAX_FRAMED_FIELD_BYTES_V1 / 7 + 3)
+        );
+        if let Some(over_limit) = MAX_FRAMED_FIELD_BYTES_V1.checked_add(1) {
+            assert_eq!(framed_byte_word_count_v1(over_limit), None);
+        }
+    }
+
+    #[test]
+    fn prepared_frame_matches_independent_python_framing_kat() {
+        let fields: [&[u8]; 1] = [b"payload"];
+        let frame = GoldilocksDigest384FrameV1::new(domain(), &fields).unwrap();
+        assert_eq!(frame.word_count(), 58);
+        assert_eq!(frame.lane_word_index(), 49);
+        let mut words = vec![0; frame.word_count()];
+        assert!(frame.write_lane_words(0, &mut words));
+        let bytes = words
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect::<Vec<_>>();
+        // Independently framed with Python integers and hashlib.sha3_256.
+        // SHA3 identifies these frame bytes; it is not a STARK commitment.
+        assert_eq!(
+            sha3_256_v1(&[&bytes]),
+            [
+                0xac, 0xaf, 0x7b, 0x7d, 0x92, 0x7a, 0xab, 0x8e, 0x24, 0xda, 0x3a, 0x9f, 0x8e, 0xa8,
+                0xbd, 0x50, 0x2a, 0xbf, 0x2b, 0xa8, 0x58, 0xe1, 0x7f, 0xe9, 0x2e, 0xdd, 0xc4, 0x2d,
+                0xbe, 0x7a, 0x95, 0x32,
+            ]
+        );
+    }
+
+    #[test]
+    fn stream_and_air_prefix_diagnostics_hide_buffered_witnesses() {
+        let mut stream =
+            GoldilocksDigest384LastFieldStreamV1::new(domain(), &[b"private prefix"], 14).unwrap();
+        stream.update(b"secret").unwrap();
+        assert_eq!(
+            stream.byte_chunk[..6],
+            *b"secret",
+            "the diagnostic regression covers an actual buffered private chunk"
+        );
+        assert_eq!(
+            format!("{stream:?}"),
+            "GoldilocksDigest384LastFieldStreamV1 { expected_len: 14, received_len: 6, .. }"
+        );
+        for lane in 0..GOLDILOCKS_DIGEST384_LANES_V1 {
+            let prefix = stream.lane_prefix_v1(lane).unwrap();
+            assert_eq!(
+                format!("{prefix:?}"),
+                format!(
+                    "GoldilocksDigest384LanePrefixV1 {{ next_rate_position: {}, .. }}",
+                    prefix.next_rate_position()
+                )
+            );
         }
     }
 

@@ -22,6 +22,9 @@ mod bn254_poseidon;
 mod bn254_poseidon_params;
 mod cyclotomic;
 mod digest;
+#[cfg(feature = "fastpq-gpu")]
+mod digest384_gpu;
+mod digest_executor;
 mod error;
 #[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 mod fastpq_cuda;
@@ -56,11 +59,12 @@ pub use axt_binding::{
     canonicalize_binding, embedded_axt_binding, encode_axt_fastpq_payload,
     set_axt_remote_spend_claims, transition_batch_from_model, transition_batch_to_model,
     validate_axt_transfer_claim_binding, verify_axt_bound_batch, verify_axt_proof_blob,
-    verify_axt_proof_envelope, verify_axt_proof_envelope_with_outer_metadata,
+    verify_axt_proof_envelope, verify_axt_proof_envelope_against_anchor_v1,
+    verify_axt_proof_envelope_with_outer_metadata,
 };
 pub use backend::{
     ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
-    set_execution_mode_observer,
+    preflight_native_v1_gpu_backend, set_execution_mode_observer,
 };
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
@@ -75,6 +79,11 @@ pub use bn254_poseidon::{
     try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,
 };
 pub use digest::trace_commitment;
+#[cfg(feature = "fastpq-gpu")]
+pub use digest384_gpu::{
+    Digest384GpuBackendV1, Digest384GpuErrorV1, MAX_DIGEST384_GPU_FRAMES_V1,
+    MAX_DIGEST384_GPU_WORDS_V1, try_hash_digest384_frames_v1,
+};
 pub use error::{Error, Result};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
@@ -102,9 +111,9 @@ pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes};
 #[cfg(feature = "fastpq-gpu")]
 pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
+pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 #[cfg(any(test, feature = "dev-tools"))]
 pub use proof::{verify_raw_statement, verify_raw_statement_with_limits};
-pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use semantics::{ProofSemantics, validate_batch_semantics};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]

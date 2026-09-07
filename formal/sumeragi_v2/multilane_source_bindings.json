@@ -546,7 +546,7 @@
           "path": "scripts/write_sumeragi_v2_release_receipt.py",
           "required_tokens": [
             "\"write_sumeragi_v2_release_receipt_gate_evidence.py\": (",
-            "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440",
+            "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de",
             "_SDK_SOURCE_CLOSURE_RESOLVER = \"ci/resolve_sumeragi_v2_sdk_source_closure.py\"",
             "_SDK_SOURCE_CLOSURE_MANIFEST = \"ci/sumeragi_v2_sdk_source_closure.json\"",
             "_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = \"native-amx-v2-grouped\"",
@@ -676,7 +676,7 @@
             "SumeragiV2WireFixtureTests'",
             "observed_test_count=50",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=48",
+            "observed_test_count=59",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests"
           ]
         },
@@ -706,7 +706,7 @@
           "required_tokens": [
             "(\"swift\", 34)",
             "(\"kotlin\", 50)",
-            "(\"java\", 48)"
+            "(\"java\", 59)"
           ]
         },
         {
@@ -716,7 +716,7 @@
             "bash scripts/check_no_legacy_codec.sh",
             "native-amx-rust-fixture-check command 0",
             "regenerate Native AMX Rust fixture authority twice into disjoint private roots and byte-authenticate both outputs",
-            "for sdk_diagnostics_test_count in 129 88 34 44 43; do",
+            "for sdk_diagnostics_test_count in 129 88 34 50 59; do",
             "SumeragiV2WireFixtureTest"
           ]
         }
@@ -6396,10 +6396,12 @@
           "kind": "fn",
           "symbol": "native_amx_participant_application_role",
           "required_tokens": [
-            "participant_settlement_hash",
-            "authority_context_height",
-            "participant_previous_block_descriptor_hash",
-            "same_route",
+            "let prepare = &leg.prepare_qc.body;",
+            "let commit = &leg.commit_qc.body;",
+            "compute_settlement_hash(&leg.participant_settlement)",
+            "settlement_hash != leg.participant_settlement_hash",
+            "Native AMX participant leg identity is internally inconsistent",
+            "Native AMX same-route leg differs from the coordinator identity",
             "NativeAmxParticipantApplicationRole::SeparateParticipant",
             "NativeAmxParticipantApplicationRole::Coordinator"
           ]
@@ -6409,9 +6411,106 @@
           "kind": "fn",
           "symbol": "native_amx_receipt_requires_separate_participant_application_for",
           "required_tokens": [
-            "native_amx_participant_application_role",
+            "let mut matches = false;",
+            "for leg in &receipt.legs",
+            "native_amx_participant_application_role(receipt, leg)?",
             "NativeAmxParticipantApplicationRole::SeparateParticipant",
-            "descriptor.lane_incarnation == lane_incarnation"
+            "matches |= descriptor.lane_id == lane_id",
+            "descriptor.dataspace_id == dataspace_id",
+            "descriptor.lane_incarnation == lane_incarnation",
+            "Ok(matches)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx/participant_application_role_tests.rs",
+          "kind": "fn",
+          "symbol": "participant_application_role_classifies_exact_routes_and_incarnations",
+          "required_tokens": [
+            "fixture_receipt()",
+            "NativeAmxParticipantApplicationRole::Coordinator",
+            "NativeAmxParticipantApplicationRole::SeparateParticipant",
+            "native_amx_participant_application_role(&receipt, leg)",
+            "Ok(role)",
+            "Ok(role == NativeAmxParticipantApplicationRole::SeparateParticipant)",
+            "\"unknown lane\"",
+            "\"different dataspace\"",
+            "\"stale incarnation\"",
+            "Ok(false)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx/participant_application_role_tests.rs",
+          "kind": "fn",
+          "symbol": "participant_application_role_keeps_each_route_coordinate_distinct",
+          "required_tokens": [
+            "(receipt.lane_id, receipt.legs[index].dataspace_id)",
+            "(receipt.legs[index].lane_id, receipt.dataspace_id)",
+            "rebind_participant_identity(leg)",
+            "Ok(NativeAmxParticipantApplicationRole::SeparateParticipant)",
+            "native_amx_receipt_requires_separate_participant_application_for(",
+            "Ok(true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx/participant_application_role_tests.rs",
+          "kind": "fn",
+          "symbol": "participant_application_role_rejects_independent_prepare_and_commit_identity_drift",
+          "required_tokens": [
+            "for index in 0..receipt.legs.len()",
+            "for phase in [NativeAmxPhase::Prepare, NativeAmxPhase::Commit]",
+            "for &(label, mutate) in BODY_IDENTITY_MUTATIONS",
+            "NativeAmxPhase::Prepare => &mut leg.prepare_qc.body",
+            "NativeAmxPhase::Commit => &mut leg.commit_qc.body",
+            "mutate(body)",
+            "Err(INCONSISTENT_IDENTITY)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx/participant_application_role_tests.rs",
+          "kind": "fn",
+          "symbol": "participant_application_role_rejects_coherent_same_route_coordinator_drift",
+          "required_tokens": [
+            "NativeAmxParticipantApplicationRole::Coordinator",
+            "descriptor.lane_incarnation =",
+            "descriptor.lane_block_height += 1",
+            "descriptor.lane_block_view += 1",
+            "descriptor.subject_hash =",
+            "mutate(&mut leg.participant_proposal.descriptor)",
+            "rebind_participant_identity(leg)",
+            "Err(SAME_ROUTE_DRIFT)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx/participant_application_role_tests.rs",
+          "kind": "fn",
+          "symbol": "participant_application_role_rejects_settlement_identity_and_content_tampering",
+          "required_tokens": [
+            "leg.participant_settlement.lane_id =",
+            "leg.participant_settlement.dataspace_id =",
+            "leg.participant_settlement.lane_incarnation =",
+            "leg.participant_settlement.block_height += 1",
+            "leg.participant_settlement.receipts[0].source_id =",
+            "leg.participant_settlement.receipts[0].timestamp_ms += 1",
+            "leg.participant_settlement_hash =",
+            "for index in 0..receipt.legs.len()",
+            "mutate(&mut altered.legs[index])",
+            "Err(INCONSISTENT_IDENTITY)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx/participant_application_role_tests.rs",
+          "kind": "fn",
+          "symbol": "participant_application_lookup_validates_later_legs_after_an_exact_match",
+          "required_tokens": [
+            "receipt.legs.swap(0, matching_index)",
+            "let descriptor = &receipt.legs[0].participant_proposal.descriptor",
+            "&receipt, route.0, route.1, route.2,",
+            "Ok(true)",
+            "receipt.legs[1]",
+            ".participant_previous_block_height += 1",
+            "for lane_id in [route.0, LaneId::new(90)]",
+            "&receipt, lane_id, route.1, route.2,",
+            "Err(INCONSISTENT_IDENTITY)"
           ]
         },
         {
@@ -8056,106 +8155,16 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
           "kind": "fn",
-          "symbol": "pending_native_participant_recovery_markers",
-          "required_tokens": [
-            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
-            "session_capacity",
-            "NativeAmxParticipantRecoveryMarkerV1::from"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
-          "symbol": "retire_native_participant_recovery_request",
-          "required_tokens": [
-            "native_participant_recovery_requests.remove",
-            "native_participant_recovery_request_owners",
-            "self.effects.retain",
-            "LaneHistoricalRecoveryRequest",
-            "self.effect_keys = self.effects.iter"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
-          "symbol": "reconcile_native_participant_recovery_requests",
-          "required_tokens": [
-            "pending_native_participant_recovery_markers",
-            "filter(|marker| !pending.contains(marker))",
-            "retire_native_participant_recovery_request"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
-          "symbol": "service_next_native_participant_recovery_request",
-          "required_tokens": [
-            "output_guard.acquire",
-            "reconcile_native_participant_recovery_requests",
-            "native_participant_recovery_retry_cursor",
-            "schedule_native_participant_recovery_request"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
-          "symbol": "schedule_native_participant_recovery_request",
-          "required_tokens": [
-            "native_participant_recovery_marker_is_well_formed",
-            "committed_block_hash_at_height",
-            "v2_finality_artifact",
-            "finality.verify",
-            "finality.commit_qc",
-            ".signers",
-            "push_effect",
-            "native_participant_recovery_request_owners",
-            "native_participant_recovery_requests.insert"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
-          "symbol": "validate_native_participant_recovery_request",
-          "required_tokens": [
-            "LANE_HISTORICAL_RECOVERY_VERSION_V2",
-            "request.certificate.is_some",
-            "request.signer_pops.is_empty",
-            "historical_recovery_request_fits_frame",
-            "lane_route_active",
-            "committed_block_hash_at_height",
-            "v2_finality_artifact",
-            "finality.verify",
-            "requester_is_authorized",
-            "finality_artifact_hash",
-            "execution_commitment"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
           "symbol": "serve_historical_recovery_request",
           "required_tokens": [
-            "validate_native_participant_recovery_request",
-            "peer_is_global_finality_signer",
-            "kura.get_block",
-            "native_participant_recovery_block_matches_finality",
-            "historical_recovery_response_fits_frame",
-            "LaneHistoricalRecoveryResponse"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
-          "symbol": "accept_native_participant_recovery_response",
-          "required_tokens": [
-            "native_participant_recovery_requests",
-            "pending_native_participant_recovery_markers",
-            "peer_is_global_finality_signer",
-            "native_participant_recovery_block_matches_finality",
-            "cache_block_body",
-            "repair_native_amx_participant_application_evidence",
-            "reconcile_native_participant_recovery_requests",
-            "close_admission_for_restart"
+            "let Some(sender) = sender else",
+            "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
+            "build_canonical_executed_block_response(",
+            "Err(CanonicalRecoveryReadError::LocalPersistence(error))",
+            "self.output_guard.close_admission_for_restart();",
+            "Err(CanonicalRecoveryReadError::Rejected(error))",
+            "self.push_effect(V2LaneWorkEffect::PostLaneBlock",
+            "LaneHistoricalRecoveryResponse(Box::new(response))"
           ]
         },
         {
@@ -8163,26 +8172,12 @@
           "kind": "method",
           "symbol": "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
           "required_tokens": [
-            "begin_fail_stop_operation",
-            "prune_finalized_pending_certified_merge_entries",
-            "repair_globally_applied_lane_receipts",
-            "hydrate_canonical_lane_artifacts",
-            "drive_lane_sessions",
-            "construction.complete"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "method",
-          "symbol": "V2LaneWorkAdapter::repair_globally_applied_lane_receipts",
-          "required_tokens": [
-            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
-            "pending_native.len() > self.limits.session_capacity.get()",
-            "kura.get_block",
-            "schedule_native_participant_recovery_request",
-            "repair_native_amx_participant_application_evidence",
-            "unresolved_native",
-            "remains without exact durable evidence after repair"
+            "begin_fail_stop_operation()",
+            "if local_peer.public_key() != key_pair.public_key()",
+            "V2LaneWorkError::LocalKeyMismatch",
+            "prune_finalized_pending_certified_merge_entries(finalized_cleanup_height)",
+            "adapter.ensure_globally_applied_lane_receipts_durable()?;",
+            "construction.complete();"
           ]
         },
         {
@@ -8190,10 +8185,92 @@
           "kind": "method",
           "symbol": "V2LaneWorkAdapter::has_pending_historical_recovery",
           "required_tokens": [
-            "historical_recovery_sessions.is_empty",
-            "native_participant_recovery_requests.is_empty",
-            "pending_native_participant_recovery_markers",
-            "Err(_) => true"
+            "!self.historical_recovery_sessions.is_empty()",
+            ".proposals_without_commit_qc()",
+            "self.historical_proposal_still_needs_recovery(proposal)",
+            ".qcs_for_incomplete_sessions()",
+            "qc.body.proposal_height < self.context.height",
+            "self.historical_autonomous_recovery_proposal_for_vote_body(&qc.body)",
+            "self.canonical_proposal_for_vote_body(&qc.body)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::ensure_globally_applied_lane_receipts_durable",
+          "required_tokens": [
+            "lane_application_certified_repair_snapshot_cached(self.limits.session_capacity.get())",
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()",
+            "!ordinary.pair_repairs.is_empty()",
+            "!ordinary.earliest_unapplied.is_empty()",
+            "!native.is_empty()",
+            "return Err(V2LaneWorkError::Persistence(",
+            "not completed by startup repair"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::activate_after_lane_drain_queue_install",
+          "required_tokens": [
+            "if self.startup_activation_complete",
+            "self.lane_drain_queue.as_ref()",
+            "if !Arc::ptr_eq(installed_queue, queue)",
+            ".begin_fail_stop_operation()",
+            "self.hydrate_canonical_lane_artifacts()?;",
+            "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;",
+            "self.startup_activation_complete = true;",
+            "self.drive_lane_sessions();",
+            "activation.complete();"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::need_capacity",
+          "required_tokens": [
+            "limits.session_capacity.get()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::retire_outstanding_request",
+          "required_tokens": [
+            "self.outstanding.take()",
+            ".contains(&outstanding.request_hash)",
+            "self.retired_request_hashes.len() < Self::need_capacity(self.limits)",
+            "self.retired_request_hashes.insert(outstanding.request_hash)",
+            "self.output_guard.close_admission_for_restart()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::reset_front_assembly",
+          "required_tokens": [
+            "self.front_attempts = 0;",
+            "self.assembly_responder = None;",
+            "self.next_chunk_index = 0;",
+            "self.assembly_wire_len = None;",
+            "self.assembly_chunk_count = None;",
+            "self.assembly = Vec::new();",
+            "self.retire_outstanding_request();"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::reconcile_cached_front",
+          "required_tokens": [
+            "self.needs.front().copied()",
+            "self.kura.read_block_body(height).map_err(|error|",
+            "self.output_guard.close_admission_for_restart()",
+            "validate_canonical_executed_block_need(",
+            "!canonical_executed_block_matches_need(&block, &finality, need)",
+            ".preflight_cached_finalized_merge_carrier_reconstruction(&block)",
+            "self.needs.pop_front();",
+            "self.reset_front_assembly();"
           ]
         },
         {
@@ -8906,16 +8983,6 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
           "kind": "fn",
-          "symbol": "native_request_matches_context",
-          "required_tokens": [
-            "validate_plan_binding",
-            "native_body_matches_context",
-            "native_coordinator_predecessor_is_current"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
           "symbol": "native_coordinator_predecessor_is_current",
           "required_tokens": [
             "latest_lane_block_artifact_matching",
@@ -8924,17 +8991,6 @@
             "previous_lane_block_descriptor_hash",
             "lane_block_descriptor_hash",
             "checked_add(1)"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "fn",
-          "symbol": "sign_native_vote_once_with_context",
-          "required_tokens": [
-            "context_is_current(self)",
-            "begin_fail_stop_operation",
-            "signing_guard.record",
-            "signature_preimage"
           ]
         },
         {
@@ -10953,14 +11009,50 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "build_merge_execution_batch_for_consensus",
+          "symbol": "build_merge_execution_candidate_for_consensus",
           "required_tokens": [
             "canonical_merged_lane_frontier_from_world",
             "validate_merge_execution_predecessor_against_frontier",
             "durable_autonomous_merge_source_for_lane_slot",
             "MergeExecutionSource::from_durable",
             "merge_execution_canonical_order_key",
-            "build_merge_execution_batch_from_source_prefix"
+            "build_merge_execution_batch_from_source_prefix",
+            "!consensus.is_current(self)",
+            "epoch_id != admission.expected_epoch()",
+            "consensus.committed_height.checked_add(1)?",
+            "application_block_header.prev_block_hash() != consensus.latest_block_hash",
+            "nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES",
+            "validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)",
+            "lane_authority::authenticated_committee_for_descriptor(",
+            "if descriptor.validator_set != authoritative",
+            "bounded_entrypoints.checked_add(source.input.entrypoints.len())",
+            "next_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS",
+            "sources.truncate(bounded_prefix_len)",
+            ".merge_active_lane_authority_snapshot(application_block_header.height().get())",
+            "let candidate_template = crate::merge::MergeLedgerCandidate {",
+            "lane_authority_catalog,",
+            "Self::select_merge_execution_candidate_prefix(",
+            "MAX_MERGE_LEDGER_ENTRY_BYTES.saturating_sub(MAX_MERGE_QC_BYTES)",
+            "sources[..prefix_len].to_vec()",
+            "consensus.is_current(self).then_some(selected).flatten()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "select_merge_execution_candidate_prefix",
+          "required_tokens": [
+            "let mut lower = 1usize;",
+            "let mut upper = source_count;",
+            "while lower <= upper",
+            "let midpoint = lower + (upper - lower) / 2;",
+            "build_batch(midpoint).and_then(|batch|",
+            "let mut candidate = candidate_template.clone();",
+            "candidate.execution_batch = Some(batch);",
+            "(candidate.canonical_bytes().len() <= unsigned_limit).then_some(candidate)",
+            "best = Some(candidate);",
+            "lower = midpoint.saturating_add(1);",
+            "None => upper = midpoint.saturating_sub(1)"
           ]
         },
         {
@@ -11957,8 +12049,12 @@
           "symbol": "persist_queue_plan_admission_certificate",
           "required_tokens": [
             "QueuePlanAdmissionCertificateStrengthV1::Quorum",
-            "queue_plan_admission_binding_registry_match",
-            "persist_pending_queue_plan_admission_certificate",
+            ".persist_classified_queue_plan_admission(&snapshot.body)",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
+            "admission.certificate.binding != *expected_binding",
+            "snapshot.body = durable_certificate;",
             "disseminate_queue_plan_admission_publication",
             "notify_pending_queue_plan_admission",
             "torii_proxy_snapshot_to_response"
@@ -12061,6 +12157,14 @@
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
           "symbol": "persist_pending_queue_plan_admission_certificate",
+          "required_tokens": [
+            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_pending_queue_plan_admission_certificate_inner",
           "required_tokens": [
             "begin_total_disk_usage_mutation",
             "reconcile_pending_merge_temp_files_unlocked",
@@ -12317,6 +12421,245 @@
         },
         {
           "path": "crates/iroha_core/src/state.rs",
+          "kind": "struct",
+          "symbol": "QueuePlanPendingSignedAliasMemberV1",
+          "required_tokens": [
+            "version",
+            "network_id_digest",
+            "signed_transaction_hash",
+            "entrypoint_hash",
+            "binding_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "struct",
+          "symbol": "QueuePlanSignedAliasTerminalV1",
+          "required_tokens": [
+            "version",
+            "network_id_digest",
+            "entrypoint_hash",
+            "signed_transaction_hash",
+            "binding_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_signed_alias_member_from_obligation",
+          "required_tokens": [
+            ".signed_transaction_hash",
+            "QueuePlanPendingSignedAliasMemberV1",
+            "QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1",
+            "network_id_digest: obligation.network_id_digest",
+            "signed_transaction_hash",
+            "entrypoint_hash: obligation.entrypoint_hash.clone()",
+            "binding_hash: obligation.binding_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_terminal_signed_alias_member_from_obligation",
+          "required_tokens": [
+            ".signed_transaction_hash",
+            "QueuePlanSignedAliasTerminalV1",
+            "QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_VERSION_V1",
+            "network_id_digest: obligation.network_id_digest",
+            "entrypoint_hash: obligation.entrypoint_hash.clone()",
+            "signed_transaction_hash",
+            "binding_hash: obligation.binding_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_signed_alias_member_marker_prefix",
+          "required_tokens": [
+            "network_id_digest: Hash",
+            "signed_transaction_hash: HashOf<SignedTransaction>",
+            "contains a zero identity",
+            "QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_MARKER_PREFIX",
+            "hex::encode(network_id_digest.as_ref())",
+            "hex::encode(signed_transaction_hash.as_ref())",
+            "let start = literal.parse()",
+            "Ok((literal, start))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_signed_alias_member_marker_key",
+          "required_tokens": [
+            "marker.version != QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1",
+            "marker.network_id_digest",
+            ".signed_transaction_hash",
+            "marker.entrypoint_hash",
+            "marker.binding_hash",
+            "QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_MARKER_PREFIX",
+            "hex::encode(marker.network_id_digest.as_ref())",
+            "hex::encode(marker.signed_transaction_hash.as_ref())",
+            "hex::encode(marker.entrypoint_hash.as_ref())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_signed_alias_member_marker_payload",
+          "required_tokens": [
+            "queue_plan_pending_signed_alias_member_marker_key(marker)?",
+            "norito::to_bytes(marker)",
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "decode_exact_queue_plan_pending_signed_alias_member_marker",
+          "required_tokens": [
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+            "norito::decode_from_bytes::<QueuePlanPendingSignedAliasMemberV1>(payload)",
+            "queue_plan_pending_signed_alias_member_marker_payload",
+            "queue_plan_pending_signed_alias_member_marker_key",
+            "canonical.as_slice() != payload || &expected_key != key"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_signed_alias_terminal_marker_key",
+          "required_tokens": [
+            "marker.version != QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_VERSION_V1",
+            "marker.network_id_digest",
+            "marker.entrypoint_hash",
+            ".signed_transaction_hash",
+            "marker.binding_hash",
+            "queue_plan_signed_alias_terminal_marker_key_from_claim"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_signed_alias_terminal_marker_key_from_claim",
+          "required_tokens": [
+            "network_id_digest: Hash",
+            "entrypoint_hash: HashOf<TransactionEntrypoint>",
+            "contains a zero identity",
+            "QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_MARKER_PREFIX",
+            "hex::encode(network_id_digest.as_ref())",
+            "hex::encode(entrypoint_hash.as_ref())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_signed_alias_terminal_marker_payload",
+          "required_tokens": [
+            "queue_plan_signed_alias_terminal_marker_key(marker)?",
+            "norito::to_bytes(marker)",
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "decode_exact_queue_plan_signed_alias_terminal_marker",
+          "required_tokens": [
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+            "norito::decode_from_bytes::<QueuePlanSignedAliasTerminalV1>(payload)",
+            "queue_plan_signed_alias_terminal_marker_payload",
+            "queue_plan_signed_alias_terminal_marker_key",
+            "canonical.as_slice() != payload || &expected_key != key"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "require_queue_plan_pending_signed_alias_member_marker",
+          "required_tokens": [
+            "queue_plan_pending_signed_alias_member_from_obligation(obligation)",
+            "return Ok(None)",
+            "queue_plan_pending_signed_alias_member_marker_key(&expected)?",
+            "storage.get(&key).ok_or_else",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "current != expected",
+            "Ok(Some(key))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_signed_alias_members_from_storage",
+          "required_tokens": [
+            "queue_plan_pending_signed_alias_member_marker_prefix",
+            "storage.range(start..)",
+            "key.as_ref().starts_with(&prefix)",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "marker.network_id_digest != network_id_digest",
+            "marker.signed_transaction_hash != signed_transaction_hash",
+            "queue_plan_admission_registry_marker_key",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "registry.binding_hash != marker.binding_hash",
+            "storage.get(&obligation_key).ok_or_else",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
+            "members.push(marker)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_exact_route_member_state_in_storage",
+          "required_tokens": [
+            "prevalidate_queue_plan_pending_route_rosters",
+            "obligation.routes.iter().copied()",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_binding_application_evidence_in_view",
+          "required_tokens": [
+            "binding.validate_structure()?",
+            "binding.network_id_digest != expected_network_id_digest",
+            "queue_plan_pending_obligation_from_binding(binding)",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "registry != binding.registry_value()",
+            "let outer_committed = state.has_entrypoint",
+            "queue_plan_signed_identity_committed",
+            "exact_route_members_absent",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "stored_pending_alias.is_none() && stored_terminal_alias.is_none()",
+            "QueuePlanBindingApplicationEvidence::AppliedDirect",
+            "compact terminal state retains its pending reverse index",
+            "stored == expected_terminal",
+            "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_pending_exact_route_member_state_in_storage",
+            "QueuePlanBindingApplicationEvidence::Pending",
+            "QueuePlanBindingApplicationEvidence::PendingStale"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "resolve_queue_plan_pending_obligations_from_block",
+          "required_tokens": [
+            "required_queue_plan_pending_obligations_for_entrypoints",
+            "block.external_entrypoints_cloned()",
+            "TransactionEntrypoint::External(transaction) => Some(transaction.hash())",
+            "TransactionEntrypoint::SealedReveal(reveal)",
+            "crate::tx::authenticated_signed_replay_alias(self, &entrypoint)",
+            "Some(reveal.signed_transaction().hash())",
+            "collect::<BTreeSet<_>>()",
+            "resolve_required_queue_plan_pending_obligations(required, committed_signed_identities)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
           "symbol": "queue_plan_pending_route_member_identity",
           "required_tokens": [
@@ -12474,11 +12817,16 @@
           "kind": "fn",
           "symbol": "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
           "required_tokens": [
+            "for route in &obligation.routes",
             "prevalidated_routes.contains(route)",
             "queue_plan_pending_route_member_from_obligation(obligation, *route)?",
+            "queue_plan_pending_route_member_marker_key",
             "decode_exact_queue_plan_pending_route_member_marker",
             "marker != expected",
+            "present = present.saturating_add(1)",
+            "present == obligation.routes.len()",
             "QueuePlanPendingRouteMemberState::AllPresent",
+            "present == 0",
             "QueuePlanPendingRouteMemberState::AllAbsent",
             "partial exact route-member set"
           ]
@@ -12516,14 +12864,21 @@
           "kind": "fn",
           "symbol": "queue_plan_registry_owner_application_state_in_view",
           "required_tokens": [
+            "queue_plan_signed_alias_terminal_marker_key_from_claim",
+            "let outer_committed = state.has_entrypoint",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "require_queue_plan_pending_signed_alias_member_marker",
             "queue_plan_pending_exact_route_member_state_in_storage",
             "pending obligation `{key}` survived canonical transaction membership",
             "queue_plan_signed_identity_committed",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             "QueuePlanAdmissionApplicationState::Pending",
             "QueuePlanAdmissionApplicationState::PendingStale",
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
             "directly applied registry owner retains terminal marker",
             "retains pending reverse index",
+            "terminal.binding_hash == registry_binding_hash",
+            "Some(terminal.signed_transaction_hash)",
             "conflicts with registry ownership or committed membership",
             "QueuePlanAdmissionApplicationState::Applied"
           ]
@@ -12533,11 +12888,13 @@
           "kind": "fn",
           "symbol": "queue_plan_binding_application_state",
           "required_tokens": [
-            "state.has_entrypoint",
+            "let outer_committed = state.has_entrypoint",
+            "queue_plan_signed_identity_committed",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             "queue_plan_binding_application_state_in_storage",
             "expected",
-            "committed",
+            "outer_committed",
+            "signed_committed",
             "active"
           ]
         },
@@ -12554,6 +12911,10 @@
             "QueuePlanAdmissionApplicationState::PendingStale",
             "queue_plan_pending_signed_alias_member_from_obligation",
             "queue_plan_terminal_signed_alias_member_from_obligation",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "directly applied admission `{key}` retains a signed-alias marker",
+            "terminal admission `{key}` retains its pending reverse index",
             "stored_terminal_alias.as_ref() == terminal_alias.as_ref()",
             "QueuePlanAdmissionApplicationState::Applied"
           ]
@@ -12585,12 +12946,96 @@
           "kind": "fn",
           "symbol": "classify_pending_queue_plan_admission",
           "required_tokens": [
-            "pending_queue_plan_admission_registry_lookup",
+            "let state_view = self.view();",
+            "Self::classify_pending_queue_plan_admission_in_view(&state_view, bytes, carrier_height)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "classify_pending_queue_plan_admission_in_view",
+          "required_tokens": [
+            "Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?",
             "QueuePlanAdmissionApplicationState::PendingStale",
             "PendingQueuePlanAdmissionDisposition::Stale",
             "QueuePlanAdmissionApplicationState::Pending",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
             "QueuePlanAdmissionApplicationState::Applied",
-            "PendingQueuePlanAdmissionDisposition::Exact"
+            "PendingQueuePlanAdmissionDisposition::Applied",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "Queue::classify_plan_admission_context_in_view(",
+            "PendingQueuePlanAdmissionDisposition::Future",
+            "Self::validate_queue_plan_admissions_for_carrier_in_view(",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "pending_queue_plan_admission_registry_lookup_in_view",
+          "required_tokens": [
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "state_view.network_id()",
+            "Self::queue_plan_admission_registry_match_in_view(",
+            "admission.registry_key.entrypoint_hash.clone()",
+            "admission.registry_value.binding_hash",
+            "map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?",
+            "Self::queue_plan_admission_application_state(state_view, &admission)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "persist_classified_queue_plan_admission",
+          "required_tokens": [
+            "const FRONTIER_RECONCILIATION_TIMEOUT: Duration = Duration::from_millis(250);",
+            "self.queue_plan_admission_persistence_lock.lock()",
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "pending_queue_plan_admission_certificate(incoming_hash)?",
+            "pending_queue_plan_admission_certificates_bounded(",
+            "self.kura.pending_queue_plan_admission_capacity()",
+            "existing.registry_key != incoming.registry_key",
+            "existing.certificate.binding == incoming.certificate.binding",
+            "self.state_commit_lock.lock()",
+            "Self::classify_pending_queue_plan_admission_in_view(",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
+            "verify_pending_queue_plan_admission_durable_height(committed_height)",
+            "another live QueuePlan binding already owns the same logical admission",
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "expected_durable_height != committed_height",
+            "one_ahead != Some(actual_durable_height)",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "Instant::now() >= *deadline",
+            "std::thread::yield_now();",
+            "Err(error) => return Err(error.into())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+          "required_tokens": [
+            "self.ensure_canonical_storage_not_poisoned()?",
+            "self.canonical_chain_lock.lock()",
+            "self.block_store.lock().read_exact_durable_index_count()?",
+            "actual_durable_height != expected_durable_height",
+            "Error::QueuePlanAdmissionDurableHeightMismatch",
+            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "verify_pending_queue_plan_admission_durable_height",
+          "required_tokens": [
+            "self.ensure_canonical_storage_not_poisoned()?",
+            "self.canonical_chain_lock.lock()",
+            "self.block_store.lock().read_exact_durable_index_count()?",
+            "actual_durable_height != expected_durable_height",
+            "Error::QueuePlanAdmissionDurableHeightMismatch",
+            "Ok(())"
           ]
         },
         {
@@ -12762,12 +13207,12 @@
             "queue_plan_pending_signed_alias_members_from_storage",
             "let mut affected_routes = BTreeSet::new()",
             "for (entrypoint_hash, expected_binding_hash) in &pending_obligations",
+            "decode_exact_queue_plan_pending_obligation_marker",
             "affected_routes.extend(obligation.routes.iter().copied())",
             "for member in alias_members.iter().flatten()",
             "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
             "prevalidate_queue_plan_pending_route_rosters",
             "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
-            "decode_exact_queue_plan_pending_obligation_marker",
             "obligation.binding_hash != expected_binding_hash",
             "autonomous QueuePlan pending obligation disappeared before resolution",
             "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
@@ -13234,7 +13679,6 @@
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "finalize_plan_journal_startup_recovery()",
             "IrohaNetwork::start_with_crypto_and_initial_authorities("
           ]
         },
@@ -13283,7 +13727,8 @@
           "required_tokens": [
             "pending_queue_plan_admission_certificates_bounded",
             "classify_pending_queue_plan_admission",
-            "PendingQueuePlanAdmissionDisposition::Exact",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
+            "PendingQueuePlanAdmissionDisposition::Applied",
             "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
             "PendingQueuePlanAdmissionDisposition::Stale",
             "reject_exact_queue_plan_admission_claim",

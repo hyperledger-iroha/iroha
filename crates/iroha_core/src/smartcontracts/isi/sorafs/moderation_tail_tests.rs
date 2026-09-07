@@ -367,7 +367,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     let appeal = fixture.appeal();
     let juror = fixture.juror_id();
     let outsider = fixture.outsider_id();
-    let mut wrong_root = proof_for_appeal(&appeal);
+    let mut wrong_root = proof_for_appeal(&appeal, &juror);
     wrong_root.commitment_root[0] ^= 1;
     assert!(
         fixture
@@ -383,7 +383,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     );
     assert_eq!(fixture.appeal().eligible_jurors.len(), 0);
     fixture.register_juror();
-    let proof = proof_for_appeal(&fixture.appeal());
+    let proof = proof_for_appeal(&fixture.appeal(), &juror);
     assert!(
         fixture
             .run(1_002_001, |transaction| {
@@ -770,7 +770,7 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
             proof_digest: [0xA1; 32],
             nullifier: [0xB1; 32],
             pop_snapshot_digest: appeal.pop_snapshot_digest,
-            credential_expires_at_epoch: 2_000,
+            credential_expires_at_epoch: shared_pop_material().credential.expires_at_epoch,
             registered_at_unix_ms: 1_002_000,
         },
         ModerationJurorEligibilityRecordV1 {
@@ -781,7 +781,7 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
             proof_digest: [0xA2; 32],
             nullifier: [0xB2; 32],
             pop_snapshot_digest: appeal.pop_snapshot_digest,
-            credential_expires_at_epoch: 2_000,
+            credential_expires_at_epoch: shared_pop_material().credential.expires_at_epoch,
             registered_at_unix_ms: 1_002_000,
         },
     ];
@@ -913,8 +913,8 @@ fn later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot() {
                 .execute(&manager, transaction)
         })
         .unwrap();
-    let proof = proof_for_appeal(&fixture.appeal());
     let juror = fixture.juror_id();
+    let proof = proof_for_appeal(&fixture.appeal(), &juror);
     fixture
         .run(1_002_000, |transaction| {
             RegisterSorafsModerationJurorEligibility::new(

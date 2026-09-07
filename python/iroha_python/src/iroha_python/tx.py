@@ -541,9 +541,9 @@ class TransactionDraft:
 
         Native privacy construction remains closed until this binding exists;
         it then requires the selected row to be active and its complete
-        compiled profile to equal the executing binary. The manifest should be
-        obtained from :meth:`ToriiClient.privacy_capabilities_v1` over an
-        authenticated transport.
+        compiled profile to equal the executing binary. The native manifest must
+        come from :meth:`ToriiClient.privacy_capabilities_v1` and be bound to this
+        draft's exact network. Offline decoded archives cannot grant admission.
         """
 
         if not _is_native_crypto_instance(manifest, "PrivacyExact12CapabilityManifestV1"):
@@ -552,6 +552,7 @@ class TransactionDraft:
             )
         if self._privacy_capability_manifest is not None:
             raise ValueError("transaction draft already has an Exact12 manifest binding")
+        manifest.require_transaction_network(self._config.network_id)
         self._privacy_capability_manifest = manifest
         return self
 

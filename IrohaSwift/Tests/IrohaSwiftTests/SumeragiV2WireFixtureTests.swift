@@ -861,6 +861,89 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             let encoded = try Data(sumeragiV2Hex: row.hex)
             XCTAssertThrowsError(try SumeragiV2Status.decodeCanonical(encoded), row.name)
         }
+
+        let rows = try fixtureRows()
+        func fixture(_ kind: String, _ name: String) throws -> Data {
+            let row = try XCTUnwrap(rows.first { $0.kind == kind && $0.name == name })
+            return try Data(sumeragiV2Hex: row.hex)
+        }
+        func counted(_ count: UInt64, suffix: Data = Data()) -> Data {
+            Data((0..<8).map { UInt8(truncatingIfNeeded: count >> ($0 * 8)) }) + suffix
+        }
+        func replaceMessageField(_ name: String, _ path: [Int], _ value: Data) throws -> Data {
+            var messageFields = try sumeragiWireFixtureFields(fixture("message", name))
+            let payload = messageFields[1]
+            messageFields[1] = Data(payload.prefix(4)) + (try replacingSumeragiWireFixtureField(
+                Data(payload.dropFirst(4)), path: [0] + path, with: value
+            ))
+            return messageFields.reduce(into: Data()) { $0.append(sumeragiWireFixtureField($1)) }
+        }
+        let hostileCounts: [UInt64] = [1, 2, 1_048_576, UInt64(Int.max), UInt64.max]
+        let vectorCases: [(String, [Int])] = [
+            ("quorum_certificate", [5]),
+            ("timeout_certificate", [1]),
+            ("proposal", [3, 4]),
+        ]
+        func assertVectorRejection(_ data: Data, status: Bool = false, count: UInt64) {
+            XCTAssertThrowsError(
+                try status
+                    ? SumeragiV2Status.decodeCanonical(data).encode()
+                    : SumeragiV2ConsensusMessage.decodeCanonical(data).encode()
+            ) { error in
+                XCTAssertEqual(error as? SumeragiV2WireError, .invalid(
+                    count > UInt64(Int.max)
+                        ? "vector count exceeds platform range"
+                        : "vector count exceeds remaining encoded fields"
+                ))
+            }
+        }
+        for count in hostileCounts {
+            for (name, path) in vectorCases {
+                assertVectorRejection(try replaceMessageField(name, path, counted(count)), count: count)
+            }
+            // A timeout group has its own independently untrusted signer vector.
+            let group = sumeragiWireFixtureField(Data([0]))
+                + sumeragiWireFixtureField(counted(count))
+                + sumeragiWireFixtureField(counted(1, suffix: Data([1])))
+            assertVectorRejection(try replaceMessageField(
+                "timeout_certificate", [1], counted(1, suffix: sumeragiWireFixtureField(group))
+            ), count: count)
+            for field in [1, 2, 3, 4, 6, 10] {
+                assertVectorRejection(try replacingSumeragiWireFixtureField(
+                    fixture("status", "compact"), path: [19, field], with: counted(count)
+                ), status: true, count: count)
+            }
+            for (name, path) in [
+                ("vote", [6]), ("quorum_certificate", [6]),
+                ("payload_chunk", [2]), ("certified_body_response", [2]),
+            ] {
+                XCTAssertThrowsError(try SumeragiV2ConsensusMessage.decodeCanonical(
+                    replaceMessageField(name, path, counted(count))
+                )) { error in
+                    XCTAssertEqual(error as? SumeragiV2WireError, .invalid(
+                        count > UInt64(Int.max)
+                            ? "byte vector length exceeds platform range"
+                            : "byte vector is truncated"
+                    ))
+                }
+            }
+        }
+        assertVectorRejection(try replaceMessageField(
+            "quorum_certificate", [5], counted(2, suffix: Data([0]))
+        ), count: 2)
+        // One empty element has enough prefix bytes; its u32 schema rejects it.
+        XCTAssertThrowsError(try SumeragiV2ConsensusMessage.decodeCanonical(
+            replaceMessageField("quorum_certificate", [5], counted(1, suffix: Data([0])))
+        )) { error in
+            XCTAssertEqual(error as? SumeragiV2WireError, .invalid("u32 is truncated"))
+        }
+        var emptyStatus = try fixture("status", "compact")
+        for field in [1, 2, 3, 4, 6, 10] {
+            emptyStatus = try replacingSumeragiWireFixtureField(
+                emptyStatus, path: [19, field], with: counted(0)
+            )
+        }
+        XCTAssertEqual(try SumeragiV2Status.decodeCanonical(emptyStatus).encode(), emptyStatus)
     }
 
     func testCommitCertificateBindingCorruptionsFailAgainstExactRequest() throws {
@@ -935,6 +1018,60 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         "commit_certificate_request",
         "commit_certificate_response",
     ]
+}
+
+// Decode only the compact field boundaries of trusted fixtures so adversarial
+// tests can replace one payload while retaining every enclosing length prefix.
+private func sumeragiWireFixtureFields(_ data: Data) throws -> [Data] {
+    let bytes = Array(data)
+    var fields: [Data] = []
+    var offset = 0
+    while offset < bytes.count {
+        var length = 0
+        var shift = 0
+        while true {
+            guard offset < bytes.count, shift < 56 else {
+                throw SumeragiV2WireError.invalid("invalid fixture field length")
+            }
+            let byte = bytes[offset]
+            offset += 1
+            length |= Int(byte & 0x7f) << shift
+            if byte & 0x80 == 0 { break }
+            shift += 7
+        }
+        guard length <= bytes.count - offset else {
+            throw SumeragiV2WireError.invalid("truncated fixture field")
+        }
+        fields.append(Data(bytes[offset..<(offset + length)]))
+        offset += length
+    }
+    return fields
+}
+
+private func sumeragiWireFixtureField(_ payload: Data) -> Data {
+    var length = payload.count
+    var encoded = Data()
+    while length >= 0x80 {
+        encoded.append(UInt8(length & 0x7f) | 0x80)
+        length >>= 7
+    }
+    encoded.append(UInt8(length))
+    encoded.append(payload)
+    return encoded
+}
+
+private func replacingSumeragiWireFixtureField(
+    _ data: Data, path: [Int], with payload: Data
+) throws -> Data {
+    guard let index = path.first else { return payload }
+    var fields = try sumeragiWireFixtureFields(data)
+    guard fields.indices.contains(index) else {
+        throw SumeragiV2WireError.invalid("missing fixture field")
+    }
+    fields[index] = try replacingSumeragiWireFixtureField(
+        fields[index], path: Array(path.dropFirst()), with: payload
+    )
+    return fields.reduce(into: Data()) { $0.append(sumeragiWireFixtureField($1)) }
 }
 
 private extension Data {

@@ -100,11 +100,7 @@ fn validate_pop_payload_bytes_rejects_oversize_and_noncanonical_archives() {
     assert!(!outcome.is_ok(), "{outcome:?}");
     assert_eq!(outcome.code, "SFS-NORITO-001", "{outcome:?}");
 
-    let compressed = norito::to_compressed_bytes(
-        &pop_enrollment(),
-        Some(norito::CompressionConfig::default()),
-    )
-    .expect("encode noncanonical compressed PoP enrollment");
+    let compressed = crate::canonical_test_support::with_compression_tag(&pop_enrollment());
     let outcome = validate_pop_payload_bytes(
         PopKind::EnrollmentRequest,
         &compressed,
@@ -124,4 +120,17 @@ fn validate_pop_payload_bytes_rejects_signature_tampering() {
     credential.credential_id = pop_scalar(0x99);
     let outcome = pop_outcome(PopKind::Credential, &credential, "bad-pop-signature.to", 34);
     assert_failure(&outcome, "SFS-SIG-009", CATEGORY_SIGNATURE);
+}
+
+#[test]
+fn canonical_pop_reference_validation_ignores_enclosing_layout() {
+    let enrollment = pop_enrollment();
+    let bytes = norito::encode_canonical(&enrollment).expect("canonical enrollment");
+    for flags in crate::canonical_test_support::supported_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        let decoded: PopEnrollmentRequestV1 =
+            decode_pop_reference_payload(&bytes).expect("canonical reference enrollment");
+        assert_eq!(decoded, enrollment);
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
 }

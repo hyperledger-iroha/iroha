@@ -2273,6 +2273,239 @@ fn outbound_payload_at_view(service: &ProductionV2Services, view: u64) -> Encode
     )
     .expect("encode view-owned payload")
 }
+struct WorkerViewWalFixture {
+    adapter: SumeragiV2Adapter,
+    _directory: TempDir,
+}
+impl WorkerViewWalFixture {
+    fn new(
+        service: &mut ProductionV2Services,
+        locked_commit: Option<(wire::QuorumCertificate, wire::Vote)>,
+    ) -> Self {
+        use crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate;
+
+        let directory = TempDir::new().expect("temporary worker view safety WAL");
+        let wal_path = directory.path().join("worker-view.wal");
+        let verified = VerifiedHeightContext::genesis(
+            service.context.clone(),
+            service.validator_set_pops.clone(),
+        )
+        .expect("verify final worker context and validator proofs");
+        let fingerprints = AdapterFingerprints {
+            node: Hash::new(b"worker-view-fixture-node"),
+            build: Hash::new(b"worker-view-fixture-build"),
+            config: Hash::new(b"worker-view-fixture-config"),
+        };
+        let consensus_key_hash = [0xA7; 32];
+        let adapter = if let Some(locked_commit) = locked_commit {
+            crate::sumeragi::v2::worker_view_adapter_with_replayed_commit(
+                wal_path.clone(),
+                verified,
+                service
+                    .local_validator
+                    .expect("worker lock fixture is a validator"),
+                service.active_tag.generation(),
+                consensus_key_hash,
+                fingerprints,
+                locked_commit,
+            )
+        } else {
+            let (adapter, startup) = SumeragiV2Adapter::open(
+                wal_path.clone(),
+                verified,
+                service.local_validator,
+                service.active_tag.generation(),
+                consensus_key_hash,
+                fingerprints,
+                DeferredAdmissionOrdinalSource::new(0),
+            )
+            .expect("open actual worker view adapter");
+            assert!(startup.is_empty());
+            adapter
+        };
+        assert_eq!(adapter.current_tag(), service.active_tag);
+        let authority = adapter
+            .leader_wire_recovery_authority()
+            .expect("derive initial worker authority from the open WAL");
+        let roster = service
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
+            roster.len(),
+            service.context.da_layout.max_chunk_count,
+        )
+        .expect("bounded worker view ingress store");
+        let (gate, restore) = LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(
+            adapter
+                .mint_leader_wire_store_authority(&wal_path)
+                .expect("mint the actual worker WAL sibling owner"),
+            service.context.id(),
+            service.context.height,
+            fingerprints.node.into(),
+            roster.clone(),
+            capacity,
+            service.context.da_layout.max_chunk_count,
+            authority,
+            &[],
+            &[],
+        )
+        .expect("open exact worker WAL-owned ingress store");
+        let ingress = Arc::new(
+            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                crate::sumeragi::fair_v2_ingress_required_transport_completion_bytes(
+                    service.context.da_layout,
+                )
+                .max(crate::sumeragi::MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES),
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
+        ingress
+            .configure_roster_for_context(
+                roster,
+                &service.context.network_id,
+                service.context.da_layout,
+            )
+            .expect("configure final worker view ingress geometry");
+        ingress.require_leader_wire_lifecycle_gate();
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                gate,
+                restore,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+                service.context.id(),
+                service.context.height,
+            )
+            .expect("bind actual worker view ingress store");
+        service.leader_wire_recovery_authority = authority;
+        service.leader_wire_ingress = ingress;
+        service
+            .leader_wire_ingress
+            .open()
+            .expect("open worker ingress after actual WAL authority");
+        Self {
+            adapter,
+            _directory: directory,
+        }
+    }
+
+    fn stage_timeout(
+        &mut self,
+        certificate: wire::TimeoutCertificate,
+    ) -> (
+        EventTag,
+        wire::TimeoutCertificate,
+        Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    ) {
+        let authenticated = self
+            .adapter
+            .authenticate(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+            ))
+            .expect("authenticate real worker timeout certificate");
+        let outcome = self
+            .adapter
+            .receive_authenticated(authenticated)
+            .expect("persist actual worker timeout transition");
+        let mut entered_views = outcome.effects().iter().filter_map(|effect| match effect {
+            AdapterEffect::EnterView {
+                tag,
+                certificate,
+                protected_lock,
+            } => Some((
+                *tag,
+                certificate.clone(),
+                protected_lock
+                    .as_ref()
+                    .map(|prepare| (prepare.proposal_round, prepare.subject)),
+            )),
+            _ => None,
+        });
+        let entered = entered_views.next().expect("one durable EnterView effect");
+        assert!(entered_views.next().is_none());
+        assert_eq!(entered.0, self.adapter.current_tag());
+        entered
+    }
+
+    fn publish(&self, service: &mut ProductionV2Services) {
+        let authority = self
+            .adapter
+            .leader_wire_recovery_authority()
+            .expect("derive the actual post-WAL consumer authority");
+        assert_eq!(authority.consumer_tag(), self.adapter.current_tag());
+        service
+            .finish_runtime_step_reconciliation(None, Some(authority))
+            .expect("publish the actual WAL consumer before EnterView");
+    }
+}
+
+fn worker_view_quorum_signature(keys: &[KeyPair], preimage: &[u8]) -> Vec<u8> {
+    assert_eq!(keys.len(), 4);
+    let signatures = keys[..3]
+        .iter()
+        .map(|key| {
+            Signature::new(key.private_key(), preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate an exact three-of-four worker certificate")
+}
+
+fn worker_view_timeout_certificate(
+    round: wire::ConsensusRound,
+    highest_prepare_qc: Option<wire::QuorumCertificate>,
+    keys: &[KeyPair],
+) -> wire::TimeoutCertificate {
+    let preimage = wire::TimeoutVote {
+        round,
+        highest_prepare_qc: highest_prepare_qc.clone(),
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    wire::TimeoutCertificate {
+        round,
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc,
+            signers: vec![0, 1, 2],
+            aggregate_signature: worker_view_quorum_signature(keys, &preimage),
+        }],
+    }
+}
+
+fn worker_view_prepare_certificate(vote: &wire::Vote, keys: &[KeyPair]) -> wire::QuorumCertificate {
+    let prepare = wire::Vote {
+        phase: wire::GlobalPhase::Prepare,
+        signer: 0,
+        signature: Vec::new(),
+        ..vote.clone()
+    };
+    wire::QuorumCertificate {
+        round: prepare.round,
+        proposal_round: prepare.proposal_round,
+        phase: prepare.phase,
+        subject: prepare.subject,
+        execution_commitment: prepare.execution_commitment,
+        signers: vec![0, 1, 2],
+        aggregate_signature: worker_view_quorum_signature(keys, &prepare.signature_preimage()),
+    }
+}
+
 fn timeout_certificate_at_view(
     service: &ProductionV2Services,
     view: u64,
@@ -2288,19 +2521,21 @@ fn timeout_certificate_at_view(
 }
 #[test]
 fn entered_view_accepts_same_view_higher_generation_supersession() {
-    let (mut service, _) = fixture();
+    let (mut service, keys) = fixture();
+    let mut wal = WorkerViewWalFixture::new(&mut service, None);
     let initial = service.active_tag;
-    let view_one = EventTag::new(
-        initial.height(),
-        initial.view() + 1,
-        Generation::new(initial.generation().get() + 1),
-    );
+    let timeout_round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: initial.height(),
+        view: initial.view(),
+    };
+    let (view_one, certificate, protected_lock) =
+        wal.stage_timeout(worker_view_timeout_certificate(timeout_round, None, &keys));
+    assert_eq!(view_one.view(), initial.view() + 1);
+    assert!(view_one.strictly_advances(initial));
+    wal.publish(&mut service);
     service
-        .entered_view(
-            view_one,
-            timeout_certificate_at_view(&service, initial.view()),
-            None,
-        )
+        .entered_view(view_one, certificate, protected_lock)
         .expect("install the first certified successor view");
     let payload = outbound_payload_at_view(&service, view_one.view());
     service
@@ -2316,11 +2551,28 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
             .is_err(),
         "an equal lifecycle tag is not a supersession"
     );
-    let rebound = EventTag::new(
-        view_one.height(),
-        view_one.view(),
-        Generation::new(view_one.generation().get() + 1),
+    let prepare_vote = wire::Vote {
+        round: timeout_round,
+        proposal_round: timeout_round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: locked_candidate_subject(b"same-view stronger PrepareQC"),
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"same-view parent state"),
+            Hash::new(b"same-view post state"),
+            Hash::new(b"same-view writes"),
+            1,
+            Hash::new(b"same-view executed wire"),
+        ),
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let prepare = worker_view_prepare_certificate(&prepare_vote, &keys);
+    let (rebound, certificate, protected_lock) = wal.stage_timeout(
+        worker_view_timeout_certificate(timeout_round, Some(prepare), &keys),
     );
+    assert_eq!(rebound.view(), view_one.view());
+    assert!(rebound.strictly_advances(view_one));
+    wal.publish(&mut service);
     assert!(
         service
             .entered_view(
@@ -2332,11 +2584,7 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
         "the certificate must still identify the immediate predecessor round"
     );
     service
-        .entered_view(
-            rebound,
-            timeout_certificate_at_view(&service, view_one.view() - 1),
-            None,
-        )
+        .entered_view(rebound, certificate, protected_lock)
         .expect("a stricter same-round TC installs a new same-view generation");
     assert_eq!(service.active_tag, rebound);
     assert!(service.outbound_chunks.is_empty());
@@ -2345,20 +2593,19 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
 #[test]
 fn entered_view_advances_live_leader_wire_recovery_cut() {
     let (mut service, keys) = fixture_with_block_payload();
-    let gate_directory = TempDir::new().expect("temporary live view-cut gate");
-    let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+    let mut wal = WorkerViewWalFixture::new(&mut service, None);
+    let ingress = Arc::clone(&service.leader_wire_ingress);
     let initial = service.active_tag;
-    let next = EventTag::new(
-        initial.height(),
-        initial.view() + 1,
-        Generation::new(initial.generation().get() + 1),
-    );
+    let round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: initial.height(),
+        view: initial.view(),
+    };
+    let (next, certificate, protected_lock) =
+        wal.stage_timeout(worker_view_timeout_certificate(round, None, &keys));
+    wal.publish(&mut service);
     service
-        .entered_view(
-            next,
-            timeout_certificate_at_view(&service, initial.view()),
-            None,
-        )
+        .entered_view(next, certificate, protected_lock)
         .expect("install the certified successor and its live recovery cut");
     let (_, _, stale_proposal, _, stale_sender) =
         productive_chunk_at_view(&service, &keys, initial.view());
@@ -2385,9 +2632,7 @@ fn entered_view_advances_live_leader_wire_recovery_cut() {
 }
 #[test]
 fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
-    let (mut service, _) = fixture_with_block_payload();
-    let gate_directory = TempDir::new().expect("temporary protected-Commit gate");
-    let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+    let (mut service, keys) = fixture_with_block_payload();
     let initial = service.active_tag;
     let protected_round = wire::ConsensusRound {
         context_id: service.context.id(),
@@ -2395,18 +2640,6 @@ fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
         view: initial.view(),
     };
     let protected_subject = locked_candidate_subject(b"live protected Commit vote");
-    let next = EventTag::new(
-        initial.height(),
-        initial.view() + 1,
-        Generation::new(initial.generation().get() + 1),
-    );
-    service
-        .entered_view(
-            next,
-            timeout_certificate_at_view(&service, initial.view()),
-            Some((protected_round, protected_subject)),
-        )
-        .expect("install the certified successor with its exact durable lock");
     let commit = wire::Vote {
         round: protected_round,
         proposal_round: protected_round,
@@ -2422,6 +2655,23 @@ fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
         signer: 0,
         signature: vec![0xA5; 48],
     };
+    let prepare = worker_view_prepare_certificate(&commit, &keys);
+    let commit_intent = wire::Vote {
+        signature: Vec::new(),
+        ..commit.clone()
+    };
+    let mut wal = WorkerViewWalFixture::new(&mut service, Some((prepare, commit_intent)));
+    let ingress = Arc::clone(&service.leader_wire_ingress);
+    let (next, certificate, protected_lock) = wal.stage_timeout(worker_view_timeout_certificate(
+        protected_round,
+        None,
+        &keys,
+    ));
+    assert_eq!(protected_lock, Some((protected_round, protected_subject)));
+    wal.publish(&mut service);
+    service
+        .entered_view(next, certificate, protected_lock)
+        .expect("install the certified successor with its exact durable lock");
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(wire::ConsensusMessageV2::new(
@@ -2458,24 +2708,34 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
 }
 #[test]
 fn outbound_payload_retention_is_constant_across_many_view_changes() {
-    let (mut service, _) = fixture();
+    let (mut service, keys) = fixture();
+    let mut wal = WorkerViewWalFixture::new(&mut service, None);
     let mut max_manifests = 0usize;
     let mut max_payload_bytes = 0usize;
     for view in 0..=1_024 {
-        let tag = EventTag::new(
-            service.context.height,
-            view,
-            Generation::new(view.saturating_add(1)),
-        );
-        if view != 0 {
+        let tag = if view == 0 {
+            wal.adapter.current_tag()
+        } else {
+            let previous = wal.adapter.current_tag();
+            let round = wire::ConsensusRound {
+                context_id: service.context.id(),
+                height: previous.height(),
+                view: previous.view(),
+            };
+            let (tag, certificate, protected_lock) =
+                wal.stage_timeout(worker_view_timeout_certificate(round, None, &keys));
+            wal.publish(&mut service);
             service
-                .entered_view(tag, timeout_certificate_at_view(&service, view - 1), None)
+                .entered_view(tag, certificate, protected_lock)
                 .expect("install monotonic certified view");
             assert!(
                 service.outbound_chunks.is_empty(),
                 "view installation must prune the prior payload before publishing ownership"
             );
-        }
+            tag
+        };
+        assert_eq!(tag.view(), view);
+        assert_eq!(tag.generation().get(), view.saturating_add(1));
         let encoded = outbound_payload_at_view(&service, view);
         service
             .register_outbound_payload(tag, encoded)
@@ -2507,24 +2767,24 @@ fn outbound_payload_retention_is_constant_across_many_view_changes() {
 }
 #[test]
 fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
-    let (mut service, _) = fixture();
+    let (mut service, keys) = fixture();
+    let mut wal = WorkerViewWalFixture::new(&mut service, None);
     let old_tag = service.active_tag;
     let old_payload = outbound_payload_at_view(&service, old_tag.view());
     service
         .register_outbound_payload(old_tag, old_payload.clone())
         .expect("register old-view proposal payload");
     assert_eq!(service.outbound_chunks.len(), 1);
-    let new_tag = EventTag::new(
-        service.context.height,
-        old_tag.view() + 1,
-        Generation::new(old_tag.generation().get() + 1),
-    );
+    let round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: old_tag.height(),
+        view: old_tag.view(),
+    };
+    let (new_tag, certificate, protected_lock) =
+        wal.stage_timeout(worker_view_timeout_certificate(round, None, &keys));
+    wal.publish(&mut service);
     service
-        .entered_view(
-            new_tag,
-            timeout_certificate_at_view(&service, old_tag.view()),
-            None,
-        )
+        .entered_view(new_tag, certificate, protected_lock)
         .expect("install next certified view");
     assert!(service.outbound_chunks.is_empty());
     service

@@ -1,10 +1,7 @@
 //! Purpose-separated adapters for detached `SoraFS` runtime signing roles.
 use super::{
     adapter::ExternalSoftwareSignerAdapterErrorV1,
-    protocol::{
-        SoftwareSignerPublicBindingV1, SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
-        digest_parts,
-    },
+    protocol::{SignerPurposeBindingV1, SignerRoleV1, SoftwareSignerPublicBindingV1, digest_parts},
     typed_payload::{SoftwareSignerPurposeV1, encode_typed_signing_payload},
     unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
 };
@@ -31,7 +28,7 @@ impl fmt::Debug for DetachedSignerClientV1 {
 impl DetachedSignerClientV1 {
     fn try_new(
         client: SoftwareSignerClientV1,
-        expected_role: SoftwareSignerRoleV1,
+        expected_role: SignerRoleV1,
     ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {
         let binding = client.expected_binding().clone();
         binding
@@ -147,9 +144,9 @@ impl ExternalSoftwareSignerGovernanceDagAdapterV1 {
         {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
-        let signer = DetachedSignerClientV1::try_new(client, SoftwareSignerRoleV1::GovernanceDag)?;
+        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::GovernanceDag)?;
         if signer.binding.purpose_binding
-            != (SoftwareSignerPurposeBindingV1::GovernanceDag {
+            != (SignerPurposeBindingV1::GovernanceDag {
                 publisher_peer_id: publisher_peer_id.clone(),
             })
         {
@@ -274,10 +271,8 @@ impl ExternalSoftwareSignerPotrGatewayAdapterV1 {
         if signer_id == [0; 32] {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
-        let signer = DetachedSignerClientV1::try_new(client, SoftwareSignerRoleV1::PotrGateway)?;
-        if signer.binding.purpose_binding
-            != (SoftwareSignerPurposeBindingV1::PotrGateway { signer_id })
-        {
+        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::PotrGateway)?;
+        if signer.binding.purpose_binding != (SignerPurposeBindingV1::PotrGateway { signer_id }) {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
         signer.ed25519_public_key()?;
@@ -339,16 +334,16 @@ impl ExternalSoftwareSignerPotrProviderAdapterV1 {
         if signer_id == [0; 32] || provider_id == [0; 32] || signer_id == provider_id {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
-        let signer = DetachedSignerClientV1::try_new(client, SoftwareSignerRoleV1::PotrProvider)?;
+        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::PotrProvider)?;
         if signer.binding.purpose_binding
-            != (SoftwareSignerPurposeBindingV1::PotrProvider {
+            != (SignerPurposeBindingV1::PotrProvider {
                 signer_id,
                 provider_id,
             })
         {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
-        if signer.binding.key_algorithm != super::protocol::SoftwareSignerKeyAlgorithmV1::MlDsa {
+        if signer.binding.key_algorithm != super::protocol::SignerKeyAlgorithmV1::MlDsa {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
         Ok(Self {
@@ -420,10 +415,9 @@ impl ExternalSoftwareSignerBillingStatementAdapterV1 {
         {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
-        let signer =
-            DetachedSignerClientV1::try_new(client, SoftwareSignerRoleV1::BillingStatement)?;
+        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::BillingStatement)?;
         if signer.binding.purpose_binding
-            != (SoftwareSignerPurposeBindingV1::BillingStatement {
+            != (SignerPurposeBindingV1::BillingStatement {
                 signer_id: signer_id.clone(),
             })
         {
@@ -516,8 +510,8 @@ impl ExternalSoftwareSignerEvidenceViewerAdapterV1 {
     pub fn try_new(
         client: SoftwareSignerClientV1,
     ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {
-        let signer = DetachedSignerClientV1::try_new(client, SoftwareSignerRoleV1::EvidenceViewer)?;
-        if signer.binding.purpose_binding != SoftwareSignerPurposeBindingV1::EvidenceViewer {
+        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::EvidenceViewer)?;
+        if signer.binding.purpose_binding != SignerPurposeBindingV1::EvidenceViewer {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
         signer.ed25519_public_key()?;
@@ -597,8 +591,8 @@ impl ExternalSoftwareSignerStreamTokenAdapterV1 {
     pub fn try_new(
         client: SoftwareSignerClientV1,
     ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {
-        let signer = DetachedSignerClientV1::try_new(client, SoftwareSignerRoleV1::StreamToken)?;
-        if signer.binding.purpose_binding != SoftwareSignerPurposeBindingV1::StreamToken {
+        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::StreamToken)?;
+        if signer.binding.purpose_binding != SignerPurposeBindingV1::StreamToken {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
         signer.ed25519_public_key()?;
@@ -659,9 +653,8 @@ impl ExternalSoftwareSignerPopIssuerAdapterV1 {
         if issuer_id.is_empty() {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
-        let signer = DetachedSignerClientV1::try_new(client, SoftwareSignerRoleV1::PopCredentials)?;
-        if signer.binding.purpose_binding
-            != (SoftwareSignerPurposeBindingV1::PopCredentials { issuer_id })
+        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::PopCredentials)?;
+        if signer.binding.purpose_binding != (SignerPurposeBindingV1::PopCredentials { issuer_id })
         {
             return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
         }
@@ -675,7 +668,7 @@ impl ExternalSoftwareSignerPopIssuerAdapterV1 {
     }
     fn issuer_id(&self) -> &str {
         match &self.signer.binding.purpose_binding {
-            SoftwareSignerPurposeBindingV1::PopCredentials { issuer_id } => issuer_id,
+            SignerPurposeBindingV1::PopCredentials { issuer_id } => issuer_id,
             _ => unreachable!("constructor pins the PoP purpose binding"),
         }
     }

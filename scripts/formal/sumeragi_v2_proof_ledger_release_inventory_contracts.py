@@ -1,3 +1,233 @@
+def _require_late_lane_recovery_runtime_source_contracts(
+    late_lane_recovery_path: Path, late_lane_recovery_test: RustItem | None,
+    errors: list[str],
+) -> None:
+    """Bind the real capacity-one recovery regression and its original release checks."""
+
+    _require_rust_token_sequence(
+        late_lane_recovery_path,
+        late_lane_recovery_test,
+        """
+    fn globally_applied_lane_body_without_certificate_remains_recoverable() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        adapter.limits.session_capacity = NonZeroUsize::new(1).expect("one exact recovery slot");
+        adapter.lane_sessions = LaneBlockSessionCache::new(1);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        """,
+        "late canonical lane recovery must set actual capacity one before canonical ownership arrives",
+        errors,
+    )
+    _require_rust_token_sequence(
+        late_lane_recovery_path,
+        late_lane_recovery_test,
+        """
+        assert!(adapter.proposal_anchor_is_committed_in_state(&proposal));
+        assert!(
+            adapter
+                .kura
+                .read_certified_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "the globally applied body must begin without lane certificate durability"
+        );
+        assert!(
+            !adapter
+                .state
+                .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&recovered),
+            "global application alone must not impersonate lane certificate application"
+        );
+        assert!(
+            adapter.proposal_body_available(&proposal),
+            "the missing certificate must remain reconstructable from the canonical body"
+        );
+        """,
+        "late canonical lane recovery must distinguish global body application "
+        "from lane-certificate durability while preserving reconstruction",
+        errors,
+    )
+    _require_rust_token_sequence(
+        late_lane_recovery_path,
+        late_lane_recovery_test,
+        """
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("rehydrate the late-applied canonical ownership"),
+            0,
+            "no certificate exists yet to persist"
+        );
+        assert!(
+            adapter
+                .lane_sessions
+                .proposals_without_commit_qc()
+                .iter()
+                .any(|pending| pending == &proposal),
+            "rollover must rehydrate ownership which arrived after adapter construction"
+        );
+        assert_eq!(adapter.lane_sessions.len(), 1);
+        assert_eq!(
+            adapter
+                .state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .expect("the receipt-free source remains in the durable recovery inventory")
+                .get(&(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.dataspace_id
+                )),
+            Some(&proposal.descriptor.lane_block_height)
+        );
+        let exact_recovered_cache = adapter.lane_sessions.clone();
+        for _ in 0..2 {
+            assert_eq!(
+                adapter
+                    .persist_anchored_sessions()
+                    .expect("repeat persistence must not charge an exact cached recovery twice"),
+                0
+            );
+            adapter
+                .hydrate_canonical_lane_artifacts()
+                .expect("direct hydration remains idempotent at its exact capacity");
+            assert_eq!(adapter.lane_sessions, exact_recovered_cache);
+            assert!(!adapter.output_guard.restart_required());
+        }
+        let retained_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
+        let retained_prepare_pops = adapter.pops_for_lane_qc(&retained_prepare_qc);
+        assert_eq!(
+            adapter
+                .lane_sessions
+                .insert_qc_with_pops(retained_prepare_qc.clone(), &retained_prepare_pops),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "retain one valid PrepareQC under the active height"
+        );
+        assert!(
+            !adapter
+                .durable_completion_matches_finality(&finality_artifact)
+                .expect("inspect late-applied lane durability"),
+            "the recovered proposal and PrepareQC are not a durable completion"
+        );
+        assert!(
+            adapter
+                .durable_lane_rollover_authority(&finality_artifact)
+                .expect("inspect incomplete decided-lane authority")
+                .is_none(),
+            "the active height must retain ownership until the CommitQC and receipt are durable"
+        );
+        assert!(
+            adapter
+                .lane_sessions
+                .qcs_for_incomplete_sessions()
+                .contains(&retained_prepare_qc),
+            "the semantically equivalent retained QC must remain active-height-owned"
+        );
+        """,
+        "late canonical lane recovery must retain incomplete certificate "
+        "progress in the active predecessor and block successor authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        late_lane_recovery_path,
+        late_lane_recovery_test,
+        """
+        let _ = adapter.drain_effects(usize::MAX);
+        adapter
+            .schedule_retransmission()
+            .expect("schedule the first exact missing-certificate discovery round");
+        let first_round = adapter.drain_effects(usize::MAX);
+        assert!(
+            first_round.iter().any(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostLaneBlock {
+                        message: BlockMessage::LaneBlockProposal(pending),
+                        ..
+                    } if pending == &proposal
+                )
+            }),
+            "the rehydrated proposal must become a bounded certificate request source"
+        );
+        adapter
+            .schedule_retransmission()
+            .expect("reissue exact discovery after the first round is dropped");
+        assert!(
+            adapter.drain_effects(usize::MAX).iter().any(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostLaneBlock {
+                        message: BlockMessage::LaneBlockProposal(pending),
+                        ..
+                    } if pending == &proposal
+                )
+            }),
+            "a dropped first discovery round must not make decided-lane recovery passive"
+        );
+        """,
+        "late canonical lane recovery must keep one bounded exact "
+        "certificate-discovery source live across a dropped round while the "
+        "predecessor stays active",
+        errors,
+    )
+    _require_rust_token_sequence(
+        late_lane_recovery_path,
+        late_lane_recovery_test,
+        """
+        let certificate = LaneBlockCertificateV1 {
+            proposal: recovered.proposal.clone(),
+            prepare_qc: recovered.prepare_qc.clone(),
+            commit_qc: recovered.commit_qc.clone(),
+        };
+        assert_eq!(
+            accept_lane_message_from(
+                &mut adapter,
+                BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                PeerId::new(keys[1].public_key().clone()),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("persist recovered certificate and application receipt"),
+            1
+        );
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("recovered durable certificate");
+        assert_eq!(durable.proposal, recovered.proposal);
+        assert_eq!(durable.prepare_qc, retained_prepare_qc);
+        assert_eq!(durable.commit_qc, recovered.commit_qc);
+        assert!(
+            adapter
+                .kura
+                .lane_block_application_receipt_available(&proposal),
+            "certificate recovery must finish the lane application boundary"
+        );
+        assert!(
+            adapter
+                .durable_completion_matches_finality(&finality_artifact)
+                .expect("validate recovered decided-lane durability"),
+            "the recovered certificate and application receipt must release the preflight"
+        );
+        assert!(
+            adapter
+                .durable_lane_rollover_authority(&finality_artifact)
+                .expect("build recovered decided-lane rollover authority")
+                .is_some(),
+            "the exact recovered certificate and receipt must release successor activation"
+        );
+        """,
+        "late canonical lane recovery must release successor activation only "
+        "after the exact certificate and application receipt are durable",
+        errors,
+    )
+
+
 @dataclass(frozen=True)
 class ProductionLivenessHelperSeal:
     """One whole-item seal for production code owned by a release regression."""
@@ -25,7 +255,7 @@ _PRODUCTION_LIVENESS_HELPER_SEALS = (
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "outbound_lane_message_predecessor_is_ready",
-        "e1adbe51e47c7d2e3629d63279b377473b9140e49e6a1b1970c9483818ebcf4d",
+        "db2addffb9721cf95cd7aa71f06f1f00d1f07824bc7a2817476145cf06599d1a",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
@@ -37,25 +267,25 @@ _PRODUCTION_LIVENESS_HELPER_SEALS = (
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "proposal_can_be_transported",
-        "bb0f15aaf294aa9667b9cf86bd4e1afc86af8d0044d506d50522b30d40fb9900",
+        "e071ff1d871d32a7bf9c0cb8807db0c474920618633953667aa629a5c1974275",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "proposal_predecessor_is_ready_for_progress",
-        "af90f5ebe15136bfc8255dc8d1a8aeac7101d4226c79ef8a94e4821eeeb0d78a",
+        "9a952a9ee41d5ad85c2b18ccd9ea270745f06cb4a27e49550c6eeee4189733b4",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "proposal_can_progress",
-        "eed1b8bf381b8ffe749d5ac1080d5bb23620b70d95b86ee75303ffec9606ffd0",
+        "b41dfab022948cf8f6c33803f200b16f69458117f5cabb83c3d42f714fd9d3ee",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "historical_lane_recovery_message_is_authorized",
-        "a9a193ee69dca20a51183279bc12e98480cad6c99dfbb7f22f81aa6b01458c7f",
+        "e71f8743f602ac749495d043ebea83db81c081f00e51bf8a61bcf9904d84ba18",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
@@ -202,6 +432,159 @@ def _formal_evidence_physical_path(
     return base / relative
 
 
+_READY_VALIDATE_WAL_CRASH_SOURCE_FILES = (
+    "crates/iroha_core/src/sumeragi/v2_ready_durable_validate_adapter_preview.rs",
+    "crates/iroha_core/src/sumeragi/safety_wal.rs",
+    "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+    "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs",
+)
+
+
+@_RECURSIVE_REVIEWED_RUST_SOURCE._reviewed_rust_source_cache()
+def _ready_validate_wal_crash_replay_source_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind the crash regression to exact append, fsync, seal and fresh replay."""
+    errors: list[str] = []
+    sources = [
+        _read_reviewed_rust_source(repo_root, relative, errors, "Ready Validate WAL crash source")
+        for relative in _READY_VALIDATE_WAL_CRASH_SOURCE_FILES
+    ]
+    if errors:
+        return errors
+
+    def item(index: int, name: str, context: str = "") -> RustItem | None:
+        path, source = sources[index]
+        candidates = rust_items(source, name)
+        expected = (rust_code_tokens(context),) if context else ()
+        candidates = tuple(candidate for candidate in candidates if candidate.brace_context == expected)
+        if len(candidates) != 1:
+            errors.append(f"{path}: WAL crash binding requires one exact {name} owner")
+            return None
+        return candidates[0]
+
+    def ordered(index: int, owner: RustItem | None, description: str, anchors: tuple[str, ...]) -> None:
+        if owner is None:
+            return
+        tokens = rust_code_tokens(owner.source)
+        cursor = 0
+        for anchor in anchors:
+            needle = rust_code_tokens(anchor)
+            positions = _token_sequence_positions(tokens[cursor:], needle)
+            if not positions:
+                errors.append(f"{sources[index][0]}: {description} omits or reorders {anchor!r}")
+                return
+            cursor += positions[0] + len(needle)
+
+    bound = item(0, "append_live_wal", "#[allow(dead_code)] impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a>")
+    ordered(0, bound, "Ready Validate durable append before live Sign seal", (
+        "if !self.pre_wal_is_exact()",
+        "adapter.pending_persistence_id = Some(persistence_id)",
+        "adapter.wal.append(&encoded_wal_payload)",
+        "#[cfg(test)] if crash_after_wal_append",
+        "adapter.fail_closed = true",
+        'panic!("injected Ready Validate crash after WAL append")',
+        "let frame_sequence = receipt.sequence()",
+        "frame_sequence != expected_wal_sequence",
+        "frame.payload() != encoded_wal_payload.as_slice()",
+        "LiveWalFrameIdentity::from_append_receipt(frame, receipt, persistence_id)",
+        "PendingRuntimeEffectBinding::from_exact_live_wal_append(",
+        "SealedLiveWalPersistedEffectV1::from_exact_live_append(",
+        ".bind_exact_validate_sign_pending(child_pending)",
+    ))
+    structs = rust_struct_items(sources[0][1], "PreparedReadyDurableValidateBoundSignPublication")
+    if len(structs) != 1 or _token_sequence_count(
+        rust_code_tokens(structs[0].source),
+        rust_code_tokens("#[cfg(test)] crash_after_wal_append: bool"),
+    ) != 1:
+        errors.append("Ready Validate crash injection must remain a test-only bound-publication field")
+    ordered(1, item(1, "append", "impl SafetyWal"), "Ready Validate real WAL append delegation", (
+        "self.append_with_limits(payload, WAL_RETENTION_LIMITS)",
+    ))
+    ordered(1, item(1, "append_with_limits", "impl SafetyWal"), "Ready Validate filesystem append receipt", (
+        "enforce_retention_limits(",
+        "let mut io = FileAppendIo {",
+        "self.append_state.append(payload, &frame_hash, &mut io)",
+        "let receipt = SafetyWalAppendReceipt {",
+        "self.records.push(record)",
+        "Ok(receipt)",
+    ))
+    ordered(1, item(1, "sync_data", "impl WalAppendIo for FileAppendIo<'_>"), "Ready Validate actual WAL sync", (
+        "self.file.sync_data()?",
+        "self.directory.verify_leaf(self.file, self.wal_name)",
+    ))
+    ordered(2, item(2, "append", "impl WalAppendState"), "Ready Validate core WAL acknowledgment order", (
+        "if self.failed_closed",
+        "io.write_all(frame.bytes())",
+        "io.flush()",
+        "io.sync_data()",
+        "wal_append_acknowledged_body!(write_complete, flush_complete, sync_complete)",
+        "self.next_sequence = next_sequence",
+        "self.last_frame_hash = frame.frame_hash()",
+        "Ok(WalAppendReceipt {",
+    ))
+    regression = item(3, "ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit")
+    if regression is not None and tuple(rust_code_tokens(attribute) for attribute in regression.attributes) != (
+        rust_code_tokens("#[test]"),
+    ):
+        errors.append("Ready Validate WAL crash regression must be one non-ignored test")
+    ordered(3, regression, "Ready Validate crash regression exact repeated replay", (
+        "for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit]",
+        ".prepare_direct_validation_succeeded(",
+        ".preflight_publication()",
+        ".bind_validate_sign_predecessor(",
+        "bound.crash_after_wal_append = true",
+        "std::panic::catch_unwind(std::panic::AssertUnwindSafe(",
+        "bound.append_live_wal()",
+        '.expect_err("crash before the append receipt can mint a live Sign seal")',
+        "assert!(adapter.fail_closed)",
+        "assert!(!adapter.ingress_ready())",
+        "assert_eq!(adapter.reducer, reducer_before)",
+        "assert_registry_eq(&adapter.registry, &registry_before)",
+        "assert_eq!(adapter.reducer_fence_generation, fence_before)",
+        "assert_eq!(adapter.wal.recovered_records().len(), records_before + 1)",
+        "drop(adapter)",
+        "for _ in 0..2",
+        "open_test(&directory)",
+        "assert!(recovered.ingress_ready())",
+        "assert!(!recovered.fail_closed)",
+        "durable.prepare_intent(expected_core_vote.round())",
+        "durable.commit_intent(expected_core_vote.round())",
+        "assert_eq!(recovered_intent, Some(expected_core_vote))",
+        "] = startup.as_slice()",
+        "assert_eq!(vote, &expected_vote)",
+        "assert!(vote.signature.is_empty())",
+        ".signature_completed(",
+        "vote.proposal_round == expected_vote.proposal_round",
+        "vote.execution_commitment == expected_vote.execution_commitment",
+        "assert_eq!(recovered.wal.recovered_records().len(), records_before + 1)",
+        "drop(recovered)",
+        'std::fs::read(&wal_path).expect("read WAL after fresh replay and signing"), durable_wal',
+    ))
+    return errors
+
+
+def _historical_hydration_registration_source_errors(
+    path: Path, source: str,
+) -> list[str]:
+    """Require both prospective hydration tests in their current test-only owner."""
+    errors: list[str] = []
+    context = ((
+        "#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")",
+        "mod", "tests",
+    ),)
+    for name in (
+        "historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity",
+        "historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity",
+    ):
+        item = _require_rust_item(path, source, name, errors)
+        _require_rust_item_context(
+            path, item, context, "prospective historical hydration release regression",
+            errors, expected_attributes=("#[test]",),
+        )
+    return errors
+
+
 def _production_liveness_release_inventory_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -216,6 +599,7 @@ def _production_liveness_release_inventory_errors(
     source = release_path.read_text(encoding="utf-8")
     errors.extend(_production_liveness_release_inventory_guard_errors(repo_root))
     errors.extend(_production_liveness_helper_source_seal_errors(repo_root))
+    errors.extend(_ready_validate_wal_crash_replay_source_errors(repo_root))
 
     def shell_array(name: str) -> list[str]:
         marker = f"{name}=(\n"
@@ -237,10 +621,10 @@ def _production_liveness_release_inventory_errors(
 
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
-        ("python", 63),
-        ("javascript", 61),
+        ("python", 65),
+        ("javascript", 63),
         ("swift", 5),
-        ("kotlin", 7),
+        ("kotlin", 8),
         ("java", 6),
     )
     def indented_shell_array(name: str) -> list[str]:
@@ -365,11 +749,7 @@ def _production_liveness_release_inventory_errors(
                 branch = runtime_case.split(branch_marker, 1)[1].split(
                     "\n    ;;", 1
                 )[0]
-                expected_assignment = (
-                    "    observed_test_count=$((6 + 1))"
-                    if surface == "kotlin"
-                    else f"    observed_test_count={_expected_count}"
-                )
+                expected_assignment = f"    observed_test_count={_expected_count}"
                 if branch.splitlines().count(expected_assignment) != 1:
                     errors.append(
                         f"{grouped_harness_path}: grouped Native AMX SDK harness "
@@ -389,7 +769,7 @@ def _production_liveness_release_inventory_errors(
         ("javascript", 88),
         ("swift", 34),
         ("kotlin", 50),
-        ("java", 48),
+        ("java", 59),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -845,8 +1225,16 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 453:
-        errors.append("internal release-regression seal must contain exactly 453 names")
+    hydration_path, hydration_source = _read_reviewed_rust_source(
+        repo_root, "crates/iroha_core/src/sumeragi/v2_lane_work.rs", errors,
+        "prospective historical hydration regression source",
+    )
+    errors.extend(_historical_hydration_registration_source_errors(
+        hydration_path, hydration_source,
+    ))
+
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 465:
+        errors.append("internal release-regression seal must contain exactly 465 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1184,188 +1572,8 @@ def _production_liveness_release_inventory_errors(
             errors,
             expected_attributes=("#[test]",),
         )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
-            assert!(adapter.proposal_anchor_is_committed_in_state(&proposal));
-            assert!(
-                adapter
-                    .kura
-                    .read_certified_lane_block_artifact(
-                        proposal.descriptor.lane_id,
-                        proposal.descriptor.lane_block_height,
-                    )
-                    .is_none(),
-                "the globally applied body must begin without lane certificate durability"
-            );
-            assert!(
-                !adapter
-                    .state
-                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&recovered),
-                "global application alone must not impersonate lane certificate application"
-            );
-            assert!(
-                adapter.proposal_body_available(&proposal),
-                "the missing certificate must remain reconstructable from the canonical body"
-            );
-            """,
-            "late canonical lane recovery must distinguish global body application "
-            "from lane-certificate durability while preserving reconstruction",
-            errors,
-        )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
-            assert_eq!(
-                adapter
-                    .persist_anchored_sessions()
-                    .expect("rehydrate the late-applied canonical ownership"),
-                0,
-                "no certificate exists yet to persist"
-            );
-            assert!(
-                adapter
-                    .lane_sessions
-                    .proposals_without_commit_qc()
-                    .iter()
-                    .any(|pending| pending == &proposal),
-                "rollover must rehydrate ownership which arrived after adapter construction"
-            );
-            let retained_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
-            let retained_prepare_pops = adapter.pops_for_lane_qc(&retained_prepare_qc);
-            assert_eq!(
-                adapter
-                    .lane_sessions
-                    .insert_qc_with_pops(retained_prepare_qc.clone(), &retained_prepare_pops),
-                Ok(LaneBlockSessionInsertOutcome::Inserted),
-                "retain one valid PrepareQC under the active height"
-            );
-            assert!(
-                !adapter
-                    .durable_completion_matches_finality(&finality_artifact)
-                    .expect("inspect late-applied lane durability"),
-                "the recovered proposal and PrepareQC are not a durable completion"
-            );
-            assert!(
-                adapter
-                    .durable_lane_rollover_authority(&finality_artifact)
-                    .expect("inspect incomplete decided-lane authority")
-                    .is_none(),
-                "the active height must retain ownership until the CommitQC and receipt are durable"
-            );
-            assert!(
-                adapter
-                    .lane_sessions
-                    .qcs_for_incomplete_sessions()
-                    .contains(&retained_prepare_qc),
-                "the semantically equivalent retained QC must remain active-height-owned"
-            );
-            """,
-            "late canonical lane recovery must retain incomplete certificate "
-            "progress in the active predecessor and block successor authority",
-            errors,
-        )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
-            let _ = adapter.drain_effects(usize::MAX);
-            adapter
-                .schedule_retransmission()
-                .expect("schedule the first exact missing-certificate discovery round");
-            let first_round = adapter.drain_effects(usize::MAX);
-            assert!(
-                first_round.iter().any(|effect| {
-                    matches!(
-                        effect,
-                        V2LaneWorkEffect::PostLaneBlock {
-                            message: BlockMessage::LaneBlockProposal(pending),
-                            ..
-                        } if pending == &proposal
-                    )
-                }),
-                "the rehydrated proposal must become a bounded certificate request source"
-            );
-            adapter
-                .schedule_retransmission()
-                .expect("reissue exact discovery after the first round is dropped");
-            assert!(
-                adapter.drain_effects(usize::MAX).iter().any(|effect| {
-                    matches!(
-                        effect,
-                        V2LaneWorkEffect::PostLaneBlock {
-                            message: BlockMessage::LaneBlockProposal(pending),
-                            ..
-                        } if pending == &proposal
-                    )
-                }),
-                "a dropped first discovery round must not make decided-lane recovery passive"
-            );
-            """,
-            "late canonical lane recovery must keep one bounded exact "
-            "certificate-discovery source live across a dropped round while the "
-            "predecessor stays active",
-            errors,
-        )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
-            let certificate = LaneBlockCertificateV1 {
-                proposal: recovered.proposal.clone(),
-                prepare_qc: recovered.prepare_qc.clone(),
-                commit_qc: recovered.commit_qc.clone(),
-            };
-            assert_eq!(
-                accept_lane_message_from(
-                    &mut adapter,
-                    BlockMessage::LaneBlockCertificate(Box::new(certificate)),
-                    PeerId::new(keys[1].public_key().clone()),
-                    0,
-                ),
-                V2LaneIngressOutcome::Inserted
-            );
-            assert_eq!(
-                adapter
-                    .persist_anchored_sessions()
-                    .expect("persist recovered certificate and application receipt"),
-                1
-            );
-            let durable = adapter
-                .kura
-                .read_certified_lane_block_artifact(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .expect("recovered durable certificate");
-            assert_eq!(durable.proposal, recovered.proposal);
-            assert_eq!(durable.prepare_qc, retained_prepare_qc);
-            assert_eq!(durable.commit_qc, recovered.commit_qc);
-            assert!(
-                adapter
-                    .kura
-                    .lane_block_application_receipt_available(&proposal),
-                "certificate recovery must finish the lane application boundary"
-            );
-            assert!(
-                adapter
-                    .durable_completion_matches_finality(&finality_artifact)
-                    .expect("validate recovered decided-lane durability"),
-                "the recovered certificate and application receipt must release the preflight"
-            );
-            assert!(
-                adapter
-                    .durable_lane_rollover_authority(&finality_artifact)
-                    .expect("build recovered decided-lane rollover authority")
-                    .is_some(),
-                "the exact recovered certificate and receipt must release successor activation"
-            );
-            """,
-            "late canonical lane recovery must release successor activation only "
-            "after the exact certificate and application receipt are durable",
-            errors,
+        _require_late_lane_recovery_runtime_source_contracts(
+            late_lane_recovery_path, late_lane_recovery_test, errors
         )
         if late_lane_recovery_test is not None:
             observed_sha256 = _rust_item_token_sha256(late_lane_recovery_test)
@@ -1429,7 +1637,7 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-            f"ordered 42-module inventory; found {modules}"
+            f"ordered 43-module inventory; found {modules}"
         )
     inventory_rows = ["module\ttest"]
     inventory_has_exact_modules = True
@@ -1461,7 +1669,7 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
-            f"42-entry inventory; found {leg_ids}"
+            f"43-entry inventory; found {leg_ids}"
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -1880,10 +2088,10 @@ def _production_liveness_release_inventory_errors(
                     "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "5de112cad5f1eef2ebeb0225c854e69183aab977262733c226000179861728d7"
+                    "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
+                    "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
@@ -2167,7 +2375,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "f5593c473235d24df71ed42ca3ab74f7a8421aae6601aebb148c7e0b6e4aeab0"
+            "d1cf09532bdbf00d3ed259d42895692c44aaf635899d325316488b4e42ffda56"
         ),
     }
     expected_bootstrap_component_symbols = {
@@ -2417,21 +2625,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory to 866 tests across 42 modules.\n"
+            "current inventory to 881 tests across 43 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 866-test,\n42-module inventory. The complete source-sealed\n"
+            "current 881-test,\n43-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current inventory to 866\nexact tests across 42 modules and "
+            "current inventory to 881\nexact tests across 43 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -2446,7 +2654,7 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 316 core, 143 queue-journal, 13 configuration, eight data-model,\n"
+            "tests: 320 core, 143 queue-journal, 13 configuration, eight data-model,\n"
             "39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",

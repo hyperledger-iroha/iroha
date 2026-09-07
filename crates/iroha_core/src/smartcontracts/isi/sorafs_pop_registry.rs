@@ -104,23 +104,20 @@ fn has_permission(
     if state_transaction._curr_block.is_genesis() {
         return true;
     }
+    let required = iroha_data_model::permission::Permission::new(
+        permission.to_owned(),
+        iroha_primitives::json::Json::new(()),
+    );
     let direct = state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|permissions| {
-            permissions
-                .iter()
-                .any(|candidate| candidate.name() == permission)
-        });
+        .is_some_and(|permissions| permissions.contains(&required));
     let role = state_transaction
         .world
         .account_roles_iter(authority)
         .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-        .any(|role| {
-            role.permissions()
-                .any(|candidate| candidate.name() == permission)
-        });
+        .any(|role| role.permissions().any(|candidate| candidate == &required));
     direct || role
 }
 fn require_permission(
@@ -2346,6 +2343,7 @@ impl ValidSingularQuery for FindSorafsPopRegistryStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("sorafs/pop_permission_token_tests.rs");
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,

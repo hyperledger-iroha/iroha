@@ -1515,15 +1515,17 @@ impl PopCredentialApiV1 {
             now_epoch,
         )
     }
-    /// Authenticate a local proof request before acquiring mutable service state.
+    /// Authenticate a local proof request, including its recipient binding, before acquiring state.
     pub fn authorize_prove_membership(
         &self,
         opaque_credential: &[u8],
         credential_commitment: [u8; 32],
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         now_epoch: u64,
     ) -> Result<PopApiAuthorizationV1, PopCredentialServiceError> {
+        nonzero_digest("presentation_binding_digest", presentation_binding_digest)?;
         bounded_clean_text(
             "verifier_context",
             verifier_context,
@@ -1532,19 +1534,26 @@ impl PopCredentialApiV1 {
         self.authorize(
             opaque_credential,
             PopCredentialApiActionV1::ProveMembership,
-            wallet_prove_api_binding(credential_commitment, challenge_digest, verifier_context),
+            wallet_prove_api_binding(
+                credential_commitment,
+                challenge_digest,
+                verifier_context,
+                presentation_binding_digest,
+            ),
             now_epoch,
         )
     }
-    /// Authenticate proof verification before acquiring mutable service state.
+    /// Authenticate proof verification, including the expected recipient, before acquiring state.
     pub fn authorize_verify_membership(
         &self,
         opaque_credential: &[u8],
         proof: &PopMembershipProofV1,
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         now_epoch: u64,
     ) -> Result<PopApiAuthorizationV1, PopCredentialServiceError> {
+        nonzero_digest("presentation_binding_digest", presentation_binding_digest)?;
         bounded_clean_text(
             "verifier_context",
             verifier_context,
@@ -1553,7 +1562,12 @@ impl PopCredentialApiV1 {
         self.authorize(
             opaque_credential,
             PopCredentialApiActionV1::VerifyMembership,
-            verify_membership_api_binding(proof, challenge_digest, verifier_context)?,
+            verify_membership_api_binding(
+                proof,
+                challenge_digest,
+                verifier_context,
+                presentation_binding_digest,
+            )?,
             now_epoch,
         )
     }
@@ -2063,6 +2077,7 @@ impl PopCredentialApiV1 {
         credential_commitment: [u8; 32],
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         committed: PopCommittedRegistryContextV1<'_>,
     ) -> Result<PopMembershipProofV1, PopCredentialServiceError> {
         let now_epoch = committed.now_epoch();
@@ -2071,6 +2086,7 @@ impl PopCredentialApiV1 {
             credential_commitment,
             challenge_digest,
             verifier_context,
+            presentation_binding_digest,
             now_epoch,
         )?;
         self.prove_membership_authorized(
@@ -2080,6 +2096,7 @@ impl PopCredentialApiV1 {
             credential_commitment,
             challenge_digest,
             verifier_context,
+            presentation_binding_digest,
             committed,
         )
     }
@@ -2096,9 +2113,11 @@ impl PopCredentialApiV1 {
         credential_commitment: [u8; 32],
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         committed: PopCommittedRegistryContextV1<'_>,
     ) -> Result<PopMembershipProofV1, PopCredentialServiceError> {
         let now_epoch = committed.now_epoch();
+        nonzero_digest("presentation_binding_digest", presentation_binding_digest)?;
         bounded_clean_text(
             "verifier_context",
             verifier_context,
@@ -2107,7 +2126,12 @@ impl PopCredentialApiV1 {
         self.consume_authorization(
             authorization,
             PopCredentialApiActionV1::ProveMembership,
-            wallet_prove_api_binding(credential_commitment, challenge_digest, verifier_context),
+            wallet_prove_api_binding(
+                credential_commitment,
+                challenge_digest,
+                verifier_context,
+                presentation_binding_digest,
+            ),
             now_epoch,
             false,
         )?;
@@ -2120,10 +2144,15 @@ impl PopCredentialApiV1 {
             finalized,
             challenge_digest,
             verifier_context,
+            presentation_binding_digest,
             now_epoch,
         )
     }
     /// Authenticate, verify, and atomically consume a proof nullifier.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "proof authorization binds the challenge, context, recipient, and finalized state explicitly"
+    )]
     pub fn verify_membership(
         &self,
         service: &mut PopCredentialService,
@@ -2131,6 +2160,7 @@ impl PopCredentialApiV1 {
         proof: &PopMembershipProofV1,
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         committed: PopCommittedRegistryContextV1<'_>,
     ) -> Result<(), PopCredentialServiceError> {
         let now_epoch = committed.now_epoch();
@@ -2139,6 +2169,7 @@ impl PopCredentialApiV1 {
             proof,
             challenge_digest,
             verifier_context,
+            presentation_binding_digest,
             now_epoch,
         )?;
         self.verify_membership_authorized(
@@ -2147,10 +2178,15 @@ impl PopCredentialApiV1 {
             proof,
             challenge_digest,
             verifier_context,
+            presentation_binding_digest,
             committed,
         )
     }
     /// Verify and consume a proof using a separately authenticated exact request.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "proof authorization binds the challenge, context, recipient, and finalized state explicitly"
+    )]
     pub fn verify_membership_authorized(
         &self,
         service: &mut PopCredentialService,
@@ -2158,9 +2194,11 @@ impl PopCredentialApiV1 {
         proof: &PopMembershipProofV1,
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         committed: PopCommittedRegistryContextV1<'_>,
     ) -> Result<(), PopCredentialServiceError> {
         let now_epoch = committed.now_epoch();
+        nonzero_digest("presentation_binding_digest", presentation_binding_digest)?;
         bounded_clean_text(
             "verifier_context",
             verifier_context,
@@ -2169,12 +2207,23 @@ impl PopCredentialApiV1 {
         self.consume_authorization(
             authorization,
             PopCredentialApiActionV1::VerifyMembership,
-            verify_membership_api_binding(proof, challenge_digest, verifier_context)?,
+            verify_membership_api_binding(
+                proof,
+                challenge_digest,
+                verifier_context,
+                presentation_binding_digest,
+            )?,
             now_epoch,
             false,
         )?;
         committed.reconcile(service)?;
-        service.verify_membership(proof, challenge_digest, verifier_context, now_epoch)
+        service.verify_membership(
+            proof,
+            challenge_digest,
+            verifier_context,
+            presentation_binding_digest,
+            now_epoch,
+        )
     }
 }
 fn issuance_request_binding(
@@ -2229,6 +2278,7 @@ fn wallet_prove_api_binding(
     credential_commitment: [u8; 32],
     challenge_digest: [u8; 32],
     verifier_context: &str,
+    presentation_binding_digest: [u8; 32],
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(WALLET_PROVE_BINDING_DOMAIN_V1);
@@ -2240,16 +2290,19 @@ fn wallet_prove_api_binding(
             .to_le_bytes(),
     );
     hasher.update(verifier_context.as_bytes());
+    hasher.update(&presentation_binding_digest);
     *hasher.finalize().as_bytes()
 }
 fn verify_membership_api_binding(
     proof: &PopMembershipProofV1,
     challenge_digest: [u8; 32],
     verifier_context: &str,
+    presentation_binding_digest: [u8; 32],
 ) -> Result<[u8; 32], PopCredentialServiceError> {
     let mut binding_material = encode_canonical(proof)?;
     binding_material.extend_from_slice(&challenge_digest);
     binding_material.extend_from_slice(verifier_context.as_bytes());
+    binding_material.extend_from_slice(&presentation_binding_digest);
     let binding_material = SensitiveBytesGuard::new(&mut binding_material);
     Ok(digest_domain(
         b"sorafs.pop.verify-api-request.v1",
@@ -3256,11 +3309,14 @@ impl PopCredentialService {
     }
     /// Verify a proof against the exact finalized roots and atomically consume
     /// its nullifier before returning success.
+    /// The relying party derives `presentation_binding_digest` from its authenticated
+    /// recipient or action; copying the candidate proof's value does not authenticate that target.
     pub fn verify_membership(
         &mut self,
         proof: &PopMembershipProofV1,
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         now_epoch: u64,
     ) -> Result<(), PopCredentialServiceError> {
         let projection = self
@@ -3291,6 +3347,7 @@ impl PopCredentialService {
             &revocations,
             challenge_digest,
             verifier_context,
+            presentation_binding_digest,
             now_epoch,
             &self.state.seen_nullifiers,
         )
@@ -4080,12 +4137,14 @@ impl PopWalletVault {
     }
     /// Produce a membership proof locally. Credential and witness bytes never
     /// leave the vault API; only the zero-knowledge proof is returned.
+    /// The verifier-selected recipient binding is independent of the shared nullifier domain.
     pub fn prove_membership(
         &self,
         credential_commitment: [u8; 32],
         finalized: &PopFinalizedRegistryProjectionV1,
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
         now_epoch: u64,
     ) -> Result<PopMembershipProofV1, PopCredentialServiceError> {
         let private = self.load_credential(credential_commitment)?;
@@ -4120,6 +4179,7 @@ impl PopWalletVault {
             witness.as_ref(),
             challenge_digest,
             verifier_context,
+            presentation_binding_digest,
             now_epoch,
         )
         .map_err(|_| PopCredentialServiceError::InvalidMembershipProof)
@@ -4261,6 +4321,9 @@ pub enum PopCredentialServiceError {
     #[error("PoP private checkpoint is poisoned")]
     PoisonedCheckpoint,
 }
+#[cfg(test)]
+#[path = "pop_credentials/presentation_binding_tests.rs"]
+mod presentation_binding_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

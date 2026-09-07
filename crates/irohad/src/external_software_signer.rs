@@ -13,11 +13,11 @@
 mod adapter;
 #[cfg(unix)]
 mod consensus_threshold;
-/// Independently authenticated hardware custody statements; not a production signer adapter.
-pub mod custody;
 mod envelope;
 #[cfg(unix)]
 mod journal;
+/// Opaque key operations fenced by independent custody state and durable reservations.
+pub mod operation;
 mod protocol;
 #[cfg(unix)]
 mod runtime_adapters;
@@ -59,9 +59,9 @@ pub use envelope::{
 #[cfg(unix)]
 pub use journal::SoftwareSignerJournalErrorV1;
 pub use protocol::{
-    ExternalSignerBackendV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1, SoftwareSignerKeyAlgorithmV1,
-    SoftwareSignerLiveProvenanceV1, SoftwareSignerPublicBindingV1, SoftwareSignerPurposeBindingV1,
-    SoftwareSignerRoleV1, SoftwareSignerValueParseErrorV1,
+    ExternalSignerBackendV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1, SignerKeyAlgorithmV1,
+    SignerPurposeBindingV1, SignerRoleV1, SignerValueParseErrorV1, SoftwareSignerLiveProvenanceV1,
+    SoftwareSignerPublicBindingV1,
 };
 #[cfg(unix)]
 pub use runtime_adapters::{
@@ -82,9 +82,9 @@ pub use typed_payload::SoftwareSignerPurposeV1;
 #[cfg(unix)]
 pub use unix::{
     ExternalSoftwareSignerClientErrorV1, SoftwareSignerAdministratorClientV1,
-    SoftwareSignerClientV1, SoftwareSignerCredentialErrorV1, SoftwareSignerEndpointPolicyV1,
-    SoftwareSignerRotationRequestV1, SoftwareSignerServerErrorV1, SoftwareSignerServerV1,
-    SoftwareSignerSignatureReceiptV1, load_software_signer_wrapping_key_from_credential_v1,
+    SoftwareSignerClientV1, SoftwareSignerEndpointPolicyV1, SoftwareSignerRotationRequestV1,
+    SoftwareSignerServerErrorV1, SoftwareSignerServerV1, SoftwareSignerSignatureReceiptV1,
+    load_software_signer_wrapping_key_from_credential_v1,
     load_software_signer_wrapping_key_from_fd_v1,
 };
 #[cfg(all(test, unix))]

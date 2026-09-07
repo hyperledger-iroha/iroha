@@ -15,9 +15,12 @@ use iroha::{
     crypto::{HashOf, KeyPair},
     data_model::{
         events::data::sorafs::SorafsRepairLedgerEventKind,
-        isi::sorafs::{
-            ApplySorafsRepairTaskAction, SorafsRepairClaimV1, SorafsRepairCompleteV1,
-            SorafsRepairFailV1, SorafsRepairTaskActionV1, SubmitSorafsRepairTask,
+        isi::{
+            error::{InstructionExecutionError, InvalidParameterError},
+            sorafs::{
+                ApplySorafsRepairTaskAction, SorafsRepairClaimV1, SorafsRepairCompleteV1,
+                SorafsRepairFailV1, SorafsRepairTaskActionV1, SubmitSorafsRepairTask,
+            },
         },
         prelude::*,
         query::sorafs::prelude::{
@@ -57,6 +60,7 @@ fn no_fee() -> FeePaymentIntent {
 fn client(network: &Network, peer: usize, account: &AccountId, keys: &KeyPair) -> Client {
     let mut client = network.peers()[peer].client_for(account, keys.private_key().clone());
     client.transaction_status_timeout = DEADLINE;
+    client.torii_request_timeout = Duration::from_secs(10);
     client.transaction_ttl = Some(Duration::from_secs(300));
     client.add_transaction_nonce = false;
     client
@@ -149,15 +153,47 @@ fn require_validation_rejection(
 ) -> Result<()> {
     let error = result.expect_err("invalid repair transition must be rejected");
     let reason = error.downcast_ref::<TransactionRejectionReason>();
+    let Some(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)),
+    ))) = reason
+    else {
+        return Err(eyre!(
+            "transport, timeout, or unrelated validation failure cannot establish repair rejection: {error:?}"
+        ));
+    };
     ensure!(
-        matches!(reason, Some(TransactionRejectionReason::Validation(_))),
-        "transport or timeout failure cannot establish ledger rejection: {error:?}"
-    );
-    ensure!(
-        error.to_string().to_ascii_lowercase().contains(marker),
+        message.to_ascii_lowercase().contains(marker),
         "unrelated validation failure cannot establish rejection of {marker}: {error:?}"
     );
     Ok(())
+}
+
+#[test]
+fn repair_rejection_requires_the_exact_native_error() {
+    let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "repair task revision mismatch: expected 1, found 2".to_owned(),
+        )),
+    ));
+    require_validation_rejection(Err(eyre!(rejection.clone())), "revision mismatch")
+        .expect("native rejection detail must be read below the outer validation error");
+    assert!(require_validation_rejection(Err(eyre!(rejection)), "permission").is_err());
+    assert!(
+        require_validation_rejection(
+            Err(eyre!("transport revision mismatch")),
+            "revision mismatch"
+        )
+        .is_err()
+    );
+    assert!(
+        require_validation_rejection(
+            Err(eyre!(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("revision mismatch".to_owned())
+            ))),
+            "revision mismatch",
+        )
+        .is_err()
+    );
 }
 
 type Observation = (
@@ -409,7 +445,7 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
         network.sync_timeout(),
         peer.once_block(before_restart.0.finalized_cursor.height),
     )
-    .await??;
+    .await?;
     let after_restart = converged(&network, 4, 4).await?;
     ensure!(
         norito::to_bytes(&before_restart)? == norito::to_bytes(&after_restart)?,

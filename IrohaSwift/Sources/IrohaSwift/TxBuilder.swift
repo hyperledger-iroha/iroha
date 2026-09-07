@@ -80,6 +80,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
         try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
             admission,
             protocolId: protocolId,
+            expectedNetworkId: admission.networkId,
             submitProofInstructionNorito: framedPayload
         )
         return TransactionInstructionFrame(
@@ -103,9 +104,10 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
     }
 
     /// Encode the dynamic `InstructionBox` pair under the V1 `COMPACT_LEN` layout.
-    func compactInstructionBoxPayload() throws -> Data {
+    /// Privacy frames require the final transaction's explicit expected network.
+    func compactInstructionBoxPayload(expectedNetworkId: NetworkId? = nil) throws -> Data {
         if wireName == PrivacyExact12FixtureCodecV1.submitProofWireId {
-            guard let privacyProtocolId, let privacyAdmission else {
+            guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId else {
                 throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
             }
             // Re-run the ABI23 catalog getter+validator and the exact manifest/
@@ -114,6 +116,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
             try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
                 privacyAdmission,
                 protocolId: privacyProtocolId,
+                expectedNetworkId: expectedNetworkId,
                 submitProofInstructionNorito: framedPayload
             )
         } else if privacyProtocolId != nil || privacyAdmission != nil {
@@ -137,7 +140,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
         lhs.wireName == rhs.wireName
             && lhs.framedPayload == rhs.framedPayload
             && lhs.privacyProtocolId == rhs.privacyProtocolId
-            && (lhs.privacyAdmission != nil) == (rhs.privacyAdmission != nil)
+            && lhs.privacyAdmission?.networkId == rhs.privacyAdmission?.networkId
     }
 }
 

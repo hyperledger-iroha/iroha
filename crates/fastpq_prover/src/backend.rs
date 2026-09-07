@@ -113,7 +113,7 @@ pub const AIR_MAX_CONSTRAINT_DEGREE_V1: usize = 2;
 pub enum ExecutionMode {
     /// Run the prover using the scalar CPU implementation.
     Cpu,
-    /// Prefer GPU acceleration when available.
+    /// Require GPU execution; final-V1 proof construction rejects this until implemented.
     Gpu,
     /// Detect hardware support at runtime and pick the best available mode.
     Auto,
@@ -165,6 +165,18 @@ impl ExecutionMode {
         log_execution_resolution(self, resolved);
         resolved
     }
+}
+
+/// Check whether the complete final-V1 native proof pipeline can execute on GPU.
+///
+/// The current six-lane commitment and proof FFT/LDE paths execute on CPU.
+/// Standalone scalar permutation or FFT kernel parity cannot qualify this
+/// pipeline. Callers requiring GPU proofs must reject admission when false.
+#[must_use]
+pub const fn preflight_native_v1_gpu_backend() -> bool {
+    // TODO: enable only after lane-aware digest dispatch, complete proof
+    // integration, and fail-closed device parity checks are implemented.
+    false
 }
 fn gpu_workload_mutex() -> &'static Mutex<()> {
     GPU_WORKLOAD_LOCK.get_or_init(|| Mutex::new(()))
@@ -319,7 +331,11 @@ fn default_batch_execution_mode() -> ExecutionMode {
     }
 }
 fn log_execution_resolution(requested: ExecutionMode, resolved: ExecutionMode) {
-    let backend = current_gpu_backend();
+    let backend = if resolved == ExecutionMode::Gpu {
+        current_gpu_backend()
+    } else {
+        None
+    };
     let backend_label = backend.map_or("none", GpuBackend::as_str);
     let planner_backend_label = backend.map_or("unknown", GpuBackend::as_str);
     tracing::info!(
@@ -834,7 +850,7 @@ mod observer_tests {
         assert_eq!(observed.load(Ordering::SeqCst), 1);
     }
     #[test]
-    fn backend_prove_uses_configured_execution_and_poseidon_modes() {
+    fn native_v1_proof_auto_reports_cpu_execution_and_poseidon() {
         let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
         let _poseidon_lock = crate::trace::POSEIDON_PIPELINE_OBSERVER_TEST_LOCK
             .lock()
@@ -861,7 +877,7 @@ mod observer_tests {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let backend = StarkBackend::new(
             BackendConfig::new(params)
-                .with_execution_mode(ExecutionMode::Cpu)
+                .with_execution_mode(ExecutionMode::Auto)
                 .with_poseidon_mode(PoseidonExecutionMode::Auto),
         );
         let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
@@ -869,17 +885,59 @@ mod observer_tests {
             .prove(&batch, &PublicIO::default(), 1)
             .expect("configured backend proof");
 
-        let (requested, resolved, _) = execution_rx
+        let (requested, resolved, reported_execution_backend) = execution_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("execution-mode event");
-        assert_eq!(requested, ExecutionMode::Cpu);
+        assert_eq!(requested, ExecutionMode::Auto);
         assert_eq!(resolved, ExecutionMode::Cpu);
-        let (policy, path, _) = poseidon_rx
+        assert!(reported_execution_backend.is_none());
+        let (policy, path, reported_backend) = poseidon_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("Poseidon-policy event");
         assert_eq!(policy.requested(), PoseidonExecutionMode::Auto);
         assert_eq!(policy.resolved(), ExecutionMode::Cpu);
-        assert_eq!(path, "cpu_fallback");
+        assert_eq!(path, "cpu");
+        assert!(reported_backend.is_none());
+    }
+    #[test]
+    fn native_v1_gpu_rejection_precedes_work_and_execution_reporting() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        clear_execution_mode_observer();
+        let _observer_guard = ExecutionModeObserverGuard;
+        let (tx, rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
+        set_execution_mode_observer(move |requested, resolved, backend| {
+            if std::thread::current().id() == test_thread {
+                let _ = tx.send((requested, resolved, backend));
+            }
+        });
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        for (execution, poseidon) in [
+            (ExecutionMode::Gpu, PoseidonExecutionMode::Cpu),
+            (ExecutionMode::Cpu, PoseidonExecutionMode::Gpu),
+            (ExecutionMode::Auto, PoseidonExecutionMode::Gpu),
+        ] {
+            let backend = StarkBackend::new(
+                BackendConfig::new(params)
+                    .with_execution_mode(execution)
+                    .with_poseidon_mode(poseidon),
+            );
+            // An invalid parameter would be rejected during preparation if
+            // the unavailable GPU request reached any statement processing.
+            let batch = TransitionBatch::new("invalid-parameter", crate::PublicInputs::default());
+            assert!(matches!(
+                backend.prove(&batch, &PublicIO::default(), 1),
+                Err(Error::NativeV1GpuUnavailable)
+            ));
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "no unexecuted backend may be reported"
+        );
+    }
+    #[test]
+    fn native_v1_gpu_preflight_never_qualifies_scalar_kernels() {
+        assert!(!preflight_native_v1_gpu_backend());
     }
     #[test]
     fn canonical_commitment_derivation_forces_cpu_trace_merkle_levels() {
@@ -1072,6 +1130,21 @@ impl BackendConfig {
     pub(crate) fn poseidon_mode(&self) -> PoseidonExecutionMode {
         self.poseidon_mode
     }
+    /// Reject requested proof execution paths that have no native-V1 implementation.
+    pub(crate) fn validate_native_v1_modes(&self) -> Result<()> {
+        if self.execution_mode == ExecutionMode::Gpu
+            || self.poseidon_mode == PoseidonExecutionMode::Gpu
+        {
+            return Err(Error::NativeV1GpuUnavailable);
+        }
+        Ok(())
+    }
+    /// Resolve and report the execution path actually used by native-V1 proofs.
+    fn resolve_native_v1_execution_mode(&self) -> Result<ExecutionMode> {
+        self.validate_native_v1_modes()?;
+        log_execution_resolution(self.execution_mode, ExecutionMode::Cpu);
+        Ok(ExecutionMode::Cpu)
+    }
 }
 /// Deterministic artifact emitted by the production backend.
 ///
@@ -1133,6 +1206,10 @@ impl StarkBackend {
 
     pub(crate) fn parameter_name(&self) -> &'static str {
         self.config.params.name
+    }
+    /// Validate proof execution before statement or witness preprocessing.
+    pub(crate) fn validate_native_v1_modes(&self) -> Result<()> {
+        self.config.validate_native_v1_modes()
     }
 }
 
@@ -1927,54 +2004,130 @@ pub fn verify_merkle_path_for_role(
     // left/right branches and therefore accept the same path.
     Ok(index == 0 && current == root)
 }
-#[allow(clippy::unnecessary_wraps)]
+fn merkle_digest_execution_v1(
+    mode: ExecutionMode,
+) -> Result<crate::digest_executor::DigestExecutionV1> {
+    use crate::digest_executor::DigestExecutionV1;
+    match mode {
+        ExecutionMode::Cpu | ExecutionMode::Auto => Ok(DigestExecutionV1::Cpu),
+        ExecutionMode::Gpu => {
+            #[cfg(feature = "fastpq-gpu")]
+            {
+                use crate::digest384_gpu::Digest384GpuBackendV1;
+                let backend = match current_gpu_backend() {
+                    Some(GpuBackend::Metal) => Digest384GpuBackendV1::Metal,
+                    Some(GpuBackend::Cuda) => Digest384GpuBackendV1::Cuda,
+                    _ => {
+                        return Err(Error::NativeDigestExecution {
+                            details: "no supported explicit six-lane device backend".into(),
+                        });
+                    }
+                };
+                Ok(DigestExecutionV1::Device(backend))
+            }
+            #[cfg(not(feature = "fastpq-gpu"))]
+            {
+                Err(Error::NativeDigestExecution {
+                    details: "six-lane device support is not compiled".into(),
+                })
+            }
+        }
+    }
+}
+
 fn build_merkle_levels_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
     mode: ExecutionMode,
 ) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
-    let _ = mode;
+    build_merkle_levels_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
+}
+
+fn build_merkle_levels_with_execution_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execution: crate::digest_executor::DigestExecutionV1,
+) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
+    let levels = build_merkle_levels_with_executor_v1(leaves, role, &mut |frames| {
+        crate::digest_executor::execute_digest384_frames_v1(frames, execution)
+    })?;
+    #[cfg(test)]
+    if !leaves.is_empty() {
+        use crate::digest_executor::DigestExecutionV1;
+        crate::trace::notify_trace_merkle_mode_observer(match execution {
+            DigestExecutionV1::Cpu => ExecutionMode::Cpu,
+            #[cfg(feature = "fastpq-gpu")]
+            DigestExecutionV1::Device(_) => ExecutionMode::Gpu,
+        });
+    }
+    Ok(levels)
+}
+
+fn build_merkle_levels_with_executor_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execute: &mut impl FnMut(
+        &[fastpq_isi::GoldilocksDigest384FrameV1<'_>],
+    ) -> Result<Vec<GoldilocksDigest384V1>>,
+) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
     if leaves.is_empty() {
         return Ok(Vec::new());
     }
     let mut levels = Vec::new();
     let mut current = leaves.to_vec();
     loop {
-        if current.len() % 2 == 1 {
-            let last = *current.last().expect("non-empty Merkle level");
-            current.push(last);
+        if !current.len().is_multiple_of(2) {
+            current.push(*current.last().expect("non-empty Merkle level"));
         }
         levels.push(current.clone());
         let level = levels.len();
-        let next = current
-            .chunks_exact(2)
-            .enumerate()
-            .map(|(index, pair)| merkle_node_hash(role, level, index, pair[0], pair[1]))
-            .collect::<Result<Vec<_>>>()?;
+        let next = crate::digest_executor::hash_digest384_pairs_v1(
+            &current,
+            |index| {
+                digest_domain_v1(
+                    role.role(),
+                    MERKLE_NODE_PHASE_V1,
+                    level,
+                    index,
+                    role.counter(),
+                )
+            },
+            execute,
+        )?;
         if next.len() == 1 {
-            levels.push(next.clone());
+            levels.push(next);
             break;
         }
         current = next;
     }
     Ok(levels)
 }
+
 fn merkle_root_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
     mode: ExecutionMode,
 ) -> Result<GoldilocksDigest384V1> {
-    let levels = build_merkle_levels_with_mode(leaves, role, mode)?;
+    merkle_root_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
+}
+
+fn merkle_root_with_execution_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execution: crate::digest_executor::DigestExecutionV1,
+) -> Result<GoldilocksDigest384V1> {
+    let levels = build_merkle_levels_with_execution_v1(leaves, role, execution)?;
     match levels.last().and_then(|level| level.first()).copied() {
         Some(root) => Ok(root),
-        None => hash_bytes_v1(
-            role.role(),
-            MERKLE_EMPTY_PHASE_V1,
-            0,
-            0,
-            role.counter(),
-            &[],
-        ),
+        None => {
+            let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
+                digest_domain_v1(role.role(), MERKLE_EMPTY_PHASE_V1, 0, 0, role.counter())?,
+                &[],
+            )
+            .ok_or(Error::PayloadLengthOverflow { length: 0 })?;
+            let result = crate::digest_executor::execute_digest384_frames_v1(&[frame], execution)?;
+            Ok(result[0])
+        }
     }
 }
 
@@ -2874,7 +3027,7 @@ impl StarkBackend {
         protocol_version: u16,
         transcript_trace_root: Option<GoldilocksDigest384V1>,
     ) -> Result<BackendArtifact> {
-        let execution_mode = self.config.execution_mode().resolve();
+        let execution_mode = self.config.resolve_native_v1_execution_mode()?;
         let poseidon_policy =
             PoseidonPipelinePolicy::new(self.config.poseidon_mode(), execution_mode);
         let poseidon_mode = poseidon_policy.resolved();
@@ -2947,6 +3100,7 @@ impl StarkBackend {
             self.config.params.fri.arity,
             poseidon_mode,
         )?;
+        crate::trace::notify_poseidon_pipeline_observer(poseidon_policy, "cpu", None);
         Ok(BackendArtifact {
             parameter: self.config.params.name.to_string(),
             trace_commitment,
@@ -3581,17 +3735,96 @@ mod tests {
             assert_eq!(accelerated, scalar, "FRI layer length {length}");
         }
     }
-    #[cfg(feature = "fastpq-gpu")]
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
-    fn native_stark_merkle_roots_are_byte_identical_across_execution_modes() {
+    #[ignore = "requires actual Metal execution; no device skip is accepted"]
+    fn native_merkle_metal_levels_roots_and_chunk_boundaries_match_cpu() {
+        use crate::digest_executor::{
+            DigestExecutionV1, execute_bounded_digest384_frames_v1, execute_digest384_frames_v1,
+        };
+        let device = DigestExecutionV1::Device(crate::digest384_gpu::Digest384GpuBackendV1::Metal);
+        for role in [
+            MerkleTreeRoleV1::Trace,
+            MerkleTreeRoleV1::Lde,
+            MerkleTreeRoleV1::AirTrace,
+            MerkleTreeRoleV1::AirComposition,
+            MerkleTreeRoleV1::Fri(0),
+            MerkleTreeRoleV1::Fri(7),
+        ] {
+            for len in [0, 1, 3, 5, 17] {
+                let leaves: Vec<_> = (0..len)
+                    .map(|i| GoldilocksDigest384V1::new([i; 6]).unwrap())
+                    .collect();
+                let cpu =
+                    build_merkle_levels_with_execution_v1(&leaves, role, DigestExecutionV1::Cpu)
+                        .unwrap();
+                let mut dispatch_sizes = Vec::new();
+                let metal = build_merkle_levels_with_executor_v1(&leaves, role, &mut |frames| {
+                    execute_bounded_digest384_frames_v1(
+                        frames,
+                        2,
+                        frames[0].word_count() * 2,
+                        &mut |chunk| {
+                            dispatch_sizes.push(chunk.len());
+                            execute_digest384_frames_v1(chunk, device)
+                        },
+                    )
+                })
+                .expect("actual bounded Metal node dispatch");
+                assert_eq!(metal, cpu, "role {role:?}, leaves {len}");
+                if len == 17 {
+                    assert!(dispatch_sizes.len() > cpu.len());
+                    assert!(dispatch_sizes.contains(&1));
+                }
+                assert_eq!(
+                    merkle_root_with_execution_v1(&leaves, role, device).unwrap(),
+                    merkle_root_with_execution_v1(&leaves, role, DigestExecutionV1::Cpu).unwrap()
+                );
+            }
+        }
         let leaves =
             hash_lde_leaves_with_mode(&(0_u64..513).collect::<Vec<_>>(), 2, ExecutionMode::Cpu)
-                .expect("native-STARK LDE leaves");
-        let scalar = merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Cpu)
-            .expect("scalar native-STARK Merkle root");
-        let accelerated = merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Gpu)
-            .expect("accelerated native-STARK Merkle root");
-        assert_eq!(accelerated, scalar);
+                .unwrap();
+        assert_eq!(
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Lde, device).unwrap(),
+            merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Cpu).unwrap()
+        );
+        assert_ne!(
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Fri(0), device).unwrap(),
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Fri(7), device).unwrap()
+        );
+        assert!(!preflight_native_v1_gpu_backend());
+    }
+
+    #[test]
+    fn native_merkle_device_failure_aborts_tree_without_cpu_substitution() {
+        use crate::digest_executor::{
+            DigestExecutionV1, execute_bounded_digest384_frames_v1, execute_digest384_frames_v1,
+        };
+        let leaves: Vec<_> = (0..17)
+            .map(|i| GoldilocksDigest384V1::new([i; 6]).unwrap())
+            .collect();
+        let mut calls = 0;
+        let result = build_merkle_levels_with_executor_v1(
+            &leaves,
+            MerkleTreeRoleV1::Fri(7),
+            &mut |frames| {
+                execute_bounded_digest384_frames_v1(frames, 2, 1000, &mut |chunk| {
+                    calls += 1;
+                    if calls == 2 {
+                        Err(Error::NativeDigestExecution {
+                            details: "injected Merkle device failure".into(),
+                        })
+                    } else {
+                        execute_digest384_frames_v1(chunk, DigestExecutionV1::Cpu)
+                    }
+                })
+            },
+        );
+        assert!(
+            matches!(result, Err(Error::NativeDigestExecution { details }) if details == "injected Merkle device failure")
+        );
+        assert_eq!(calls, 2);
     }
     #[test]
     fn fold_with_fri_emits_layers_and_betas() {

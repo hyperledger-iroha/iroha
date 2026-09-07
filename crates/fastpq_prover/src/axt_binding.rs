@@ -18,9 +18,11 @@ use iroha_data_model::{
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY,
     },
     nexus::{
-        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtRemoteSpendClaimV1, ProofBlob,
+        AxtEffectBinding, AxtFastpqBinding, AxtFinalizedSpendAnchorV1, AxtProofEnvelope,
+        AxtRemoteSpendClaimV1, ProofBlob, axt_ordered_transaction_set_digest_v1,
         compute_remote_spend_claim_commitment_v1,
     },
+    transaction::signed::TransactionEntrypoint,
 };
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
@@ -517,6 +519,100 @@ pub fn bind_axt_batch_with_proof_metadata(
 /// binding/payload or when the carried batch does not bind to the AXT statement. Returns
 /// any `FastPQ` proof verification error for invalid proof material.
 pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerifiedProof> {
+    verify_axt_proof_envelope_inner(envelope, None)
+}
+
+/// Verify a transfer proof against an independently authenticated finalized anchor.
+///
+/// The caller must resolve the exact anchor from immutable finalized consensus
+/// state and authenticate its network, lane/incarnation, block, QC, committee,
+/// issuer signatures and spend nonce. It must also establish successful finalized
+/// execution and the exact transfer facts for the selected source transaction.
+/// Merely supplying an anchor does not authenticate it, and this function does not authorize a spend by itself.
+///
+/// Exact ordered canonical transaction wires must reproduce the anchor's set
+/// digest and contain the binding's execution-call identity exactly once. The
+/// proof's pre/post roots and transaction-set digest are then compared byte for
+/// byte with that anchor before cryptographic verification. No local transfer
+/// subtree root or sorted execution-identity digest is substituted. Only the
+/// witnessed transfer profile is admitted; opaque effect carriers cannot be used.
+///
+/// # Errors
+/// Rejects an invalid anchor, absent/non-positive expiry, excessive transaction
+/// witness, wrong transaction order/wires or execution membership, any mismatch
+/// in the public roots, dataspace, DA commitment or expiry, and invalid proofs.
+pub fn verify_axt_proof_envelope_against_anchor_v1(
+    envelope: &AxtProofEnvelope,
+    expiry_slot: Option<u64>,
+    authoritative_anchor: &AxtFinalizedSpendAnchorV1,
+    ordered_transactions: &[TransactionEntrypoint],
+) -> Result<AxtVerifiedProof> {
+    enforce_axt_fastpq_payload_limit(&envelope.proof)?;
+    if ordered_transactions.len() > iroha_data_model::nexus::MAX_AXT_FINALIZED_TRANSACTIONS_V1 {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_axt_finalized_transactions",
+            actual: ordered_transactions.len(),
+            max: iroha_data_model::nexus::MAX_AXT_FINALIZED_TRANSACTIONS_V1,
+        });
+    }
+    authoritative_anchor
+        .validate()
+        .map_err(|error| Error::InvalidAxtBinding {
+            details: format!("invalid authoritative AXT finalized anchor: {error}"),
+        })?;
+    if expiry_slot.is_none_or(|expiry| expiry == 0) {
+        return Err(Error::InvalidAxtBinding {
+            details: "anchored AXT proof requires a non-zero expiry_slot".into(),
+        });
+    }
+    if envelope.dsid != authoritative_anchor.dataspace_id {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof dataspace does not match authoritative finalized anchor".into(),
+        });
+    }
+    if envelope.da_commitment != Some(authoritative_anchor.da_manifest_digest.into()) {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof DA manifest does not match authoritative finalized anchor".into(),
+        });
+    }
+    let binding = envelope
+        .fastpq_binding
+        .as_ref()
+        .ok_or_else(|| Error::InvalidAxtBinding {
+            details: "AXT proof envelope is missing fastpq_binding".into(),
+        })?;
+    validate_axt_transfer_claim_binding(binding)?;
+    let canonical = require_canonical_binding(binding)?;
+    let transaction_set_digest = axt_ordered_transaction_set_digest_v1(ordered_transactions)
+        .map_err(|error| Error::InvalidAxtBinding {
+            details: format!("invalid AXT finalized transaction witness: {error}"),
+        })?;
+    if transaction_set_digest != authoritative_anchor.transaction_set_digest {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT ordered transaction wires do not match authoritative finalized anchor"
+                .into(),
+        });
+    }
+    let source_execution =
+        decode_hex_digest(&canonical.source_tx_commitment, "source_tx_commitment")?;
+    let occurrences = ordered_transactions
+        .iter()
+        .filter(|transaction| transaction.execution_call_hash().as_ref() == &source_execution)
+        .count();
+    if occurrences != 1 {
+        return Err(Error::InvalidAxtBinding {
+            details:
+                "AXT source execution must occur exactly once in the finalized transaction set"
+                    .into(),
+        });
+    }
+    verify_axt_proof_envelope_inner(envelope, Some((authoritative_anchor, expiry_slot)))
+}
+
+fn verify_axt_proof_envelope_inner(
+    envelope: &AxtProofEnvelope,
+    finalized: Option<(&AxtFinalizedSpendAnchorV1, Option<u64>)>,
+) -> Result<AxtVerifiedProof> {
     let binding = envelope
         .fastpq_binding
         .as_ref()
@@ -546,6 +642,9 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
     }
     let batch = transition_batch_from_model_owned(batch_model);
     enforce_default_verify_limits(&batch, &proof)?;
+    if let Some((anchor, _)) = finalized {
+        require_finalized_public_inputs_v1(&batch.public_inputs, anchor)?;
+    }
 
     // Canonical re-encoding and the model clone are deliberately delayed until
     // the decoded batch and proof have passed their verifier resource limits.
@@ -557,6 +656,13 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
     verify_batch_matches_canonical_binding(&batch, &canonical_binding)?;
     let proof_bound_amount = proof_bound_committed_amount(&batch)?;
     let proof_bound_expiry = proof_bound_expiry_slot(&batch)?;
+    if let Some((_, expiry_slot)) = finalized
+        && expiry_slot != proof_bound_expiry
+    {
+        return Err(Error::InvalidAxtBinding {
+            details: "anchored AXT expiry_slot does not match proof-bound batch metadata".into(),
+        });
+    }
     if envelope.manifest_root != proof_bound_manifest_root(&batch)? {
         return Err(Error::InvalidAxtBinding {
             details: "AXT proof envelope manifest_root does not match proof-bound batch metadata"
@@ -590,6 +696,39 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         expiry_slot: proof_bound_expiry,
     })
 }
+fn require_finalized_public_inputs_v1(
+    inputs: &PublicInputs,
+    anchor: &AxtFinalizedSpendAnchorV1,
+) -> Result<()> {
+    if inputs.dsid != dsid_bytes(anchor.dataspace_id.as_u64()) {
+        return Err(Error::InvalidAxtBinding {
+            details: "FastPQ public dsid does not match authoritative finalized anchor".into(),
+        });
+    }
+    for (field, actual, expected) in [
+        ("old_root", &inputs.old_root, anchor.pre_state_root.as_ref()),
+        (
+            "new_root",
+            &inputs.new_root,
+            anchor.post_state_root.as_ref(),
+        ),
+        (
+            "tx_set_hash",
+            &inputs.tx_set_hash,
+            anchor.transaction_set_digest.as_ref(),
+        ),
+    ] {
+        if actual != expected {
+            return Err(Error::InvalidAxtBinding {
+                details: format!(
+                    "FastPQ public {field} does not match authoritative finalized anchor"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn enforce_axt_fastpq_payload_limit(payload: &[u8]) -> Result<()> {
     if payload.len() > DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES {
         return Err(Error::VerifierLimitExceeded {
@@ -1483,6 +1622,306 @@ mod tests {
         nexus::{AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId},
     };
     use iroha_primitives::numeric::Quantity;
+    fn finalized_transaction(seed: u8) -> TransactionEntrypoint {
+        let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let network = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"axt-finalized-verifier-network"),
+        ));
+        let mut builder = iroha_data_model::transaction::TransactionBuilder::new(
+            network,
+            AccountId::new(signer.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(std::time::Duration::from_millis(1_000));
+        TransactionEntrypoint::External(builder.try_sign(signer.private_key()).expect("sign entry"))
+    }
+
+    fn finalized_test_anchor(
+        inputs: PublicInputs,
+        transactions: &[TransactionEntrypoint],
+    ) -> AxtFinalizedSpendAnchorV1 {
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"axt-finalized-verifier-network"),
+        ));
+        AxtFinalizedSpendAnchorV1 {
+            network_id,
+            genesis_hash: *network_id.as_bytes(),
+            dataspace_id: DataSpaceId::new(7),
+            lane_id: LaneId::new(1),
+            lane_incarnation: Hash::new(b"test lane incarnation"),
+            finalized_height: 42,
+            block_header_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"test block",
+            )),
+            quorum_certificate_digest: Hash::new(b"test QC"),
+            committee_digest: Hash::new(b"test committee"),
+            pre_state_root: Hash::prehashed(inputs.old_root),
+            post_state_root: Hash::prehashed(inputs.new_root),
+            transaction_set_digest: axt_ordered_transaction_set_digest_v1(transactions).unwrap(),
+            da_manifest_digest: Hash::new(b"test DA manifest"),
+        }
+    }
+
+    fn finalized_proof_fixture() -> &'static (
+        AxtProofEnvelope,
+        AxtFinalizedSpendAnchorV1,
+        Vec<TransactionEntrypoint>,
+    ) {
+        static FIXTURE: std::sync::OnceLock<(
+            AxtProofEnvelope,
+            AxtFinalizedSpendAnchorV1,
+            Vec<TransactionEntrypoint>,
+        )> = std::sync::OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let transactions = vec![finalized_transaction(71), finalized_transaction(72)];
+            let mut binding = sample_binding();
+            binding.claim_type = "tx_predicate".into();
+            binding.source_tx_commitment =
+                hex::encode(transactions[0].execution_call_hash().as_ref());
+            let mut batch = real_transfer_claim_batch(&binding);
+            // This is a verifier boundary fixture, not evidence of a real finalized WSV.
+            let anchor = finalized_test_anchor(batch.public_inputs, &transactions);
+            batch.public_inputs.tx_set_hash = anchor.transaction_set_digest.into();
+            bind_axt_batch_with_proof_metadata(
+                &mut batch,
+                &binding,
+                [0x42; 32],
+                Some(anchor.da_manifest_digest.into()),
+                None,
+                Some(100),
+            )
+            .expect("bind finalized fixture");
+            let proof = Prover::canonical(DEFAULT_PARAMETER)
+                .unwrap()
+                .prove_axt_bound(&batch, &binding)
+                .expect("prove transfer fixture");
+            let envelope = axt_proof_envelope_from_bound_batch(
+                &batch,
+                proof,
+                [0x42; 32],
+                Some(anchor.da_manifest_digest.into()),
+            )
+            .expect("package finalized fixture");
+            (envelope, anchor, transactions)
+        })
+    }
+
+    #[test]
+    fn anchored_axt_verifier_accepts_exact_public_roots_and_ordered_wires() {
+        let (envelope, anchor, transactions) = finalized_proof_fixture();
+        let verified =
+            verify_axt_proof_envelope_against_anchor_v1(envelope, Some(100), anchor, transactions)
+                .expect("exact anchored transfer proof");
+        assert_eq!(verified.old_root, *anchor.pre_state_root.as_ref());
+        assert_eq!(verified.new_root, *anchor.post_state_root.as_ref());
+        assert_eq!(
+            verified.tx_set_hash,
+            *anchor.transaction_set_digest.as_ref()
+        );
+        assert_eq!(verified.expiry_slot, Some(100));
+        for expiry in [None, Some(0), Some(101)] {
+            assert!(
+                verify_axt_proof_envelope_against_anchor_v1(envelope, expiry, anchor, transactions)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn anchored_axt_verifier_rejects_root_dataspace_da_and_public_set_substitution() {
+        let (envelope, anchor, transactions) = finalized_proof_fixture();
+        for (field, changed) in [
+            (
+                "old_root",
+                AxtFinalizedSpendAnchorV1 {
+                    pre_state_root: Hash::new(b"foreign WSV pre-root"),
+                    ..*anchor
+                },
+            ),
+            (
+                "new_root",
+                AxtFinalizedSpendAnchorV1 {
+                    post_state_root: Hash::new(b"foreign WSV post-root"),
+                    ..*anchor
+                },
+            ),
+            (
+                "dataspace",
+                AxtFinalizedSpendAnchorV1 {
+                    dataspace_id: DataSpaceId::new(8),
+                    ..*anchor
+                },
+            ),
+            (
+                "DA manifest",
+                AxtFinalizedSpendAnchorV1 {
+                    da_manifest_digest: Hash::new(b"foreign DA"),
+                    ..*anchor
+                },
+            ),
+        ] {
+            let error = verify_axt_proof_envelope_against_anchor_v1(
+                envelope,
+                Some(100),
+                &changed,
+                transactions,
+            )
+            .expect_err("foreign authoritative context must fail");
+            assert!(
+                matches!(error, Error::InvalidAxtBinding { details } if details.contains(field))
+            );
+        }
+        let mut payload = decode_axt_fastpq_payload(&envelope.proof).unwrap();
+        payload.batch.public_inputs.tx_set_hash = Hash::new(b"old sorted execution digest").into();
+        let mut changed = envelope.clone();
+        changed.proof = encode_canonical_norito(&payload).unwrap();
+        let error =
+            verify_axt_proof_envelope_against_anchor_v1(&changed, Some(100), anchor, transactions)
+                .expect_err("wrong public set fails before batch seal or proof replay");
+        assert!(
+            matches!(error, Error::InvalidAxtBinding { details } if details.contains("tx_set_hash"))
+        );
+    }
+
+    #[test]
+    fn anchored_axt_verifier_requires_exact_execution_membership_and_wire_order() {
+        let (envelope, anchor, transactions) = finalized_proof_fixture();
+        let reversed = vec![transactions[1].clone(), transactions[0].clone()];
+        let error =
+            verify_axt_proof_envelope_against_anchor_v1(envelope, Some(100), anchor, &reversed)
+                .unwrap_err();
+        assert!(
+            matches!(error, Error::InvalidAxtBinding { details } if details.contains("ordered transaction wires"))
+        );
+        for entries in [
+            vec![transactions[1].clone()],
+            vec![transactions[0].clone(), transactions[0].clone()],
+        ] {
+            let changed = AxtFinalizedSpendAnchorV1 {
+                transaction_set_digest: axt_ordered_transaction_set_digest_v1(&entries).unwrap(),
+                ..*anchor
+            };
+            let error = verify_axt_proof_envelope_against_anchor_v1(
+                envelope,
+                Some(100),
+                &changed,
+                &entries,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error, Error::InvalidAxtBinding { details } if details.contains("exactly once"))
+            );
+        }
+        let mut opaque = envelope.clone();
+        opaque.fastpq_binding.as_mut().unwrap().claim_type = "authorization".into();
+        assert!(matches!(
+            verify_axt_proof_envelope_against_anchor_v1(&opaque, Some(100), anchor, transactions),
+            Err(Error::InvalidProofSemantics { .. }),
+        ));
+    }
+
+    #[test]
+    fn anchored_axt_verifier_derives_sealed_reveal_execution_from_exact_outer_wire() {
+        let TransactionEntrypoint::External(transaction) = finalized_transaction(73) else {
+            unreachable!()
+        };
+        let execution = transaction.hash_as_entrypoint();
+        let reveal = TransactionEntrypoint::SealedReveal(
+            iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+                Hash::new(b"test sealed commitment"),
+                transaction,
+                [0x74; 32],
+            ),
+        );
+        assert_ne!(reveal.hash(), execution);
+        let transactions = [reveal];
+        let mut binding = sample_binding();
+        binding.claim_type = "tx_predicate".into();
+        binding.source_tx_commitment = hex::encode(execution.as_ref());
+        let anchor = finalized_test_anchor(
+            PublicInputs {
+                old_root: [1; 32],
+                new_root: [2; 32],
+                ..PublicInputs::default()
+            },
+            &transactions,
+        );
+        let mut envelope = envelope_with_payload(binding, vec![0xAA]);
+        envelope.da_commitment = Some(anchor.da_manifest_digest.into());
+        assert!(
+            matches!(
+                verify_axt_proof_envelope_against_anchor_v1(
+                    &envelope,
+                    Some(100),
+                    &anchor,
+                    &transactions
+                ),
+                Err(Error::AxtProofPayloadDecode { .. }),
+            ),
+            "inner execution membership must pass before invalid proof bytes are decoded"
+        );
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .unwrap()
+            .source_tx_commitment = hex::encode(transactions[0].hash().as_ref());
+        let error = verify_axt_proof_envelope_against_anchor_v1(
+            &envelope,
+            Some(100),
+            &anchor,
+            &transactions,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, Error::InvalidAxtBinding { details } if details.contains("exactly once"))
+        );
+    }
+
+    #[test]
+    fn anchored_axt_verifier_enforces_its_witness_count_cap_before_hashing() {
+        let transaction = finalized_transaction(74);
+        let maximum = iroha_data_model::nexus::MAX_AXT_FINALIZED_TRANSACTIONS_V1;
+        let transactions = vec![transaction; maximum + 1];
+        let envelope = envelope_with_payload(sample_binding(), Vec::new());
+        let anchor = finalized_test_anchor(PublicInputs::default(), &[]);
+        assert!(matches!(
+            verify_axt_proof_envelope_against_anchor_v1(&envelope, Some(100), &anchor, &transactions),
+            Err(Error::VerifierLimitExceeded { limit: "max_axt_finalized_transactions", actual, max })
+                if actual == maximum + 1 && max == maximum,
+        ));
+    }
+
+    #[test]
+    fn anchored_axt_public_inputs_compare_every_dataspace_and_digest_byte() {
+        let (_, anchor, _) = finalized_proof_fixture();
+        let inputs = PublicInputs {
+            dsid: dsid_bytes(anchor.dataspace_id.as_u64()),
+            old_root: anchor.pre_state_root.into(),
+            new_root: anchor.post_state_root.into(),
+            tx_set_hash: anchor.transaction_set_digest.into(),
+            ..PublicInputs::default()
+        };
+        assert!(require_finalized_public_inputs_v1(&inputs, anchor).is_ok());
+        let mut changed = inputs;
+        changed.dsid[15] = 1;
+        assert!(require_finalized_public_inputs_v1(&changed, anchor).is_err());
+        for index in 0..32 {
+            for field in [0, 1, 2] {
+                let mut changed = inputs;
+                match field {
+                    0 => changed.old_root[index] ^= 1,
+                    1 => changed.new_root[index] ^= 1,
+                    _ => changed.tx_set_hash[index] ^= 1,
+                }
+                assert!(require_finalized_public_inputs_v1(&changed, anchor).is_err());
+            }
+        }
+    }
+
     fn sample_binding() -> AxtFastpqBinding {
         AxtFastpqBinding {
             parameter: DEFAULT_PARAMETER.to_string(),

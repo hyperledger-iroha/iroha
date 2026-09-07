@@ -18768,3 +18768,5 @@ mod tests {
 }
 #[cfg(all(test, feature = "bls"))]
 pub(in crate::sumeragi) use tests::recovered_decision_apply_owner_for_lineage_test;
+#[cfg(test)]
+pub(in crate::sumeragi) use tests::worker_view_adapter_with_replayed_commit;

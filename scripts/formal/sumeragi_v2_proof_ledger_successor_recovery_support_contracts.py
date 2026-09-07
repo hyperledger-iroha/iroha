@@ -892,6 +892,358 @@ def _check_successor_snapshot_authority(
     )
 
 
+def _worker_actual_wal_enter_view_fixture_errors(
+    adapter_source: str,
+    worker_source: str,
+    adapter_path: Path,
+    worker_path: Path,
+) -> list[str]:
+    """Keep the protected-Commit regression on real, published adapter WAL authority."""
+    errors: list[str] = []
+    adapter_context = (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)
+    worker_context = ((
+        "#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")",
+        "mod", "tests",
+    ),)
+    fixture_context = worker_context + (("impl", "WorkerViewWalFixture"),)
+    contracts = (
+        ("adapter", "worker_view_adapter_with_replayed_commit", adapter_context, (), (
+            "let (mut adapter, startup) = SumeragiV2Adapter::open(wal_path.clone(), verified.clone(), Some(local_validator), generation, consensus_key_hash, fingerprints, DeferredAdmissionOrdinalSource::new(0),)",
+            "assert!(startup.is_empty()); assert!(adapter.wal.recovered_records().is_empty());",
+            "let (prepare, vote) = locked_commit;",
+            "record: WalRecordV2::LockAndCommit { prepare, vote: vote.clone(), },",
+            "let receipt = adapter.wal.append(&payload)",
+            "assert_eq!(receipt.sequence(), 0); drop(adapter);",
+            "let (adapter, startup) = SumeragiV2Adapter::open(wal_path, verified, Some(local_validator), generation, consensus_key_hash, fingerprints, DeferredAdmissionOrdinalSource::new(0),)",
+            "assert!(matches!(startup.as_slice(), [AdapterEffect::Sign { request: SignRequest::Vote(replayed), .. }] if replayed == &vote));",
+            "let durable = adapter.reducer.durable_state();",
+            "let locked = durable.locked()",
+            "assert!(durable.commit_intent_for_lock(locked).is_some()); adapter",
+        )),
+        ("worker", "new", fixture_context, (), (
+            "VerifiedHeightContext::genesis(service.context.clone(), service.validator_set_pops.clone(),)",
+            "let adapter = if let Some(locked_commit) = locked_commit {",
+            "crate::sumeragi::v2::worker_view_adapter_with_replayed_commit(",
+            "service.active_tag.generation(), consensus_key_hash, fingerprints, locked_commit,",
+            "assert_eq!(adapter.current_tag(), service.active_tag);",
+            "let authority = adapter.leader_wire_recovery_authority()",
+            "LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(adapter.mint_leader_wire_store_authority(&wal_path)",
+            "service.context.id(), service.context.height, fingerprints.node.into(), roster.clone(), capacity, service.context.da_layout.max_chunk_count, authority, &[], &[],",
+            ".bind_leader_wire_lifecycle_gate(gate, restore, RuntimeLifecycleOrdinalSource::after_high_watermark(0), service.context.id(), service.context.height,)",
+            "service.leader_wire_recovery_authority = authority; service.leader_wire_ingress = ingress;",
+            "Self { adapter, _directory: directory, }",
+        )),
+        ("worker", "stage_timeout", fixture_context, (), (
+            ".authenticate(wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),))",
+            "let outcome = self.adapter.receive_authenticated(authenticated)",
+            "let mut entered_views = outcome.effects().iter().filter_map(|effect| match effect {",
+            "AdapterEffect::EnterView { tag, certificate, protected_lock, } => Some((*tag, certificate.clone(), protected_lock.as_ref().map(|prepare| (prepare.proposal_round, prepare.subject)),)),",
+            "let entered = entered_views.next()",
+            "assert!(entered_views.next().is_none()); assert_eq!(entered.0, self.adapter.current_tag()); entered",
+        )),
+        ("worker", "publish", fixture_context, (), (
+            "let authority = self.adapter.leader_wire_recovery_authority()",
+            "assert_eq!(authority.consumer_tag(), self.adapter.current_tag());",
+            ".finish_runtime_step_reconciliation(None, Some(authority))",
+        )),
+        ("worker", "worker_view_prepare_certificate", worker_context, (), (
+            "let prepare = wire::Vote { phase: wire::GlobalPhase::Prepare, signer: 0, signature: Vec::new(), ..vote.clone() };",
+            "wire::QuorumCertificate { round: prepare.round, proposal_round: prepare.proposal_round, phase: prepare.phase, subject: prepare.subject, execution_commitment: prepare.execution_commitment, signers: vec![0, 1, 2], aggregate_signature: worker_view_quorum_signature(keys, &prepare.signature_preimage()), }",
+        )),
+        ("worker", "worker_view_timeout_certificate", worker_context, (), (
+            "let preimage = wire::TimeoutVote { round, highest_prepare_qc: highest_prepare_qc.clone(), signer: 0, signature: Vec::new(), }.signature_preimage();",
+            "wire::TimeoutCertificate { round, groups: vec![wire::TimeoutVoteGroup { highest_prepare_qc, signers: vec![0, 1, 2], aggregate_signature: worker_view_quorum_signature(keys, &preimage), }], }",
+        )),
+        ("worker", "worker_view_quorum_signature", worker_context, (), (
+            "assert_eq!(keys.len(), 4);",
+            "let signatures = keys[..3].iter().map(|key| { Signature::new(key.private_key(), preimage).payload().to_vec() }).collect::<Vec<_>>();",
+            "iroha_crypto::bls_normal_aggregate_signatures(&signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),)",
+        )),
+        ("worker", "entered_view_publishes_the_exact_protected_commit_vote_cut", worker_context, ("#[test]",), (
+            "let (mut service, keys) = fixture_with_block_payload();",
+            "phase: wire::GlobalPhase::Commit, subject: protected_subject,",
+            "let prepare = worker_view_prepare_certificate(&commit, &keys);",
+            "let commit_intent = wire::Vote { signature: Vec::new(), ..commit.clone() };",
+            "let mut wal = WorkerViewWalFixture::new(&mut service, Some((prepare, commit_intent)));",
+            "let (next, certificate, protected_lock) = wal.stage_timeout(worker_view_timeout_certificate(protected_round, None, &keys,));",
+            "assert_eq!(protected_lock, Some((protected_round, protected_subject)));",
+            "wal.publish(&mut service);",
+            ".entered_view(next, certificate, protected_lock)",
+            "ingress.try_push(InboundBlockMessage::from_authenticated_peer(BlockMessage::V2(wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(commit),)), service.context.roster[0].validator.clone(),))",
+            "Ok(super::super::FairV2IngressPushDisposition::Enqueued)",
+        )),
+    )
+    for owner, name, context, attributes, required in contracts:
+        source, path = (
+            (adapter_source, adapter_path) if owner == "adapter"
+            else (worker_source, worker_path)
+        )
+        matches = [item for item in rust_items(source, name) if item.brace_context == context]
+        if len(matches) != 1 or matches[0].attributes != attributes:
+            errors.append(f"{path}: worker actual-WAL fixture {name} requires one exact test-owner declaration")
+            continue
+        item = matches[0]
+        tokens = rust_code_tokens(item.source)
+        cursor = 0
+        for sequence in required:
+            expected = rust_code_tokens(sequence)
+            position = next((index for index in range(cursor, len(tokens) - len(expected) + 1)
+                             if tokens[index:index + len(expected)] == expected), None)
+            if position is None:
+                errors.append(f"{path}:{item.line}: worker actual-WAL fixture {name} must retain ordered authority sequence {sequence!r}")
+                break
+            cursor = position + len(expected)
+        for forbidden in ("EventTag::new", "Generation::new", "from_replayed_adapter", "advance_view"):
+            if forbidden in item.source:
+                errors.append(f"{path}:{item.line}: worker actual-WAL fixture {name} cannot synthesize authority with {forbidden}")
+    return errors
+
+
+def _persistent_recovery_cut_canonical_contracts():
+    """Reviewed current authority, WAL, and publication predicates; no scalar factory."""
+    authority = (("impl", "LeaderWireRecoveryAuthority"),)
+    wal = (("impl", "DurableState"),)
+    executor = (("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),)
+    return (
+        ("factory", "consumer", "from_adapter", authority, (
+            "pub(super) fn from_adapter(adapter: &SumeragiV2Adapter) -> Result<Self, AdapterError>",
+            "adapter.ensure_ingress()?; let durable = adapter.reducer.durable_state(); let tag = adapter.reducer.current_tag();",
+            "let protected_lock = durable.locked().map(|certificate| { Ok::<_, AdapterError>((adapter.registry.round_to_wire(certificate.proposal_round()), adapter.registry.subject(certificate.subject())?,)) }).transpose()?;",
+            "let protected_commit_statement = durable.locked().filter(|locked| { locked.round().view() == tag.view() || durable.commit_intent_for_lock(locked).is_some() }).map(|locked| { Ok::<_, AdapterError>(vote_statement_hash(adapter.registry.round_to_wire(locked.proposal_round()), adapter.registry.subject(locked.subject())?, &adapter.registry.execution_commitment(locked.round(), locked.subject())?,)) }).transpose()?;",
+            "Ok(Self { context_id: adapter.wire_context.id(), height: adapter.wire_context.height, owner: adapter.fingerprints.node.into(), consumer_tag: tag, wal_id: durable.last_id(), decision_durable: durable.decision().is_some(), highest_prepare_view: durable.highest_prepare().map(|qc| qc.round().view()), installed_timeout_view: durable.last_timeout().map(|tc| tc.round().view()), protected_lock, protected_commit_statement, })",
+        )),
+        ("consumer_tag", "consumer", "consumer_tag", authority, ("self.consumer_tag",)),
+        ("geometry", "consumer", "matches_geometry", authority, (
+            "self.context_id == context_id && self.height == height && self.owner == owner",
+        )),
+        ("monotonicity", "consumer", "monotonically_extends", authority, (
+            "self.matches_geometry(previous.context_id, previous.height, previous.owner) && self.wal_id >= previous.wal_id && (self.consumer_tag == previous.consumer_tag || self.consumer_tag.strictly_advances(previous.consumer_tag)) && (!previous.decision_durable || self.decision_durable) && self.highest_prepare_view >= previous.highest_prepare_view && match (previous.protected_lock, self.protected_lock) { (None, _) => true, (Some(_), None) => false, (Some(old), Some(new)) => old == new || new.0.view > old.0.view, }",
+        )),
+        ("statement", "consumer", "vote_statement_hash", (), (
+            "Hash::new((proposal_round, subject, *execution_commitment).encode())",
+        )),
+        ("protected_commit", "consumer", "protects_commit_vote", authority, (
+            "identity.phase == Phase::CommitVote && self.protected_lock.is_some_and(|(round, subject)| { identity.context_id == round.context_id && identity.height == round.height && identity.view == round.view && identity.subject_hash == Hash::new(subject.encode()) && identity.vote_statement_hash == self.protected_commit_statement && self.protected_commit_statement.is_some() })",
+        )),
+        ("admission", "consumer", "admits", authority, (
+            "if phase.source_class() != FairV2IngressLeaderWireSourceClass::Control { return true; } if self.decision_durable { return false; } let current_view = self.consumer_tag.view();",
+            "match phase { Phase::Proposal | Phase::PrepareVote => view == current_view, Phase::CommitVote => exact_commit, Phase::PrepareQc => { view <= current_view && self.highest_prepare_view.is_none_or(|highest| view >= highest) } Phase::CommitQc => true, Phase::TimeoutVote => reducer::timeout_vote_view_is_admissible(current_view, view),",
+            "Phase::TimeoutCertificate => { view.checked_add(1).is_some() && (view >= current_view || reducer::strict_same_round_timeout_upgrade_is_allowed(reducer::StrictSameRoundTimeoutUpgradeProjection { current_view, timeout_view: view, installed_same_round: self.installed_timeout_view == Some(view), selected_prepare_present: timeout_prepare_view.is_some(), selected_prepare_view: timeout_prepare_view.unwrap_or(0), highest_prepare_present: self.highest_prepare_view.is_some(), highest_prepare_view: self.highest_prepare_view.unwrap_or(0), locked_prepare_present: self.protected_lock.is_some(), locked_prepare_view: self.protected_lock.map_or(0, |lock| lock.0.view), },)) } Phase::Chunk | Phase::CertifiedResponse => true,",
+        )),
+        ("identity_admission", "consumer", "admits_ingress_identity", authority, (
+            "self.admits(identity.phase, identity.view, self.protects_commit_vote(identity), identity.timeout_prepare_view,)",
+        )),
+        ("payload_admission", "consumer", "admits_payload", authority, (
+            "Payload::Vote(vote) => (match vote.phase { wire::GlobalPhase::Prepare => Phase::PrepareVote, wire::GlobalPhase::Commit => Phase::CommitVote, }, vote.round.view, vote.round == vote.proposal_round && self.protected_commit_statement == Some(vote_statement_hash(vote.proposal_round, vote.subject, &vote.execution_commitment,)), None,),",
+            "Payload::TimeoutCertificate(tc) => (Phase::TimeoutCertificate, tc.round.view, false, tc.highest_prepare_qc().map(|qc| qc.round.view),),",
+            "self.admits(phase, view, exact_commit, timeout_prepare_view)",
+        )),
+        ("retirement", "consumer", "retires", authority, (
+            "token.identity.phase.source_class() == FairV2IngressLeaderWireSourceClass::Control && !self.admits_ingress_identity(&token.identity)",
+        )),
+        ("rearm", "consumer", "rearms", authority, (
+            "self.consumer_tag.strictly_advances(consumed_by) && self.admits_ingress_identity(&token.identity) && matches!(token.identity.phase, Phase::Proposal | Phase::PrepareVote | Phase::CommitVote)",
+        )),
+        ("wal_apply", "core_wal", "apply", wal, (
+            "let mut next = self.clone(); next.apply_in_place(context, local_validator, entry)?; *self = next; Ok(())",
+        )),
+        ("wal_locks", "core_wal", "apply_in_place", wal, (
+            "if entry.record.context_id() != self.context_id { return Err(ReplayError::ContextMismatch); }",
+            "WalRecord::LockAndCommit { prepare, vote } => { validate_qc(context, prepare, Phase::Prepare)?; Self::validate_local_vote(context, local_validator, *vote, Phase::Commit)?; if vote.round().view() != self.current_view || vote.proposal_round() != vote.round() { return Err(ReplayError::InvalidLocalVote); }",
+            "if vote.proposal_round() != prepare.proposal_round() || prepare.proposal_round() != prepare.round() || vote.subject() != prepare.subject() { return Err(ReplayError::CommitDoesNotMatchPrepare); }",
+            "if let Some(locked) = &self.locked && (prepare.round().view() < locked.round().view() || (prepare.round().view() == locked.round().view() && prepare.subject() != locked.subject())) { return Err(ReplayError::LockRegression); } insert_unique_vote(&mut self.commit_intents, *vote)?; update_highest(&mut self.highest_prepare, prepare.clone())?; self.locked = Some(prepare.clone());",
+            "WalRecord::InstallTimeout(certificate) => { certificate.validate(context).map_err(|_| ReplayError::InvalidCertificate)?; let selected = certificate.highest_prepare().cloned();",
+            "let strict_same_round_upgrade = self.is_strict_same_round_timeout_upgrade(certificate); if certificate.round().view() < self.current_view && !strict_same_round_upgrade { return Err(ReplayError::ViewRegression); }",
+            "match &self.locked { None => self.locked = Some(highest.clone()), Some(locked) if highest.round().view() > locked.round().view() => { self.locked = Some(highest.clone()); } Some(locked) if highest.round().view() == locked.round().view() && highest.subject() != locked.subject() => { return Err(ReplayError::LockRegression); } Some(_) => {} }",
+            "if !strict_same_round_upgrade { self.current_view = certificate.round().view().checked_add(1).ok_or(ReplayError::ViewOverflow)?; } self.last_timeout = Some(certificate.clone());",
+        )),
+        ("wal_vote", "core_wal", "validate_local_vote", wal, (
+            "if vote.context_id() != context.id() || vote.round().height() != context.height() || vote.proposal_round().height() != context.height() || vote.proposal_round() != vote.round() || vote.phase() != phase || Some(vote.signer()) != local_validator || context.validator(&vote.signer()).is_none() { return Err(ReplayError::InvalidLocalVote); }",
+        )),
+        ("wal_qc", "core_wal", "validate_qc", (), (
+            "if certificate.phase() != expected_phase { return Err(ReplayError::InvalidCertificate); } certificate.validate(context).map(|_| ()).map_err(|_| ReplayError::InvalidCertificate)",
+        )),
+        ("wal_commit_intent", "core_wal", "commit_intent_for_lock", wal, (
+            "let round = locked.round(); self.commit_intent(round).filter(|vote| { vote.phase() == Phase::Commit && vote.round() == round && vote.proposal_round() == round && vote.subject() == locked.subject() })",
+        )),
+        ("qc_geometry", "core_types", "validate", (("impl", "QuorumCertificate"),), (
+            "if self.reference.context_id != context.id { return Err(QuorumError::ContextMismatch); } if self.reference.round.height != context.height { return Err(QuorumError::HeightMismatch); } if self.reference.proposal_round != self.reference.round { return Err(QuorumError::InvalidProposalRound); }",
+            "let signers: Vec<_> = self.signatures.iter().map(SignatureShare::signer).collect(); Quorum::require(context, &signers)",
+        )),
+        ("tc_geometry", "core_types", "validate", (("impl", "TimeoutCertificate"),), (
+            "if self.context_id != context.id() { return Err(QuorumError::ContextMismatch); } if self.round.height() != context.height() { return Err(QuorumError::HeightMismatch); }",
+            "if let Some(certificate) = group.highest_prepare() { if certificate.phase() != Phase::Prepare { return Err(QuorumError::InvalidPhase); } certificate.validate(context)?; if certificate.round().view() > self.round.view() { return Err(QuorumError::HighestPrepareFromFuture); }",
+        )),
+        ("adapter_factory", "adapter", "leader_wire_recovery_authority", (("impl", "SumeragiV2Adapter"),), (
+            "LeaderWireRecoveryAuthority::from_adapter(self)",
+        )),
+        ("store", "store", "advance_recovery_cut", (("impl", "LeaderWireLifecycleStoreGate"),), (
+            "if !next.matches_geometry(self.context_id, self.height, self.owner) { return Err(\"leader-wire recovery cut changed immutable geometry\".to_owned()); }",
+            "if !next.monotonically_extends(state.recovery_authority) { return Err(\"leader-wire recovery cut is not monotone\".to_owned()); }",
+            "let retiring = state.records.iter().filter_map(|(slot, record)| { (matches!(record.status, LeaderWireLifecycleStatus::Dormant | LeaderWireLifecycleStatus::VolatileTerminal) && next.retires(&record.token)).then(|| slot.clone()) }).collect::<BTreeSet<_>>();",
+            "if retiring != *expected_retiring_slots { return Err(\"leader-wire recovery cut disagreed with carrierless ingress ownership\".to_owned(),); }",
+            "let rearming = state.records.iter().filter_map(|(slot, record)| { (record.status == LeaderWireLifecycleStatus::VolatileTerminal && state.runtime_consumer_epochs.get(slot).is_some_and(|tag| next.rearms(&record.token, *tag))).then(|| slot.clone()) }).collect::<BTreeSet<_>>();",
+            "let previous = state.clone(); state.recovery_authority = next; for slot in &retiring {",
+            "state.records.remove(slot).expect(\"preflighted carrierless leader-wire slot remains indexed\"); state.replay_dormant.remove(slot); state.runtime_consumer_epochs.remove(slot); }",
+            "for slot in &rearming { state.records.get_mut(slot).expect(\"preflighted terminal remains indexed\").status = LeaderWireLifecycleStatus::Dormant; state.replay_dormant.insert(slot.clone()); }",
+            "if (!retiring.is_empty() || !rearming.is_empty()) && let Err(error) = self.persist_locked(&state) { *state = previous; return Err(error); } Ok(rearming)",
+        )),
+        ("mirror", "ingress", "advance_leader_wire_recovery_cut", (("impl", "FairV2Ingress"),), (
+            "let mut state = self.state.lock();",
+            "let retiring = state.leader_wire_lifecycles.iter().filter_map(|(slot, record)| { (matches!(record.status, FairV2IngressLeaderWireStatus::Dormant | FairV2IngressLeaderWireStatus::VolatileTerminal) && next.retires(&record.token)).then(|| slot.clone()) }).collect::<BTreeSet<_>>();",
+            "let rearming = gate.advance_recovery_cut(next, &retiring)?; for slot in &retiring { let removed = state.leader_wire_lifecycles.remove(slot)",
+            "for slot in &rearming { let record = state.leader_wire_lifecycles.get_mut(slot).expect(\"durably rearmed terminal remains mirrored\"); assert_eq!(record.status, FairV2IngressLeaderWireStatus::VolatileTerminal); record.status = FairV2IngressLeaderWireStatus::Dormant; record.ingress_predecessors.clear(); }",
+        )),
+        ("runtime_factory", "effects", "leader_wire_recovery_authority", (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),), (
+            "self.driver().leader_wire_recovery_authority().map(Some).map_err(|error| error.to_string())",
+        )),
+        ("executor_publish", "effects", "finish_runtime_step_reconciliation", executor, (
+            "let authority = self.runtime.leader_wire_recovery_authority().map_err(EffectExecutorError::Runtime)?; services.finish_runtime_step_reconciliation(decided_subject, authority).map_err(service_error)",
+        )),
+        ("service_publish", "worker", "finish_runtime_step_reconciliation", (("impl", "V2EffectServices", "for", "ProductionV2Services"),), (
+            "let next = authority.ok_or_else(|| { \"production ingress reconciliation has no adapter WAL authority\".to_owned() })?;",
+            "let output_guard = Arc::clone(&self.output_guard); let _permit = output_guard.acquire().ok_or_else(|| \"Sumeragi v2 consensus requires process restart\".to_owned())?;",
+            "if !next.monotonically_extends(self.leader_wire_recovery_authority) { return Err(\"production ingress reconciliation regressed the adapter WAL authority\".to_owned(),); } self.leader_wire_ingress.advance_leader_wire_recovery_cut(next)?; self.leader_wire_recovery_authority = next; Ok(())",
+        )),
+        ("enter", "worker", "entered_view", (("impl", "V2EffectServices", "for", "ProductionV2Services"),), (
+            "if tag.height() != self.context.height || certificate.round.context_id != self.context.id() || certificate.round.height != self.context.height || certificate.round.view.checked_add(1) != Some(tag.view()) || !tag.strictly_advances(self.active_tag) { return Err(\"Sumeragi v2 service rejected non-monotonic certified view ownership\".to_owned(),); }",
+            "if tag != self.leader_wire_recovery_authority.consumer_tag() { return Err(\"entered view lacks the actual published adapter WAL consumer\".to_owned()); }",
+            "self.outbound_chunks.clear(); self.fast_path_proposals.clear(); self.active_tag = tag;",
+        )),
+    ) + tuple(
+        (key, "effects", name,
+         (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),)
+         if key == "publish_apply" else executor, before + (
+            runtime_call,
+            "wal_step.complete(); if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close(error, services)); }",
+            consume_call,
+        ))
+        for key, name, before, runtime_call, consume_call in (
+            ("publish_apply", "step_lifecycle_decision_apply_runtime_predecessor_after_cut", (),
+             "self.runtime.try_step_owed_fifo_predecessor(now, attestation.dispatch_key().lifecycle_ordinal())",
+             "self.consume_effects_with_runner_decision_cleanup("),
+            ("publish_pre_timeout", "step_pre_timeout_locked_prepare_qc_after_debt", (),
+             "self.runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut)",
+             "self.consume_pacemaker_effects_with_runner_decision_cleanup("),
+            ("publish_pacemaker", "step_pacemaker_once", (),
+             "self.runtime.step_pacemaker_effects(now)",
+             "self.consume_pacemaker_effects_with_runner_decision_cleanup("),
+            ("publish_capacity", "step_completion_capacity_relief", (),
+             "self.runtime.step_completion_capacity_relief_effects(now, blocked_ordinal)",
+             "self.consume_effects_with_runner_decision_cleanup("),
+            ("publish_step", "step", (
+                "self.ensure_open()?; if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close_after_transferring_runtime_terminals(error, services)); }",
+                "self.drain_retained_effect_batch(services, true)",
+             ), "self.runtime.step_effects(now)",
+             "self.consume_effects_with_runner_decision_cleanup("),
+            ("publish_recovery", "step_pending_tip_recovery", (),
+             "self.runtime.step_recovery_effects(now)",
+             "self.consume_pending_tip_recovery_effects(effects, services)?"),
+        )
+    )
+
+
+def _persistent_recovery_cut_canonical_items(paths, sources, errors):
+    """Extract exact production owners independently from their semantic checks."""
+    items = {
+        "module_statements": tuple(
+            statement for statement in rust_top_level_statements(sources["adapter"])
+            if "leader_wire_consumer" in statement.tokens
+        ),
+        "authority_structs": rust_struct_items(sources["consumer"], "LeaderWireRecoveryAuthority"),
+    }
+    for name in ("from_replayed_adapter", "with_protected_lock", "advance_view", "with_durable_decision"):
+        items["fixture_" + name] = rust_items(sources["consumer"], name)
+    cache = {}
+    for key, owner, name, context, _ in _persistent_recovery_cut_canonical_contracts():
+        if (owner, name) not in cache:
+            cache[(owner, name)] = rust_items(sources[owner], name)
+        candidates = cache[(owner, name)]
+        candidates = tuple(item for item in candidates if item.brace_context == context)
+        if len(candidates) != 1:
+            errors.append(f"{paths[owner]}: canonical recovery-cut {key} requires one exact production owner {name}")
+        else:
+            items[key] = candidates[0]
+    return items
+
+
+def _persistent_recovery_cut_canonical_item_errors(paths, items):
+    """Require exact unique predicates and their reviewed preflight/publication order."""
+    errors: list[str] = []
+    statements = items.get("module_statements", ())
+    expected_statements = (
+        '#[path = "v2_leader_wire_consumer.rs"] mod leader_wire_consumer;',
+        'pub(crate) use leader_wire_consumer::{LeaderWireRecoveryAuthority, vote_statement_hash as leader_wire_vote_statement_hash,};',
+    )
+    if len(statements) != 2 or any(
+        statement.ancestor_inner_attributes
+        or re.sub(r"\s+", "", mask_rust_comments(statement.source)) != re.sub(r"\s+", "", expected)
+        for statement, expected in zip(statements, expected_statements)
+    ):
+        errors.append(f"{paths['adapter']}: canonical recovery authority requires its exact private ungated module edge and reexport")
+    authority = items.get("authority_structs", ())
+    if len(authority) != 1:
+        errors.append(f"{paths['consumer']}: canonical recovery authority requires one opaque production struct")
+    else:
+        item = authority[0]
+        _require_rust_item_context(paths["consumer"], item, (), "canonical recovery authority opacity", errors,
+                                  expected_attributes=("#[derive(Clone, Copy, Debug, PartialEq, Eq)]",))
+        expected_fields = """context_id: wire::HeightContextId, height: wire::Height,
+            owner: [u8; 32], consumer_tag: reducer::EventTag, wal_id: reducer::PersistenceId,
+            decision_durable: bool, highest_prepare_view: Option<wire::View>,
+            installed_timeout_view: Option<wire::View>,
+            protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+            protected_commit_statement: Option<Hash>,"""
+        if rust_code_tokens(item.body) != rust_code_tokens(expected_fields):
+            errors.append(f"{paths['consumer']}: canonical recovery authority fields must retain private actual-WAL ownership")
+    for name in ("from_replayed_adapter", "with_protected_lock", "advance_view", "with_durable_decision"):
+        fixtures = items.get("fixture_" + name, ())
+        if len(fixtures) != 1:
+            errors.append(f"{paths['consumer']}: scalar authority fixture {name} must remain cfg(test) only")
+        else:
+            _require_rust_item_context(paths["consumer"], fixtures[0], (("impl", "LeaderWireRecoveryAuthority"),),
+                                      f"scalar authority fixture {name}", errors,
+                                      expected_attributes=("#[cfg(test)]",))
+    for key, owner, _name, context, required in _persistent_recovery_cut_canonical_contracts():
+        item = items.get(key)
+        if item is None:
+            errors.append(f"{paths[owner]}: canonical recovery-cut {key} is missing")
+            continue
+        _require_rust_item_context(paths[owner], item, context,
+                                  f"canonical recovery-cut {key}", errors,
+                                  expected_attributes=(("#[allow(clippy::too_many_lines)]",)
+                                                       if key in ("wal_apply", "wal_locks") else ()))
+        tokens = rust_code_tokens(item.source)
+        if key == "factory" and rust_code_tokens(item.body) != rust_code_tokens(" ".join(required[1:])):
+            errors.append(f"{paths[owner]}:{item.line}: canonical recovery-cut factory must retain the complete actual-WAL construction without shadow bindings or fabricated fields")
+        cursor = 0
+        for sequence in required:
+            expected = rust_code_tokens(sequence)
+            positions = _token_sequence_positions(tokens, expected)
+            if len(positions) != 1 or positions[0] < cursor:
+                errors.append(f"{paths[owner]}:{item.line}: canonical recovery-cut {key} must retain one ordered predicate {sequence!r}")
+                break
+            cursor = positions[0] + len(expected)
+        counts = {
+            "store": (("state.records", 4), ("state.replay_dormant", 2),
+                      ("state.runtime_consumer_epochs", 2),
+                      ("state.records.remove(", 1), ("state.records.get_mut(", 1),
+                      ("state.runtime_consumer_epochs.remove(", 1), ("self.persist_locked(", 1)),
+            "mirror": (("state.leader_wire_lifecycles", 3),
+                       ("state.leader_wire_lifecycles.remove(", 1), ("state.leader_wire_lifecycles.get_mut(", 1),
+                       ("gate.advance_recovery_cut(", 1)),
+            "service_publish": (("self.leader_wire_ingress.advance_leader_wire_recovery_cut(", 1),
+                                ("self.leader_wire_recovery_authority =", 1)),
+        }.get(key, ())
+        if key.startswith("publish_"):
+            counts += (("self.finish_runtime_step_reconciliation(services)", 2 if key == "publish_step" else 1),
+                       ("wal_step.complete()", 1))
+        for sequence, expected_count in counts:
+            if len(_token_sequence_positions(tokens, rust_code_tokens(sequence))) != expected_count:
+                errors.append(f"{paths[owner]}:{item.line}: canonical recovery-cut {key} requires exactly {expected_count} occurrences of {sequence!r}")
+    return errors
+
+
 def _persistent_recovery_cut_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -900,6 +1252,9 @@ def _persistent_recovery_cut_source_fidelity_errors(
     base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
     paths = {
         "adapter": base / "v2.rs",
+        "consumer": base / "v2_leader_wire_consumer.rs",
+        "core_wal": base / "v2_core" / "wal.rs",
+        "core_types": base / "v2_core" / "types.rs",
         "runtime": base / "v2_runtime.rs",
         "effects": base / "v2_effects.rs",
         "store": base / "serviced_candidate_store.rs",
@@ -1476,260 +1831,8 @@ SerializedV2Runtime::retire_restored_body_fetch_parent(self, effect, ownership)
         errors,
     )
 
-    authority_advance = _require_rust_item(
-        paths["store"], sources["store"], "advance_view", errors
-    )
-    _require_rust_item_context(
-        paths["store"],
-        authority_advance,
-        (("impl", "LeaderWireRecoveryAuthority"),),
-        "monotone leader-wire view authority",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        authority_advance,
-        """
-if durable_view < self.durable_view {
-    return Err("leader-wire recovery authority regressed its durable view".to_owned());
-}
-""",
-        "leader-wire view authority must reject regression",
-        errors,
-    )
-    for sequence, description in (
-        (
-            """
-let next = Self {
-    durable_view,
-    protected_lock,
-    ..self
-};
-if protected_lock.is_some_and(|lock| !next.protected_lock_is_well_formed(lock)) {
-    return Err(
-        "leader-wire recovery authority carried a future protected lock"
-            .to_owned(),
-    );
-}
-if !next.protected_lock_monotonically_extends(self) {
-    return Err("leader-wire recovery authority regressed its protected lock".to_owned());
-}
-""",
-            "leader-wire view authority must carry only a well-formed monotone protected lock",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["store"], authority_advance, sequence, description, errors
-        )
-
-    protected_lock_monotonicity = _require_rust_item(
-        paths["store"],
-        sources["store"],
-        "protected_lock_monotonically_extends",
-        errors,
-    )
-    _require_rust_item_context(
-        paths["store"],
-        protected_lock_monotonicity,
-        (("impl", "LeaderWireRecoveryAuthority"),),
-        "monotone protected-lock authority",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        protected_lock_monotonicity,
-        """
-match (previous.protected_lock, self.protected_lock) {
-    (None, _) => true,
-    (Some(_), None) => false,
-    (Some(previous), Some(next)) => next == previous || next.0.view > previous.0.view,
-}
-""",
-        "protected-lock authority must permit only introduction, exact reuse, or a higher round",
-        errors,
-    )
-
-    protected_lock_shape = _require_rust_item(
-        paths["store"],
-        sources["store"],
-        "protected_lock_is_well_formed",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        protected_lock_shape,
-        """
-round.context_id == self.context_id
-    && round.height == self.height
-    && round.view <= self.durable_view
-""",
-        "protected-lock authority must retain exact context, height, and non-future view",
-        errors,
-    )
-
-    protected_commit = _require_rust_item(
-        paths["store"], sources["store"], "protects_commit_vote", errors
-    )
-    _require_rust_item_context(
-        paths["store"],
-        protected_commit,
-        (("impl", "LeaderWireRecoveryAuthority"),),
-        "exact historical protected-Commit classifier",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        protected_commit,
-        """
-identity.phase == FairV2IngressLeaderWirePhase::CommitVote
-    && self.protected_lock.is_some_and(|(round, subject)| {
-        identity.context_id == round.context_id
-            && identity.height == round.height
-            && identity.view == round.view
-            && identity.subject_hash == Hash::new(subject.encode())
-    })
-""",
-        "historical Commit-vote admission must exact-match phase, round, and subject",
-        errors,
-    )
-
-    retire_identity = _require_rust_item(
-        paths["store"], sources["store"], "retires_stored_identity", errors
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        retire_identity,
-        """
-self.decision_durable
-    || (identity.view < self.durable_view
-        && identity.phase != FairV2IngressLeaderWirePhase::CommitQc
-        && !self.protects_commit_vote(identity))
-""",
-        "view cuts must retain only exact protected Commit votes and historical CommitQCs",
-        errors,
-    )
-
-    admit_identity = _require_rust_item(
-        paths["store"], sources["store"], "admits_ingress_identity", errors
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        admit_identity,
-        """
-if self.decision_durable {
-    return false;
-}
-identity.phase == FairV2IngressLeaderWirePhase::CommitQc
-    || self.protects_commit_vote(identity)
-    || identity.view >= self.durable_view
-""",
-        "Decision must close control while pre-Decision cuts admit protected Commit progress",
-        errors,
-    )
-
-    replayed_recovery_authority = require_context_item(
-        "adapter",
-        "leader_wire_recovery_authority",
-        adapter_context,
-        "replayed protected-lock recovery authority",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        replayed_recovery_authority,
-        """
-let protected_lock = self
-    .reducer
-    .durable_state()
-    .locked()
-    .map(|certificate| -> Result<_, AdapterError> {
-        Ok((
-            self.registry
-                .round_to_wire(certificate.proposal_round()),
-            self.registry.subject(certificate.subject())?,
-        ))
-    })
-    .transpose()?;
-""",
-        "startup recovery authority must derive the exact durable lock from replayed state",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        replayed_recovery_authority,
-        """
-.with_protected_lock(protected_lock)
-.map_err(AdapterError::ServicedCandidateStore)
-""",
-        "startup recovery authority must fail closed while attaching the replayed lock",
-        errors,
-    )
-    require_item_order(
-        "adapter",
-        replayed_recovery_authority,
-        (
-            ".durable_state()",
-            ".locked()",
-            ".round_to_wire(certificate.proposal_round())",
-            ".transpose()?",
-            "LeaderWireRecoveryAuthority::from_replayed_adapter(",
-            ".with_protected_lock(protected_lock)",
-            ".map_err(AdapterError::ServicedCandidateStore)",
-        ),
-        "startup recovery authority lock authentication and attachment",
-    )
-
-    store_cut = require_context_item(
-        "store",
-        "advance_recovery_cut",
-        store_context,
-        "durable leader-wire live recovery cut",
-    )
-    for sequence, description in (
-        (
-            """
-if !next.matches_geometry(self.context_id, self.height, self.owner) {
-    return Err("leader-wire recovery cut changed immutable geometry".to_owned());
-}
-""",
-            "leader-wire cut must retain frozen geometry",
-        ),
-        (
-            """
-if !next.monotonically_extends(state.recovery_authority) {
-    return Err("leader-wire recovery cut is not monotone".to_owned());
-}
-""",
-            "leader-wire cut must monotonically extend the WAL authority",
-        ),
-        (
-            """
-if retiring != *expected_dormant_slots || !retiring.is_subset(&state.replay_dormant) {
-""",
-            "durable and mirrored obsolete Dormant sets must be exactly equal",
-        ),
-        (
-            """
-let previous = state.clone();
-state.recovery_authority = next;
-for slot in &retiring {
-""",
-            "leader-wire cut must retain one complete rollback image before removal",
-        ),
-        (
-            """
-if !retiring.is_empty()
-    && let Err(error) = self.persist_locked(&state)
-{
-    *state = previous;
-    return Err(error);
-}
-""",
-            "failed leader-wire persistence must restore authority and records",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["store"], store_cut, sequence, description, errors
-        )
+    canonical_items = _persistent_recovery_cut_canonical_items(paths, sources, errors)
+    errors.extend(_persistent_recovery_cut_canonical_item_errors(paths, canonical_items))
 
     admit_ingress = require_context_item(
         "store",
@@ -1774,47 +1877,6 @@ let durable_exact = gate
     .lookup_exact(&identity, &slot)
 """,
         "fair ingress must coalesce below-cut wire before durable exact lookup",
-        errors,
-    )
-
-    fair_cut = require_context_item(
-        "ingress",
-        "advance_leader_wire_recovery_cut",
-        ingress_context,
-        "gate-first fair-ingress recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["ingress"],
-        fair_cut,
-        """
-gate.advance_recovery_cut(next, &retiring)?;
-for slot in &retiring {
-    let removed = state
-        .leader_wire_lifecycles
-        .remove(slot)
-""",
-        "persistent gate publication must precede mirror pruning",
-        errors,
-    )
-
-    entered_view = require_context_item(
-        "worker",
-        "entered_view",
-        worker_services_context,
-        "production certified-view recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        entered_view,
-        """
-let next_recovery_authority = self
-    .leader_wire_recovery_authority
-    .advance_view(tag.view(), protected_lock)?;
-self.leader_wire_ingress
-    .advance_leader_wire_recovery_cut(next_recovery_authority)?;
-self.leader_wire_recovery_authority = next_recovery_authority;
-""",
-        "certified EnterView must publish its protected-lock gate cut before exposing authority",
         errors,
     )
 
@@ -1873,27 +1935,6 @@ services
             "self.reconciled_tag = Some(tag);",
         ),
         "validated protected-lock reconciliation and installed-view exposure",
-    )
-
-    finish_runtime_step = require_context_item(
-        "worker",
-        "finish_runtime_step_reconciliation",
-        worker_services_context,
-        "production durable-Decision recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        finish_runtime_step,
-        """
-if decided_subject.is_some() {
-    let next = self.leader_wire_recovery_authority.with_durable_decision();
-    self.leader_wire_ingress
-        .advance_leader_wire_recovery_cut(next)?;
-    self.leader_wire_recovery_authority = next;
-}
-""",
-        "durable Decision must publish the all-wire gate cut during runtime-step reconciliation",
-        errors,
     )
 
     regression_contracts = (
@@ -2057,34 +2098,9 @@ assert!(!decision.admits_ingress_identity(&historical_commit_qc.identity));
             errors,
         )
 
-    live_protected_cut_regression = _require_rust_item(
-        paths["worker"],
-        sources["worker"],
-        "entered_view_publishes_the_exact_protected_commit_vote_cut",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        live_protected_cut_regression,
-        """
-.entered_view(
-    next,
-    timeout_certificate_at_view(&service, initial.view()),
-    Some((protected_round, protected_subject)),
-)
-""",
-        "live EnterView regression must publish the exact protected-lock coordinates",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        live_protected_cut_regression,
-        """
-Ok(super::super::FairV2IngressPushDisposition::Enqueued)
-""",
-        "live EnterView regression must enqueue the exact historical Commit vote",
-        errors,
-    )
+    errors.extend(_worker_actual_wal_enter_view_fixture_errors(
+        sources["adapter"], sources["worker"], paths["adapter"], paths["worker"]
+    ))
 
     live_cut_regression = _require_rust_item(
         paths["store"],

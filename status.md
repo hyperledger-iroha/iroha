@@ -18,18 +18,36 @@ counts, plans, dates, and former policies do not attest the current candidate.
 
 Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
 Source inspection confirms substantial implementation beyond the original plan;
-fresh qualification remains open. The current release-inventory preflight rejects
-an existing unmerged Git index. No milestone or release gate is closed by this audit.
-The focused Kotlin consensus/HTTP diagnostics selection now passes 60 tests,
-zero failures/errors/skips, including immutable evidence ownership and Java
-consumers of Kotlin. Four private-invocation layout tests and 27 formal-launcher
-tests pass. Rust crash/classifier regressions await the shared build queue;
-formal source inventories and full release qualification remain open.
+fresh qualification remains open. The unmerged index entries have been resolved;
+source and receipt inventories are being reconciled. No milestone or release gate
+is closed by this audit. The focused JVM consensus/HTTP selection passes 123 tests,
+zero failures/errors/skips, including immutable evidence ownership, bounded wire vectors and Java
+consumers of Kotlin. Both migrated Java release runners pass (59 diagnostics and
+6 grouped tests); 10 affected legacy settlement/onboarding checks also pass. Four private-invocation layout tests and 55 formal-launcher/artifact-retention
+tests pass. QueuePlan's source ledger/startup controls pass 85 cases plus five
+semantic checks. Six finite TLC models, 106 multilane mutations and 22 in-flight
+mutations pass with fresh retained raw traces; five Apalache bounds pass and the
+in-flight 18-step run is pending.
+JS/Python settlement ownership and exact TWAP checks pass 63/65 grouped tests
+and 152 related Python tests; Kotlin retains signed Numeric and bounded Quantity
+semantics. Rust completion cleanup and crash/classifier regressions await the
+shared build queue. Current cohort source-closure and receipt checks pass 23/7.
+Public-certificate source controls pass 19 cases. A subsequent recovery fix stages
+the complete bounded proposal set before eviction and prevents completed historical
+source resurrection; its four new cache tests and updated hydration regressions
+await Rust execution. G-UNIT now registers 526 tests; production remains 881 across
+43 modules. New recovery source controls and full integration remain in progress.
+All 17 Swift wire fixture tests pass in
+an isolated source build after bounding vector allocations; the complete SDK
+gate still needs its real bridge artifact. The broad receipt/bootstrap selection
+finishes with 555 passes and one cache parent-change rejection; that case passes
+on isolated retry. Source-contract reconciliation, a settled full receipt run,
+fixture regeneration and full release qualification remain open.
 
 | Area | Observed evidence | Practical limit |
 | --- | --- | --- |
-| Privacy V1 admission and field carriers | Six-lane digest wrappers encode exactly 48 bytes and Fp4 values exactly 32 bytes. Complete signed synthetic qualification passes bounded native decoding; Swift/C# now require the sixth Rust capability validator, and Swift admission requires authenticated Torii origin. Canonical Exact12 fixtures are regenerated; header and 25 drift checks pass. | Final combined Rust/native and SDK fixture runs are in progress. Synthetic signatures are validator tests only; the [closure ledger](specs/privacy_first_release_closure.md) records the remaining twelve-engine, hardware, independent-review and four-validator evidence. |
-| SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact circuit checkpoint identity, and complete breaker transaction readbacks. All 191 SCCP Rust tests (35 TON native), the new model regression, 42 TON contract tests, 15 builder/golden tests, focused Go tests/compile checks, and Core/Torii production library compilation pass; authenticated StateInit regenerated. | Full Core/workspace and Torii runtime tests are unclaimed. New message R1CS counts and dependent release artifacts still require regeneration and independent qualification. |
+| Privacy V1 admission and field carriers | Canonical 48-byte digest and 32-byte Fp4 carriers; complete signed synthetic qualification passes bounded decoding. Rust capability FFI passes 2 tests; corrected Exact12 fixtures pass JS 23, Python 94, Kotlin 16 and C# 13. SDK admission source checks pass 86 regressions; model privacy selection passes 127 tests and the final intent KAT is independently reproduced. Shared six-lane framing passes 39 primitive tests and the ACE selection passes 26; AXT binding passes 76 FASTPQ and 7 Core regressions. | Core native selection passes all 63 tests; the corrected complete proof crate passes 1,299 with zero failures and 13 ignored. Current SDK origin/network checks pass JS 37, Python 103, Kotlin 63, C# 17 and Swift source-only 35. Apple duplicate archive ownership is corrected and three target link controls pass; the fresh full XCFramework build is running; complete GPU proof dispatch, AXT authoritative state/execution binding, independent review and four-validator qualification remain open in the [closure ledger](specs/privacy_first_release_closure.md). Synthetic signatures are validator tests only. |
+| SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact circuit checkpoint identity, complete breaker transaction readbacks, and SCCP builder Git/verifier/attribute isolation. All 191 SCCP Rust tests (35 TON native), 9 Core TON breaker tests, the new model regression, 42 TON contract tests, focused Go tests/compile checks, and Core/Torii production library compilation pass; authenticated StateInit regenerated. Combined builder/golden/release/corridor tests: 377 passed, 28 external-evidence/validator-dependent skips. All 8 R1CS identities are current and bound to checked definition/dependency sources. | Full Core/workspace and Torii runtime tests are unclaimed. Dependent release artifacts require regeneration and independent qualification against refreshed circuit identities. |
 | Rust SDK dependency separation | Relay accounting moved to `soranet_incentives`; SoraNet policies and shared defaults have one `iroha_service_model` owner. SDK/config/CAR/orchestrator/CLI production library and binary checks pass after the policy and logging migration. | Storage orchestration and telemetry remain SDK dependencies; Musubi service ownership, immutable client contexts, asynchronous transport and consumer migration are incomplete. |
 | Configuration and status HTTP contracts | Shared configuration DTOs have 22 wire tests, 3 node conversion tests and 14 Core runtime tests. Shared status preserves 32 captured named DTO frames/hashes/JSON; 93 telemetry tests pass. Core, SDK/CLI, test-network, schema generation, Mochi and grouped consumers compile. | Named records are qualified by focused fixtures; arbitrary generic-envelope schema identity is not yet cut over or fully qualified. |
 | Core integration fixtures | The `core_api` harness compiles after all 21 identified fixture errors were repaired through canonical APIs. | The new four-validator configuration startup/restart/readback/isolation scenario has not run against rebuilt binaries. Compilation is not runtime evidence. |
@@ -62,8 +80,22 @@ SoraFS goal execution is tracked in the [V1 implementation goals](specs/sorafs/v
 The initial release-hardening slice fixes signing-output directory substitution,
 checks the source seal before Cargo metadata, and restores native mobile CI with
 mandatory per-task execution evidence. The combined script/contract selection
-passes 714 tests; native CI execution, the source seal, HSM custody and production
-qualification remain open. See the [current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-06-execution-checkpoint).
+passes 714 tests. The complete manifest library rerun passed 891 tests with no
+failures or ignored tests. The focused Core security run passed 11 of 15
+tests; registry-label and bootstrap-state fixture corrections await a fresh
+Core binary. The canonical account binding passes its model regression and three
+node authorization tests; Torii passes three binding, three OpenAPI and three
+query-filter tests. The validator CLI passes 56 tests, fixture generator 12 and
+Python fixture checker 30. Both Kotlin/Java-source PoP tests pass with a fresh
+native bridge and no skipped tests. Signed-manifest qualification requires independently
+authenticated source files; signed-state/receipt verification passes 11 tests,
+and seven actual CLI process checks pass over simulated signed inputs. Python
+gate integration remains pending. The four-peer repair target
+compiles; all 23 custody-verifier, 26 operation/control/recovery and three bounded
+credential-reader tests pass. Network execution and production hardware/state
+adapter integration remain pending. Native CI execution,
+the source seal, HSM custody and production qualification remain open. See the
+[current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-06-execution-checkpoint).
 
 The active acceptance policy uses enforced dependency ownership, the existing
 5,000-line production and 3,000-line test-file limits, substantive duplication

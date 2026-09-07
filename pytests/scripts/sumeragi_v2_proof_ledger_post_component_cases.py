@@ -547,6 +547,7 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs"),

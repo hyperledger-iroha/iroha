@@ -1670,17 +1670,6 @@ fn pending_owner_seal_and_frame_preflight_roundtrip_are_mutation_sensitive() {
     assert_eq!(view.successor, successor.as_slice());
     assert_eq!(view.core_proofs.len(), CORES_V1);
 
-    let second_pending = pending_fixture_v1();
-    let (second_bound, second_cross_field) =
-        bind_to_terminal_transcript_v1(second_pending).expect("same typed terminal bind");
-    assert_eq!(second_cross_field.binding_digest(), cross_field_binding);
-    let alternate_wire = second_bound
-        .seal_v1(&[0xa5, 0x5a])
-        .expect("alternate successor seal");
-    let alternate =
-        FramePreflightV1::decode_exact_v1(&alternate_wire).expect("alternate successor preflight");
-    assert_ne!(preflight.successor_digest, alternate.successor_digest);
-
     let mut mutated_core = wire.clone();
     mutated_core[HEADER_BYTES_V1 + CORE_RECORD_HEADER_BYTES_V1 + 17] ^= 1;
     assert!(matches!(
@@ -1695,28 +1684,56 @@ fn pending_owner_seal_and_frame_preflight_roundtrip_are_mutation_sensitive() {
         FramePreflightV1::decode_exact_v1(&mutated_successor),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
     ));
+}
 
-    let mut mutated_owner = pending_fixture_v1();
-    mutated_owner.proof_set_digest[0] ^= 1;
-    assert!(matches!(
-        bind_to_terminal_transcript_v1(mutated_owner),
-        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
-    ));
+// Return only the binding so mutation tests do not retain another large pending
+// owner in their stack frame. Each test exercises one ownership scenario within
+// the standard test-thread stack budget.
+fn pending_fixture_binding_v1() -> [u8; DIGEST_BYTES_V1] {
+    let (_, cross_field) =
+        bind_to_terminal_transcript_v1(pending_fixture_v1()).expect("baseline typed terminal bind");
+    cross_field.binding_digest()
+}
 
-    let mut mutated_root_owner = pending_fixture_v1();
-    mutated_root_owner.cross_field_core_root.0[0] ^= 1;
-    assert!(matches!(
-        bind_to_terminal_transcript_v1(mutated_root_owner),
-        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
-    ));
+fn sealed_pending_fixture_v1(successor: &[u8]) -> ([u8; DIGEST_BYTES_V1], Vec<u8>) {
+    let (bound, cross_field) =
+        bind_to_terminal_transcript_v1(pending_fixture_v1()).expect("typed terminal bind");
+    let binding = cross_field.binding_digest();
+    let wire = bound.seal_v1(successor).expect("canonical sealed frame");
+    (binding, wire)
+}
 
-    let mut mutated_qpcs_owner = pending_fixture_v1();
-    mutated_qpcs_owner.inputs.schedule.relation_seed[0] ^= 1;
-    assert!(matches!(
-        bind_to_terminal_transcript_v1(mutated_qpcs_owner),
-        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
-    ));
+#[test]
+fn pending_successor_binding_is_separate_from_the_cross_field_binding() {
+    let (cross_field_binding, wire) = sealed_pending_fixture_v1(&[0x5a; 17]);
+    let preflight = FramePreflightV1::decode_exact_v1(&wire).expect("source-free preflight");
+    let (second_binding, alternate_wire) = sealed_pending_fixture_v1(&[0xa5, 0x5a]);
+    assert_eq!(second_binding, cross_field_binding);
+    let alternate =
+        FramePreflightV1::decode_exact_v1(&alternate_wire).expect("alternate successor preflight");
+    assert_ne!(preflight.successor_digest, alternate.successor_digest);
+}
 
+#[test]
+fn pending_owner_integrity_rejects_each_binding_mutation() {
+    for mutation in 0..3 {
+        let mut pending = pending_fixture_v1();
+        match mutation {
+            0 => pending.proof_set_digest[0] ^= 1,
+            1 => pending.cross_field_core_root.0[0] ^= 1,
+            2 => pending.inputs.schedule.relation_seed[0] ^= 1,
+            _ => unreachable!("closed mutation range"),
+        }
+        assert!(matches!(
+            bind_to_terminal_transcript_v1(pending),
+            Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
+        ));
+    }
+}
+
+#[test]
+fn pending_core_scalar_change_rebinds_the_cross_field_transcript() {
+    let cross_field_binding = pending_fixture_binding_v1();
     let mut rebuilt_with_changed_core = pending_fixture_v1();
     let scalar_offset = FIXED_PROOF_POINTS_V1 * POINT_BYTES_V1;
     rebuilt_with_changed_core.proofs[0][scalar_offset..scalar_offset + SCALAR_BYTES_V1]

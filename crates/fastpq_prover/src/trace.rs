@@ -193,7 +193,7 @@ fn clone_observer<T: ?Sized>(
         }
     }
 }
-fn notify_poseidon_pipeline_observer(
+pub(crate) fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
     backend: Option<backend::GpuBackend>,
@@ -223,7 +223,7 @@ fn notify_poseidon_pipeline_observer(
     }
 }
 #[cfg(test)]
-fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
+pub(crate) fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
     let observer = clone_observer(trace_merkle_mode_observer_slot(), "trace_merkle_mode");
     if let Some(callback) = observer {
         callback(mode);

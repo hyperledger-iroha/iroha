@@ -22,15 +22,24 @@ MINIMUM_NET_REDUCTION = 2_161
 # uncompacted tests with only the same 31-line growth.
 ORIGINAL_PREIMAGE_RUST_LINES = 5_779
 ORIGINAL_POSTIMAGE_RUST_LINES = 3_618
-CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
+# The actual WAL consumer now lives in its own already-existing source module.
+# Its closed source-provider enum, parser and resolver add exactly three Rust
+# lines. Credit those same three lines to both compared forms; retain the
+# original historical measurements and net-reduction floor unchanged.
+MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
+WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES = 3
+CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = (
+    MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES
+    + WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES
+)
 BASELINE_RUST_LINES = (
     ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
 MAX_POSTIMAGE_RUST_LINES = (
     ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
-EXPECTED_ASSET_LENGTH = 613_797
-EXPECTED_ASSET_SHA256 = "8ff26670f01c337a929127297f098e86372889d677878a92490b70463719fc45"
+EXPECTED_ASSET_LENGTH = 629_258
+EXPECTED_ASSET_SHA256 = "c67e3ba5522638d49e5942f3dc31caaaef1793e4d5b231be87311b488dd103d6"
 EXPECTED_CASE_IDS_SHA256 = "77db5140892b9c541a0e4e08b0b70648210765ebce8a828514ca1cc006427284"
 
 HOST_PREIMAGE_SHA256 = {
@@ -40,12 +49,19 @@ HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "5af2c411d6d1c7d5579004760e8c9ae0b48f2335e1468f456f72e0d614dede6b",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "0afc9993189c5d118e5da3e9d1b37376687bfd316c66512b1605913b1a1908f4",
 }
-HOST_POSTIMAGE_SHA256 = {
+COMPACTED_HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d380501e4efd09374acdfc2b7729bd095c7499a4d0dfdde355ef2296fa8de23d",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d83e903bd0d2307896a2cc53ffb8c36aaf01cce3cb9178f88221009f44fe284c",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "c2f419913582f0b15a2f3209f8f0b45e90cbe84d608764a7dd6bcfd7299cef06",
+}
+
+# Preserve every original compacted host hash as historical evidence. Only the
+# explicit three-line source provider has changed the current support host.
+HOST_POSTIMAGE_SHA256 = {
+    **COMPACTED_HOST_POSTIMAGE_SHA256,
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "2730b23d1731d602404c83cee672437891e9d5ee8abde0af9ee01ddd37cd3f53",
 }
 
 MIGRATED_TESTS = {
@@ -74,14 +90,14 @@ NEW_CASE_CONTRACT_COUNTS = {
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 306,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 81,
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 92,
 }
 MIGRATED_CASE_SHA256 = {
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "48c0bab0ae5a14d9f6b4c46beb3207a45f30ca8c520e1150a9ed01c70ab97eae",
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "3ea2517742f7aba7784c565472645a2ba05964f209b88ce1b4c23ae82414a8b8",
 }
 
 
@@ -127,6 +143,173 @@ def parse_cases(asset: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     if current_id is not None:
         raise AssertionError(f"unclosed case {current_id}")
     return tuple(cases)
+
+
+# These are the narrow production regions whose guards moved during the current
+# owner reconciliation. Use their exact source providers, without source globbing
+# or depending on a compiled Core test executable.
+BOUNDARY_CASE_REGIONS = {
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": (
+        "leader_wire_replay_lock_authority",
+        "actual_consumer_factory",
+        "actual_consumer_publication",
+        "leader_wire_live_lock_authority",
+    ),
+    "certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only": (
+        "terminal_next_sign_pair",
+    ),
+    "selected_certified_response_priority_is_closed_and_exactly_routed": (
+        "recovered_response_preparation",
+    ),
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": (
+        "physical_fifo_proof",
+    ),
+}
+BOUNDARY_SOURCE_PATHS = {
+    "adapter": "crates/iroha_core/src/sumeragi/v2.rs",
+    "leader_wire_consumer": "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs",
+    "worker": "crates/iroha_core/src/sumeragi/v2_worker/effect_services_impl.rs",
+    "registry": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
+    "turn_driver": "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+    "queue": "crates/iroha_core/src/queue.rs",
+}
+BOUNDARY_MUTATIONS = (
+    (
+        "physical global FIFO inversion",
+        "queue",
+        "previous_global_fifo_ordinal.is_some_and(|previous| previous >= order.ordinal)",
+        "false",
+    ),
+    (
+        "missing paired Sign terminal authentication",
+        "registry",
+        "!broadcast\n                            .paired_next_sign_matches_terminal_record(coordinator, &exact_ledger)",
+        "false",
+    ),
+    (
+        "recovered queue refresh retry",
+        "turn_driver",
+        "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry,\n                                );",
+        "ProductionLifecycleIngressSelectionV1::RestartRequired,\n                                );",
+    ),
+    (
+        "actual adapter factory delegation",
+        "adapter",
+        "LeaderWireRecoveryAuthority::from_adapter(self)",
+        "LeaderWireRecoveryAuthority::from_replayed_adapter(self)",
+    ),
+    (
+        "actual locked proposal round",
+        "leader_wire_consumer",
+        "adapter.registry.round_to_wire(certificate.proposal_round())",
+        "adapter.registry.round_to_wire(certificate.round())",
+    ),
+    (
+        "historical CommitIntent authority",
+        "leader_wire_consumer",
+        "durable.commit_intent_for_lock(locked).is_some()",
+        "true",
+    ),
+    (
+        "exact WAL persistence frontier",
+        "leader_wire_consumer",
+        "wal_id: durable.last_id()",
+        "wal_id: reducer::PersistenceId::new(0)",
+    ),
+    (
+        "monotonic consumer publication",
+        "worker",
+        "if !next.monotonically_extends(self.leader_wire_recovery_authority)",
+        "if false",
+    ),
+    (
+        "persist before exposing consumer authority",
+        "worker",
+        "self.leader_wire_ingress\n            .advance_leader_wire_recovery_cut(next)?;\n        self.leader_wire_recovery_authority = next;",
+        "self.leader_wire_recovery_authority = next;\n        self.leader_wire_ingress\n            .advance_leader_wire_recovery_cut(next)?;",
+    ),
+    (
+        "entered-view exact consumer tag",
+        "worker",
+        "if tag != self.leader_wire_recovery_authority.consumer_tag()",
+        "if false",
+    ),
+)
+
+
+def boundary_contract_failures(
+    cases: dict[str, tuple[str, ...]], sources: dict[str, str]
+) -> list[str]:
+    """Evaluate only the relocated guards against real or adversely changed sources.
+
+    Region, count and order behavior matches the Rust runner. Restricting this
+    check to explicit regions lets negative controls expose lost ownership
+    guards without treating an unrelated source-contract failure as rejection.
+    """
+
+    def unescape(value: str) -> str:
+        return re.sub(
+            r"\\([\\nrtp])",
+            lambda match: {"\\": "\\", "n": "\n", "r": "\r", "t": "\t", "p": "|"}[match[1]],
+            value,
+        )
+
+    failures: list[str] = []
+    for case_id, region_ids in BOUNDARY_CASE_REGIONS.items():
+        rows = [
+            [unescape(field) for field in row.split("|")]
+            for row in cases[case_id][1:-1]
+            if row.split("|", 2)[1] in region_ids
+        ]
+        regions: dict[str, list[str]] = {}
+        for row in rows:
+            if row[0] != "region":
+                continue
+            _, region, source_id, start_mode, start_token, end_mode, end_token = row
+            source = sources[source_id]
+            try:
+                if start_mode == "last":
+                    end = len(source) if end_mode == "end" else source.index(end_token)
+                    start = source.rindex(start_token, 0, end)
+                else:
+                    start = (
+                        0 if start_mode == "begin" else source.index(start_token)
+                        + (len(start_token) if start_mode == "after" else 0)
+                    )
+                    end = len(source) if end_mode == "end" else source.index(end_token, start)
+                regions.setdefault(region, []).append(source[start:end])
+            except ValueError:
+                failures.append(f"{case_id}/{region}: missing region delimiter")
+        for row in rows:
+            tag, region, *fields = row
+            if tag == "region":
+                continue
+            parts = regions.get(region, [])
+            valid = bool(parts)
+            if tag == "required":
+                valid &= any(fields[0] in part for part in parts)
+            elif tag == "forbidden":
+                valid &= all(fields[0] not in part for part in parts)
+            elif tag == "count":
+                valid &= sum(part.count(fields[0]) for part in parts) == int(fields[1])
+            elif tag == "order":
+                if len(fields) != int(fields[0]) + 2:
+                    raise AssertionError(f"malformed order row: {row}")
+                remaining = "\n".join(parts)
+                for anchor in fields[1:-1]:
+                    offset = remaining.find(anchor)
+                    if offset < 0:
+                        valid = False
+                        break
+                    remaining = remaining[offset + len(anchor):]
+            else:
+                raise AssertionError(f"unsupported boundary row: {row}")
+            if not valid:
+                failures.append(f"{case_id}/{region}: {fields[-1]}")
+        for region in region_ids:
+            if not any(row[0] != "region" and row[1] == region for row in rows):
+                failures.append(f"{case_id}/{region}: lost all relocated guards")
+    return failures
 
 
 class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
@@ -187,8 +370,28 @@ class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
         support = SUPPORT_PATH.read_text(encoding="utf-8")
         self.assertIn(f"cases.len() != {EXPECTED_CASE_COUNT}", support)
         self.assertIn(f"assert_eq!(ids.len(), {EXPECTED_CASE_COUNT}", support)
-        for source_id in ("ReplayAuthorityBase", "ReplayAuthorityCertifiedBody"):
+        for source_id in ("ReplayAuthorityBase", "ReplayAuthorityCertifiedBody", "LeaderWireConsumer"):
             self.assertIn(source_id, support)
+        self.assertIn('"leader_wire_consumer" => Self::LeaderWireConsumer', support)
+        self.assertIn(
+            'SourceId::LeaderWireConsumer => include_str!("v2_leader_wire_consumer.rs").to_owned()',
+            support,
+        )
+        cases = dict(parse_cases(ASSET_PATH.read_text(encoding="utf-8")))
+        sources = {
+            source_id: (ROOT / relative_path).read_text(encoding="utf-8")
+            for source_id, relative_path in BOUNDARY_SOURCE_PATHS.items()
+        }
+        self.assertEqual(boundary_contract_failures(cases, sources), [])
+        for label, source_id, before, after in BOUNDARY_MUTATIONS:
+            with self.subTest(boundary=label):
+                self.assertEqual(sources[source_id].count(before), 1, label)
+                mutated = dict(sources)
+                mutated[source_id] = sources[source_id].replace(before, after, 1)
+                self.assertTrue(
+                    boundary_contract_failures(cases, mutated),
+                    f"source contracts accepted removal of {label}",
+                )
 
 
 if __name__ == "__main__":

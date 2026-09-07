@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build payload-free SoraFS reference SDK release evidence artifacts."""
+"""Build payload-free SoraFS reference SDK release evidence artifacts.
+
+signed_manifest requires an independently pinned absolute source context;
+caller-asserted signing digests/provider/revision flags are not accepted. Raw
+Ed25519 verification alone cannot emit a canary. The native ReleaseManifest
+hardware receipt verifier is mandatory; missing support fails closed.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +25,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
-    ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_SMOKE_DURATION_SECS,
     DEFAULT_MIN_DOWNSTREAM_PACKAGES,
@@ -28,8 +33,6 @@ from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     RELEASE_MANIFEST_BOUND_KINDS,
     REQUIRED_DOWNSTREAM_PACKAGES,
     REQUIRED_RELEASE_TARGETS,
-    REQUIRED_SIGNING_BACKEND,
-    REQUIRED_SIGNING_PROVIDER,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -61,11 +64,16 @@ from sorafs_reference_sdk_supply_chain import (  # noqa: E402
     validate_supply_chain_sources,
 )
 from sccp_release_common import verify_ed25519  # noqa: E402
+from sorafs_reference_sdk_signed_manifest import (  # noqa: E402
+    SignedManifestSourceError,
+    VerifiedSignedManifestSources,
+    authenticate_signed_manifest_sources,
+)
 
 
 CANARY_KINDS = tuple(KIND_BY_NAME)
 HEX64_LEN = 64
-POLICY_DIGEST_KINDS = ("signed_manifest", "governance_approval")
+POLICY_DIGEST_KINDS = ("governance_approval",)
 
 
 def split_csv_values(values: Sequence[str]) -> list[str]:
@@ -130,24 +138,6 @@ def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None
         errors.append(f"{option} must be exact lowercase 32-byte hex")
 
 
-def validate_nonzero_hex64(
-    value: str | None,
-    *,
-    option: str,
-    errors: list[str],
-) -> None:
-    """Validate an exact lowercase non-zero 32-byte digest."""
-
-    before = len(errors)
-    validate_hex64(value, option=option, errors=errors)
-    if (
-        len(errors) == before
-        and isinstance(value, str)
-        and not any(bytes.fromhex(value))
-    ):
-        errors.append(f"{option} must not be zero")
-
-
 def decode_ed25519_public_key(
     value: str | None,
     *,
@@ -194,17 +184,6 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
 
     if not diagnostic_text_is_canonical(value):
         errors.append(f"{label} must be a non-empty canonical string")
-
-
-def validate_signature_algorithm(value: str | None, *, errors: list[str]) -> None:
-    """Require a governed release manifest signature algorithm label."""
-
-    validate_canonical_string(value, label="--signature-algorithm", errors=errors)
-    if value not in ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS:
-        allowed = " or ".join(
-            f"`{algorithm}`" for algorithm in ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS
-        )
-        errors.append(f"--signature-algorithm must be {allowed}")
 
 
 def require_kind_options(
@@ -337,25 +316,17 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "signed_manifest":
-        payload.update(
-            {
-                "manifest_signed": True,
-                "manifest_signature_verified": True,
-                "manifest_sha256_published": True,
-                "governed_release_key_used": True,
-                "public_key_fingerprint_recorded": True,
-                "private_key_absent": True,
-                "signature_algorithm": args.signature_algorithm,
-                "signing_provider": args.signing_provider,
-                "signing_backend": args.signing_backend,
-                "signing_provider_revision": args.signing_provider_revision,
-                "signer_response_verified": True,
-                "manifest_digest_hex": args.manifest_digest_hex,
-                "policy_digest_hex": args.policy_digest_hex,
-                "public_key_fingerprint_hex": args.public_key_fingerprint_hex,
-                "raw_manifest_included": False,
-            }
+        verified = authenticate_signed_manifest_sources(
+            args.signed_manifest_source_context,
+            args.signed_manifest_source_context_sha256,
+            args.now_unix,
         )
+        if not isinstance(verified, VerifiedSignedManifestSources):
+            raise SignedManifestSourceError("signed-manifest source authenticator returned without a verified hardware receipt")
+        fields = verified.canary_fields()
+        if fields["deployment_id"] != args.deployment_id:
+            raise SignedManifestSourceError("signed-manifest deployment differs from the authenticated receipt")
+        payload.update(fields)
     elif args.kind == "supply_chain":
         source_result = args.supply_chain_source_result
         assert isinstance(source_result, SupplyChainSourceResult)
@@ -470,32 +441,20 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         field="--environment",
     )
     if args.kind == "signed_manifest":
-        validate_hex64(
-            args.manifest_digest_hex,
-            option="--manifest-digest-hex",
-            errors=errors,
-        )
-        validate_nonzero_hex64(
-            args.public_key_fingerprint_hex,
-            option="--public-key-fingerprint-hex",
-            errors=errors,
-        )
-        validate_signature_algorithm(args.signature_algorithm, errors=errors)
-        require_kind_options(
-            args,
-            errors,
-            (
-                ("--signing-provider", args.signing_provider),
-                ("--signing-backend", args.signing_backend),
-                ("--signing-provider-revision", args.signing_provider_revision),
-            ),
-        )
-        if args.signing_provider != REQUIRED_SIGNING_PROVIDER:
-            errors.append(
-                f"--signing-provider must be `{REQUIRED_SIGNING_PROVIDER}`"
+        if args.policy_digest_hex is not None or args.public_key_fingerprint_hex is not None:
+            errors.append("signed_manifest policy/key claims are retired; use the independently pinned source context")
+        try:
+            verified = authenticate_signed_manifest_sources(
+                args.signed_manifest_source_context,
+                args.signed_manifest_source_context_sha256,
+                args.now_unix,
             )
-        if args.signing_backend != REQUIRED_SIGNING_BACKEND:
-            errors.append(f"--signing-backend must be `{REQUIRED_SIGNING_BACKEND}`")
+            if not isinstance(verified, VerifiedSignedManifestSources):
+                raise SignedManifestSourceError("signed-manifest source authenticator returned without a verified hardware receipt")
+            if verified.canary_fields()["deployment_id"] != args.deployment_id:
+                raise SignedManifestSourceError("signed-manifest deployment differs from the authenticated receipt")
+        except SignedManifestSourceError as error:
+            errors.append(f"signed-manifest source: {error}")
     if args.kind == "governance_approval":
         require_kind_options(
             args,
@@ -568,18 +527,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors,
             (("--policy-digest-hex", args.policy_digest_hex),),
         )
-        if args.kind == "signed_manifest":
-            validate_nonzero_hex64(
-                args.policy_digest_hex,
-                option="--policy-digest-hex",
-                errors=errors,
-            )
-        else:
-            validate_hex64(
-                args.policy_digest_hex,
-                option="--policy-digest-hex",
-                errors=errors,
-            )
+        validate_hex64(args.policy_digest_hex, option="--policy-digest-hex", errors=errors)
     return errors
 
 
@@ -612,6 +560,8 @@ def validation_options(args: argparse.Namespace) -> ValidationOptions:
             if args.kind == "supply_chain"
             else None
         ),
+        signed_manifest_source_context=args.signed_manifest_source_context,
+        signed_manifest_source_context_sha256=args.signed_manifest_source_context_sha256,
     )
 
 
@@ -687,7 +637,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
     parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--release-manifest-digest-hex")
-    parser.add_argument("--manifest-digest-hex")
     parser.add_argument("--archive-index-digest-hex")
     parser.add_argument("--package-index-digest-hex")
     parser.add_argument("--smoke-output-digest-hex")
@@ -695,10 +644,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ffi-contract-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--public-key-fingerprint-hex")
-    parser.add_argument("--signature-algorithm", default="ed25519")
-    parser.add_argument("--signing-provider")
-    parser.add_argument("--signing-backend")
-    parser.add_argument("--signing-provider-revision", type=positive_int_arg)
+    parser.add_argument("--signed-manifest-source-context", type=Path)
+    parser.add_argument("--signed-manifest-source-context-sha256")
     parser.add_argument("--target", action="append", default=[])
     parser.add_argument("--package", action="append", default=[])
     parser.add_argument("--smoke-duration-seconds", type=positive_int_arg, default=600)
@@ -749,7 +696,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    payload = build_payload(args)
+    try:
+        payload = build_payload(args)
+    except SignedManifestSourceError as error:
+        emit_checker_error_lines([f"signed-manifest source: {error}"])
+        return 2
     payload_errors = validate_generated_payload(payload, args)
     if payload_errors:
         emit_checker_error_lines(payload_errors)

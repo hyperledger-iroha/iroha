@@ -646,7 +646,7 @@ height-context state are not migrated in place.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  522-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  526-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
   One hundred six `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
@@ -690,7 +690,34 @@ height-context state are not migrated in place.
   cannot advance beyond revalidated evidence or authorize consensus state.
   The same schema-5 ledger machine-maps every conceptual `ML-MUT-*` ID from
   the closure ledger. `tla_counterexample` entries cover every and only the 106
-  production-refinement `_bug.cfg` files. Its separate
+  production-refinement `_bug.cfg` files.
+  The 106-case runner and the separate in-flight runner (one fixed positive
+  and twenty-two mutations) retain fresh private invocation directories under
+  `SUMERAGI_V2_FORMAL_EVIDENCE_DIR`, or the system temp directory for local
+  runs. Each prints its retained path on entry and exit, including failures.
+  `sumeragi_v2_tlc_artifacts.py` copies the exact executed module/config and
+  pinned JAR, records their SHA-256 digests, fingerprints Java and the runner
+  support files, and retains argv, cwd, separate raw stdout/stderr, process
+  status and the complete raw counterexample transcript. Tool-generated trace
+  files remain in the case directory. The recorder executes its retained
+  copy; the shell runner, sourced result checker, Java resolver and structural
+  preflight execute their repository paths, whose copies are provenance
+  snapshots. The existing result assertions inspect
+  stdout; acceptance additionally requires empty stderr. `combined.log` is
+  an observed-order convenience view, with no total-order claim across streams.
+  Create-only `accepted.json` records follow all assertions, and
+  `finished.json` records whether every expected case was accepted with intact
+  input, tool, raw-output and record hash links. Missing
+  terminal records indicate an incomplete invocation; failed artifacts remain
+  available. These schema-V1 records are bounded abstract evidence, with no
+  immutable release-receipt or production-refinement claim. Nightly CI already
+  uploads the containing formal evidence directory. The recorder and its
+  controlled subprocess tests are included in the multilane source manifest;
+  run `python3 -m pytest -q scripts/tests/sumeragi_v2_tlc_artifacts_test.py` to
+  check retention and rejection without running TLC.
+  These twenty-eight controls join the twenty-seven formal-launcher cases in
+  the existing fifty-five-test preflight; the release corridor retains 84 legs.
+  The ledger's separate
   `composed_state_action_relation_with_source_bound_trace_extraction` contract binds the
   accepted payload schema V1 in `LaneExecutablePayloadV1`, QueuePlan journal
   V1, reservation journal V1, the 4096 entry ceiling, exact queue durability
@@ -1698,9 +1725,16 @@ repair regression brought the historical inventory to 867 tests across 44
 modules. The Kagemusha clean-break then retired the separate finality and
 offline compact-QC rows and their module legs, replacing them with one
 consensus-signature-envelope regression in the existing context-identity
-module. That consolidation brings the current inventory to 866 tests across 42 modules.
+module, producing the historical 866-test, 42-module inventory. Registering the
+six Native participant-role regressions, the WAL-append crash regression, two
+Certified-Serve corruption regressions, and two existing worker regressions
+adds eleven exact names and one Native module; registering the two canonical
+Kagemusha share/QC boundary tests in the existing v2 module adds two more names.
+The two historical autonomous hydration capacity regressions add two names in
+the existing lane-work module, bringing the
+current inventory to 881 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 83 legs. The
+corridor contains 84 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor. The
 fence rows prove that an exact lifecycle dequeue serializes both same-wire and
 unrelated producers until publication, and that abandoning an unpublished
@@ -1776,7 +1810,19 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20`.
+`6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815`.
+
+This is the prospective source inventory: six Native participant-role tests,
+the Ready Validate WAL-append crash test, two Certified-Serve corruption tests,
+two existing worker tests, two canonical Kagemusha share/QC boundary tests,
+and two historical autonomous hydration capacity tests are registered for execution. Registration adds no passing execution evidence.
+The required-regression subset has 465 names: the reviewed 452-name baseline
+plus thirteen new names; the two worker names were already required. The
+452-name baseline follows the intentional first-release Kagemusha envelope
+migration in `9c17d8bd0`. Its framing test does not establish cryptographic
+provenance coverage. The new direct share/QC and production-ingress negative
+matrix is registered, but still requires compilation and execution.
+
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1813,14 +1859,14 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 83 legs, including the governance-
+the complete pre-network corridor now spans 84 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
 command-success legs. Its finality and height-context proposal-origin modules
 each use a dedicated `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of the 42 modules or 83 legs. The
+geometry tests as part of the 43 modules or 84 legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1970,8 +2016,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 83 pre-network legs and the exact
-866-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and the exact
+881-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

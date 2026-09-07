@@ -586,6 +586,65 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 from: diagnosticsWithUnknownApplicationFieldData
             )
         )
+        let metadata: [String: Any] = [
+            "epsilon_bps": 50,
+            "twap_window_seconds": 60,
+            "liquidity_profile": ["profile": "Tier1", "state": NSNull()],
+            "twap_local_per_xor": "0.5",
+            "volatility_class": ["bucket": "Stable", "state": NSNull()],
+        ]
+        func diagnosticsWithMetadata(_ value: Any) throws -> ToriiSumeragiDiagnosticsSnapshot {
+            let changed = try assigningFixtureValue(
+                value,
+                at: pointerTokens("/lane_settlement_commitments/0/swap_metadata")[...],
+                in: expected
+            )
+            return try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: JSONSerialization.data(withJSONObject: changed)
+            )
+        }
+        XCTAssertEqual(
+            try diagnosticsWithMetadata(metadata).laneSettlementCommitments.first?
+                .swapMetadata?.twapLocalPerXor,
+            "0.5"
+        )
+        for canonical in ["0", "-1", "-0.5", "0." + String(repeating: "0", count: 27) + "1"] {
+            var exact = metadata
+            exact["twap_local_per_xor"] = canonical
+            XCTAssertEqual(
+                try diagnosticsWithMetadata(exact).laneSettlementCommitments.first?
+                    .swapMetadata?.twapLocalPerXor,
+                canonical
+            )
+        }
+        for invalid: Any in [
+            "", " ", "-0", "01", "1.0", "1e0", "NaN", 1, true,
+            "0." + String(repeating: "0", count: 28) + "1",
+            String(repeating: "9", count: 155),
+        ] {
+            var malformed = metadata
+            malformed["twap_local_per_xor"] = invalid
+            XCTAssertThrowsError(try diagnosticsWithMetadata(malformed))
+        }
+        for (field, value): (String, Any) in [
+            ("unexpected", true),
+            ("epsilon_bps", 65_536),
+            ("twap_window_seconds", 4_294_967_296),
+            ("liquidity_profile", ["profile": "Tier1", "state": NSNull(), "extra": true]),
+            ("liquidity_profile", ["profile": "Tier1", "state": true]),
+            ("volatility_class", ["bucket": "Stable", "state": NSNull(), "extra": true]),
+            ("volatility_class", ["bucket": "Stable", "state": true]),
+        ] {
+            var malformed = metadata
+            malformed[field] = value
+            XCTAssertThrowsError(try diagnosticsWithMetadata(malformed))
+        }
+        for field in metadata.keys {
+            var malformed = metadata
+            malformed.removeValue(forKey: field)
+            XCTAssertThrowsError(try diagnosticsWithMetadata(malformed))
+        }
         try validateApplicationEvidenceFixture(document)
     }
 
@@ -771,6 +830,94 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
             }
         }
         XCTAssertEqual(requestedPaths, ["/v1/sumeragi/diagnostics"])
+
+        // Insert the number only after serialization so the hostile decimal or
+        // exponent lexeme reaches the endpoint unchanged from the Rust fixture.
+        func rawNumberPayload(_ lexeme: String, at path: String, in object: Any) throws -> Data {
+            let marker = "__native_amx_raw_integer_token__"
+            let marked = try assigningFixtureValue(
+                marker,
+                at: try pointerTokens(path)[...],
+                in: object
+            )
+            let text = String(
+                decoding: try JSONSerialization.data(withJSONObject: marked, options: [.sortedKeys]),
+                as: UTF8.self
+            )
+            let quotedMarker = "\"\(marker)\""
+            guard text.components(separatedBy: quotedMarker).count == 2 else {
+                throw NativeAmxGroupedFixtureError.malformed("raw integer marker must occur once")
+            }
+            return Data(text.replacingOccurrences(of: quotedMarker, with: lexeme).utf8)
+        }
+
+        let roundHeightPath = "/lane_settlement_commitments/0/native_amx_receipts/0"
+            + "/legs/0/prepare_qc/body/round/height"
+        let nativeHeight = try XCTUnwrap(
+            try fixtureValue(at: pointerTokens(roundHeightPath)[...], in: diagnosticsObject) as? NSNumber
+        ).uint64Value
+        for (path, lexeme) in [
+            (roundHeightPath, "\(nativeHeight).0"),
+            (roundHeightPath, "\(nativeHeight)e0"),
+            (roundHeightPath, "\(nativeHeight)E+0"),
+            ("/tx_queue_capacity", "1.0"),
+        ] {
+            let malformed = try rawNumberPayload(lexeme, at: path, in: diagnosticsObject)
+            requestedPaths = []
+            NativeAmxGroupedEndpointURLProtocol.handler = { request in
+                requestedPaths.append(request.url?.path ?? "<missing>")
+                return response(for: request, body: malformed)
+            }
+            do {
+                _ = try await client.getSumeragiDiagnostics()
+                XCTFail("diagnostics must reject the raw non-integer token \(lexeme)")
+            } catch let error as ToriiClientError {
+                guard case let .invalidPayload(reason) = error else {
+                    XCTFail("expected raw integer-token rejection, got \(error)")
+                    continue
+                }
+                XCTAssertTrue(reason.contains("integer numeric tokens"))
+            }
+            XCTAssertEqual(requestedPaths, ["/v1/sumeragi/diagnostics"])
+        }
+
+        for (path, lexeme) in [
+            (roundHeightPath, "true"),
+            ("/tx_queue_saturated", "0"),
+            ("/tx_queue_capacity", "18446744073709551616"),
+        ] {
+            let malformed = try rawNumberPayload(lexeme, at: path, in: diagnosticsObject)
+            NativeAmxGroupedEndpointURLProtocol.handler = { request in
+                response(for: request, body: malformed)
+            }
+            do {
+                _ = try await client.getSumeragiDiagnostics()
+                XCTFail("diagnostics must reject Boolean/integer confusion and u64 overflow")
+            } catch let error as ToriiClientError {
+                guard case .decoding = error else {
+                    XCTFail("expected typed integer/Boolean rejection, got \(error)")
+                    continue
+                }
+            }
+        }
+
+        let exactFraction = try assigningFixtureValue(
+            "0.5",
+            at: pointerTokens("/lane_settlement_commitments/0/total_xor_due")[...],
+            in: diagnosticsObject
+        )
+        let maximumInteger = try rawNumberPayload(
+            "18446744073709551615",
+            at: "/tx_queue_capacity",
+            in: exactFraction
+        )
+        NativeAmxGroupedEndpointURLProtocol.handler = { request in
+            response(for: request, body: maximumInteger)
+        }
+        let maximumSnapshot = try await client.getSumeragiDiagnostics()
+        XCTAssertEqual(maximumSnapshot.txQueueCapacity, UInt64.max)
+        XCTAssertEqual(maximumSnapshot.fields["tx_queue_capacity"], .integer("18446744073709551615"))
+        XCTAssertEqual(maximumSnapshot.laneSettlementCommitments.first?.totalXorDue, "0.5")
     }
 
     func testRustOwnedGroupedNativeAmxV2NegativeCorpus() throws {

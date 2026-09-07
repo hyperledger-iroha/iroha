@@ -295,7 +295,11 @@ participant rows, and inconsistent carrier identities.
 Diagnostics are immutable values for Kotlin and Java callers. Construction owns
 the NPoS seed, evidence vectors and nested JSON maps/arrays; changing supplied
 collections cannot change validated evidence. Constructors enforce unsigned
-counters, vector limits and the parser's nesting bound.
+counters, vector limits and the parser's nesting bound. Canonical wire values
+also own their signer, manifest and liveness vectors; decoders reject element
+counts that cannot fit the remaining frame before allocating. Direct Native AMX
+round construction enforces the same positive height and unsigned view bounds
+as parsing. Java-source fixture and mutation tests run in this module.
 
 ### KAGEMUSHA peer transports
 
@@ -468,7 +472,15 @@ have a gap.
 generic proof request/build/verify ABI and free-form algorithm selectors are
 absent; proofs must use protocol-specific typed APIs. The local catalog never
 establishes activation or readiness; proof submission requires a fresh
-committed `/v1/privacy/capabilities` snapshot from live Torii.
+committed `/v1/privacy/capabilities` manifest from live Torii.
+`HttpClientTransport.getPrivacyCapabilities(canonicalAuth)` performs a one-shot
+authenticated HTTPS fetch for `ClientConfig`'s immutable local network, verifies
+the exact response URL and bounded Norito body, and native-validates its signatures
+and deployment network before privately binding its origin. Public archive decoding
+is inspection-only and cannot mint admission. Native construction validates the
+selected activation and limits; the transaction encoder also requires the token's
+network to equal the enclosing transaction network. Java consumers use this same
+Kotlin-owned boundary.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.

@@ -19,6 +19,12 @@ The managed HTTP, address, transaction, query, and Norito surfaces do not requir
 native library. Privacy and native SoraFS validation features use the packaged native
 bridge for the current runtime identifier.
 
+Exact12 capability admission requires authenticated HTTPS Torii reads, the configured
+`NetworkId`, and native validation of the complete signed qualification. The SDK
+retains that exact network on the manifest and admission token, checks the deployment
+network against its genesis hash, and revalidates native evidence and network identity
+at construction. Offline decoded archives are inspection data and cannot grant admission.
+
 ## Add the SDK
 
 From a consuming project after the package is published:

@@ -1560,9 +1560,15 @@ regressions and the CompleteTip payload-before-ledger-repair regression brought
 the historical inventory to 867 exact tests across 44 modules. The Kagemusha
 clean-break retired the separate finality and offline compact-QC rows and their
 module legs, replacing them with one consensus-signature-envelope regression
-in the existing context-identity module. That consolidation brings the
-current inventory to 866
-exact tests across 42 modules and 83 pre-network legs.
+in the existing context-identity module, producing the historical 866-test,
+42-module inventory. Registering the six Native participant-role regressions,
+the WAL-append crash regression, two Certified-Serve corruption regressions,
+and two existing worker regressions adds eleven names and one module. The two
+canonical Kagemusha share/QC boundary tests add two more names in the existing
+v2 module. Two historical autonomous hydration capacity regressions add two
+names in the existing lane-work module, bringing the
+current inventory to 881
+exact tests across 43 modules and 84 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
 identical periodic rediscovery even after live tag authority is relinquished,
@@ -1570,11 +1576,23 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20`.
-Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 523 TSV lines and has SHA-256
-`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`.
-The 316-test core group includes grouped Native prevote-budget rejection before
+`6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815`.
+
+This is the prospective source inventory: six Native participant-role tests,
+the Ready Validate WAL-append crash test, two Certified-Serve corruption tests,
+two existing worker tests, two canonical Kagemusha share/QC boundary tests,
+and two historical autonomous hydration capacity tests are registered for execution. Registration adds no passing execution evidence.
+The required-regression subset has 465 names: the reviewed 452-name baseline
+plus thirteen new names; the two worker names were already required. The
+452-name baseline follows the intentional first-release Kagemusha envelope
+migration in `9c17d8bd0`. Its framing test does not establish cryptographic
+provenance coverage. The new direct share/QC and production-ingress negative
+matrix is registered, but still requires compilation and execution.
+
+Nine of those legs execute the separate 526-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 527 TSV lines and has SHA-256
+`15f6b8abd9f1f0afb270d4f457318baf4d5dca5f21e238e9689004a180f0c654`.
+The 320-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1817,7 +1835,7 @@ three-per-materialized-authenticated-non-validator owners (`5N+3H` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-83 legs, including the governance-unlock audit module, the autonomous
+84 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
@@ -1830,7 +1848,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 866-test inventory is a mechanically checked
+The current 881-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -2029,9 +2047,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 864 exact production
-liveness tests and executes all 44 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 522-test
+Before those longer scenarios, the PR gate inventories 881 exact production
+liveness tests and executes all 43 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 526-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -2245,7 +2263,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 83-leg, 866-production-test corridor plus 522 G-UNIT tests; execution
+audited 84-leg, 881-production-test corridor plus 526 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2414,7 +2432,7 @@ respectively; the canonical ordered IDs are recorded in the
 [multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
 and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
 ordered operation-record SHA-256 values, in the same class order, are
-`a0dd1b1da72f46b4484c05b6c0597d27bde7322ba047f7661a677d2e3b8879d3`,
+`d09f1808391cc23c3db3fa9ee3c6fef4750ee4a165e42f637c44f9f03bc658c0`,
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
 `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
@@ -2527,8 +2545,8 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 83 pre-network corridor legs and
-their exact 866-test production inventory, the separate 522-test G-UNIT
+receipt binds the 84 pre-network corridor legs and
+their exact 881-test production inventory, the separate 526-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

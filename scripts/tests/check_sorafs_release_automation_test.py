@@ -2166,6 +2166,10 @@ def test_validate_release_automation_rejects_release_document_drift(
             "sorafs_reference_sdk_release_evidence.args.example",
             "--provenance-verification-public-key-hex",
         ),
+        ("scripts/examples/sorafs_reference_sdk_release_collection.args.example", "--signed-manifest-source-context-sha256"),
+        ("scripts/examples/sorafs_reference_sdk_release_evidence.args.example", "--signed-manifest-source-context-sha256"),
+        ("scripts/examples/sorafs_reference_sdk_release_signed_manifest_canary.args.example", "--signed-manifest-source-context-sha256"),
+        ("scripts/examples/sorafs_reference_sdk_signed_manifest_canary.args.example", "--signed-manifest-source-context-sha256"),
     ],
 )
 def test_validate_release_automation_rejects_stale_source_examples(
@@ -2210,7 +2214,17 @@ def test_validate_release_automation_rejects_retired_supply_chain_example_flags(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="retired manual supply-chain marker"):
+    with pytest.raises(ValueError, match="retired manual release marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("retired", ("--manifest-digest-hex", "--policy-digest-hex", "--public-key-fingerprint-hex", "--signature-algorithm", "--signing-provider", "--signing-backend"))
+@pytest.mark.parametrize("name", ("sorafs_reference_sdk_release_signed_manifest_canary.args.example", "sorafs_reference_sdk_signed_manifest_canary.args.example"))
+def test_validate_release_automation_rejects_signing_claims_in_source_examples(tmp_path, retired, name):
+    _copy_workflows(tmp_path)
+    path = tmp_path / "scripts/examples" / name
+    path.write_text(path.read_text() + f"{retired}\nclaim\n")
+    with pytest.raises(ValueError, match="retired manual release marker"):
         automation.validate_release_automation(tmp_path)
 
 
@@ -2466,6 +2480,7 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
         "scripts/tests/check_sorafs_mobile_parity_reports_test.py",
         "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py",
         "scripts/tests/sorafs_reference_sdk_supply_chain_test.py",
+        "scripts/tests/sorafs_reference_sdk_signed_manifest_test.py",
         "scripts/tests/check_sorafs_release_version_map_test.py",
         "cargo test --locked -p iroha --lib client::repair::tests -- --nocapture",
         "cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture",

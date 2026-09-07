@@ -24,8 +24,8 @@ pub use params::{
 pub use poseidon_digest384::{
     GOLDILOCKS_DIGEST384_BYTES_V1, GOLDILOCKS_DIGEST384_LANES_V1,
     GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1, GOLDILOCKS_DIGEST384_ROUNDS_V1,
-    GoldilocksDigest384LanePrefixV1, GoldilocksDigest384LastFieldStreamErrorV1,
-    GoldilocksDigest384LastFieldStreamV1, GoldilocksDigest384V1, GoldilocksDigestDomainV1,
-    goldilocks_digest384_lane_initial_state_v1, goldilocks_digest384_lane_round_constants_v1,
-    hash_bytes_384_v1,
+    GoldilocksDigest384FrameV1, GoldilocksDigest384LanePrefixV1,
+    GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1,
+    GoldilocksDigest384V1, GoldilocksDigestDomainV1, goldilocks_digest384_lane_initial_state_v1,
+    goldilocks_digest384_lane_round_constants_v1, hash_bytes_384_v1,
 };

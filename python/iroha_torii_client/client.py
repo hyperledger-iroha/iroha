@@ -468,6 +468,21 @@ def _canonical_quantity(value: Any, context: str) -> str:
     return value
 
 
+def _canonical_numeric(value: Any, context: str) -> str:
+    """Require the exact signed Numeric JSON spelling before integer allocation."""
+
+    if not isinstance(value, str) or len(value) > 156:
+        raise RuntimeError(f"{context} must be a bounded canonical Numeric string")
+    matched = re.fullmatch(r"(-?)(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
+    if matched is None or value == "-0":
+        raise RuntimeError(f"{context} must be a canonical signed Numeric")
+    fraction = matched.group(3) or ""
+    mantissa = int(matched.group(1) + matched.group(2) + fraction)
+    if not -(1 << 511) <= mantissa <= _QUANTITY_MAX_MANTISSA:
+        raise RuntimeError(f"{context} Numeric exceeds the signed 512-bit domain")
+    return value
+
+
 def _fee_quote_quantity_parts(value: str) -> Tuple[int, int]:
     """Return one already-canonical Quantity as an exact mantissa/scale pair."""
 
@@ -5679,7 +5694,7 @@ class _SumeragiV2StatusParser:
                     ),
                     "state": None,
                 },
-                "twap_local_per_xor": cls._non_empty_string(
+                "twap_local_per_xor": _canonical_numeric(
                     swap.get("twap_local_per_xor"),
                     f"{swap_context}.twap_local_per_xor",
                 ),

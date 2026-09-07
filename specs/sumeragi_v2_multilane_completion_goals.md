@@ -71,8 +71,9 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
 6. Rebuild fixture and recursive SDK source inventories from their canonical
    producers. Current fixture hashes and suite counts differ from ledger pins;
    copying new hashes into pins alone cannot establish correctness.
-7. Reconcile the existing unmerged index through its owning work before sealing
-   a candidate. Preserve unrelated work; no release receipt can use this index.
+7. Seal a reviewed candidate only after source and receipt inventories match
+   the canonical owners. The previous unmerged index entries are resolved;
+   preserve unrelated work and recheck the index before candidate sealing.
 
 ## Required acceptance evidence
 
@@ -145,8 +146,183 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
   live Sign publication. Rust formatting passes on the changed test/source
   files. Rust execution and workspace formatting wait for existing Cargo/rustc
   jobs; no process was interrupted and no Rust test pass is claimed.
-- M1–M6 and every release gate remain open. The full legacy Java consumer
-  migration, source-inventory regeneration, formal engines, runtime corridors
-  and scaling qualification remain outstanding.
+- M1–M6 and every release gate remain open. The later JVM ownership and
+  delivery checkpoint below supersedes this checkpoint's migration state;
+  formal engines, runtime corridors and scaling qualification remain outstanding.
 - The legacy-codec guard and scoped whitespace checks pass. No new crate,
   dependency, manifest/lock change or compatibility path was introduced.
+
+## 2026-09-06 JVM ownership and delivery checkpoint
+
+- Migrated all six original Java suites (51 test methods and every assertion)
+  into Kotlin `core-jvm`. Removed the five duplicate Java consensus classes,
+  obsolete transport methods and unused operator configuration; private-settlement
+  responder checks now invoke Kotlin's canonical BLS peer validator directly.
+- All ten public wire vectors own immutable snapshots, including nested timeout
+  signers and liveness vectors. Eleven new Java tests cover mutation, null entries,
+  stable encoding/equality and 80 hostile count cases at ten decode boundaries.
+  Allocation is bounded by the actual remaining compact-field prefixes. Native
+  round constructors now enforce the parser's positive-height/u64-view domain;
+  existing numeric-domain tests cover both constructor and parser boundaries.
+- The current isolated JDK-21 selection passes **122 tests with zero failures,
+  errors or skips**. The actual Java diagnostics runner passes its exact 59-test
+  inventory, and grouped Java parity passes its six tests. These are local runner
+  results, not sealed release evidence. The affected legacy Java build compiles
+  and passes four selected settlement/configuration/read harnesses plus six
+  onboarding tests after removal.
+- Both JVM release legs now use Kotlin `:core-jvm:test`. SDK source closure
+  removes the legacy Java/Norito-Java production/build roots and includes the
+  migrated consumers and private diagnostics serializer. The external dependency
+  schema now binds one Kotlin Gradle wrapper and rejects obsolete Java wrapper
+  keys. Source-closure tests pass 23 cases; wrapper/queue schema controls and a
+  current receipt smoke pass. Full receipt/bootstrap validation remains in progress.
+- Formal include inventory and its per-root rejection controls pass 56 cases;
+  17 loader, four candidate-builder and six Native source controls also pass.
+  Current State/Kura admission and candidate-builder bindings now follow their
+  actual ownership graph. Obsolete Native recovery rows, token translations and
+  duplicate exemptions are removed. QueuePlan's 27-name exception set is now
+  removed: 17 missing owner rows and five drifted rows are reconciled directly,
+  retaining exact route-marker, terminal-conflict and pending-decode checks.
+  Startup now declares its current replay-before-network path directly without
+  token/name translations. The focused ledger/startup controls pass 85 cases.
+- All milestones remain open. The new Rust classifier/WAL regressions still
+  require focused execution, release-inventory registration and matching formal
+  coverage. Other Cargo/rustc jobs continue to occupy the shared build queue.
+- The current release-inventory preflight exits 1 because the closure ledger
+  does not contain the current grouped Native fixture hash at its two required
+  locations. Fresh Rust-owned regeneration remains a prerequisite; changing
+  historical pins alone would not establish canonical fixture evidence.
+- Receipt validation now requires the runner's canonical 12-step autonomous
+  Apalache bound and explicitly rejects the old 10-step result. The production
+  inventory remains 866 tests in 42 modules; its missing `queue::tests::` owner
+  prefix was corrected with controls rejecting adjacent, unregistered prefixes.
+- The final current-source structural formal preflight passes: five refinement
+  kernels and the composed in-flight relation have their required source bindings.
+  The corrected QueuePlan baseline check passes (one test); the earlier mutation
+  batch loaded a pre-fix baseline and is not an all-pass result. No TLC, Apalache,
+  deductive proof or runtime-network evidence is implied by these static checks.
+
+## 2026-09-06 lifecycle and bounded-model checkpoint
+
+- Retired the unlaunched-owner Certified-Serve completion API and its obsolete
+  body-store writer/validator. Existing recovery tests now consume the real
+  worker readback; corruption is checked separately before minting completion
+  and after minting against the accepted payload store. Ten affected tests
+  become eleven, preserving lease, registry, publication, restart and replay
+  assertions. Direct Rust formatting and scoped whitespace checks pass;
+  compilation and focused execution still await other Cargo/rustc jobs.
+- Source inspection traced recovered Broadcast through authenticated output
+  handoff and fsynced all-row owner retirement, exact Fetch queue cuts through
+  the complete executor census, and the borrowed live ingress cursor through
+  consuming launch. Their stale TODOs are corrected. The unused standalone
+  production selector and duplicate queue-selection helpers are removed.
+  Its existing test facade is now test-only and composes the live fenced-cut
+  chain; all 65 selection assertions and production visibility are preserved.
+  The older formal declarations now bind the live driver and reject the
+  test-only facade as production evidence; seven focused controls pass.
+- QueuePlan's exact source ledger and startup declarations pass 85 focused
+  controls plus five production/semantic checks. The final structural model
+  preflight passes after selector retirement.
+  Certified-Serve source-contract rows now follow worker readback ownership;
+  independent review of the stale whole-asset pin led to the four explicit
+  contract repairs and derived-pin validation recorded below.
+- Pinned TLC 1.7.4 passes all six finite model configurations. The production
+  multilane mutation runner observes all 106 exact named counterexamples; the
+  separate in-flight corpus passes its positive model and all 22 mutations.
+  Summary logs and local model/config hashes are retained. An independent
+  audit confirms the positive runs and runner-observed mutation results;
+  raw mutation traces were deleted by those runners. Immutable trace evidence,
+  Rust refinement proof and a sealed release receipt remain open.
+- Pinned Apalache 0.52.2 typechecks all six models and passes the autoscale,
+  Native evidence, autonomous carrier (12 steps), QueuePlan and Kura retention
+  bounds. The in-flight 18-step check is still running. It must finish at its
+  exact bound before any all-model Apalache pass is recorded.
+- SDK inspection reproduced mutable nested participant settlement data after
+  hash validation in JavaScript and Python. The repair preserves the checked
+  settlement hash and wire JSON; grouped tests pass 62 JavaScript and 64 Python
+  cases. Python constructors also own all three receipt vectors; 152 related
+  Native/status tests pass. JavaScript declarations now reflect immutable
+  receipt entries. Canonical runner/receipt/CI cardinalities are updated;
+  23 source-closure and five receipt/schema controls pass. The broad
+  receipt/bootstrap run finishes with 555 passes and one fail-closed cache
+  parent-change rejection; that exact bootstrap case passes on isolated retry.
+  The parent identity check remains enforced; a settled full run remains open.
+- Swift diagnostics now checks integer number tokens before Foundation can
+  normalize decimal/exponent notation. The existing grouped endpoint test
+  covers those raw forms, Boolean confusion, overflow, exact `UInt64.max`
+  and fractional quantity strings. Syntax parsing and the exact repository
+  scanner/Foundation reproduction pass. Full SwiftPM testing still needs a
+  real ABI-23 bridge artifact; the package gate is preserved and no stub used.
+- Swift wire vectors now reject counts exceeding available length-prefix bytes
+  before reserving storage; byte vectors validate their input range before
+  copying. All 17 checked-in wire fixture XCTest methods pass in an isolated
+  build of the exact wire/hash/network sources. The expanded malformed-input
+  method covers ten vector boundaries, four byte-vector boundaries, platform
+  overflow, empty-element prefixes and canonical empty liveness vectors.
+  This standalone check does not substitute for the full Swift SDK gate.
+- Swift swap metadata now validates TWAP with the canonical signed decimal decoder
+  and rejects unknown metadata/tagged-value fields. The exact repository
+  metadata and numeric declarations compile and pass five signed/zero/fractional
+  positives plus 23 malformed-input cases in isolation. Matching assertions extend the
+  existing grouped golden test; its full bridge-backed execution is pending.
+  Metadata parity passes 65 grouped Python plus 152 related tests across both
+  public decoders, 63 JavaScript grouped cases against source and rebuilt dist,
+  and 123 focused Kotlin/JVM consensus/HTTP tests with zero failures/errors/skips.
+  Kotlin uses the bounded Quantity codec; cohort source-closure/receipt checks pass 23/7.
+- Registered the seven Native/WAL, two Serve and two previously omitted worker
+  regressions. Five committed predicate changes and the 452-vs-453 seal baseline
+  have source/history reviews; 57 Native and nine WAL controls pass. The grouped
+  fixture hash still requires two fresh Rust-owned regenerations before repinning.
+- Two additional canonical Kagemusha V1 share/bundle tests close an identified
+  assertion gap in the prospective inventory: real BLS/Pasta positive fixtures,
+  exact round/statement/signers, each Pasta equation, independent BLS failures
+  and mandatory zero-top-up epoch-boundary seals. Direct formatting and source
+  review pass; compilation and execution remain pending. The prospective named
+  inventory is 879 tests across 43 module selections and 84 legs, with 463
+  required regressions. Ten inventory controls, seven receipt controls and
+  23 SDK source-closure controls pass; these are not Rust runtime pass counts.
+- A full source-asset audit repaired four bounded contracts: follow the
+  actual WAL-backed leader-wire consumer; retain relocated physical FIFO-order
+  checks; authenticate missing paired Sign through its exact terminal ledger;
+  retain recovered Fetch queue-cut retry semantics. Six worker fixtures now
+  derive view transitions and protected Commit authority from authenticated WAL
+  replay, preserving their assertions and the 1,024-view bound.
+  All 54 source evaluations and five compaction tests with ten adverse controls
+  pass; the revised worker fixtures still require compilation and execution.
+- Three additional lane-work seals are reconciled after exact history/owner
+  review, 19 public-certificate and ten historical-hydration adverse controls,
+  and a passing five-owner complete-pin/direct-contract baseline. Two new Rust
+  hydration tests and an extended public-finality regression await execution;
+  full source integration remains independent of these focused results.
+- All milestones and release gates remain open. The mutable shared source,
+  fresh Rust-owned fixture regeneration, strict proof/receipt checks, SDK
+  parity, four-peer networks, deterministic corridors, soak, scaling and full
+  workspace validation still require qualification.
+
+## 2026-09-07 recovery and formal evidence checkpoint
+
+- Fixed canonical hydration's repeated-recovery capacity failure. Recovery now
+  stages the complete current required set, validates every original conflicting
+  quorum before eviction, preserves canonical order, and publishes only after
+  exact retention. Fresh historical staging prevents completed-source resurrection;
+  READY authorization follows successful installation. The existing ordinary test
+  repeats actual persistence at capacity one; historical coverage includes a real
+  certified-source completion before fresh hydration. Four cache regressions cover
+  replacement/idempotence, protected evidence, preflight and atomic rejection.
+  Direct formatting and source review pass; Rust execution remains pending.
+- Registered those four cache tests in G-UNIT, preserving every prior row:
+  526 focused tests, including 320 core. The current production inventory is
+  881 tests across 43 modules and 84 legs, with 465 required regressions. These
+  supersede earlier prospective counts and do not assert Rust execution.
+- The exact formal preflight passes 55 controls, including 28 artifact-retention
+  cases. Both freshly pinned TLC runners pass: 106 expected multilane
+  counterexamples, one in-flight positive and 22 expected in-flight counterexamples.
+  All 129 stderr streams are empty; retained private artifacts bind tools, exact
+  input copies, argv, status, raw outputs, named traces and acceptance links.
+  These are local bounded-model results. The original 18-step Apalache run is
+  still active; no reduced bound or restarted run substitutes for its result.
+- Reconcile the new hydration/cache and actual WAL authority source contracts,
+  execute focused Rust regressions after the shared Cargo queue clears, and run
+  full SwiftPM against the real ABI-23 bridge once built. The grouped fixture hash
+  still needs two fresh Rust-owned regenerations. No milestone or release gate
+  is complete.

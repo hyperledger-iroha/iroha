@@ -305,32 +305,25 @@ fn block_time_ms(
     }
     Ok(now)
 }
-fn has_named_permission(
+fn has_policy_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
-    permission_name: &str,
 ) -> bool {
     if state_transaction._curr_block.is_genesis() {
         return true;
     }
+    let required = Permission::from(CanManageSorafsProofOutcomePolicy);
     let direct = state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|permissions| {
-            permissions
-                .iter()
-                .any(|permission| permission.name() == permission_name)
-        });
+        .is_some_and(|permissions| permissions.contains(&required));
     direct
         || state_transaction
             .world
             .account_roles_iter(authority)
             .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-            .any(|role| {
-                role.permissions()
-                    .any(|permission| permission.name() == permission_name)
-            })
+            .any(|role| role.permissions().any(|permission| permission == &required))
 }
 fn has_scheduler_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -1128,11 +1121,7 @@ impl Execute for SetSorafsProofOutcomeSignerPolicy {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        if !has_named_permission(
-            state_transaction,
-            authority,
-            Permission::from(CanManageSorafsProofOutcomePolicy).name(),
-        ) {
+        if !has_policy_permission(state_transaction, authority) {
             return Err(invalid_parameter(
                 "CanManageSorafsProofOutcomePolicy permission is required",
             ));
@@ -1688,6 +1677,7 @@ impl ValidSingularQuery for FindSorafsProofOutcomeEvents {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("sorafs/proof_outcome_permission_token_tests.rs");
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,

@@ -228,6 +228,38 @@ fn fri_transcript_challenge_uses_non_base_fp4_coefficients() {
     );
 }
 #[test]
+fn air_composition_root_uses_its_own_role_for_every_tree_level() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        domain_tag: "iroha:test:air-composition-root-role".to_owned(),
+    };
+    for domain in [1, 2, 16] {
+        let values = (0..domain).map(|value| value as u64).collect::<Vec<_>>();
+        let fields = values.iter().copied().map(Fq::new).collect::<Vec<_>>();
+        let expected =
+            merkle_levels_from_values(&params, &fields, StarkMerkleDomainV1::air_composition())
+                .and_then(|levels| merkle_root_from_levels(&levels))
+                .expect("AIR composition root");
+        let auxiliary = merkle_levels_from_values(
+            &params,
+            &fields,
+            StarkMerkleDomainV1::auxiliary_composition(),
+        )
+        .and_then(|levels| merkle_root_from_levels(&levels))
+        .expect("auxiliary composition root");
+        assert_eq!(
+            stark_merkle_root_from_field_values_v1(&params, &values),
+            Some(expected)
+        );
+        assert_ne!(expected, auxiliary, "role separation at domain {domain}");
+    }
+}
+#[test]
 fn constant_zero_merkle_root_matches_allocated_builder() {
     let params = StarkFriParamsV1 {
         version: 1,

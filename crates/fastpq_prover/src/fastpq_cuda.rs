@@ -4,7 +4,8 @@
 //!
 //! The GPU backend is optional – enable the `fastpq-gpu` feature and provide a CUDA toolchain
 //! (SM80+) to compile the kernels. When unavailable, all entry points return
-//! [`CudaBackendError::Unavailable`] so the caller can fall back to the scalar implementation.
+//! [`CudaBackendError::Unavailable`]. The explicit six-lane frame API propagates
+//! failure and never substitutes CPU execution.
 use crate::bn254::{self, BN254_LIMBS};
 #[cfg(feature = "fastpq-gpu")]
 use crate::trace::PoseidonColumnSlice;
@@ -181,6 +182,15 @@ mod native {
             stage_twiddle_len: usize,
             coset: *const u64,
             out: *mut u64,
+        ) -> i32;
+        fn fastpq_digest384_hash_frames_v1_cuda(
+            words: *const u64,
+            word_count: usize,
+            descriptors: *const u64,
+            frame_count: usize,
+            parameters: *const u64,
+            parameter_count: usize,
+            output: *mut u64,
         ) -> i32;
         fn fastpq_poseidon_permute_cuda(states: *mut u64, state_count: usize) -> i32;
         fn fastpq_poseidon_hash_columns_cuda(
@@ -379,6 +389,28 @@ mod native {
         };
         map_cuda(code)
     }
+    pub(super) fn digest384_hash_frames_v1(
+        staged: &crate::digest384_gpu::StagedDigest384V1,
+        output: &mut [u64],
+    ) -> Result<()> {
+        let parameters = crate::digest384_gpu::digest384_gpu_parameters_v1();
+        // SAFETY: only the bounded canonical staging owner constructs these
+        // buffers; descriptor ranges and six-word output shape are checked.
+        // Native completion or quarantine takes ownership of every async copy
+        // before this synchronous call returns.
+        let code = unsafe {
+            fastpq_digest384_hash_frames_v1_cuda(
+                staged.words.as_ptr(),
+                staged.words.len(),
+                staged.descriptors.as_ptr(),
+                staged.frame_count,
+                parameters.as_ptr(),
+                parameters.len(),
+                output.as_mut_ptr(),
+            )
+        };
+        map_cuda(code)
+    }
     pub(super) fn bn254_poseidon_hash_words(
         words: &[u64],
         slices: &[Bn254PoseidonCudaSlice],
@@ -493,6 +525,13 @@ mod native {
         Err(CudaBackendError::Unavailable)
     }
     #[cfg(feature = "fastpq-gpu")]
+    pub(super) fn digest384_hash_frames_v1(
+        _staged: &crate::digest384_gpu::StagedDigest384V1,
+        _output: &mut [u64],
+    ) -> Result<()> {
+        Err(CudaBackendError::Unavailable)
+    }
+    #[cfg(feature = "fastpq-gpu")]
     pub(super) fn bn254_poseidon_hash_words(
         _words: &[u64],
         _slices: &[Bn254PoseidonCudaSlice],
@@ -502,6 +541,18 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
+}
+#[cfg(feature = "fastpq-gpu")]
+pub(crate) fn digest384_hash_frames_v1(
+    staged: &crate::digest384_gpu::StagedDigest384V1,
+    output: &mut [u64],
+) -> Result<()> {
+    if output.len() != staged.frame_count * 6 {
+        return Err(CudaBackendError::InvalidInput(
+            "six-lane CUDA output shape mismatch",
+        ));
+    }
+    native::digest384_hash_frames_v1(staged, output)
 }
 #[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn backend_quarantined() -> bool {

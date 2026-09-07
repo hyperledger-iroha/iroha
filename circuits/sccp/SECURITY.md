@@ -1,7 +1,10 @@
 # Security reporting and release invariants
 
-Do not deploy artifacts from this directory while the source-level semantic
-implementation guard is false. A successful Groth16 equation is not evidence
+Artifacts from this directory remain non-admissible while the documented
+implementation, resource, ceremony, audit, and destination-verification blockers
+remain. Only the signed Rust/Python production corridor can authenticate an
+actual release; local R1CS counts and hashes cannot issue that verdict.
+A successful Groth16 equation is not evidence
 that an SCCP transfer, Taira finality artifact, or epoch transition is valid
 unless every final-V1 semantic constraint is present in the R1CS and the exact
 ceremony/audit closure passes.

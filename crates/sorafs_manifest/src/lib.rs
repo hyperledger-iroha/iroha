@@ -14,6 +14,8 @@ use norito::{
 use sorafs_chunker::ChunkProfile;
 use thiserror::Error;
 pub mod alias_cache;
+#[cfg(test)]
+mod canonical_test_support;
 pub mod capacity;
 pub mod chunker_registry;
 pub mod deal;
@@ -43,6 +45,7 @@ pub mod reference_ffi;
 pub mod repair;
 pub mod reputation;
 pub mod retention;
+pub mod signer;
 pub mod token;
 pub mod transparency;
 pub mod validation;
@@ -412,9 +415,9 @@ pub use reference::{
     FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, HedgingValidationPayloadKindV1,
     OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1,
-    PopValidationPayloadKindV1, REFERENCE_SDK_ERRORS_DOC_URL, RepairValidationPayloadKindV1,
-    VALIDATION_OUTCOME_VERSION_V1, ValidationContextFieldV1, ValidationInputV1,
-    ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
+    POP_REFERENCE_PAYLOAD_MAX_BYTES_V1, PopValidationPayloadKindV1, REFERENCE_SDK_ERRORS_DOC_URL,
+    RepairValidationPayloadKindV1, VALIDATION_OUTCOME_VERSION_V1, ValidationContextFieldV1,
+    ValidationInputV1, ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     sign_orderbook_payload_bytes_ed25519_v1, validate_appeal_finance_cancel_asset_lock_bytes,

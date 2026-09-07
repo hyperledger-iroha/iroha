@@ -16,10 +16,8 @@ SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
 MACRO_NAME = "jni_sdk_android_pairs"
 EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
-EXPECTED_ABI_DIGEST = "b685438fb76abd4cb67c1a60e3d269d0a1013f3d9c80ea5b0b0c8cef9b47b46b"
-EXPECTED_ATTRIBUTE_DIGEST = (
-    "4e7da2a305ced782a82f6fbdb5e233045c42a5f755420f2abf947e45899fa9e9"
-)
+EXPECTED_ABI_DIGEST = "643f8f611c8aaf1a3080a6366658a1c70da309ef8525b1b7eb1aa3393cba1319"
+EXPECTED_ATTRIBUTE_DIGEST = "d974d4296dd43d3c8adde6996c75901f620afd273655471f794827948e3e28bd"
 
 EXPECTED_METHODS = {
     "crypto_NativeSignerBridge": (
@@ -35,10 +33,10 @@ EXPECTED_METHODS = {
         "nativeBridgeAbiVersion",
         "nativeCompiledProfileCatalog",
         "nativeValidateCompiledProfileCatalog",
-        "nativeValidateExact12CapabilityManifest",
+        "nativeValidateExact12CapabilityManifestForNetworkV1",
         "nativeInspectExact12CapabilityManifest",
-        "nativeRequireExact12CapabilityTuple",
-        "nativeValidateExact12SubmitProofConstruction",
+        "nativeRequireExact12CapabilityTupleForNetworkV1",
+        "nativeValidateExact12SubmitProofConstructionForNetworkV1",
         "nativeExact12FixtureBundle",
         "nativeValidateExact12FixtureBundle",
     ),

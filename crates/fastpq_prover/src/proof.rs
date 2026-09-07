@@ -262,12 +262,13 @@ impl Prover {
     /// Construct a prover using a canonical parameter set and explicit execution mode.
     ///
     /// This helper mirrors [`Prover::canonical`] but forces the backend to use the specified
-    /// [`ExecutionMode`], allowing operators to pin the prover to CPU or GPU execution explicitly.
+    /// [`ExecutionMode`]. CPU and automatic selection use the implemented CPU proof path.
     ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownParameter`] when the supplied name is not part of
-    /// the canonical FASTPQ catalogue.
+    /// the canonical FASTPQ catalogue, or [`Error::NativeV1GpuUnavailable`] for an explicit GPU
+    /// request. Final-V1 proof GPU dispatch is not implemented.
     pub fn canonical_with_execution_mode(
         parameter_name: &str,
         mode: ExecutionMode,
@@ -284,7 +285,8 @@ impl Prover {
     /// # Errors
     ///
     /// Returns [`Error::UnknownParameter`] when the named parameter set is not
-    /// part of the canonical FASTPQ catalogue.
+    /// part of the canonical FASTPQ catalogue, or [`Error::NativeV1GpuUnavailable`] when either
+    /// execution or Poseidon mode explicitly requires GPU proof dispatch.
     pub fn canonical_with_modes(
         parameter_name: &str,
         execution_mode: ExecutionMode,
@@ -296,6 +298,7 @@ impl Prover {
         let config = BackendConfig::new(params)
             .with_execution_mode(execution_mode)
             .with_poseidon_mode(poseidon_mode);
+        config.validate_native_v1_modes()?;
         Ok(Self::from_backend_config(config))
     }
     /// Return the sole canonical parameter set exposed by this crate.
@@ -320,6 +323,7 @@ impl Prover {
         batch: &TransitionBatch,
         semantics: ProofSemantics,
     ) -> Result<Proof> {
+        self.backend.validate_native_v1_modes()?;
         validate_batch_semantics(batch, semantics)?;
         self.prove_raw(batch)
     }
@@ -339,6 +343,7 @@ impl Prover {
     }
 
     fn prove_raw(&self, batch: &TransitionBatch) -> Result<Proof> {
+        self.backend.validate_native_v1_modes()?;
         if self.backend.parameter_name() != batch.parameter {
             return Err(Error::ParameterMismatch {
                 expected: self.backend.parameter_name().to_owned(),
@@ -2203,6 +2208,61 @@ mod tests {
         assert_eq!(
             Prover::canonical_parameter_sets(),
             CANONICAL_PARAMETER_SETS.as_slice()
+        );
+    }
+    #[test]
+    fn native_v1_canonical_gpu_modes_fail_before_prover_construction() {
+        for execution in [ExecutionMode::Cpu, ExecutionMode::Auto, ExecutionMode::Gpu] {
+            for poseidon in [
+                PoseidonExecutionMode::Cpu,
+                PoseidonExecutionMode::Auto,
+                PoseidonExecutionMode::Gpu,
+            ] {
+                let result = Prover::canonical_with_modes(
+                    "fastpq-state-transition-stark-v1",
+                    execution,
+                    poseidon,
+                );
+                if execution == ExecutionMode::Gpu || poseidon == PoseidonExecutionMode::Gpu {
+                    assert!(matches!(result, Err(Error::NativeV1GpuUnavailable)));
+                } else {
+                    result.expect("CPU and automatic native-V1 modes are implemented");
+                }
+            }
+        }
+        assert!(matches!(
+            Prover::canonical_with_execution_mode(
+                "fastpq-state-transition-stark-v1",
+                ExecutionMode::Gpu,
+            ),
+            Err(Error::NativeV1GpuUnavailable)
+        ));
+    }
+    #[test]
+    fn native_v1_gpu_rejection_precedes_statement_and_witness_validation() {
+        let prover = Prover::from_backend_config(
+            BackendConfig::new(CANONICAL_PARAMETER_SETS[0]).with_execution_mode(ExecutionMode::Gpu),
+        );
+        let batch = TransitionBatch::new("invalid-parameter", PublicInputs::default());
+        for result in [prover.prove(&batch), prover.prove_raw_statement(&batch)] {
+            assert!(matches!(result, Err(Error::NativeV1GpuUnavailable)));
+        }
+    }
+    #[test]
+    fn native_v1_cpu_and_auto_proofs_are_identical() {
+        let parameter = "fastpq-state-transition-stark-v1";
+        let batch = TransitionBatch::new(parameter, PublicInputs::default());
+        let cpu = Prover::canonical_with_execution_mode(parameter, ExecutionMode::Cpu)
+            .expect("CPU prover")
+            .prove(&batch)
+            .expect("CPU proof");
+        let automatic = Prover::canonical_with_execution_mode(parameter, ExecutionMode::Auto)
+            .expect("automatic prover")
+            .prove(&batch)
+            .expect("automatic proof");
+        assert_eq!(
+            norito::core::to_bytes(&cpu).unwrap(),
+            norito::core::to_bytes(&automatic).unwrap()
         );
     }
     #[test]

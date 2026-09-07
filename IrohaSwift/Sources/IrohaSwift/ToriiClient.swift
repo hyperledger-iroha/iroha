@@ -21345,6 +21345,9 @@ public enum ToriiLaneLiquidityProfile: String, Decodable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey { case profile, state }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder, allowed: ["profile", "state"], context: "lane liquidity profile"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let raw = try container.decode(String.self, forKey: .profile)
         guard container.contains(.state), try container.decodeNil(forKey: .state),
@@ -21368,6 +21371,9 @@ public enum ToriiLaneVolatilityClass: String, Decodable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey { case bucket, state }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder, allowed: ["bucket", "state"], context: "lane volatility class"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let raw = try container.decode(String.self, forKey: .bucket)
         guard container.contains(.state), try container.decodeNil(forKey: .state),
@@ -21396,6 +21402,25 @@ public struct ToriiLaneSwapMetadata: Decodable, Sendable, Equatable {
         case liquidityProfile = "liquidity_profile"
         case twapLocalPerXor = "twap_local_per_xor"
         case volatilityClass = "volatility_class"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: [
+                "epsilon_bps", "twap_window_seconds", "liquidity_profile",
+                "twap_local_per_xor", "volatility_class",
+            ],
+            context: "lane swap metadata"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        epsilonBps = try container.decode(UInt16.self, forKey: .epsilonBps)
+        twapWindowSeconds = try container.decode(UInt32.self, forKey: .twapWindowSeconds)
+        liquidityProfile = try container.decode(ToriiLaneLiquidityProfile.self, forKey: .liquidityProfile)
+        twapLocalPerXor = try KotodamaNumericV1Codec.decodeDecimalJSON(
+            container.decode(String.self, forKey: .twapLocalPerXor)
+        ).canonicalString
+        volatilityClass = try container.decode(ToriiLaneVolatilityClass.self, forKey: .volatilityClass)
     }
 }
 
@@ -26350,15 +26375,23 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
-    private func rejectDuplicateJSONKeys(_ data: Data, context: String) throws {
+    private func rejectDuplicateJSONKeys(
+        _ data: Data,
+        context: String,
+        requireAllNumbersInteger: Bool = false
+    ) throws {
         guard !data.isEmpty else {
             throw ToriiClientError.emptyBody
         }
         do {
-            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+                in: data,
+                requireAllNumbersInteger: requireAllNumbersInteger
+            )
         } catch {
+            let numericRequirement = requireAllNumbersInteger ? " and with integer numeric tokens" : ""
             throw ToriiClientError.invalidPayload(
-                "\(context) must be valid UTF-8 JSON without duplicate object keys."
+                "\(context) must be valid UTF-8 JSON without duplicate object keys\(numericRequirement)."
             )
         }
     }
@@ -27834,7 +27867,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// This authority-bearing route is deliberately unavailable over HTTP,
     /// JSON, redirects, mock catalogs, or without the loaded exact ABI23
     /// artifact. The returned model retains the response bytes and binds every
-    /// compiled row to that artifact's natively validated local catalog.
+    /// compiled row to that artifact's natively validated local catalog and the
+    /// expected network from `localSigningContext`.
     public func getPrivacyExact12CapabilityManifestV1(
         canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws
@@ -27845,15 +27879,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "privacy capability authority requires an HTTPS Torii base URL"
             )
         }
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "privacy capability authority requires the expected local signing network"
+            )
+        }
         // Fail before network I/O when the bridge is absent, stale, or missing
         // any of the exact six privacy ABI23 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
-        var request = try makeRequest(
-            path: "/v1/privacy/capabilities",
-            method: .get,
-            headers: ["Accept": "application/x-norito"]
-        )
-        try applyCanonicalAuth(canonicalAuth, to: &request, body: nil)
+        let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)
         let (data, response) = try await sendBoundedSccpResponse(
             request,
             context: "privacy Exact12 capabilities",
@@ -27890,7 +27924,27 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         guard !data.isEmpty else { throw ToriiClientError.emptyBody }
-        return try PrivacyExact12CapabilityManifestV1.fromAuthenticatedToriiResponseV1(data)
+        return try PrivacyExact12CapabilityManifestV1.fromAuthenticatedToriiResponseV1(
+            data, expectedNetworkId: localSigningContext.networkId
+        )
+    }
+
+    /// Build the exact signed request without fetching or granting admission.
+    /// Kept separate so transport policy is testable without a native artifact.
+    func makePrivacyExact12CapabilityRequestV1(
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) throws -> URLRequest {
+        var request = try makeRequest(
+            path: "/v1/privacy/capabilities",
+            method: .get,
+            headers: [
+                "Accept": "application/x-norito",
+                "Cache-Control": "no-cache, no-store",
+            ]
+        )
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        try applyCanonicalAuth(canonicalAuth, to: &request, body: nil)
+        return request
     }
 
     /// Fetch consensus-derived SCCP capabilities.
@@ -28444,7 +28498,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             context: "Sumeragi diagnostics",
             maximumBytes: 16 * 1_024 * 1_024
         )
-        try rejectDuplicateJSONKeys(data, context: "Sumeragi diagnostics response")
+        // Every numeric token in the diagnostics schema is an integer; exact
+        // fractional quantities and TWAP values are carried as JSON strings.
+        // Check the raw token before Foundation can normalize 40.0 or 40e0 to 40.
+        try rejectDuplicateJSONKeys(
+            data,
+            context: "Sumeragi diagnostics response",
+            requireAllNumbersInteger: true
+        )
         return try decodeJSON(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
     }
     public func getStatusSnapshot() async throws -> ToriiStatusSnapshot {

@@ -929,6 +929,9 @@ pub enum PrivacyTransactionIntentErrorV1 {
     /// A platform payload length cannot be represented by the fixed u64 frame.
     #[error("privacy transaction-intent payload length overflow")]
     PayloadLengthOverflow,
+    /// The statement targets a different network, or the payload is genesis-only.
+    #[error("privacy statement network does not match the transaction network domain")]
+    NetworkDomainMismatch,
     /// The stored intent digest is zero.
     #[error("privacy statement transaction-intent digest must not be zero")]
     ZeroIntentDigest,
@@ -1220,12 +1223,18 @@ impl TransactionPayload {
     ///
     /// # Errors
     ///
-    /// Returns a canonical projection error or an exact derived-field mismatch.
+    /// Returns a canonical projection error, network-domain mismatch, or an exact
+    /// derived-field mismatch.
     pub fn validate_privacy_transaction_intent_binding_v1(
         &self,
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
         let scan = scan_privacy_transaction_intent_v1(&self.instructions);
         let submission = validate_exact_direct_privacy_submission_v1(&scan)?;
+        if self.domain
+            != TransactionDomain::Network(submission.envelope.statement.context().network_id)
+        {
+            return Err(PrivacyTransactionIntentErrorV1::NetworkDomainMismatch);
+        }
         let expected_intent = self.privacy_transaction_intent_digest_v1()?;
         let actual_intent = submission
             .envelope

@@ -2,19 +2,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
 
-// pqcrypto-internals 0.2.11 emits untyped link directives after cc's static
-// directives. Explicitly bundle its C helpers into this final staticlib so
-// Swift/C consumers receive the same SHA3/SHAKE closure as Rust executables.
-// These conditions match the helper archives built by pqcrypto-internals;
-// the bridge's iroha_crypto dependency always enables the pqc feature.
-#[link(name = "pqclean_common", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
-#[cfg(all(target_arch = "aarch64", not(target_env = "msvc")))]
-#[link(name = "keccak2x", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[link(name = "keccak4x", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
+// Native PQClean archives are bundled by their owning pqcrypto-internals
+// dependency. Repeating +bundle links here duplicates the same object members
+// and breaks the mandatory complete-archive Apple C consumer link.
 
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;

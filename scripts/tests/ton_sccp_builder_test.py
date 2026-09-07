@@ -5,9 +5,12 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import io
 import os
+import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -65,6 +68,7 @@ def _policy() -> tuple[dict[str, object], dict[str, tuple[bytes, bytes, int]]]:
             "host_python_sha256": "2f" * 32,
             "host_git_sha256": "30" * 32,
             "host_docker_sha256": "40" * 32,
+            "host_commit_verifier_sha256": "41" * 32,
             "toolchain_inventory": [
                 {
                     "path": "toolchain/acton",
@@ -324,3 +328,337 @@ def test_cli_shape_errors_do_not_echo_untrusted_arguments() -> None:
     assert result.returncode == 2
     assert marker not in result.stdout + result.stderr
     assert len(result.stderr) < 1024
+
+
+def test_policy_requires_a_nonzero_commit_verifier_digest() -> None:
+    policy, _ = _policy()
+    for value in (None, "00" * 32, "short"):
+        candidate = copy.deepcopy(policy)
+        if value is None:
+            del candidate["builder"]["host_commit_verifier_sha256"]
+        else:
+            candidate["builder"]["host_commit_verifier_sha256"] = value
+        with pytest.raises(builder.TonBuilderError):
+            builder.validate_policy(candidate)
+
+
+def test_git_environment_ignores_ambient_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_DIR", "HOME"):
+        monkeypatch.setenv(key, "ambient-setting")
+    environment = builder._closed_environment(source_date_epoch=1_700_000_000)
+    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert environment["GIT_NO_LAZY_FETCH"] == "1"
+    assert environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert environment["SOURCE_DATE_EPOCH"] == "1700000000"
+    assert "ambient-setting" not in environment.values()
+
+
+def test_git_reads_original_objects_despite_local_replacement_refs(tmp_path: Path) -> None:
+    git_path = shutil.which("git")
+    if git_path is None:
+        pytest.skip("Git unavailable")
+    git = Path(git_path)
+
+    def run(*arguments: str, payload: bytes | None = None) -> bytes:
+        return subprocess.run(
+            [str(git), "-C", str(tmp_path), *arguments],
+            input=payload, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=builder._closed_environment(),
+        ).stdout.strip()
+
+    run("init", "--quiet")
+    original = run("hash-object", "-w", "--stdin", payload=b"approved source\n").decode()
+    replacement = run("hash-object", "-w", "--stdin", payload=b"unapproved source\n").decode()
+    run("update-ref", f"refs/replace/{original}", replacement)
+    assert builder._git_command(git, tmp_path, ("cat-file", "blob", original)) == b"approved source\n"
+
+
+def test_git_operations_disable_repository_command_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def run(executable, arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return b"", b""
+
+    monkeypatch.setattr(builder, "_run_bounded", run)
+    builder._git_command(Path("/approved/git"), ROOT, ("status", "--porcelain=v1"))
+    arguments, options = calls[0]
+    assert "core.fsmonitor=false" in arguments
+    assert f"core.hooksPath={os.devnull}" in arguments
+    assert options["environment"]["GIT_NO_REPLACE_OBJECTS"] == "1"
+
+
+@pytest.mark.parametrize("path", ["relative/verifier", "/approved/tool name", "/approved/../verifier"])
+def test_commit_verifier_path_is_rejected_before_git(
+    path: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_git(*args, **kwargs):
+        pytest.fail("invalid verifier path reached Git")
+
+    monkeypatch.setattr(builder, "_git_command", unexpected_git)
+    policy, _ = _policy()
+    with pytest.raises(builder.TonBuilderError, match="canonical shell-inert"):
+        builder._verify_source_and_archive(Path("/approved/git"), Path(path), policy, tmp_path / "source.tar")
+
+
+def test_both_signature_checks_bind_every_verifier_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy, _ = _policy()
+    commands = []
+
+    def git_command(git, root, arguments, **kwargs):
+        commands.append(arguments)
+        if "--show-toplevel" in arguments:
+            return str(ROOT).encode() + b"\n"
+        if "--show-object-format=storage" in arguments:
+            return b"sha1\n"
+        if "--git-path" in arguments:
+            return str(tmp_path).encode() + b"\n"
+        if "rev-parse" in arguments:
+            return policy["source"]["commit"].encode() + b"\n"
+        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
+            fingerprint = policy["source"]["commit_signer_fingerprint"].encode()
+            return b"G\x00" + fingerprint + b"\x00" + fingerprint + b"\x00\n"
+        if "--format=%ct" in arguments:
+            return b"0\n"  # Stop before archive creation; only signature dispatch is under test.
+        return b""
+
+    monkeypatch.setattr(builder, "_git_command", git_command)
+    with pytest.raises(builder.TonBuilderError, match="commit time"):
+        builder._verify_source_and_archive(
+            Path("/approved/git"), Path("/approved/verifier"), policy, tmp_path / "source.tar",
+        )
+    checks = [args for args in commands if "verify-commit" in args or "--format=%G?%x00%GF%x00%GP%x00" in args]
+    assert len(checks) == 2
+    for arguments in checks:
+        assert "gpg.format=openpgp" in arguments
+        for slot in ("gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program"):
+            assert f"{slot}=/approved/verifier" in arguments
+
+
+def test_production_rejects_unapproved_commit_verifier_before_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy, _ = _policy()
+    policy_bytes = common.canonical_json_file_bytes(policy)
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_bytes(policy_bytes)
+
+    def open_executable(path, *, label):
+        hashes = {
+            "pinned Python executable": "2f" * 32,
+            "pinned Git executable": "30" * 32,
+            "pinned Docker executable": "40" * 32,
+            "pinned OpenPGP commit signature verifier": "42" * 32,
+        }
+        return Path(path), (1, 2, 3, 4, 5), hashes[label]
+
+    def unexpected_build(*args, **kwargs):
+        pytest.fail("unapproved commit verifier reached container work")
+
+    monkeypatch.setattr(builder, "_open_stable_executable", open_executable)
+    monkeypatch.setattr(builder, "_inspect_image", unexpected_build)
+    with pytest.raises(builder.TonBuilderError, match="verifier does not match"):
+        builder._production_build(
+            policy_path=policy_path, trusted_policy_sha256=hashlib.sha256(policy_bytes).hexdigest(),
+            git_path="/approved/git", docker_path="/approved/docker",
+            commit_verifier_path="/approved/verifier",
+        )
+
+
+def test_source_archive_uses_the_same_git_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy, _ = _policy()
+    archive_bytes = b"bounded archive stream\n"
+    invocations = []
+
+    def git_command(git, root, arguments, **kwargs):
+        if "--show-toplevel" in arguments:
+            return str(ROOT).encode() + b"\n"
+        if "--show-object-format=storage" in arguments:
+            return b"sha1\n"
+        if "--git-path" in arguments:
+            return str(tmp_path).encode() + b"\n"
+        if "rev-parse" in arguments:
+            return policy["source"]["commit"].encode() + b"\n"
+        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
+            fingerprint = policy["source"]["commit_signer_fingerprint"].encode()
+            return b"G\x00" + fingerprint + b"\x00" + fingerprint + b"\x00\n"
+        if "--format=%ct" in arguments:
+            return str(policy["source"]["source_date_epoch"]).encode() + b"\n"
+        return b""
+
+    class ArchiveProcess:
+        def __init__(self, arguments, **kwargs):
+            invocations.append((arguments, kwargs))
+            self.stdout = io.BytesIO(archive_bytes)
+            self.stderr = io.BytesIO()
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(builder, "_git_command", git_command)
+    monkeypatch.setattr(builder.subprocess, "Popen", ArchiveProcess)
+    archive = tmp_path / "source.tar"
+    digest = builder._verify_source_and_archive(
+        Path("/approved/git"), Path("/approved/verifier"), policy, archive,
+    )
+    assert digest == hashlib.sha256(archive_bytes).hexdigest()
+    assert archive.read_bytes() == archive_bytes
+    arguments, options = invocations[0]
+    assert "core.fsmonitor=false" in arguments
+    assert f"core.hooksPath={os.devnull}" in arguments
+    assert options["env"]["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert options["env"]["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert options["env"]["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert options["env"]["GIT_NO_LAZY_FETCH"] == "1"
+    assert options["env"]["GIT_ATTR_NOSYSTEM"] == "1"
+    assert options["env"]["GIT_DIR"] != str(ROOT / ".git")
+    for slot in ("gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program"):
+        assert f"{slot}=/approved/verifier" in arguments
+
+
+@pytest.mark.parametrize("mode", ["production-prepare", "production-release"])
+def test_production_cli_requires_commit_verifier(mode: str) -> None:
+    arguments = [
+        mode, "--policy", "/approved/policy.json", "--trusted-policy-sha256", "11" * 32,
+        "--git", "/approved/git", "--docker", "/approved/docker", "--output-dir", "/approved/output",
+    ]
+    if mode == "production-release":
+        arguments.extend(["--signed-output-lock", "/approved/lock.json"])
+    with pytest.raises(builder.TonBuilderError, match="invalid final-V1 shape"):
+        builder._parser().parse_args(arguments)
+    parsed = builder._parser().parse_args(arguments + ["--commit-verifier", "/approved/verifier"])
+    assert parsed.commit_verifier == "/approved/verifier"
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+@pytest.mark.parametrize("dirty", [None, "staged", "worktree", "untracked", "staged-gitlink"])
+def test_source_archive_uses_only_signed_attributes_and_no_repository_filters(
+    object_format: str, dirty: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    git_path = shutil.which("git")
+    if git_path is None:
+        pytest.skip("Git unavailable")
+    git = Path(git_path)
+    repository = tmp_path / "repository"
+    repository.mkdir(mode=0o700)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(mode=0o700)
+
+    def run(*arguments: str, payload: bytes | None = None) -> bytes:
+        return subprocess.run(
+            [str(git), "-C", str(repository), *arguments],
+            input=payload, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=builder._closed_environment(),
+        ).stdout.strip()
+
+    # Assemble inert Git objects directly: this test does not create signatures
+    # or execute a production verifier. Only the signature result is mocked.
+    run("init", "--quiet", f"--object-format={object_format}", "--template=")
+    blobs = {
+        ".gitattributes": b"keep.txt filter=sccp-test\nomitted.txt export-ignore\nexpanded.txt export-subst\n",
+        "expanded.txt": b"$Format:%H$\n",
+        "keep.txt": b"approved source bytes\n",
+        "omitted.txt": b"intentionally excluded by signed attributes\n",
+    }
+    entries = []
+    for name, contents in sorted(blobs.items()):
+        oid = run("hash-object", "-w", "--stdin", payload=contents).decode()
+        entries.append(f"100644 blob {oid}\t{name}\n")
+    oid_length = 40 if object_format == "sha1" else 64
+    entries.append(f"160000 commit {'7' * oid_length}\toptional-docs\n")
+    tree = run("mktree", payload="".join(entries).encode()).decode()
+    commit = run(
+        "hash-object", "-w", "-t", "commit", "--stdin",
+        payload=(
+            f"tree {tree}\nauthor Fixture <fixture@example.invalid> 1700000000 +0000\n"
+            "committer Fixture <fixture@example.invalid> 1700000000 +0000\n\n"
+            "Isolated archive regression fixture\n"
+        ).encode(),
+    ).decode()
+    run("update-ref", "HEAD", commit)
+    run("read-tree", "--reset", "-u", commit)
+    # Optional gitlink worktrees can contain independent, unusable metadata.
+    # Parent-source validation must never recurse into that child checkout.
+    child_git = repository / "optional-docs" / ".git"
+    child_git.mkdir(parents=True)
+    (child_git / "objects").mkdir()
+    (child_git / "refs").mkdir()
+    (child_git / "HEAD").write_text("ref: refs/heads/fixture\n")
+    (child_git / "config").write_text("[core]\n\trepositoryformatversion = 999\n")
+    # These files are deliberately outside the signed tree. Required, absent
+    # filter executables make any accidental helper selection fail the test.
+    (repository / ".git" / "info").mkdir(exist_ok=True)
+    (repository / ".git" / "info" / "attributes").write_text("keep.txt export-ignore\n")
+    ambient_attributes = tmp_path / "ambient-attributes"
+    ambient_attributes.write_text("expanded.txt export-ignore\n")
+    run("config", "core.attributesFile", str(ambient_attributes))
+    for kind in ("clean", "smudge", "process"):
+        run("config", f"filter.sccp-test.{kind}", str(tmp_path / "unavailable-filter"))
+    run("config", "filter.sccp-test.required", "true")
+    # Force a worktree recheck even when its bytes still match the index.
+    keep = repository / "keep.txt"
+    modified = keep.stat().st_mtime_ns + 2_000_000_000
+    os.utime(keep, ns=(modified, modified))
+    if dirty == "worktree":
+        keep.write_bytes(b"changed working tree\n")
+    elif dirty == "staged":
+        staged = run("hash-object", "-w", "--stdin", payload=b"changed index\n").decode()
+        run("update-index", "--cacheinfo", f"100644,{staged},keep.txt")
+    elif dirty == "untracked":
+        (repository / "untracked.txt").write_bytes(b"untracked source\n")
+    elif dirty == "staged-gitlink":
+        run("update-index", "--cacheinfo", f"160000,{'8' * oid_length},optional-docs")
+    index = repository / ".git" / "index"
+    original_index = index.read_bytes()
+    original_index_mtime = index.stat().st_mtime_ns
+    fingerprint = "0123456789abcdef"
+    original_git_command = builder._git_command
+
+    def git_command(executable, root, arguments, **kwargs):
+        if "verify-commit" in arguments:
+            return b""
+        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
+            return f"G\0{fingerprint}\0{fingerprint}\0\n".encode()
+        return original_git_command(executable, root, arguments, **kwargs)
+
+    monkeypatch.setattr(builder, "ROOT", repository)
+    monkeypatch.setattr(builder, "_git_command", git_command)
+    policy = {"source": {
+        "commit": commit, "commit_signer_fingerprint": fingerprint, "source_date_epoch": 1_700_000_000,
+    }}
+    archive_path = scratch / "source.tar"
+    if dirty is not None:
+        with pytest.raises(builder.TonBuilderError, match="completely clean"):
+            builder._verify_source_and_archive(git, Path("/approved/verifier"), policy, archive_path)
+    else:
+        digest = builder._verify_source_and_archive(git, Path("/approved/verifier"), policy, archive_path)
+        assert digest == hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        with tarfile.open(archive_path) as archive:
+            assert "source/omitted.txt" not in archive.getnames()
+            assert archive.extractfile("source/keep.txt").read() == blobs["keep.txt"]
+            assert archive.extractfile("source/expanded.txt").read() == (commit + "\n").encode()
+    assert index.read_bytes() == original_index
+    assert index.stat().st_mtime_ns == original_index_mtime
+
+
+@pytest.mark.parametrize(
+    "object_format,commit", [("sha512", "1" * 40), ("sha1", "1" * 64), ("sha256", "0" * 64)],
+)
+def test_isolated_git_directory_rejects_invalid_source_identity(
+    object_format: str, commit: str, tmp_path: Path,
+) -> None:
+    with pytest.raises(common.SccpReleaseError, match="identity is not canonical"):
+        common.create_isolated_git_directory(tmp_path, object_format=object_format, commit=commit)
+
+
+def test_isolated_git_directory_rejects_shared_scratch_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "shared"
+    parent.mkdir(mode=0o755)
+    with pytest.raises(common.SccpReleaseError, match="owner-only"):
+        common.create_isolated_git_directory(parent, object_format="sha1", commit="1" * 40)

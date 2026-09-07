@@ -517,7 +517,7 @@ PY
       org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     ;;
   java)
-    observed_test_count=48
+    observed_test_count=59
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -542,7 +542,8 @@ PY
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTests \
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsParsingTests \
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTests \
-      --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest
+      --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest \
+      --tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireOwnershipTest
     assert_gradle_reports \
       "$gradle_build_root" "$observed_test_count" \
       org.hyperledger.iroha.sdk.client.SumeragiHttpTransportTests \
@@ -550,7 +551,8 @@ PY
       org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTests \
       org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsParsingTests \
       org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTests \
-      org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest
+      org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest \
+      org.hyperledger.iroha.sdk.consensus.SumeragiV2WireOwnershipTest
     ;;
 esac
 

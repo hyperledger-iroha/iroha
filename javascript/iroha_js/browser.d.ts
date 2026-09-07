@@ -59,6 +59,7 @@ export {
   deriveContractAddress,
   prepareBrowserContractArtifact,
   encodeAccountIdNoritoValue,
+  decodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,
   encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,

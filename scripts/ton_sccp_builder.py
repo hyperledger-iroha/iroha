@@ -48,6 +48,12 @@ IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._:/-]{0,200}@sha256:[0-9a-f]{64}$")
 ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._:+-]{0,127})$")
 SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:+/=_-]{15,199}$")
+SHELL_INERT_HOST_PATH_RE = re.compile(
+    r"^/(?:[A-Za-z0-9][A-Za-z0-9._+-]*/)*[A-Za-z0-9][A-Za-z0-9._+-]*$"
+)
+GIT_ISOLATION_ARGUMENTS = (
+    "-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}",
+)
 MAX_POLICY_BYTES = 2 * 1024 * 1024
 MAX_LOCK_BYTES = 8 * 1024 * 1024
 MAX_REPORT_BYTES = 8 * 1024 * 1024
@@ -257,6 +263,7 @@ def validate_policy(value: Any) -> dict[str, Any]:
             "host_python_sha256",
             "host_git_sha256",
             "host_docker_sha256",
+            "host_commit_verifier_sha256",
             "toolchain_inventory",
         ),
     )
@@ -277,6 +284,9 @@ def validate_policy(value: Any) -> dict[str, Any]:
     )
     git_hash = _hex32(builder["host_git_sha256"], label="builder.host_git_sha256")
     docker_hash = _hex32(builder["host_docker_sha256"], label="builder.host_docker_sha256")
+    commit_verifier_hash = _hex32(
+        builder["host_commit_verifier_sha256"], label="builder.host_commit_verifier_sha256"
+    )
     toolchain = _ordered_inventory(
         builder["toolchain_inventory"],
         label="builder.toolchain_inventory",
@@ -368,6 +378,7 @@ def validate_policy(value: Any) -> dict[str, Any]:
             "host_python_sha256": python_hash,
             "host_git_sha256": git_hash,
             "host_docker_sha256": docker_hash,
+            "host_commit_verifier_sha256": commit_verifier_hash,
             "toolchain_inventory": toolchain,
         },
         "limits": normalized_limits,
@@ -502,7 +513,16 @@ def _run_bounded(
 
 
 def _closed_environment(*, source_date_epoch: int | None = None) -> dict[str, str]:
-    environment = {"LANG": "C", "LC_ALL": "C", "TZ": "UTC", "PATH": os.defpath}
+    environment = {
+        "LANG": "C", "LC_ALL": "C", "TZ": "UTC", "PATH": os.defpath,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
     if source_date_epoch is not None:
         environment["SOURCE_DATE_EPOCH"] = str(source_date_epoch)
     for name in ("SYSTEMROOT", "WINDIR"):
@@ -517,12 +537,13 @@ def _git_command(
     arguments: Sequence[str],
     *,
     maximum: int = 1024 * 1024,
+    environment: Mapping[str, str] | None = None,
 ) -> bytes:
     stdout, _ = _run_bounded(
         git,
-        ("-C", os.fspath(root), *arguments),
+        ("-C", os.fspath(root), *GIT_ISOLATION_ARGUMENTS, *arguments),
         cwd=root,
-        environment=_closed_environment(),
+        environment=_closed_environment() if environment is None else environment,
         maximum_bytes=maximum,
         timeout_seconds=120,
         label="pinned Git operation",
@@ -532,31 +553,90 @@ def _git_command(
 
 def _verify_source_and_archive(
     git: Path,
+    commit_verifier: Path,
     policy: Mapping[str, Any],
     archive_path: Path,
 ) -> str:
     source = policy["source"]
     commit = source["commit"]
+    verifier_path = os.fspath(commit_verifier)
+    if (
+        not commit_verifier.is_absolute()
+        or len(verifier_path) > 1024
+        or not SHELL_INERT_HOST_PATH_RE.fullmatch(verifier_path)
+        or any(part in ("", ".", "..") for part in commit_verifier.parts[1:])
+    ):
+        _fail("commit signature verifier path is not canonical shell-inert text")
+    # Git detects the signature format from the object itself. Bind all helper
+    # slots, so a non-OpenPGP object cannot select a repository-configured tool.
+    signature_configuration = (
+        "-c", "gpg.format=openpgp",
+        "-c", f"gpg.program={verifier_path}",
+        "-c", f"gpg.openpgp.program={verifier_path}",
+        "-c", f"gpg.x509.program={verifier_path}",
+        "-c", f"gpg.ssh.program={verifier_path}",
+    )
     top = _git_command(git, ROOT, ("rev-parse", "--show-toplevel")).decode("utf-8", "strict").strip()
     if Path(top).resolve() != ROOT.resolve():
         _fail("source root is not the exact Git top-level")
     head = _git_command(git, ROOT, ("rev-parse", "--verify", "HEAD")).decode().strip()
     if head != commit:
         _fail("source HEAD does not match the approved full commit")
+    object_format = _git_command(
+        git, ROOT, ("rev-parse", "--show-object-format=storage"), maximum=256,
+    ).decode("ascii", "strict").strip()
+    source_paths: dict[str, Path] = {}
+    for name in ("objects", "index"):
+        encoded_path = _git_command(
+            git, ROOT, ("rev-parse", "--path-format=absolute", "--git-path", name),
+            maximum=16 * 1024,
+        ).decode("utf-8", "strict").rstrip("\n")
+        if not encoded_path or "\n" in encoded_path or "\r" in encoded_path:
+            _fail("Git source metadata path is not canonical")
+        path = Path(encoded_path)
+        if not path.is_absolute():
+            _fail("Git source metadata path is not absolute")
+        source_paths[name] = path.resolve(strict=True)
+    isolated_git = common.create_isolated_git_directory(
+        archive_path.parent, object_format=object_format, commit=commit,
+    )
+    isolated_environment = {
+        **_closed_environment(source_date_epoch=source["source_date_epoch"]),
+        "GIT_DIR": os.fspath(isolated_git),
+        "GIT_OBJECT_DIRECTORY": os.fspath(source_paths["objects"]),
+    }
+    status_environment = {
+        **isolated_environment,
+        "GIT_WORK_TREE": os.fspath(ROOT),
+        "GIT_INDEX_FILE": os.fspath(source_paths["index"]),
+    }
     status = _git_command(
         git,
         ROOT,
-        ("status", "--porcelain=v1", "--untracked-files=all"),
+        ("status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=all"),
         maximum=16 * 1024 * 1024,
+        environment=status_environment,
     )
-    if status:
+    cached_status = _git_command(
+        git, ROOT,
+        ("diff-index", "--cached", "--raw", "--no-ext-diff", "--no-textconv",
+         "--ignore-submodules=none", commit, "--"),
+        maximum=16 * 1024 * 1024,
+        environment=status_environment,
+    )
+    if status or cached_status:
         _fail("production TON builds require a completely clean tracked and untracked tree")
-    _git_command(git, ROOT, ("verify-commit", "--raw", commit), maximum=256 * 1024)
+    _git_command(
+        git, ROOT, (*signature_configuration, "verify-commit", "--raw", commit),
+        maximum=256 * 1024,
+        environment=isolated_environment,
+    )
     signature = _git_command(
         git,
         ROOT,
-        ("show", "--no-patch", "--format=%G?%x00%GF%x00%GP%x00", commit),
+        (*signature_configuration, "show", "--no-patch", "--format=%G?%x00%GF%x00%GP%x00", commit),
         maximum=8 * 1024,
+        environment=isolated_environment,
     ).rstrip(b"\n")
     fields = signature.split(b"\x00")
     if len(fields) != 4 or fields[0] != b"G" or fields[3] != b"":
@@ -567,7 +647,10 @@ def _verify_source_and_archive(
         _fail("source commit signature fingerprint is malformed")
     if source["commit_signer_fingerprint"] not in fingerprints:
         _fail("source commit signer does not match the approved fingerprint")
-    timestamp = _git_command(git, ROOT, ("show", "-s", "--format=%ct", commit)).decode().strip()
+    timestamp = _git_command(
+        git, ROOT, ("show", "-s", "--format=%ct", commit),
+        environment=isolated_environment,
+    ).decode().strip()
     if timestamp != str(source["source_date_epoch"]):
         _fail("source commit time does not match the approved SOURCE_DATE_EPOCH")
 
@@ -595,13 +678,15 @@ def _verify_source_and_archive(
                 os.fspath(git),
                 "-C",
                 os.fspath(ROOT),
+                *GIT_ISOLATION_ARGUMENTS,
+                *signature_configuration,
                 "archive",
                 "--format=tar",
                 "--prefix=source/",
                 commit,
             ],
             cwd=ROOT,
-            env=_closed_environment(source_date_epoch=source["source_date_epoch"]),
+            env=isolated_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -671,7 +756,16 @@ def _verify_source_and_archive(
         os.close(descriptor)
     if _git_command(git, ROOT, ("rev-parse", "--verify", "HEAD")).decode().strip() != commit:
         _fail("source HEAD changed during archival")
-    if _git_command(git, ROOT, ("status", "--porcelain=v1", "--untracked-files=all")):
+    if _git_command(
+        git, ROOT,
+        ("status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=all"),
+        environment=status_environment,
+    ) or _git_command(
+        git, ROOT,
+        ("diff-index", "--cached", "--raw", "--no-ext-diff", "--no-textconv",
+         "--ignore-submodules=none", commit, "--"),
+        environment=status_environment,
+    ):
         _fail("source tree changed during archival")
     return digest.hexdigest()
 
@@ -1313,6 +1407,7 @@ def _production_build(
     trusted_policy_sha256: str,
     git_path: str,
     docker_path: str,
+    commit_verifier_path: str,
 ) -> tuple[
     dict[str, Any],
     bytes,
@@ -1346,12 +1441,20 @@ def _production_build(
         _fail("pinned Git executable does not match builder policy")
     if docker_hash != policy["builder"]["host_docker_sha256"]:
         _fail("pinned Docker executable does not match builder policy")
+    commit_verifier, verifier_identity, verifier_hash = _open_stable_executable(
+        commit_verifier_path, label="pinned OpenPGP commit signature verifier"
+    )
+    if verifier_hash != policy["builder"]["host_commit_verifier_sha256"]:
+        _fail("pinned commit signature verifier does not match builder policy")
     _inspect_image(docker, policy, identity=docker_identity)
     temporary = tempfile.TemporaryDirectory(prefix="iroha-sccp-ton-builder-")
     temporary_root = Path(temporary.name)
     os.chmod(temporary_root, 0o700)
     archive = temporary_root / "source.tar"
-    source_closure_sha256 = _verify_source_and_archive(git, policy, archive)
+    source_closure_sha256 = _verify_source_and_archive(git, commit_verifier, policy, archive)
+    _require_unchanged_executable(
+        commit_verifier, verifier_identity, label="pinned OpenPGP commit signature verifier"
+    )
     _require_unchanged_executable(git, git_identity, label="pinned Git executable")
     _require_unchanged_executable(python, python_identity, label="pinned Python executable")
     build_one = temporary_root / "build-one"
@@ -1378,6 +1481,9 @@ def _production_build(
     _require_unchanged_executable(git, git_identity, label="pinned Git executable")
     _require_unchanged_executable(python, python_identity, label="pinned Python executable")
     _require_unchanged_executable(docker, docker_identity, label="pinned Docker executable")
+    _require_unchanged_executable(
+        commit_verifier, verifier_identity, label="pinned OpenPGP commit signature verifier"
+    )
     return (
         policy,
         policy_bytes,
@@ -1397,6 +1503,7 @@ def prepare_release(arguments: argparse.Namespace) -> None:
         trusted_policy_sha256=arguments.trusted_policy_sha256,
         git_path=arguments.git,
         docker_path=arguments.docker,
+        commit_verifier_path=arguments.commit_verifier,
     )
     try:
         unsigned = _unsigned_lock(policy_sha256, source_sha256, policy, report)
@@ -1421,6 +1528,7 @@ def release(arguments: argparse.Namespace) -> None:
         trusted_policy_sha256=arguments.trusted_policy_sha256,
         git_path=arguments.git,
         docker_path=arguments.docker,
+        commit_verifier_path=arguments.commit_verifier,
     )
     try:
         _ensure_outside_repository(
@@ -1515,6 +1623,10 @@ def _parser() -> argparse.ArgumentParser:
         production.add_argument("--trusted-policy-sha256", required=True)
         production.add_argument("--git", required=True, help="absolute pinned Git executable")
         production.add_argument("--docker", required=True, help="absolute pinned Docker executable")
+        production.add_argument(
+            "--commit-verifier", required=True,
+            help="absolute policy-pinned OpenPGP commit signature verifier",
+        )
         production.add_argument("--output-dir", required=True, type=Path)
         if name == "production-release":
             production.add_argument("--signed-output-lock", required=True, type=Path)

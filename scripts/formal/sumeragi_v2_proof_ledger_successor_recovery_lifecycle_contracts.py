@@ -4100,82 +4100,120 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "target.matches_recovered_decision_fetch_key(task.dispatch_key())",
                 ),
             )
-            recovered_fetch_next_selector = region(
+            errors.extend(_recovered_fetch_canonical_selector_owner_errors(
+                selector_source, ingress_position_source, turn_driver_source,
+            ))
+            recovered_fetch_selected_family = _require_rust_item(
                 selector_path,
                 selector_source,
-                "queue-owned recovered Decision Fetch selector",
-                "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-                "/// Classify the exact selected certified-response occurrence without mutation.",
+                "prepare_recovered_decision_fetch_from_selected_cut",
+                errors,
+            )
+            if recovered_fetch_selected_family is not None:
+                require_order(
+                    selector_path,
+                    "queue-owned recovered Decision Fetch selected family",
+                    recovered_fetch_selected_family.source,
+                    (
+                        "let selected_ordinal = cut.selected_identity().physical_admission_ordinal()",
+                        "let selected_request_hash = cut.selector_occurrences()",
+                        "occurrence.physical_admission_ordinal() == selected_ordinal",
+                        "Some(response.request_hash)",
+                        "self.capture_lifecycle_ingress_selector_for_response_family(",
+                        "Some(selected_request_hash)",
+                        "prepared.queue_witness.selected_disposition()",
+                        "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
+                        ".selected_claimed_response_family()",
+                        "family.candidate.recovered()",
+                        "LifecycleIngressSelectorError::CandidateRevalidationDrift",
+                        "Ok(prepared)",
+                    ),
+                )
+                reject_tokens(
+                    selector_path,
+                    "queue-owned recovered Decision Fetch selected family",
+                    recovered_fetch_selected_family.source,
+                    (
+                        "target_physical_ordinal:",
+                        "prepare_lifecycle_ingress_selector(",
+                        "try_recv",
+                        "commit_exact_dequeue",
+                        "capture_next_ingress_turn_cut(",
+                    ),
+                )
+            recovered_fetch_live_driver = region(
+                turn_driver_path,
+                turn_driver_source,
+                "queue-owned recovered Decision Fetch live driver",
+                "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+                "fn drive_recovered_ingress_selector<'cursor>(",
             )
             require_order(
-                selector_path,
-                "queue-owned recovered Decision Fetch selector",
-                recovered_fetch_next_selector,
+                turn_driver_path,
+                "queue-owned recovered Decision Fetch live driver",
+                recovered_fetch_live_driver,
                 (
-                    "self.lifecycle_terminal_subject()",
-                    "capture_next_lifecycle_queue_cut(",
-                    "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
-                    "self.capture_lifecycle_ingress_selector(cut)",
-                    "prepared.queue_witness.selected_disposition()",
-                    "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
-                    ".selected_claimed_response_family()",
+                    "self.executor.lifecycle_terminal_subject()",
+                    "capture_next_ingress_turn_cut(",
+                    "v2_ingress_head_can_drain(",
+                    "cut.narrow_to_lifecycle(expected_context)",
+                    "classify_selected_certified_response_priority(&cut)",
+                    "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+                    "prepare_recovered_decision_fetch_from_selected_cut(cut)",
+                    "self.drive_recovered_ingress_selector(selector, runner)",
                 ),
             )
-            reject_tokens(
-                selector_path,
-                "queue-owned recovered Decision Fetch selector",
-                recovered_fetch_next_selector,
-                (
-                    "target_physical_ordinal:",
-                    "prepare_lifecycle_ingress_selector(",
-                    "try_recv",
-                    "commit_exact_dequeue",
-                ),
-            )
-            recovered_fetch_queue_cut = region(
+            recovered_fetch_queue_cut = _require_rust_item(
                 ingress_position_path,
                 ingress_position_source,
-                "queue-owned recovered Decision Fetch fair cut",
-                "pub(super) fn capture_next_lifecycle_queue_cut(",
-                "fn capture_lifecycle_queue_cut_for(",
+                "capture_next_ingress_turn_cut",
+                errors,
             )
-            require_tokens(
-                ingress_position_path,
-                "queue-owned recovered Decision Fetch fair cut",
-                recovered_fetch_queue_cut,
-                (
-                    "LifecycleQueueCutTarget::NextAdmissible",
-                    "predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool",
-                    "Result<Option<FairIngressQueueCut<'_>>, FairIngressQueueCutError>",
-                ),
-            )
-            recovered_fetch_fair_selection = region(
+            if recovered_fetch_queue_cut is not None:
+                require_tokens(
+                    ingress_position_path,
+                    "queue-owned recovered Decision Fetch fair cut",
+                    recovered_fetch_queue_cut.source,
+                    (
+                        "self.capture_next_ingress_turn_cut_at(",
+                        "FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete",
+                        "predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool",
+                        "Result<Option<FairIngressTurnCut<'_>>, FairIngressQueueCutError>",
+                    ),
+                )
+            recovered_fetch_fair_selection = _require_rust_item(
                 ingress_position_path,
                 ingress_position_source,
-                "queue-owned recovered Decision Fetch fair selection",
-                "fn select_next_admissible_ordinal(",
-                "fn mint_pending_identities(",
+                "capture_next_ingress_turn_cut_at",
+                errors,
             )
-            require_order(
-                ingress_position_path,
-                "queue-owned recovered Decision Fetch fair selection",
-                recovered_fetch_fair_selection,
-                (
-                    "geometry.ready_prefix.iter()",
-                    "selector.queue_gate() != occurrence.value.queue_gate",
-                    "select_fair_v2_ingress_candidate(",
-                    "occurrence.physical_admission_ordinal()",
-                    "occurrence.queue_gate()",
-                    "occurrence.is_obsolete()",
-                    "predicate(occurrence)",
-                ),
-            )
-            reject_tokens(
-                ingress_position_path,
-                "queue-owned recovered Decision Fetch fair selection",
-                recovered_fetch_fair_selection,
-                ("pop_", "remove(", "rotate_", "dequeue_selected_locked"),
-            )
+            if recovered_fetch_fair_selection is not None:
+                require_order(
+                    ingress_position_path,
+                    "queue-owned recovered Decision Fetch fair selection",
+                    recovered_fetch_fair_selection.source,
+                    (
+                        "self.service_lock.lock()",
+                        "self.state.lock()",
+                        "validate_live_queue_structure(&state)",
+                        "freeze_live_geometry(",
+                        "drop(state)",
+                        "validate_frozen_ownership_outside_state(",
+                        "geometry.ready_prefix.iter()",
+                        "selector.queue_gate() != occurrence.value.queue_gate",
+                        "select_fair_v2_ingress_candidate(",
+                        "occurrence.physical_admission_ordinal()",
+                        "occurrence.queue_gate()",
+                        "occurrence.is_obsolete()",
+                        "predicate(occurrence)",
+                    ),
+                )
+                reject_tokens(
+                    ingress_position_path,
+                    "queue-owned recovered Decision Fetch fair selection",
+                    recovered_fetch_fair_selection.source,
+                    ("pop_", "remove(", "rotate_", "dequeue_selected_locked"),
+                )
             shared_fair_selection = region(
                 sumeragi_path,
                 sumeragi_source,

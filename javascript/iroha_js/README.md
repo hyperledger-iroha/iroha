@@ -340,11 +340,16 @@ committed height, consensus policy, activation, or readiness projection and
 cannot authorize a network operation. Import
 `getPrivacyExact12CapabilityManifestV1` from
 `@iroha/iroha-js/privacy-capabilities` to fetch Torii's canonical Norito
-manifest through the Node/N-API client. The authenticated ABI23 binding applies
+manifest through the Node/N-API client with an HTTPS origin and immutable
+`LocalSigningContext`. Explicit custom fetch implementations are trusted transport
+dependencies and must preserve HTTPS authentication, response URL, and redirect semantics.
+Public archive decoding is inspection-only; copying or re-decoding transport
+bytes loses admission authority. The authenticated ABI23 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state, registered production qualification, and byte-exact equality with the
-selected local compiled-profile row. There is no browser, JSON snapshot, or
+selected local compiled-profile row and deployment network. The admission result
+retains that exact network and Torii origin. There is no browser, JSON snapshot, or
 mock authorization fallback. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
@@ -1983,6 +1988,10 @@ applications live on `GET /v1/sumeragi/diagnostics`; they are parsed by the
 separate `getSumeragiDiagnosticsTyped()` helper and are not consensus
 authority. The general `GET /status` API remains another distinct
 operational-health snapshot.
+
+Parsed Native AMX participant settlements own frozen receipt arrays and receipt
+entries. Mutating the input payload cannot change a settlement after its hash
+has been checked against the Prepare and Commit certificates.
 
 All Sumeragi status helpers accept the standard `{signal}` option:
 

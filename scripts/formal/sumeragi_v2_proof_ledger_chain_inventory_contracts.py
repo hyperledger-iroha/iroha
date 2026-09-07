@@ -3660,6 +3660,7 @@ def _production_liveness_release_inventory_guard_errors(
             )
 
     guarded_modules = (
+        "native_amx::participant_application_role_tests",
         "kura::tests",
         "sumeragi::authoritative_runtime_gate_tests",
         "sumeragi::serviced_candidate_store::tests",

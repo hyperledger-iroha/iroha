@@ -47,6 +47,14 @@ This is native-ledger qualification; provider storage execution, lease-expiry
 timing, slash/appeal orchestration and production evidence require their own
 tests and deployment runs.
 
+The orderbook and reserve corridors use the same harness with the filters
+`sorafs_orderbook_ledger::` and `sorafs_reserve_ledger::`. They bootstrap provider
+ownership through the production pre-genesis configuration, then submit signed
+native instructions for policy, funding and custody changes. Both check distinct
+transaction races, exact authority failures, balance conservation and matching
+finalized projections after a validator restart. Orderbook partial fills and
+expiry, elapsed rent collection, and hardware signing remain separate coverage.
+
 - IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
 - Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:

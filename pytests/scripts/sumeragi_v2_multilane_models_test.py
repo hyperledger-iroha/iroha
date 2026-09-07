@@ -168,6 +168,62 @@ def canonical_models() -> list[dict]:
     return copy.deepcopy(ledger["models"])
 
 
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    [
+        (None, None, None),
+        (
+            "build_merge_execution_candidate_for_consensus",
+            "if descriptor.validator_set != authoritative",
+            "if false",
+        ),
+        (
+            "build_merge_execution_candidate_for_consensus",
+            "consensus.is_current(self).then_some(selected).flatten()",
+            "selected",
+        ),
+        (
+            "select_merge_execution_candidate_prefix",
+            "candidate.canonical_bytes().len() <= unsigned_limit",
+            "true",
+        ),
+    ],
+    ids=("current", "historical-committee", "final-generation", "whole-candidate-budget"),
+)
+def test_merge_candidate_builder_source_contract(
+    tmp_path: Path, symbol: str | None, old: str | None, new: str | None
+) -> None:
+    """Bind the production candidate builder and reject weakened safety checks."""
+    module = load_checker()
+    relative = "crates/iroha_core/src/state.rs"
+    path = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    model = next(
+        model for model in canonical_models()
+        if model["module"] == "SumeragiV2AutonomousReservationCarrier"
+    )
+    # Exercise the ordinary model validator with just the two reviewed owners.
+    # Other production bindings have their own source/negative-control suites.
+    model["production_symbols"] = [
+        binding for binding in model["production_symbols"]
+        if binding["symbol"] in (
+            "build_merge_execution_candidate_for_consensus",
+            "select_merge_execution_candidate_prefix",
+        )
+    ]
+    assert len(model["production_symbols"]) == 2
+    if symbol is not None:
+        assert old is not None and new is not None
+        replace_once_after(path, f"fn {symbol}(", old, new)
+    errors: list[str] = []
+    module._validate_model(
+        tmp_path, ROOT_DIR / "formal/sumeragi_v2", model, errors
+    )
+    if symbol is None:
+        assert errors == [], errors
+    else:
+        assert any(symbol in error and old in error for error in errors), errors
+
+
 def copy_stable_generation_diagnostics_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:

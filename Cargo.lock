@@ -3205,6 +3205,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -5502,12 +5503,12 @@ dependencies = [
  "futures",
  "hex",
  "http",
- "iroha_config",
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_service_model",
  "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",
@@ -6303,6 +6304,7 @@ dependencies = [
  "iroha_crypto",
  "poseidon-primitives",
  "rand_core 0.6.4",
+ "zeroize",
 ]
 
 [[package]]

@@ -40,25 +40,34 @@ big-endian lowercase hexadecimal values.
 and `TestCheckedInKATInventoryAuthenticatesEveryVector` rejects any path,
 profile ordering, or byte-level drift.
 
-`manifests/constraint-counts-final-v1.json` records the fresh R1CS constraint
-count for every closed profile definition and pairs it with that profile's KAT
-digest. These source-level counts are not substitutes for the R1CS/PK/VK and
-fixed-verifier artifact hashes produced and signed by the circuit-specific
-ceremonies.
+`manifests/constraint-counts-final-v1.json` pairs each closed profile with its
+constraint count and KAT digest. Fresh measurements additionally include the
+canonical gnark `ConstraintSystem.WriteTo` byte length and SHA-256 identity;
+the explicit pending list identifies any historical entries awaiting a new
+measurement. `constraint-count --profile <closed-id>` emits those measurements
+without generating key material or retaining a serialized R1CS output file.
 
-The composable retained-anchor authorization adds exactly 97 constraints to
-each of the four epoch-anchor-update profiles. Their positive public KAT bytes
-are unchanged because the same one-step statements remain valid, but this does
-not make the earlier R1CS compatible. The constraint manifest records the
-canonical gnark `ConstraintSystem.WriteTo` byte length and SHA-256 identity for
-each repaired epoch R1CS, and explicitly invalidates every earlier epoch
-Phase-2 transcript, proving key, verifying key, fixed verifier, and destination
-deployment. Fresh circuit-specific ceremonies and all three independent audits
-remain mandatory before release.
+`definition_source_closure_sha256` detects definition or dependency drift even
+when positive KAT bytes remain unchanged. It hashes the UTF-8 domain
+`sccp:r1cs-definition-source-closure:v1` followed by one zero byte, then sorted
+relative paths for non-test `.go` files under `internal/circuit` and
+`internal/profile`, plus `go.mod`, `go.sum`, `vendor/modules.txt`, and
+`vendor-inventory-final-v1.json`. Each entry contributes its u32-LE path-byte
+length, path bytes, u64-LE file length, and raw SHA-256 file digest. The inventory
+test recomputes this closure and requires remeasurement after a mismatch; the
+offline builder separately verifies every file in the pinned vendor inventory.
+
+The composable retained-anchor and same-height message checkpoint constraints
+invalidate earlier affected R1CS definitions and their dependent artifacts.
+Unchanged positive KAT bytes do not make an earlier R1CS compatible. Fresh
+local measurements do not replace circuit-specific Phase-2 transcripts,
+proving keys, verification keys, fixed verifiers, destination deployments, or
+the three independent audits required by the signed production corridor.
 
 `TestEightProfileKATsAndPublicMutationNegatives` solves each positive circuit
 assignment and requires every single public-signal mutation to fail. The
 epoch suite additionally composes one emitted successor anchor into a second
 authenticated advance and rejects stale, wrong-roster, wrong-boundary, and
-same-height-equivocation substitutions. The source-level semantic
-implementation guard remains false regardless of KAT success.
+same-height-equivocation substitutions. Focused message authorization tests
+check the exact checkpoint block, context, and finality-artifact identity in
+both outer fields. KAT success does not establish production admissibility.

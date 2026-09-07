@@ -2469,25 +2469,30 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 ),
             )
     if lifecycle_selector_source:
-        recovered_fetch_next_selector = _require_rust_item(
+        recovered_fetch_selected_family = _require_rust_item(
             lifecycle_selector_path,
             lifecycle_selector_source,
-            "prepare_next_recovered_decision_fetch_ingress_selector",
+            "prepare_recovered_decision_fetch_from_selected_cut",
             errors,
         )
-        if recovered_fetch_next_selector is not None:
+        if recovered_fetch_selected_family is not None:
             require_order(
                 lifecycle_selector_path,
-                "queue-owned recovered Decision Fetch selector",
-                recovered_fetch_next_selector.source,
+                "queue-owned recovered Decision Fetch selected family",
+                recovered_fetch_selected_family.source,
                 (
-                    "self.lifecycle_terminal_subject()",
-                    "capture_next_lifecycle_queue_cut(",
-                    "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
-                    "self.capture_lifecycle_ingress_selector(cut)",
+                    "let selected_ordinal = cut.selected_identity().physical_admission_ordinal()",
+                    "let selected_request_hash = cut.selector_occurrences()",
+                    "occurrence.physical_admission_ordinal() == selected_ordinal",
+                    "Some(response.request_hash)",
+                    "self.capture_lifecycle_ingress_selector_for_response_family(",
+                    "Some(selected_request_hash)",
                     "prepared.queue_witness.selected_disposition()",
                     "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
                     ".selected_claimed_response_family()",
+                    "family.candidate.recovered()",
+                    "LifecycleIngressSelectorError::CandidateRevalidationDrift",
+                    "Ok(prepared)",
                 ),
             )
         ownership_exact = _require_rust_item(

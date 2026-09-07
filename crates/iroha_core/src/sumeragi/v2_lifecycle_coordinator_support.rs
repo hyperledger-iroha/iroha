@@ -324,6 +324,7 @@ enum SourceId {
     KuraMergeSupport,
     KuraReleaseAuthority,
     LaneWork,
+    LeaderWireConsumer,
     Launch,
     Ledger,
     LifecycleOpen,
@@ -378,6 +379,7 @@ impl SourceId {
             "kura_merge_support" => Self::KuraMergeSupport,
             "kura_release_authority" => Self::KuraReleaseAuthority,
             "lane_work" => Self::LaneWork,
+            "leader_wire_consumer" => Self::LeaderWireConsumer,
             "launch" => Self::Launch,
             "ledger" => Self::Ledger,
             "lifecycle_open" => Self::LifecycleOpen,
@@ -455,6 +457,7 @@ fn source(id: SourceId) -> String {
             include_str!("../kura/autonomous_release_authority.rs").to_owned()
         }
         SourceId::LaneWork => include_str!("v2_lane_work.rs").to_owned(),
+        SourceId::LeaderWireConsumer => include_str!("v2_leader_wire_consumer.rs").to_owned(),
         SourceId::Launch => include_str!("v2_lifecycle_launch.rs").to_owned(),
         SourceId::Ledger => reviewed_lifecycle_ledger_source_for_test().to_owned(),
         SourceId::LifecycleOpen => include_str!("v2_lifecycle_open.rs").replacen(

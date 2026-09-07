@@ -11837,29 +11837,35 @@ pub(crate) mod valid {
             }
             let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
-            let mut fastpq_execution_hashes =
-                Vec::with_capacity(entrypoints.len() + time_hashes.len());
             for (idx, entrypoint) in entrypoints.iter().enumerate() {
                 let execution_hash = entrypoint.execution_call_hash();
                 fastpq_entry_dataspaces.insert(
                     iroha_crypto::Hash::from(execution_hash),
                     routing_decisions[idx].dataspace_id,
                 );
-                fastpq_execution_hashes.push(execution_hash);
             }
             for entry_hash in &time_hashes {
                 fastpq_entry_dataspaces.insert(
                     iroha_crypto::Hash::from(*entry_hash),
                     DataSpaceId::UNIVERSAL,
                 );
-                fastpq_execution_hashes.push(*entry_hash);
             }
             ordered_hashes.append(&mut time_hashes);
             ordered_results.append(&mut time_results);
-            fastpq_execution_hashes.sort_unstable();
-            let tx_set_hash = crate::fastpq::tx_set_hash_from_ordered_hashes(
-                fastpq_execution_hashes.iter().copied(),
-            );
+            let time_entrypoints = time_trgs
+                .iter()
+                .cloned()
+                .map(TransactionEntrypoint::Time)
+                .collect::<Vec<_>>();
+            let tx_set_hash = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                entrypoints.iter().chain(time_entrypoints.iter()),
+            )
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "FASTPQ canonical transaction-wire commitment failed: {error}"
+                ))
+            })?
+            .into();
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
             let fastpq_transcripts =
@@ -15705,7 +15711,7 @@ pub(crate) mod valid {
             }
             let dataspaces_start = timings.as_ref().map(|_| Instant::now());
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
-            let mut fastpq_execution_hashes = block
+            let fastpq_execution_hashes = block
                 .external_entrypoints_slice()
                 .iter()
                 .map(TransactionEntrypoint::execution_call_hash)
@@ -15728,7 +15734,6 @@ pub(crate) mod valid {
                     iroha_crypto::Hash::from(*entry_hash),
                     DataSpaceId::UNIVERSAL,
                 );
-                fastpq_execution_hashes.push(*entry_hash);
             }
             hashes.append(&mut time_trg_hashes);
             ordered_results.append(&mut time_trg_results);
@@ -15736,10 +15741,23 @@ pub(crate) mod valid {
                 timings.execution_tx_finalize_dataspaces_ms = to_ms(start.elapsed());
             }
             let tx_set_start = timings.as_ref().map(|_| Instant::now());
-            fastpq_execution_hashes.sort_unstable();
-            let tx_set_hash = crate::fastpq::tx_set_hash_from_ordered_hashes(
-                fastpq_execution_hashes.iter().copied(),
-            );
+            let time_entrypoints = time_trgs
+                .iter()
+                .cloned()
+                .map(TransactionEntrypoint::Time)
+                .collect::<Vec<_>>();
+            let tx_set_hash = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                block
+                    .external_entrypoints_slice()
+                    .iter()
+                    .chain(time_entrypoints.iter()),
+            )
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "FASTPQ canonical transaction-wire commitment failed: {error}"
+                ))
+            })?
+            .into();
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), tx_set_start) {
@@ -31544,12 +31562,16 @@ seiyaku DynamicTarget {
                 .is_none(),
             "the outer reveal envelope must not replace the signed execution-call identity"
         );
-        let expected_tx_set_hash = crate::fastpq::tx_set_hash_from_ordered_hashes(
-            [HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-                inner_call_hash,
-            )]
-            .into_iter(),
-        );
+        let ordered_entrypoints = valid_reveal
+            .as_ref()
+            .entrypoints_cloned()
+            .collect::<Vec<_>>();
+        let expected_tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                ordered_entrypoints.iter(),
+            )
+            .expect("canonical sealed-reveal transaction set")
+            .into();
         assert_eq!(fastpq_context.tx_set_hash, Some(expected_tx_set_hash));
         assert_eq!(
             reveal_state_block

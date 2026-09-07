@@ -151,6 +151,7 @@ fn exact_small_constraint_aggregates_match_canonical_materialization() {
 
 #[test]
 fn exact_small_constraint_source_closes_shape_and_release_row_counts() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
     assert_eq!(
         ExactSmallCoefficientConstraintSourceV1::new(0, ExactBound::One),
         Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)

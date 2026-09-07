@@ -199,23 +199,6 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--archive-index-digest-hex", ARCHIVE_DIGEST])
         for target in MODULE.REQUIRED_RELEASE_TARGETS:
             args.extend(["--target", target])
-    elif kind == "signed_manifest":
-        args.extend(
-            [
-                "--manifest-digest-hex",
-                MANIFEST_DIGEST,
-                "--public-key-fingerprint-hex",
-                PUBLIC_KEY_DIGEST,
-                "--policy-digest-hex",
-                POLICY_DIGEST,
-                "--signing-provider",
-                "authenticated_external_signer",
-                "--signing-backend",
-                "software",
-                "--signing-provider-revision",
-                "7",
-            ]
-        )
     elif kind == "supply_chain":
         args.extend(
             [
@@ -364,11 +347,15 @@ def test_builds_payload_free_release_archive_canary(tmp_path: Path) -> None:
     assert errors == []
 
 
-def test_generated_canaries_pass_full_reference_sdk_release_gate(
+def test_generated_canaries_cannot_pass_without_authenticated_signed_manifest(
     tmp_path: Path,
 ) -> None:
     evidence_paths: list[Path] = []
     for kind in MODULE.CANARY_KINDS:
+        if kind == "signed_manifest":
+            assert MODULE.main(args_for(kind, tmp_path)) == 2
+            assert not canary_path(tmp_path, kind).exists()
+            continue
         assert MODULE.main(args_for(kind, tmp_path)) == 0
         evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
@@ -410,43 +397,39 @@ def test_generated_canaries_pass_full_reference_sdk_release_gate(
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary)])
 
-    assert CHECKER.main(command) == 0
+    assert CHECKER.main(command) == 1
 
     payload = json.loads(summary.read_text("utf-8"))
-    assert payload["status"] == "ready"
-    assert payload["valid_release_manifest_digests"] == [MANIFEST_DIGEST]
-    assert payload["valid_release_manifest_reference_digests"] == [MANIFEST_DIGEST]
-    assert payload["valid_release_key_fingerprints"] == [PUBLIC_KEY_DIGEST]
-    assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert payload["status"] == "blocked"
+    assert payload["valid_release_manifest_digests"] == []
+    assert payload["valid_release_manifest_reference_digests"] == []
+    assert payload["valid_release_key_fingerprints"] == []
+    assert payload["valid_policy_digests"] == []
     assert payload["valid_provenance_bundle_digests"] == [PROVENANCE_DIGEST]
     assert payload["valid_sbom_index_digests"] == [SBOM_DIGEST]
     assert payload["valid_vulnerability_report_digests"] == [
         VULNERABILITY_DIGEST
     ]
     for kind in MODULE.CANARY_KINDS:
+        if kind == "signed_manifest":
+            assert payload["required"][kind]["artifact_count"] == 0
+            assert payload["required"][kind]["valid"] is False
+            continue
         assert payload["required"][kind]["artifact_count"] == 1
-        assert payload["required"][kind]["artifacts"][0]["valid"] is True
+        assert payload["required"][kind]["artifacts"][0]["valid"] is False
+        assert any("requires a valid signed_manifest" in error for error in payload["required"][kind]["artifacts"][0]["errors"])
 
 
-def test_response_file_can_build_signed_manifest_canary(tmp_path: Path) -> None:
+def test_response_file_cannot_bypass_signed_manifest_source_authentication(tmp_path: Path, capsys) -> None:
     args_file = tmp_path / "signed-manifest.args"
     args_file.write_text(
         "\n".join(args_for("signed_manifest", tmp_path)),
         encoding="utf-8",
     )
 
-    assert MODULE.main([f"@{args_file}"]) == 0
-
-    payload = json.loads(canary_path(tmp_path, "signed_manifest").read_text("utf-8"))
-    assert payload["manifest_digest_hex"] == MANIFEST_DIGEST
-    assert payload["policy_digest_hex"] == POLICY_DIGEST
-    assert payload["private_key_absent"] is True
-    assert payload["signing_provider"] == "authenticated_external_signer"
-    assert payload["signing_backend"] == "software"
-    assert payload["signing_provider_revision"] == 7
-    assert payload["signer_response_verified"] is True
-    assert "hsm_signature_verified" not in payload
-    assert payload["raw_manifest_included"] is False
+    assert MODULE.main([f"@{args_file}"]) == 2
+    assert "independently pinned source context" in capsys.readouterr().err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
 def test_builds_complete_supply_chain_canary(tmp_path: Path) -> None:
@@ -670,9 +653,13 @@ def test_supply_chain_rejects_retired_manual_digest_flags(
 
 
 def test_policy_digest_kind_inventory_matches_generated_payloads(tmp_path: Path) -> None:
-    assert MODULE.POLICY_DIGEST_KINDS == ("signed_manifest", "governance_approval")
+    assert MODULE.POLICY_DIGEST_KINDS == ("governance_approval",)
 
     for kind in MODULE.CANARY_KINDS:
+        if kind == "signed_manifest":
+            assert MODULE.main(args_for(kind, tmp_path)) == 2
+            assert not canary_path(tmp_path, kind).exists()
+            continue
         assert MODULE.main(args_for(kind, tmp_path)) == 0
         payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
         if kind in MODULE.POLICY_DIGEST_KINDS:
@@ -681,17 +668,15 @@ def test_policy_digest_kind_inventory_matches_generated_payloads(tmp_path: Path)
             assert "policy_digest_hex" not in payload
 
 
-def test_signed_manifest_requires_policy_digest_before_write(
+def test_signed_manifest_requires_independent_sources_before_write(
     tmp_path: Path, capsys
 ) -> None:
     args = args_for("signed_manifest", tmp_path)
-    index = args.index("--policy-digest-hex")
-    del args[index : index + 2]
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--policy-digest-hex is required for signed_manifest" in captured.err
+    assert "independently pinned source context" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
@@ -705,7 +690,7 @@ def test_signed_manifest_rejects_unsupported_signature_algorithm_before_write(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--signature-algorithm must be `ed25519`" in captured.err
+    assert "unrecognized arguments: --signature-algorithm none" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
@@ -716,31 +701,29 @@ def test_signed_manifest_rejects_legacy_or_unapproved_provider_before_write(
     provider: str,
 ) -> None:
     args = args_for("signed_manifest", tmp_path)
-    index = args.index("--signing-provider")
-    args[index + 1] = provider
+    args.extend(["--signing-provider", provider])
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
     assert (
-        "--signing-provider must be `authenticated_external_signer`"
+        "unrecognized arguments: --signing-provider"
         in captured.err
     )
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
-def test_signed_manifest_rejects_non_software_backend_before_write(
+def test_signed_manifest_rejects_caller_asserted_hardware_backend_before_write(
     tmp_path: Path,
     capsys,
 ) -> None:
     args = args_for("signed_manifest", tmp_path)
-    index = args.index("--signing-backend")
-    args[index + 1] = "hsm"
+    args.extend(["--signing-backend", "hsm"])
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--signing-backend must be `software`" in captured.err
+    assert "unrecognized arguments: --signing-backend hsm" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
@@ -754,13 +737,12 @@ def test_signed_manifest_rejects_zero_policy_or_key_binding_before_write(
     option: str,
 ) -> None:
     args = args_for("signed_manifest", tmp_path)
-    index = args.index(option)
-    args[index + 1] = "0" * 64
+    args.extend([option, "0" * 64])
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert f"{option} must not be zero" in captured.err
+    assert "signed_manifest policy/key claims are retired" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
@@ -769,13 +751,12 @@ def test_signed_manifest_rejects_nonpositive_provider_revision_before_write(
     capsys,
 ) -> None:
     args = args_for("signed_manifest", tmp_path)
-    index = args.index("--signing-provider-revision")
-    args[index + 1] = "0"
+    args.extend(["--signing-provider-revision", "0"])
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "argument --signing-provider-revision: must be positive" in captured.err
+    assert "unrecognized arguments: --signing-provider-revision 0" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
@@ -837,7 +818,7 @@ def test_signed_manifest_canary_rejects_rsa_sha256_signature_algorithm(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--signature-algorithm must be `ed25519`" in captured.err
+    assert "unrecognized arguments: --signature-algorithm rsa-sha256" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 

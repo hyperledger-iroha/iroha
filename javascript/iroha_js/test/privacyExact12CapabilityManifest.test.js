@@ -196,8 +196,8 @@ function qualificationPayload() {
     deployment_qualification: {
       version: 1,
       chain_id: "fixture-chain",
-      network_id: "fixture-network",
-      genesis_hash: Array(32).fill(0xd1),
+      network_id: TEST_LOCAL_SIGNING_CONTEXT.networkId.literal,
+      genesis_hash: Array.from(TEST_LOCAL_SIGNING_CONTEXT.networkId.toBytes()),
       release_manifest_digest: [...releaseDigest],
       activation_transaction_digest: Array(32).fill(0xd2),
       activations: PRIVACY_PROTOCOL_IDS_V1.map((protocolId) => ({
@@ -288,6 +288,28 @@ function sameBytes(left, right) {
   return Buffer.from(left).equals(Buffer.from(right));
 }
 
+
+const TEST_MANIFEST_URL = "https://privacy.example.test/v1/privacy/capabilities";
+function manifestResponse(body = ARCHIVE, init = {}, metadata = {}) {
+  const response = new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/x-norito" },
+    ...init,
+  });
+  return {
+    body: response.body, headers: response.headers, status: response.status,
+    statusText: response.statusText,
+    url: metadata.url ?? TEST_MANIFEST_URL,
+    redirected: metadata.redirected ?? false,
+  };
+}
+async function fetchTestManifest() {
+  return getPrivacyExact12CapabilityManifestV1(new ToriiClient("https://privacy.example.test", {
+    localSigningContext: TEST_LOCAL_SIGNING_CONTEXT,
+    fetchImpl: async () => manifestResponse(),
+  }), { canonicalAuth: TEST_CANONICAL_AUTH });
+}
+
 function fakeNative(payload = manifestPayload(), overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion: () => 23,
@@ -300,8 +322,9 @@ function fakeNative(payload = manifestPayload(), overrides = {}) {
       if (!sameBytes(bytes, ARCHIVE)) throw new Error("noncanonical archive");
       return JSON.stringify(payload);
     },
-    privacyRequireExact12CapabilityTupleV1: (bytes, protocolId) => {
-      if (!sameBytes(bytes, ARCHIVE) || protocolId !== ACTIVE_PROTOCOL) {
+    privacyRequireExact12CapabilityTupleV1: (bytes, protocolId, expectedNetworkId) => {
+      if (!sameBytes(bytes, ARCHIVE) || protocolId !== ACTIVE_PROTOCOL
+          || !sameBytes(expectedNetworkId, TEST_LOCAL_SIGNING_CONTEXT.networkId.toBytes())) {
         throw new Error("tuple mismatch");
       }
       return true;
@@ -427,9 +450,11 @@ test("canonical decoder preserves immutable bytes and the closed Exact12 mapping
   });
 });
 
-test("full Exact12 evidence alone derives production readiness and native admission", async () => {
-  await withNative(fakeNative(qualifiedManifestPayload()), () => {
-    const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+test("only authenticated transport grants admission; archived qualified evidence remains inspection-only", async () => {
+  await withNative(fakeNative(qualifiedManifestPayload()), async () => {
+    const archived = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+    assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(archived, ACTIVE_PROTOCOL), /authenticated Torii-origin/u);
+    const manifest = await fetchTestManifest();
     assert.equal(Object.isFrozen(manifest.qualification), true);
     assert.equal(Object.isFrozen(manifest.qualification.release_manifest), true);
     assert.deepEqual(manifest.protocols[1].readiness, {
@@ -442,6 +467,10 @@ test("full Exact12 evidence alone derives production readiness and native admiss
     );
     assert.equal(admission.readiness, "production-qualified");
     assert.equal(admission.protocol_id, ACTIVE_PROTOCOL);
+    assert.deepEqual(admission.network_id, Array.from(TEST_LOCAL_SIGNING_CONTEXT.networkId.toBytes()));
+    assert.equal(admission.torii_origin, "https://privacy.example.test");
+    const replayedArchive = decodePrivacyExact12CapabilityManifestV1(manifest.canonicalBytes());
+    assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(replayedArchive, ACTIVE_PROTOCOL), /authenticated Torii-origin/u);
   });
 });
 
@@ -461,8 +490,8 @@ test("qualification tuple drift derives unavailable and never reaches native adm
       admissionCalls += 1;
       return true;
     },
-  }), () => {
-    const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+  }), async () => {
+    const manifest = await fetchTestManifest();
     assert.deepEqual(manifest.protocols[1].readiness, payload.protocols[1].readiness);
     assert.throws(
       () => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL),
@@ -588,8 +617,8 @@ test("admission rejects active rows without registered production qualification"
       nativeAdmissionCalls += 1;
       return true;
     },
-  }), () => {
-    const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+  }), async () => {
+    const manifest = await fetchTestManifest();
     assert.throws(
       () => requirePrivacyExact12CapabilityAdmissionV1(
         manifest,
@@ -629,7 +658,7 @@ test("legacy snapshot exports and caller-created shells are rejected", async () 
       () => requirePrivacyExact12CapabilityAdmissionV1({
         manifest_digest: Array(32).fill(0xa5),
       }, ACTIVE_PROTOCOL),
-      /native-validated/u,
+      /authenticated Torii-origin/u,
     );
   });
 });
@@ -641,10 +670,7 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
       localSigningContext: TEST_LOCAL_SIGNING_CONTEXT,
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
-        return new Response(ARCHIVE, {
-          status: 200,
-          headers: { "content-type": "application/x-norito" },
-        });
+        return manifestResponse();
       },
     });
     const manifest = await getPrivacyExact12CapabilityManifestV1(node, {
@@ -655,10 +681,12 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
     assert.equal(calls[0].url, "https://privacy.example.test/v1/privacy/capabilities");
     assert.equal(new Headers(calls[0].init.headers).get("accept"), "application/x-norito");
     assert.equal(calls[0].init.redirect, "error");
+    assert.equal(calls[0].init.cache, "no-store");
+    assert.equal(new Headers(calls[0].init.headers).get("cache-control"), "no-store");
 
     const legacyJsonNode = new ToriiClient("https://privacy.example.test", {
       localSigningContext: TEST_LOCAL_SIGNING_CONTEXT,
-      fetchImpl: async () => new Response(JSON.stringify({
+      fetchImpl: async () => manifestResponse(JSON.stringify({
         version: 1,
         committed_height: 42,
         consensus_policy: consensusPolicy(),
@@ -687,5 +715,101 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
       /browser and mock transports cannot authorize privacy/u,
     );
     assert.equal(browserCalls, 0);
+  });
+});
+
+
+test("forged symbol transports, other-network archives and insecure response origins reject", async () => {
+  await withNative(fakeNative(qualifiedManifestPayload()), async () => {
+    let forgedCalls = 0;
+    const forged = {};
+    for (const key of Object.getOwnPropertySymbols(ToriiClient.prototype)) {
+      forged[key] = async () => { forgedCalls += 1; return ARCHIVE; };
+    }
+    await assert.rejects(getPrivacyExact12CapabilityManifestV1(forged, { canonicalAuth: TEST_CANONICAL_AUTH }), /N-API Torii client/u);
+    assert.equal(forgedCalls, 0);
+    for (const [baseUrl, context, metadata, error] of [
+      ["http://privacy.example.test", TEST_LOCAL_SIGNING_CONTEXT, {}, /HTTPS/u],
+      ["https://privacy.example.test", undefined, {}, /NetworkId|networkId/u],
+      ["https://privacy.example.test", new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xd1))), {}, /different network/u],
+      ["https://privacy.example.test", TEST_LOCAL_SIGNING_CONTEXT, {url: "https://other.example.test/v1/privacy/capabilities"}, /exact authenticated URL/u],
+      ["https://privacy.example.test", TEST_LOCAL_SIGNING_CONTEXT, {redirected: true}, /exact authenticated URL/u],
+    ]) {
+      const client = new ToriiClient(baseUrl, {localSigningContext: context, fetchImpl: async () => manifestResponse(ARCHIVE, {}, metadata)});
+      await assert.rejects(getPrivacyExact12CapabilityManifestV1(client, {canonicalAuth: TEST_CANONICAL_AUTH}), error);
+    }
+  });
+});
+
+
+test("transport origin never substitutes for native tuple or network validation", async () => {
+  for (const result of [false, "true", null]) {
+    await withNative(fakeNative(qualifiedManifestPayload(), {
+      privacyRequireExact12CapabilityTupleV1: () => result,
+    }), async () => {
+      const manifest = await fetchTestManifest();
+      assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL), /sole success value/u);
+    });
+  }
+  await withNative(fakeNative(qualifiedManifestPayload(), {
+    privacyRequireExact12CapabilityTupleV1: () => { throw new Error("native network or tuple mismatch"); },
+  }), async () => {
+    const manifest = await fetchTestManifest();
+    assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL), /native/u);
+  });
+});
+
+test("unreadable transport origin is rejected without invoking getters and cancels its body", async () => {
+  await withNative(fakeNative(), async () => {
+    let getterCalls = 0;
+    let cancellations = 0;
+    const response = manifestResponse();
+    response.body = new ReadableStream({ cancel() { cancellations += 1; } });
+    Object.defineProperty(response, "url", {
+      get() { getterCalls += 1; throw new Error("untrusted origin getter"); },
+    });
+    const client = new ToriiClient("https://privacy.example.test", {
+      localSigningContext: TEST_LOCAL_SIGNING_CONTEXT,
+      fetchImpl: async () => response,
+    });
+    await assert.rejects(getPrivacyExact12CapabilityManifestV1(client, {
+      canonicalAuth: TEST_CANONICAL_AUTH,
+    }), /URL must be an own data property/u);
+    assert.equal(getterCalls, 0);
+    assert.equal(cancellations, 1);
+  });
+});
+
+test("Exact12 transport ignores mutable client and static normalization overrides", async () => {
+  await withNative(fakeNative(qualifiedManifestPayload()), async () => {
+    let fetchCalls = 0;
+    let overrideCalls = 0;
+    const client = new ToriiClient("https://privacy.example.test", {
+      localSigningContext: TEST_LOCAL_SIGNING_CONTEXT,
+      fetchImpl: async (_url, init) => {
+        fetchCalls += 1;
+        assert.ok(Object.keys(init.headers).some((name) => name.toLowerCase() === "x-iroha-signature"));
+        return manifestResponse();
+      },
+    });
+    const failOverride = () => { overrideCalls += 1; throw new Error("mutable client override reached"); };
+    for (const name of ["_request", "_createHeaders", "_expectStatus", "_getHeader", "_readBoundedResponseBytes"]) {
+      client[name] = failOverride;
+    }
+    const originalAuth = ToriiClient._normalizeCanonicalAuth;
+    const originalKey = ToriiClient._normalizePrivateKey;
+    ToriiClient._normalizeCanonicalAuth = failOverride;
+    ToriiClient._normalizePrivateKey = failOverride;
+    try {
+      const manifest = await getPrivacyExact12CapabilityManifestV1(client, {
+        canonicalAuth: TEST_CANONICAL_AUTH,
+      });
+      requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL);
+      assert.equal(fetchCalls, 1);
+      assert.equal(overrideCalls, 0);
+    } finally {
+      ToriiClient._normalizeCanonicalAuth = originalAuth;
+      ToriiClient._normalizePrivateKey = originalKey;
+    }
   });
 });

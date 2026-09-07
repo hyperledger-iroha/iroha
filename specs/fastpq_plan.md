@@ -352,10 +352,38 @@ required before the arithmetic result can be treated as release evidence.
 | `old_root`       | 32    | canonical hash bytes                  | Transfer touched-balance pre-root; external context for opaque AXT. |
 | `new_root`       | 32    | canonical hash bytes                  | Transfer touched-balance post-root; external context for opaque AXT. |
 | `perm_root`      | 32    | opaque commitment bytes               | Authenticated context only; permission membership is not proven in V1. |
-| `tx_set_hash`    | 32    | BLAKE2b                               | Sorted instruction identifiers.     |
+| `tx_set_hash`    | 32    | canonical `iroha_crypto::Hash` bytes   | Exact ordered canonical transaction-entrypoint wires via `axt_ordered_transaction_set_digest_v1`. |
 | `parameter`      | var   | UTF-8 (`fastpq-state-transition-stark-v1`) | Sole V1 parameter set name.         |
 | `protocol_version` | 2   | little-endian u16                     | The sole V1 protocol discriminator. |
 | `ordering_hash`  | 32    | domain-separated BLAKE2b-256          | Stable hash of sorted rows.         |
+
+The canonical transaction-set preimage is
+`b"iroha:axt:ordered-transaction-wire-set:v1\0" || count_u64_le ||
+(length_u64_le || entrypoint_wire_v1)*`, in actual external-entrypoint order
+followed by time-trigger order. Each complete fixed-V1 Norito wire retains all
+authorization proofs. The shared data-model helper streams BLAKE2b-256 through
+`iroha_crypto::Hash`, including its canonical final-byte marker; this ledger
+commitment is distinct from native six-lane STARK digests. The canonical helper
+checks 256 MiB of cumulative wire bytes (the consensus executed block ceiling)
+with a bounded counting pass before streaming the hash. The anchored verifier
+separately admits at most 65,536 witness entries; that proof resource limit does
+not restrict ordinary canonical block hashing.
+No sorting, per-execution-hash substitution, or transcript-derived fallback is
+accepted by the finalized-anchor verifier.
+
+`verify_axt_proof_envelope_against_anchor_v1` requires the exact independently
+resolved `AxtFinalizedSpendAnchorV1`, ordered transaction wires and non-zero
+expiry. It checks wire-set equality, exactly one occurrence of the source
+execution identity (derived from each complete entrypoint, including sealed
+reveals), and exact pre/post root, dataspace, DA and public set commitments before
+proof replay. The per-execution `source_tx_commitment` remains distinct from
+the complete set digest. The verifier admits witnessed transfer claims only.
+Its supplied anchor is not authority by itself: Core must authenticate finality,
+network/lane/incarnation, successful source execution and exact transfer facts,
+issuer signatures and durable nonce consumption. Current bundle-local transfer
+SMT roots do not establish equality with finalized WSV roots; the new boundary
+rejects such a mismatch. Rooted WSV witness integration and runtime anchored-spend
+admission remain release blockers.
 
 Generic deletion and absent-key/non-membership proofs are not implemented in
 the release profile.
@@ -414,6 +442,84 @@ and outer-payload limits, and measured final-artifact resource bounds.
   - Telemetry exported for queue depth, queue wait time, prover execution latency, retry counts, backend failure counts, and GPU/CPU utilisation, with dashboards and alert thresholds for each metric.
 
 ## Stage 5 — GPU Acceleration & Optimisation
+
+The current final-V1 proof implementation executes on CPU. Its Merkle-level
+builder has a separately testable explicit device path, while preprocessing,
+trace/LDE/AIR/FRI leaves, transcript, IFFT and LDE remain CPU operations in the
+proof pipeline. Explicit GPU execution or Poseidon requests return
+`NativeV1GpuUnavailable` before statement
+or witness preprocessing. Automatic proof selection resolves and reports CPU;
+it does not infer proof capability from the presence of a device. Core startup
+uses `preflight_native_v1_gpu_backend`, which remains false. The separately
+exposed scalar permutation/FFT microbenchmarks and their preflights cannot
+qualify native-V1 proof execution.
+
+Local admission regressions pass for all nine execution/Poseidon mode pairs,
+rejection before statement and backend preprocessing, CPU-only observer events,
+and exact CPU/automatic proof byte equality. The regression compiled with
+`dev-tools,fastpq-gpu` also rejects explicit proof-GPU admission even though the
+scalar kernels ship. Device execution requires separate validation; these
+checks do not provide GPU parity or release-performance qualification.
+
+`GoldilocksDigest384FrameV1` is the shared allocation-free borrowed framing
+owner. Construction checks the final 32-bit field/count limits, `word_count()`
+includes terminal-one and even-rate padding, and `write_lane_words` requires an
+exact output length before mutation. Its lane-zero KAT has 58 words, lane index
+at word 49, and SHA3-256
+`acaf7b7d927aab8e24da3a9f8ea8bd502abf2ba858e17fe92eddc42dbe7a9532`.
+The independent `scripts/check_goldilocks_digest384_reference.py` reproduces
+all six digest words and the complete generated parameter asset using Python
+SHAKE256 and integer modular arithmetic.
+
+The `fastpq-gpu` primitive API `try_hash_digest384_frames_v1` now explicitly
+selects Metal or CUDA and accepts only these prepared frames. A dispatch is
+bounded to 65,536 frames and 4,194,304 cumulative words (32 MiB); these are
+hardware resource limits, not alternate protocol framing. Dedicated kernels
+run six threads per message using generated lane-specific IVs and all 65
+round-constant rows, substitute only the typed lane-word position, and preserve
+seven-byte packing, exact field lengths, and terminal-one framing. They do not
+use the older scalar permutation's constant set. Each backend must pass a
+fixed public six-lane KAT before receiving requested payloads; readiness,
+noncanonical-output, and execution failures quarantine further primitive
+requests before staging. No CPU substitution occurs. New host staging is
+zeroized; completed Metal backing pages and CUDA pinned/device regions are
+wiped before reuse. Uncertain completion retains the exact device-visible
+allocations in a quarantined owner rather than wiping memory still in use.
+
+The new Metal shader compiled and executed on Apple M1 Ultra: 12 boundary-size
+frames / 72 lane words matched the independent Python reference. This is local
+primitive conformance evidence. CUDA compilation and device parity remain
+unverified in this environment. Neither kernel presence nor this scoped Metal
+result enables the full GPU proof path. Ten host staging/readiness/quarantine
+and cleanup regressions pass, including failure in a later dispatch partition
+and rejection before any subsequent payload staging.
+
+The shared `digest_executor.rs` now bounds pair-frame preparation to 1,024
+pairs and partitions hardware dispatch by both frame and word ceilings. The
+backend's Merkle-level builder uses it for every role, including FRI round
+counters, preserving absolute node indices across chunks and duplicating an
+odd final child exactly as before. The preprocessing trace-commitment tree
+uses the same pair-frame owner with CPU execution. Explicit device failures
+propagate without computing a replacement CPU root. This does not activate
+the full-proof GPU constructor. Current-source local checks pass three executor
+boundary/order tests, injected tree-failure rejection, five preprocessing and
+manual-commitment checks, and six proof admission/CPU-auto parity checks. A
+required actual Metal test compares every level and root across all tree roles,
+FRI rounds 0 and 7, empty/single/odd leaf shapes, and two-frame test-only
+dispatch limits; the local run passed in 2.63 seconds. These are scoped
+conformance tests, not release throughput measurements or CUDA evidence.
+The unchanged `v1_raw_transcript_64.bin` also verifies and regenerates byte for
+byte under the same CPU source (96.32-second local replay); its explicit raw
+fixture budget remains separate from production admission.
+
+The next integration boundary is to route named-column/row/FRI leaf batches
+through this executor, then integrate FFT/LDE, FRI folding and transcript
+operations. Closure requires actual
+CPU/Metal/CUDA digest and complete proof byte parity, runtime cleanup/failure
+coverage, and release performance measurements. No complete hardware
+qualification is supplied by the CPU fixture replay, this primitive slice,
+or the earlier scalar kernel captures below.
+
 - Target kernels: LDE (NTT), Poseidon hashing, Merkle tree construction, FRI folding.
 - Determinism: disable fast-math, ensure bit-identical outputs across CPU, CUDA, Metal. CI must compare proof roots across devices.
 - Benchmark suite comparing CPU vs GPU on reference hardware (e.g., Nvidia A100, AMD MI210).
@@ -421,9 +527,9 @@ and outer-payload limits, and measured final-artifact resource bounds.
   event or stream completion handling—including, but not limited to, a timeout—quarantines the
   backend for the process lifetime and deliberately abandons resources whose ownership is
   uncertain. Subsequent operations therefore cannot accumulate or free device buffers that may
-  still be in flight. Direct CUDA calls return an error; the proof hashing layer records the
-  dispatch failure and uses its deterministic CPU fallback. Mandatory-GPU startup preflight
-  remains a separate fail-closed gate.【crates/fastpq_prover/cuda/fastpq_cuda.cu:22】【crates/fastpq_prover/cuda/fastpq_cuda.cu:42】【crates/fastpq_prover/src/trace.rs:1252】
+  still be in flight. Direct CUDA calls return an error; standalone scalar diagnostic helpers
+  may choose their documented CPU path. Native-V1 GPU proof admission remains closed until
+  the complete pipeline and fail-closed dispatch are implemented.【crates/fastpq_prover/cuda/fastpq_cuda.cu:22】【crates/fastpq_prover/cuda/fastpq_cuda.cu:42】
 - Metal backend (Apple Silicon):
   - Build script compiles the kernel suite (`metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon.metal`, `metal/kernels/bn254.metal`) into `fastpq.metallib` via `xcrun metal`/`xcrun metallib`; install and select full Xcode (standalone Command Line Tools are insufficient). The build probes the optional MetalToolchain but never installs components or clears system caches; missing tools warn and select runtime source compilation.【crates/fastpq_prover/build.rs:30】【crates/fastpq_prover/build.rs:107】
   - Manual rebuild (mirrors `build.rs`) for CI warm-ups or deterministic packaging:

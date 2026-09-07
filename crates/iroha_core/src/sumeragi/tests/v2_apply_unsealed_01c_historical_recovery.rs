@@ -1460,5 +1460,16 @@ v2_apply_test!(
             SumeragiAutonomousLaneExecutionStage::QueueFinalized,
         );
         assert_eq!(terminal_row, finalized_row);
+        crate::sumeragi::v2_lane_work::tests::inspect_applied_public_lane_qc_replay_for_test(
+            Arc::clone(&fixture.state),
+            Arc::clone(&fixture.kura),
+            startup_context,
+            limits,
+            iroha_data_model::block::consensus::LaneBlockCertificateV1 {
+                proposal: execution.proposal.clone(),
+                prepare_qc: execution.prepare_qc.clone(),
+                commit_qc: execution.commit_qc.clone(),
+            },
+        );
     }
 );

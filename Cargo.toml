@@ -166,6 +166,7 @@ rustc-hash = "2.1.1"
 json5 = "1.0.0"
 toml = "0.9.8"
 zstd = "0.13.3"
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
 
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }

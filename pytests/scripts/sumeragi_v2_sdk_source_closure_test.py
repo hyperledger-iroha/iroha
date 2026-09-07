@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 1_474
+    assert len(grouped_record_lines) == 872
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 1_476
+    assert len(diagnostics_records.stdout.splitlines()) == 875
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -939,11 +939,9 @@ def _sdk_dependency_fixture(
         "zipStoreBase=GRADLE_USER_HOME\n"
         "zipStorePath=wrapper/dists\n"
     ).encode()
-    for wrapper in (
-        repository / "kotlin/gradle/wrapper/gradle-wrapper.properties",
-    ):
-        wrapper.parent.mkdir(parents=True)
-        wrapper.write_bytes(wrapper_bytes)
+    wrapper = repository / "kotlin/gradle/wrapper/gradle-wrapper.properties"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_bytes(wrapper_bytes)
     distribution = external / "gradle-9.3.0-bin.zip"
     with zipfile.ZipFile(distribution, "w") as archive:
         archive.writestr("gradle-9.3.0/bin/gradle", b"#!/bin/sh\n")
@@ -991,9 +989,6 @@ def _sdk_dependency_fixture(
             "distribution_url": helper.SDK_GRADLE_DISTRIBUTION_URL,
             "gradle_user_home": str(gradle_home),
             "gradle_user_home_inventory": source_inventory(gradle_home),
-            "java_wrapper_properties_sha256": hashlib.sha256(
-                wrapper_bytes
-            ).hexdigest(),
             "kotlin_wrapper_properties_sha256": hashlib.sha256(
                 wrapper_bytes
             ).hexdigest(),
@@ -1093,6 +1088,11 @@ def test_sdk_dependency_bundle_withholds_paths_and_uses_new_inodes(
     assert stat.S_IMODE(archived_openapi_node.stat().st_mode) == 0o400
     assert inventory["bindings"]["openapi_node"]["node_modules_archive_name"] \
         == "openapi/node_modules"
+    kotlin_wrapper = output / "sdk-inputs/gradle/kotlin-gradle-wrapper.properties"
+    assert inventory["bindings"]["gradle"]["wrapper_properties_sha256"] == {
+        "kotlin": hashlib.sha256(kotlin_wrapper.read_bytes()).hexdigest(),
+    }
+    assert not (output / "sdk-inputs/gradle/java-gradle-wrapper.properties").exists()
 
     archived_swift = output / "sdk-inputs/swiftpm/cache/checkouts/example/.git/HEAD"
     working_swift = output / "sdk-work/swiftpm/checkouts/example/.git/HEAD"
@@ -1142,6 +1142,35 @@ def test_sdk_dependency_bundle_withholds_paths_and_uses_new_inodes(
         )
     helper.cleanup_sdk_command_work(output / "sdk-inputs", command_work)
     assert not command_work.exists()
+
+
+@pytest.mark.parametrize("mutation", ("obsolete_java_wrapper", "missing_kotlin_wrapper"))
+def test_sdk_dependency_source_requires_only_canonical_kotlin_wrapper(
+    tmp_path: Path, mutation: str,
+) -> None:
+    helper, arguments, _, output = _sdk_dependency_fixture(tmp_path)
+    manifest_path = arguments[0]
+    assert isinstance(manifest_path, Path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "obsolete_java_wrapper":
+        document["gradle"]["java_wrapper_properties_sha256"] = document["gradle"][
+            "kotlin_wrapper_properties_sha256"
+        ]
+    else:
+        del document["gradle"]["kotlin_wrapper_properties_sha256"]
+    manifest_path.chmod(0o600)
+    manifest_path.write_bytes(helper._canonical_payload(document))
+    manifest_path.chmod(0o400)
+    rebound = (
+        manifest_path,
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        *arguments[2:],
+    )
+    with pytest.raises(
+        helper.CacheCopyError, match="SDK dependency source sections are not exact",
+    ):
+        helper.copy_sdk_dependencies(*rebound)
+    assert not (output / "sdk-dependency-bundle.tar").exists()
 
 
 def test_sdk_dependency_bundle_rejects_hardlinked_inputs(tmp_path: Path) -> None:

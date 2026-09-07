@@ -154,7 +154,7 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '"write_sumeragi_v2_release_receipt_gate_evidence.py": (',
-            "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440",
+            "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de",
             '_SDK_SOURCE_CLOSURE_RESOLVER = "ci/'
             'resolve_sumeragi_v2_sdk_source_closure.py"',
             '_SDK_SOURCE_CLOSURE_MANIFEST = "ci/'
@@ -287,7 +287,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "SumeragiV2WireFixtureTests'",
             "observed_test_count=50",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=48",
+            "observed_test_count=59",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests",
         ),
     ),
@@ -317,7 +317,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         (
             '("swift", 34)',
             '("kotlin", 50)',
-            '("java", 48)',
+            '("java", 59)',
         ),
     ),
     (
@@ -328,7 +328,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "native-amx-rust-fixture-check command 0",
             "regenerate Native AMX Rust fixture authority twice into disjoint "
             "private roots and byte-authenticate both outputs",
-            "for sdk_diagnostics_test_count in 129 88 34 44 43; do",
+            "for sdk_diagnostics_test_count in 129 88 34 50 59; do",
             "SumeragiV2WireFixtureTest",
         ),
     ),

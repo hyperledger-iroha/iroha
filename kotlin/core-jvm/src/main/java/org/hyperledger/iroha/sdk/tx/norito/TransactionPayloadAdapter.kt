@@ -45,6 +45,17 @@ internal class TransactionPayloadAdapter private constructor(
 
     override fun encode(encoder: NoritoEncoder, value: TransactionPayload) {
         withChainContext(chainDiscriminant) {
+            when (val executable = value.executable) {
+                is Executable.Instructions -> executable.instructions.forEach {
+                    it.requirePrivacyExact12Network(value.networkId)
+                }
+                is Executable.Batch -> executable.entries.forEach {
+                    if (it is ExecutableBatchItem.Instruction) {
+                        it.instruction.requirePrivacyExact12Network(value.networkId)
+                    }
+                }
+                is Executable.Ivm, is Executable.ContractCall -> Unit
+            }
             require(!value.executable.requiresTransactionGasLimit() || value.feePayment.gasLimit != null) {
                 "feePayment.gasLimit is required for IVM and contract-call executables"
             }

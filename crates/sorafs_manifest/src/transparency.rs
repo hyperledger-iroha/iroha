@@ -1730,7 +1730,8 @@ fn hash_node(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 fn hash_norito<T: Encode>(domain: &[u8], value: &T) -> Result<[u8; 32], TransparencyLedgerError> {
-    let bytes = norito::to_bytes(value).map_err(|_| TransparencyLedgerError::CanonicalEncode)?;
+    let bytes =
+        norito::encode_canonical(value).map_err(|_| TransparencyLedgerError::CanonicalEncode)?;
     let mut hasher = Hasher::new();
     hasher.update(domain);
     hasher.update(&bytes);
@@ -2044,6 +2045,113 @@ mod tests {
                 key: "issuer".to_string(),
                 value: "gateway-a".to_string(),
             }],
+        }
+    }
+    #[test]
+    fn transparency_publication_hashes_and_signature_ignore_enclosing_layout() {
+        use crate::governance::{
+            GOVERNANCE_LOG_VERSION_V1, GovernanceExternalPayloadV1, GovernanceLogNodeV1,
+            GovernanceLogPayloadV1, GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
+        };
+        use ed25519_dalek::{Signer as _, SigningKey};
+
+        let entries = vec![entry(0x22, 2), entry(0x11, 1), entry(0x33, 3)];
+        let publication = ModerationLedgerCyclePublicationV1::from_entries(
+            cycle_id(),
+            1_767_225_600,
+            1_767_830_400,
+            1_767_830_401,
+            None,
+            &entries,
+        )
+        .unwrap();
+        let bytes = norito::encode_canonical(&publication).unwrap();
+        let publication_hash = publication.publication_hash().unwrap();
+        let block_hash = publication.block.block_hash().unwrap();
+        let entry_hash = entries[0].entry_hash().unwrap();
+        let mut expected = Hasher::new();
+        expected.update(PUBLICATION_HASH_DOMAIN_V1);
+        expected.update(&bytes);
+        assert_eq!(publication_hash, *expected.finalize().as_bytes());
+
+        let external =
+            GovernanceExternalPayloadV1::from_transparency_ledger_publication(&publication, &bytes)
+                .unwrap();
+        let key = SigningKey::from_bytes(&[0x68; 32]);
+        let mut node = GovernanceLogNodeV1 {
+            version: GOVERNANCE_LOG_VERSION_V1,
+            node_cid: Vec::new(),
+            prev_cid: None,
+            timestamp: 1_767_830_402,
+            publisher_peer_id: b"transparency-fixture-publisher".to_vec(),
+            submission_provenance: None,
+            payload: GovernanceLogPayloadV1::ExternalPayload(external),
+            publisher_signature: GovernanceLogSignatureV1 {
+                algorithm: GovernanceSignatureAlgorithm::Ed25519,
+                public_key: key.verifying_key().to_bytes().to_vec(),
+                signature: vec![1; 64],
+            },
+        };
+        node.node_cid = node.recompute_node_cid().unwrap();
+        let signing_payload = node.signature_payload_bytes().unwrap();
+        node.publisher_signature.signature = key.sign(&signing_payload).to_bytes().to_vec();
+        let aggregate = privacy_aggregate();
+        let aggregate_hash = aggregate.aggregate_hash().unwrap();
+        let issuance = proof_token_issuance();
+        let issuance_hash = issuance.issuance_hash().unwrap();
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _context = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(entries[0].entry_hash().unwrap(), entry_hash);
+            assert_eq!(publication.block.block_hash().unwrap(), block_hash);
+            assert_eq!(publication.publication_hash().unwrap(), publication_hash);
+            assert_eq!(aggregate.aggregate_hash().unwrap(), aggregate_hash);
+            assert_eq!(issuance.issuance_hash().unwrap(), issuance_hash);
+            let rebuilt = ModerationLedgerCyclePublicationV1::from_entries(
+                cycle_id(),
+                1_767_225_600,
+                1_767_830_400,
+                1_767_830_401,
+                None,
+                &entries,
+            )
+            .unwrap();
+            assert_eq!(rebuilt, publication);
+            publication.validate().unwrap();
+            for proof in &publication.proofs {
+                proof.verify_against_block(&publication.block).unwrap();
+            }
+            node.validate()
+                .expect("canonical embedded publication and CID");
+            assert_eq!(node.recompute_node_cid().unwrap(), node.node_cid);
+            assert_eq!(node.signature_payload_bytes().unwrap(), signing_payload);
+            node.verify_publisher_signature()
+                .expect("actual publisher signature over the same publication");
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+    }
+    #[test]
+    fn transparency_entry_proof_rejects_noncanonical_hash_preimage() {
+        let entries = vec![entry(0x11, 1)];
+        let mut proof = ModerationLedgerProofV1::build(cycle_id(), &entries, [0x11; 16]).unwrap();
+        let alternate = {
+            let _context = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&proof.entry).unwrap()
+        };
+        assert_eq!(
+            norito::decode_from_bytes::<ModerationLedgerEntryV1>(&alternate).unwrap(),
+            proof.entry
+        );
+        assert_ne!(alternate, norito::encode_canonical(&proof.entry).unwrap());
+        let mut hasher = Hasher::new();
+        hasher.update(ENTRY_HASH_DOMAIN_V1);
+        hasher.update(&alternate);
+        proof.entry_hash = *hasher.finalize().as_bytes();
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _context = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                proof.validate(),
+                Err(TransparencyLedgerError::ProofEntryHashMismatch)
+            );
         }
     }
     #[test]

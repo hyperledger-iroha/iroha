@@ -69,6 +69,64 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
     )
     .expect("reopen authenticated FIFO WAL")
 }
+/// Reopen a worker fixture through the canonical authenticated LockAndCommit WAL.
+pub(in crate::sumeragi) fn worker_view_adapter_with_replayed_commit(
+    wal_path: PathBuf,
+    verified: VerifiedHeightContext,
+    local_validator: wire::ValidatorIndex,
+    generation: reducer::Generation,
+    consensus_key_hash: [u8; 32],
+    fingerprints: AdapterFingerprints,
+    locked_commit: (wire::QuorumCertificate, wire::Vote),
+) -> SumeragiV2Adapter {
+    let (mut adapter, startup) = SumeragiV2Adapter::open(
+        wal_path.clone(),
+        verified.clone(),
+        Some(local_validator),
+        generation,
+        consensus_key_hash,
+        fingerprints,
+        DeferredAdmissionOrdinalSource::new(0),
+    )
+    .expect("open worker lock fixture WAL");
+    assert!(startup.is_empty());
+    assert!(adapter.wal.recovered_records().is_empty());
+    let (prepare, vote) = locked_commit;
+    let payload = WalEnvelopeV2 {
+        protocol_version: wire::PROTOCOL_VERSION,
+        persistence_id: 1,
+        record: WalRecordV2::LockAndCommit {
+            prepare,
+            vote: vote.clone(),
+        },
+    }
+    .encode();
+    let receipt = adapter
+        .wal
+        .append(&payload)
+        .expect("fsync the exact worker lock and CommitIntent");
+    assert_eq!(receipt.sequence(), 0);
+    drop(adapter);
+    let (adapter, startup) = SumeragiV2Adapter::open(
+        wal_path,
+        verified,
+        Some(local_validator),
+        generation,
+        consensus_key_hash,
+        fingerprints,
+        DeferredAdmissionOrdinalSource::new(0),
+    )
+    .expect("authenticate and replay the exact worker lock and CommitIntent");
+    assert!(matches!(
+        startup.as_slice(),
+        [AdapterEffect::Sign { request: SignRequest::Vote(replayed), .. }]
+            if replayed == &vote
+    ));
+    let durable = adapter.reducer.durable_state();
+    let locked = durable.locked().expect("replay retains the exact lock");
+    assert!(durable.commit_intent_for_lock(locked).is_some());
+    adapter
+}
 fn take_current_sign(effects: &mut Vec<AdapterEffect>) -> AdapterEffect {
     let signs = effects
         .iter()

@@ -1,4 +1,161 @@
 #[test]
+fn recovered_proposal_batch_is_idempotent_and_replaces_uncertified_slot_at_capacity() {
+    let (_keys, validators) = lane_block_validator_fixture(4);
+    let canonical = lane_block_proposal_at_height(&validators, 13);
+    let conflicting = retag_lane_block_proposal_payload(canonical.clone(), 0xA0);
+    let mut cache = LaneBlockSessionCache::new(1);
+    cache
+        .insert_proposal(conflicting.clone())
+        .expect("fill the one recovery slot");
+    cache
+        .insert_recovered_proposals(&[canonical.clone(), canonical.clone()])
+        .expect("the unique canonical replacement fits at capacity");
+    assert_eq!(cache.len(), 1);
+    assert!(cache.contains_proposal(&canonical));
+    assert!(!cache.contains_proposal(&conflicting));
+    let exact = cache.clone();
+    cache
+        .insert_recovered_proposals(&[canonical.clone(), canonical])
+        .expect("duplicate recovery consumes no additional slot");
+    assert_eq!(cache, exact);
+}
+
+#[test]
+fn recovered_proposal_batch_preserves_required_history_and_commit_evidence() {
+    let (keys, validators) = lane_block_validator_fixture(4);
+    let protected = lane_block_proposal_at_height(&validators, 15);
+    let historical = lane_block_proposal_at_height(&validators, 13);
+    let unrelated = lane_block_proposal_at_height(&validators, 14);
+    let recovered = lane_block_proposal_at_height(&validators, 16);
+    let mut cache = LaneBlockSessionCache::new(2);
+    cache
+        .insert_proposal(protected.clone())
+        .expect("install protected proposal");
+    for phase in [CertPhase::Prepare, CertPhase::Commit] {
+        let body = protected.vote_body(phase);
+        let votes = keys[..3]
+            .iter()
+            .map(|key| signed_vote(&body, key))
+            .collect::<Vec<_>>();
+        let qc = aggregate_lane_block_votes_to_qc(body, validators.clone(), &votes)
+            .expect("exact three-of-four quorum");
+        cache
+            .insert_qc_with_pops(qc, &signer_pops(&keys))
+            .expect("retain verified quorum");
+    }
+    cache
+        .insert_proposal(historical.clone())
+        .expect("retain oldest required history");
+    cache
+        .insert_proposal(unrelated.clone())
+        .expect("fill ordinary capacity with speculative work");
+    let protected_session = cache
+        .get(&LaneBlockSessionKey::from_proposal(&protected))
+        .cloned();
+    let signer_locks = cache.commit_vote_locks.clone();
+    cache
+        .insert_recovered_proposals(&[recovered.clone(), historical.clone()])
+        .expect("required history and new canonical input fit independently of Commit evidence");
+    assert_eq!(
+        cache.len(),
+        3,
+        "two ordinary required sources plus protected Commit evidence"
+    );
+    assert!(cache.contains_proposal(&historical));
+    assert!(cache.contains_proposal(&recovered));
+    assert!(!cache.contains_proposal(&unrelated));
+    assert_eq!(
+        cache
+            .get(&LaneBlockSessionKey::from_proposal(&protected))
+            .cloned(),
+        protected_session
+    );
+    assert_eq!(cache.commit_vote_locks, signer_locks);
+    let exact = cache.clone();
+    cache
+        .insert_recovered_proposals(&[recovered, historical])
+        .expect("the same required batch retains its exact recency order");
+    assert_eq!(cache, exact);
+}
+
+#[test]
+fn recovered_proposal_batch_preflights_later_quorum_before_any_eviction() {
+    let (keys, validators) = lane_block_validator_fixture(4);
+    let earlier = lane_block_proposal_at_height(&validators, 13);
+    let certified = lane_block_proposal_at_height(&validators, 15);
+    let conflicting = retag_lane_block_proposal_payload(certified.clone(), 0xA1);
+    let unrelated = lane_block_proposal_at_height(&validators, 16);
+    for with_proposal in [false, true] {
+        for with_commit in [false, true] {
+            let mut cache = LaneBlockSessionCache::new(2);
+            if with_proposal {
+                cache
+                    .insert_proposal(certified.clone())
+                    .expect("install optional quorum proposal shell");
+            }
+            for phase in [CertPhase::Prepare, CertPhase::Commit] {
+                if phase == CertPhase::Commit && !with_commit {
+                    break;
+                }
+                let body = certified.vote_body(phase);
+                let votes = keys[..3]
+                    .iter()
+                    .map(|key| signed_vote(&body, key))
+                    .collect::<Vec<_>>();
+                let qc = aggregate_lane_block_votes_to_qc(body, validators.clone(), &votes)
+                    .expect("exact three-of-four quorum");
+                cache
+                    .insert_qc_with_pops(qc, &signer_pops(&keys))
+                    .expect("retain verified original quorum");
+            }
+            cache
+                .insert_proposal(unrelated.clone())
+                .expect("make the quorum the oldest retained session");
+            let original = cache.clone();
+            assert_eq!(
+                cache.insert_recovered_proposals(&[earlier.clone(), conflicting.clone()]),
+                Err(LaneBlockSessionError::ConflictingProposal),
+                "preflight must see the later slot's original quorum before an earlier insertion can evict its Prepare-only evidence"
+            );
+            assert_eq!(
+                cache, original,
+                "rejected recovery must publish no partial cache or signer-lock changes"
+            );
+        }
+    }
+}
+
+#[test]
+fn recovered_proposal_batch_rejects_required_union_over_capacity() {
+    let (_keys, validators) = lane_block_validator_fixture(4);
+    let first = lane_block_proposal_at_height(&validators, 13);
+    let second = lane_block_proposal_at_height(&validators, 14);
+    let mut cache = LaneBlockSessionCache::new(1);
+    cache
+        .insert_proposal(first.clone())
+        .expect("retain existing canonical source");
+    let original = cache.clone();
+    assert_eq!(
+        cache.insert_recovered_proposals(&[first.clone(), second.clone()]),
+        Err(LaneBlockSessionError::RecoveryCapacityExceeded)
+    );
+    assert_eq!(cache, original);
+    let mut invalid = second;
+    invalid.descriptor.descriptor_hash = Hash::new(b"invalid recovery descriptor");
+    assert!(matches!(
+        cache.insert_recovered_proposals(&[first.clone(), invalid]),
+        Err(LaneBlockSessionError::InvalidProposal(_))
+    ));
+    assert_eq!(cache, original);
+    let conflict = retag_lane_block_proposal_payload(first.clone(), 0xA2);
+    assert_eq!(
+        cache.insert_recovered_proposals(&[first, conflict]),
+        Err(LaneBlockSessionError::ConflictingProposal)
+    );
+    assert_eq!(cache, original);
+}
+
+#[test]
 fn lane_block_session_capacity_and_pruning_preserve_commit_locks() {
     let keys = [
         checked_bls_keypair(1),

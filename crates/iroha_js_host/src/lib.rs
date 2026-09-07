@@ -11277,11 +11277,14 @@ pub fn privacy_exact12_capability_manifest_json_v1(archive: Uint8Array) -> napi:
     json::to_json(&manifest).map_err(norito_to_napi)
 }
 #[napi(js_name = "privacyRequireExact12CapabilityTupleV1")]
-/// Require active committed admission and exact equality with this binary's local profile row.
+/// Require active committed admission, the authenticated transport's expected network,
+/// and exact equality with this binary's local profile row.
 pub fn privacy_require_exact12_capability_tuple_v1(
     archive: Uint8Array,
     protocol_id: String,
+    expected_network_id: Uint8Array,
 ) -> napi::Result<bool> {
+    let expected_network_id = parse_transaction_network_id_bytes(expected_network_id.as_ref())?;
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(&protocol_id).ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -11289,6 +11292,17 @@ pub fn privacy_require_exact12_capability_tuple_v1(
         )
     })?;
     let manifest = decode_privacy_exact12_capability_manifest_v1(archive.as_ref())?;
+    let qualification = manifest.qualification.as_ref().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "Exact12 admission requires target-network production qualification",
+        )
+    })?;
+    require_privacy_exact12_network_v1(
+        &qualification.deployment_qualification.network_id,
+        &qualification.deployment_qualification.genesis_hash,
+        &expected_network_id,
+    )?;
     let network_row = manifest
         .protocols
         .iter()
@@ -11329,6 +11343,20 @@ pub fn privacy_require_exact12_capability_tuple_v1(
         ));
     }
     Ok(true)
+}
+
+fn require_privacy_exact12_network_v1(
+    actual: &NetworkId,
+    genesis_hash: &[u8; Hash::LENGTH],
+    expected: &NetworkId,
+) -> napi::Result<()> {
+    if actual != expected || genesis_hash != expected.as_bytes() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "Exact12 deployment qualification does not match the authenticated Torii network",
+        ));
+    }
+    Ok(())
 }
 /// Result of signing a transaction via the native helper.
 #[napi(object)]
@@ -13751,6 +13779,7 @@ seiyaku Privacy {
             privacy_require_exact12_capability_tuple_v1(
                 Uint8Array::from(archive.clone()),
                 active_protocol.canonical_label().to_owned(),
+                test_network_id_bytes(b"privacy-exact12-network"),
             )
             .is_err()
         );
@@ -13760,6 +13789,7 @@ seiyaku Privacy {
                 PrivacyProtocolIdV1::IrohaZkAmsV1
                     .canonical_label()
                     .to_owned(),
+                test_network_id_bytes(b"privacy-exact12-network"),
             )
             .is_err(),
             "local compilation without committed Active state must not authorize"
@@ -13773,6 +13803,7 @@ seiyaku Privacy {
                 privacy_require_exact12_capability_tuple_v1(
                     Uint8Array::from(archive.clone()),
                     retired.to_owned(),
+                    test_network_id_bytes(b"privacy-exact12-network"),
                 )
                 .is_err(),
                 "accepted retired or aliased protocol {retired}"
@@ -13784,6 +13815,21 @@ seiyaku Privacy {
             privacy_validate_exact12_capability_manifest_v1(Uint8Array::from(suffixed)),
             iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
         );
+    }
+    #[test]
+    fn privacy_exact12_admission_binds_expected_network_and_genesis() {
+        let expected = test_network_id(b"privacy-exact12-network");
+        let other = test_network_id(b"privacy-exact12-other-network");
+        assert!(
+            require_privacy_exact12_network_v1(&expected, expected.as_bytes(), &expected).is_ok()
+        );
+        assert!(
+            require_privacy_exact12_network_v1(&other, expected.as_bytes(), &expected).is_err()
+        );
+        assert!(
+            require_privacy_exact12_network_v1(&expected, other.as_bytes(), &expected).is_err()
+        );
+        assert!(require_privacy_exact12_network_v1(&other, other.as_bytes(), &expected).is_err());
     }
     fn disable_packed_struct_once() {
         static ONCE: std::sync::Once = std::sync::Once::new();
@@ -17556,7 +17602,8 @@ seiyaku Privacy {
                 .expect_err("noncanonical signed transaction must fail closed");
             assert_eq!(error.status, napi::Status::InvalidArg, "{label}");
             let public_error = encode_signed_transaction_versioned(Uint8Array::from(rejected))
-                .expect_err("public canonical V1 validator must reject noncanonical bytes");
+                .err()
+                .expect("public canonical V1 validator must reject noncanonical bytes");
             assert_eq!(public_error.status, napi::Status::InvalidArg, "{label}");
         }
     }
@@ -17748,7 +17795,7 @@ seiyaku Privacy {
             norito_json!({
                 "DeactivateContractInstance": norito_json!({
                     "contract_address": contract_address.to_string(),
-                    "reason": null,
+                    "reason": Value::Null,
                 }),
             }),
         ] {

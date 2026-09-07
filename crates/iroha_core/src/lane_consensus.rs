@@ -2802,6 +2802,9 @@ pub(crate) enum LaneBlockSessionError {
     /// a different QC already exists for the same proposal phase
     #[error("conflicting lane block QC")]
     ConflictingQc,
+    /// the complete required recovery set cannot fit the ordinary cache bound
+    #[error("required lane recovery proposals exceed session capacity")]
+    RecoveryCapacityExceeded,
 }
 /// Bounded in-memory cache for standalone lane-block consensus sessions.
 ///
@@ -3961,6 +3964,71 @@ impl LaneBlockSessionCache {
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
         self.insert_trusted_proposal_replacing_uncommitted_conflict(proposal)
     }
+    /// Install a complete, bounded set of canonical recovery proposals atomically.
+    ///
+    /// Every replacement is checked against the original quorum evidence before
+    /// insertion can evict an unrelated PrepareQC. Required existing sessions
+    /// become recent before missing sessions are inserted, so ordinary eviction
+    /// cannot discard a required historical source. Unrelated live Commit
+    /// evidence keeps its independent eviction protection and does not consume
+    /// required-set capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing the cache if a proposal is invalid,
+    /// conflicts with a retained quorum, or the required set exceeds capacity.
+    pub(crate) fn insert_recovered_proposals(
+        &mut self,
+        proposals: &[LaneBlockProposalV1],
+    ) -> Result<(), LaneBlockSessionError> {
+        let mut required = BTreeMap::new();
+        let mut required_slots = BTreeMap::new();
+        let mut ordered_required = Vec::new();
+        for proposal in proposals {
+            self.preflight_trusted_proposal_replacement(proposal)?;
+            let key = LaneBlockSessionKey::from_proposal(proposal);
+            let slot = LaneBlockSlotKey::from_session_key(key);
+            match required.insert(key, proposal) {
+                Some(previous) if previous != proposal => {
+                    return Err(LaneBlockSessionError::ConflictingProposal);
+                }
+                Some(_) => {}
+                None => ordered_required.push(proposal),
+            }
+            if required_slots
+                .insert(slot, key.proposal_hash)
+                .is_some_and(|previous| previous != key.proposal_hash)
+            {
+                return Err(LaneBlockSessionError::ConflictingProposal);
+            }
+            if required.len() > self.capacity {
+                return Err(LaneBlockSessionError::RecoveryCapacityExceeded);
+            }
+        }
+        let mut next = self.clone();
+        for proposal in &ordered_required {
+            let key = LaneBlockSessionKey::from_proposal(proposal);
+            if next.sessions.contains_key(&key) {
+                next.touch(key);
+            }
+        }
+        for proposal in ordered_required {
+            next.insert_trusted_proposal_replacing_uncommitted_conflict(proposal.clone())?;
+            // Exact duplicates return before touching the single-item cache.
+            // Normalize the complete batch's recency in caller order as well.
+            next.touch(LaneBlockSessionKey::from_proposal(proposal));
+        }
+        if required.iter().any(|(key, proposal)| {
+            next.sessions
+                .get(key)
+                .and_then(|session| session.proposal.as_ref())
+                != Some(*proposal)
+        }) {
+            return Err(LaneBlockSessionError::RecoveryCapacityExceeded);
+        }
+        *self = next;
+        Ok(())
+    }
     /// Replace losing local proposal work before the global body is locked.
     ///
     /// This has the same quorum-preserving conflict rule as durable recovery,
@@ -3978,7 +4046,7 @@ impl LaneBlockSessionCache {
         &mut self,
         proposal: LaneBlockProposalV1,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
-        validate_lane_block_proposal(&proposal).map_err(LaneBlockSessionError::InvalidProposal)?;
+        self.preflight_trusted_proposal_replacement(&proposal)?;
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let slot_key = LaneBlockSlotKey::from_session_key(key);
         if let Some(existing) = self
@@ -4001,22 +4069,35 @@ impl LaneBlockSessionCache {
         if let Some(existing_hash) = self.slot_proposals.get(&slot_key).copied()
             && existing_hash != key.proposal_hash
         {
-            let existing_key = LaneBlockSessionKey {
-                lane_id: key.lane_id,
-                dataspace_id: key.dataspace_id,
-                lane_incarnation: key.lane_incarnation,
-                lane_block_height: key.lane_block_height,
-                lane_block_view: key.lane_block_view,
-                proposal_hash: existing_hash,
-            };
-            if let Some(existing_session) = self.sessions.get(&existing_key)
-                && session_has_quorum_certificate(existing_session)
-            {
-                return Err(LaneBlockSessionError::ConflictingProposal);
-            }
             self.remove_slot_conflict(slot_key, existing_hash);
         }
         self.insert_proposal(proposal)
+    }
+    fn preflight_trusted_proposal_replacement(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        validate_lane_block_proposal(proposal).map_err(LaneBlockSessionError::InvalidProposal)?;
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        let first = LaneBlockSessionKey {
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            ..key
+        };
+        let last = LaneBlockSessionKey {
+            proposal_hash: Hash::prehashed([u8::MAX; Hash::LENGTH]),
+            ..key
+        };
+        if self
+            .sessions
+            .range(first..=last)
+            .any(|(retained_key, session)| {
+                retained_key.proposal_hash != key.proposal_hash
+                    && session_has_quorum_certificate(session)
+            })
+        {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+        Ok(())
     }
     /// Insert a standalone lane-block vote.
     pub(crate) fn insert_vote(

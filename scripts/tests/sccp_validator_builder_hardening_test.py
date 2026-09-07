@@ -11,8 +11,11 @@ import io
 import json
 import os
 import re
+import shlex
+import shutil
 import stat
 import struct
+import subprocess
 import sys
 import tarfile
 import textwrap
@@ -29,6 +32,252 @@ import sccp_validator_builder as builder
 import sccp_validator_builder_driver as driver
 
 SOURCE_DATE_EPOCH = 1_700_000_000
+
+
+@pytest.mark.parametrize(
+    "slot", ("gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program")
+)
+def test_source_signature_checks_bind_every_detected_format_to_the_pinned_verifier(
+    slot: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit = "7" * 40
+    fingerprint = "0123456789abcdef"
+    policy = {
+        "source": {
+            "commit": commit,
+            "commit_signer_fingerprint": fingerprint,
+            "source_date_epoch": SOURCE_DATE_EPOCH,
+        }
+    }
+    commands = []
+
+    def git_command(git, arguments, **kwargs):
+        commands.append(arguments)
+        if "--show-toplevel" in arguments:
+            return os.fspath(ROOT).encode() + b"\n"
+        if "rev-parse" in arguments:
+            return commit.encode() + b"\n"
+        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
+            return f"G\0{fingerprint}\0{fingerprint}\0\n".encode()
+        if "--format=%ct" in arguments:
+            # Stop after both signature checks; no archive or helper is executed.
+            return b"0\n"
+        return b""
+
+    monkeypatch.setattr(builder, "_git_command", git_command)
+    monkeypatch.setattr(
+        builder, "_isolated_source_environment", lambda *args: builder._closed_environment(),
+    )
+    with pytest.raises(builder.ValidatorBuilderError, match="commit time"):
+        builder._verify_source_and_archive(
+            Path("/approved/git"),
+            Path("/approved/verifier"),
+            policy,
+            tmp_path / "source.tar",
+        )
+    signature_checks = [
+        arguments for arguments in commands
+        if "verify-commit" in arguments or "--format=%G?%x00%GF%x00%GP%x00" in arguments
+    ]
+    assert len(signature_checks) == 2
+    for arguments in signature_checks:
+        assert f"{slot}=/approved/verifier" in arguments
+
+
+def _fixture_git(git: Path, root: Path, *arguments: str, payload: bytes | None = None) -> bytes:
+    """Operate only on a disposable repository with no ambient Git configuration."""
+
+    result = subprocess.run(
+        [os.fspath(git), "-C", os.fspath(root), *arguments],
+        input=payload,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=builder._closed_environment(),
+        check=True,
+    )
+    return result.stdout
+
+
+@pytest.fixture
+def isolated_source_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, dict[str, Any]]:
+    """Create synthetic source objects without using a signing key or real index."""
+
+    executable = shutil.which("git")
+    if executable is None:
+        pytest.skip("Git is required for disposable source isolation regressions")
+    git = Path(executable).resolve()
+    source = (tmp_path / "source").resolve()
+    source.mkdir(mode=0o700)
+    _fixture_git(git, source, "init", "--template=")
+    for name, content in {
+        ".gitattributes": (
+            "tracked-filter.txt filter=tracked\n"
+            "trusted-substitution.txt export-subst\n"
+        ),
+        "tracked.txt": "original tracked source\n",
+        "tracked-filter.txt": "tracked attributes cannot select a local helper\n",
+        "omitted.txt": "this signed source must be archived\n",
+        "substitution.txt": "$Format:%H$\n",
+        "trusted-substitution.txt": "$Format:%G?$\n",
+    }.items():
+        (source / name).write_text(content, encoding="utf-8")
+    _fixture_git(git, source, "add", "--all")
+    _fixture_git(git, source, "update-index", "--add", "--cacheinfo", "160000", "1" * 40, "vendor")
+    tree = _fixture_git(git, source, "write-tree").decode().strip()
+    commit_bytes = (
+        f"tree {tree}\n"
+        f"author Fixture <fixture@example.invalid> {SOURCE_DATE_EPOCH} +0000\n"
+        f"committer Fixture <fixture@example.invalid> {SOURCE_DATE_EPOCH} +0000\n"
+        "\nDisposable source isolation fixture\n"
+    ).encode("ascii")
+    commit = _fixture_git(
+        git, source, "hash-object", "-t", "commit", "-w", "--stdin", payload=commit_bytes,
+    ).decode().strip()
+    _fixture_git(git, source, "update-ref", "HEAD", commit)
+    # A child repository is outside the archived source closure. Its hostile
+    # configuration must not be loaded by the original worktree status check.
+    child = source / "vendor"
+    child.mkdir(mode=0o700)
+    _fixture_git(git, child, "init", "--template=")
+    (child / ".git" / "config").write_text(
+        "[core]\nrepositoryformatversion = 999\n", encoding="ascii",
+    )
+    monkeypatch.setattr(builder, "ROOT", source)
+    return git, source, {
+        "source": {
+            "commit": commit,
+            "commit_signer_fingerprint": "0123456789abcdef",
+            "source_date_epoch": SOURCE_DATE_EPOCH,
+            "secret_scan_exceptions": [],
+        },
+        "limits": {
+            "max_inventory_files": 32,
+            "max_file_bytes": 64 * 1024,
+            "max_total_bytes": 1024 * 1024,
+        },
+    }
+
+
+@pytest.mark.parametrize("attribute_source", ("info", "configured"))
+def test_isolated_source_archive_ignores_ambient_attributes_and_filters(
+    attribute_source: str,
+    isolated_source_fixture: tuple[Path, Path, dict[str, Any]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    git, source, policy = isolated_source_fixture
+    marker = tmp_path / "ambient-helper-ran"
+    attributes = (
+        source / ".git" / "info" / "attributes"
+        if attribute_source == "info" else tmp_path / "ambient-attributes"
+    )
+    attributes.parent.mkdir(parents=True, exist_ok=True)
+    attributes.write_text(
+        "tracked.txt filter=ambient\nomitted.txt export-ignore\nsubstitution.txt export-subst\n",
+        encoding="utf-8",
+    )
+    if attribute_source == "configured":
+        _fixture_git(git, source, "config", "core.attributesFile", os.fspath(attributes))
+    helper = f"printf invoked >> {shlex.quote(os.fspath(marker))}; cat"
+    for name in ("ambient", "tracked"):
+        for direction in ("clean", "smudge"):
+            _fixture_git(git, source, "config", f"filter.{name}.{direction}", helper)
+        _fixture_git(git, source, "config", f"filter.{name}.required", "true")
+
+    # Positive control: these exact local attributes can run a host helper and
+    # omit signed files when the original metadata is used for archival.
+    ambient = _fixture_git(
+        git, source, "archive", "--format=tar", policy["source"]["commit"],
+    )
+    assert marker.read_bytes()
+    with tarfile.open(fileobj=io.BytesIO(ambient)) as archive:
+        assert "omitted.txt" not in archive.getnames()
+        assert archive.extractfile("substitution.txt").read() != (source / "substitution.txt").read_bytes()
+    marker.unlink()
+
+    # Force a status refresh, so skipping clean filters cannot be explained by
+    # Git accepting the existing index stat cache without checking the worktree.
+    tracked = source / "tracked-filter.txt"
+    metadata = tracked.stat()
+    os.utime(tracked, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000))
+    index = source / ".git" / "index"
+    index_before = (index.read_bytes(), index.stat().st_mtime_ns)
+    real_git_command = builder._git_command
+    real_popen = subprocess.Popen
+    archives: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fixture_signature(git_path, arguments, **kwargs):
+        if "verify-commit" in arguments:
+            return b""
+        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
+            fingerprint = policy["source"]["commit_signer_fingerprint"]
+            return f"G\0{fingerprint}\0{fingerprint}\0\n".encode()
+        return real_git_command(git_path, arguments, **kwargs)
+
+    def observe_archive(arguments, **kwargs):
+        if "archive" in arguments:
+            archives.append((list(arguments), kwargs))
+        return real_popen(arguments, **kwargs)
+
+    monkeypatch.setattr(builder, "_git_command", fixture_signature)
+    monkeypatch.setattr(builder.subprocess, "Popen", observe_archive)
+    output = tmp_path / "output"
+    output.mkdir(mode=0o700)
+    archive_path = output / "source.tar"
+    digest, size = builder._verify_source_and_archive(
+        git, Path("/approved/verifier"), policy, archive_path,
+    )
+    payload = archive_path.read_bytes()
+    assert digest == hashlib.sha256(payload).hexdigest()
+    assert size == len(payload)
+    assert not marker.exists()
+    assert (index.read_bytes(), index.stat().st_mtime_ns) == index_before
+    with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+        for path in source.iterdir():
+            if path.is_file():
+                expected = b"N\n" if path.name == "trusted-substitution.txt" else path.read_bytes()
+                assert archive.extractfile("source/" + path.name).read() == expected
+        assert "source/" + builder.SOURCE_TREE_INVENTORY in archive.getnames()
+    assert len(archives) == 1
+    arguments, options = archives[0]
+    for slot in ("gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program"):
+        assert f"{slot}=/approved/verifier" in arguments
+    assert "gpg.format=openpgp" in arguments
+    assert Path(options["env"]["GIT_DIR"]) != source / ".git"
+    assert options["env"]["GIT_ATTR_NOSYSTEM"] == "1"
+    assert options["env"]["GIT_OPTIONAL_LOCKS"] == "0"
+    assert "GIT_INDEX_FILE" not in options["env"]
+    assert "GIT_WORK_TREE" not in options["env"]
+
+
+@pytest.mark.parametrize("change", ("worktree", "staged", "untracked", "gitlink"))
+def test_isolated_source_status_detects_changes_without_writing_original_index(
+    change: str,
+    isolated_source_fixture: tuple[Path, Path, dict[str, Any]],
+    tmp_path: Path,
+) -> None:
+    git, source, policy = isolated_source_fixture
+    if change == "untracked":
+        (source / "untracked.txt").write_text("new file\n", encoding="utf-8")
+    elif change == "gitlink":
+        _fixture_git(git, source, "update-index", "--cacheinfo", "160000", "2" * 40, "vendor")
+    else:
+        (source / "tracked.txt").write_text("modified source\n", encoding="utf-8")
+        if change == "staged":
+            _fixture_git(git, source, "add", "tracked.txt")
+    index = source / ".git" / "index"
+    index_before = (index.read_bytes(), index.stat().st_mtime_ns)
+    output = tmp_path / "output"
+    output.mkdir(mode=0o700)
+
+    with pytest.raises(builder.ValidatorBuilderError, match="completely clean source tree"):
+        builder._verify_source_and_archive(
+            git, Path("/approved/verifier"), policy, output / "source.tar",
+        )
+    assert (index.read_bytes(), index.stat().st_mtime_ns) == index_before
+    assert not (output / "source.tar").exists()
 
 
 def _executable_identity(path: Path) -> tuple[int, ...]:

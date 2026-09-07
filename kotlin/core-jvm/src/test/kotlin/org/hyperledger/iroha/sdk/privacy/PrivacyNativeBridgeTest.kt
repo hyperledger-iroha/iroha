@@ -250,6 +250,19 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
+    fun capabilityValidatorRejectsLocalBuildMetadataThroughNativeAbi23() {
+        assertTrue(PrivacyNativeBridge.isNativeAvailable(), "current native Exact12 exports are required")
+        val localCatalog = PrivacyNativeBridge.compiledProfileCatalogV1()
+        assertNotEquals(
+            PrivacyNativeBridge.Exact12CapabilityManifestValidationStatusV1.VALID,
+            PrivacyNativeBridge.validateExact12CapabilityManifestV1(localCatalog),
+        )
+        assertFailsWith<IllegalStateException> {
+            PrivacyNativeBridge.requireExact12CapabilityManifest(localCatalog)
+        }
+    }
+
+    @Test
     fun exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
         assertEquals(
             PrivacyNativeBridge.Exact12FixtureValidationStatusV1.NULL_POINTER,

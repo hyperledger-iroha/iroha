@@ -1079,6 +1079,12 @@ function parseSumeragiNativeAmxLeg(value, context) {
   ) {
     throw new TypeError(`${context} participant settlement differs from its signed body`);
   }
+  // Keep the validated terminal settlement bound to its checked commitment.
+  participantSettlement.receipts.forEach(Object.freeze);
+  Object.freeze(participantSettlement.receipts);
+  Object.freeze(participantSettlement.nexus_fee_receipts);
+  Object.freeze(participantSettlement.native_amx_receipts);
+  Object.freeze(participantSettlement);
   return Object.freeze({
     lane_id: laneId,
     dataspace_id: dataspaceId,
@@ -1258,7 +1264,7 @@ function parseLaneSettlementCommitments(payload) {
           ["Tier1", "Tier2", "Tier3"],
           `status.lane_settlement_commitments[${index}].swap_metadata.liquidity_profile`,
         ),
-        twap_local_per_xor: requireNonEmptyString(
+        twap_local_per_xor: requireCanonicalNumeric(
           metadata.twap_local_per_xor,
           `status.lane_settlement_commitments[${index}].swap_metadata.twap_local_per_xor`,
         ),
@@ -3851,6 +3857,26 @@ function requireCanonicalQuantity(value, name) {
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
       `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+      name,
+    );
+  }
+}
+
+function requireCanonicalNumeric(value, name) {
+  if (typeof value !== "string" || value.length > 156) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a bounded canonical Numeric string`,
+      name,
+    );
+  }
+  try {
+    return NumericV1.decodeDecimalJson(value).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a canonical signed Numeric (${error.code})`,
       name,
     );
   }

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -242,6 +243,18 @@ class NativeAmxV2GroupedFixtureTest {
                 }
             }
         }
+        val context = NativeAmxV2.parseReceiptGroup(canonical)
+            .receipts.first().legs.first().prepareQc.body.round.contextId
+        val heights = listOf(BigInteger.ONE) + accepted
+        val views = listOf(BigInteger.ZERO) + accepted
+        heights.forEach { height ->
+            views.forEach { view ->
+                val round = NativeAmxV2.Round(context, height, view)
+                assertEquals(height, round.height)
+                assertEquals(view, round.view)
+                assertEquals(round, NativeAmxV2.Round(context, height, view))
+            }
+        }
     }
 
     @Test
@@ -266,6 +279,20 @@ class NativeAmxV2GroupedFixtureTest {
                 NativeAmxV2.parseReceiptGroup(wire)
             }
         }
+        val context = NativeAmxV2.parseReceiptGroup(canonical)
+            .receipts.first().legs.first().prepareQc.body.round.contextId
+        val outOfRange = listOf(BigInteger.valueOf(-1), BigInteger.ONE.shiftLeft(64))
+        val invalidHeights = listOf(BigInteger.ZERO) + outOfRange
+        invalidHeights.forEach { height ->
+            assertFailsWith<IllegalArgumentException>("direct round height $height") {
+                NativeAmxV2.Round(context, height, BigInteger.ZERO)
+            }
+        }
+        outOfRange.forEach { view ->
+            assertFailsWith<IllegalArgumentException>("direct round view $view") {
+                NativeAmxV2.Round(context, BigInteger.ONE, view)
+            }
+        }
     }
 
     @Test
@@ -282,6 +309,76 @@ class NativeAmxV2GroupedFixtureTest {
 
         assertFailsWith<IllegalArgumentException> {
             NativeAmxV2.parseReceiptGroup(wire)
+        }
+    }
+
+    @Test
+    fun `receipt group requires canonical swap metadata and bounded quantities`() {
+        val group = fixture().objectValue("golden").objectValue("receipt_group")
+        val metadata = Json.parseToJsonElement(
+            """{"epsilon_bps":65535,"twap_window_seconds":4294967295,"liquidity_profile":{"profile":"Tier2","state":null},"twap_local_per_xor":"1.25","volatility_class":{"bucket":"Elevated","state":null}}""",
+        ).jsonObject
+        val limit = BigInteger.ONE.shiftLeft(511)
+        val maximum = limit.subtract(BigInteger.ONE).toString()
+        val minimumMagnitude = limit.toString()
+        for (numeric in listOf(
+            "0", "1.25", "-1.25", maximum, "-$minimumMagnitude",
+            maximum.dropLast(28) + "." + maximum.takeLast(28),
+            "-" + minimumMagnitude.dropLast(28) + "." + minimumMagnitude.takeLast(28),
+        )) {
+            val wire = JsonObject(
+                group + ("swap_metadata" to JsonObject(
+                    metadata + ("twap_local_per_xor" to JsonPrimitive(numeric)),
+                )),
+            )
+            val parsed = NativeAmxV2.parseReceiptGroup(wire.toString())
+            assertEquals(2, parsed.receipts.size, numeric)
+        }
+        for (quantity in listOf("0", maximum, maximum.dropLast(28) + "." + maximum.takeLast(28))) {
+            val wire = JsonObject(group + ("total_local_amount" to JsonPrimitive(quantity)))
+            assertEquals(2, NativeAmxV2.parseReceiptGroup(wire.toString()).receipts.size)
+        }
+        val invalidNumerics = listOf(
+            "null", "true", "1", "1.25", "{}",
+        ).map(Json::parseToJsonElement) + listOf(
+            "", " ", " 1", "1 ", "+1", "01", "-0", "1.0", "1.", ".5", "1e3",
+            "NaN", "Infinity", "١", "1".repeat(157),
+            "0.00000000000000000000000000001", limit.toString(),
+            limit.negate().subtract(BigInteger.ONE).toString(),
+        ).map(::JsonPrimitive)
+        val invalidMetadata = invalidNumerics.map { value ->
+            JsonObject(metadata + ("twap_local_per_xor" to value))
+        }.toMutableList<JsonElement>()
+        for ((field, wireValue) in listOf(
+            "epsilon_bps" to "-1", "epsilon_bps" to "65536", "epsilon_bps" to "true",
+            "epsilon_bps" to "1.0", "twap_window_seconds" to "-1",
+            "twap_window_seconds" to "4294967296", "twap_window_seconds" to "\"300\"",
+            "twap_window_seconds" to "1.0", "liquidity_profile" to "\"Tier2\"",
+            "liquidity_profile" to """{"profile":"Tier4","state":null}""",
+            "liquidity_profile" to """{"profile":"Tier2","state":{}}""",
+            "liquidity_profile" to """{"profile":"Tier2"}""",
+            "volatility_class" to "\"Elevated\"",
+            "volatility_class" to """{"bucket":"Unknown","state":null}""",
+            "volatility_class" to """{"bucket":"Elevated","state":false}""",
+            "volatility_class" to """{"bucket":"Elevated","state":null,"extra":0}""",
+        )) {
+            invalidMetadata.add(JsonObject(metadata + (field to Json.parseToJsonElement(wireValue))))
+        }
+        metadata.keys.forEach { invalidMetadata.add(JsonObject(metadata - it)) }
+        invalidMetadata.add(JsonObject(metadata + ("extra" to JsonPrimitive(0))))
+        invalidMetadata.add(JsonArray(emptyList()))
+        invalidMetadata.add(JsonPrimitive("metadata"))
+        invalidMetadata.forEach { value ->
+            assertFailsWith<IllegalArgumentException>(value.toString()) {
+                NativeAmxV2.parseReceiptGroup(JsonObject(group + ("swap_metadata" to value)).toString())
+            }
+        }
+        for (quantity in listOf(limit.toString(), "9".repeat(154), "-1", "1.0", "1e3")) {
+            assertFailsWith<IllegalArgumentException>(quantity) {
+                NativeAmxV2.parseReceiptGroup(
+                    JsonObject(group + ("total_local_amount" to JsonPrimitive(quantity))).toString(),
+                )
+            }
         }
     }
 

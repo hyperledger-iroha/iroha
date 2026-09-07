@@ -338,6 +338,8 @@ impl PotrReceiptV1 {
             return Err(PotrReceiptValidationError::NoteTooLong);
         }
         let unsigned = PotrReceiptSigningViewV1::from_receipt(self);
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let frame_len = norito::core::encoded_frame_len(&unsigned)
             .map_err(|_| signing_payload_encoding_error())?;
         let payload_len = POTR_RECEIPT_SIGNATURE_DOMAIN_V1
@@ -350,7 +352,7 @@ impl PotrReceiptV1 {
             .try_reserve_exact(payload_len)
             .map_err(|_| signing_payload_encoding_error())?;
         payload.extend_from_slice(POTR_RECEIPT_SIGNATURE_DOMAIN_V1);
-        norito::core::write_frame_to_writer(
+        norito::core::write_canonical_to_writer(
             &unsigned,
             &mut AdmittedVecWriter {
                 bytes: &mut payload,
@@ -516,12 +518,16 @@ impl PotrReceiptV1 {
     /// Return the exact canonical bytes persisted and exported for this receipt.
     pub fn signed_receipt_bytes(&self) -> Result<Vec<u8>, PotrReceiptValidationError> {
         self.validate()?;
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         norito::core::to_bytes_bounded(self, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1)
             .map_err(|_| PotrReceiptValidationError::CanonicalEncoding)
     }
     /// Derive the authoritative exactly-once identity of the final signed receipt.
     pub fn signed_receipt_digest(&self) -> Result<[u8; 32], PotrReceiptValidationError> {
         self.validate()?;
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let frame_len = norito::core::encoded_frame_len(self)
             .map_err(|_| PotrReceiptValidationError::CanonicalEncoding)?;
         if frame_len > POTR_RECEIPT_MAX_CANONICAL_BYTES_V1 {
@@ -539,7 +545,7 @@ impl PotrReceiptV1 {
         }
         let mut hasher = blake3::Hasher::new();
         hasher.update(POTR_RECEIPT_DIGEST_DOMAIN_V1);
-        norito::core::write_frame_to_writer(self, &mut Blake3Writer(&mut hasher))
+        norito::core::write_canonical_to_writer(self, &mut Blake3Writer(&mut hasher))
             .map_err(|_| PotrReceiptValidationError::CanonicalEncoding)?;
         Ok(*hasher.finalize().as_bytes())
     }
@@ -812,11 +818,12 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
-    fn historical_signing_payload(receipt: &PotrReceiptV1) -> Vec<u8> {
+    fn canonical_owned_signing_payload(receipt: &PotrReceiptV1) -> Vec<u8> {
         let mut unsigned = receipt.clone();
         unsigned.gateway_signature = None;
         unsigned.provider_signature = None;
-        let canonical = norito::to_bytes(&unsigned).expect("historical unsigned receipt frame");
+        let canonical =
+            norito::encode_canonical(&unsigned).expect("canonical unsigned receipt frame");
         let mut payload =
             Vec::with_capacity(POTR_RECEIPT_SIGNATURE_DOMAIN_V1.len() + canonical.len());
         payload.extend_from_slice(POTR_RECEIPT_SIGNATURE_DOMAIN_V1);
@@ -824,7 +831,7 @@ mod tests {
         payload
     }
     #[test]
-    fn borrowed_signing_payload_preserves_historical_bytes_for_every_layout() {
+    fn borrowed_signing_payload_matches_canonical_owned_bytes_for_every_layout() {
         let receipt = base_receipt();
         for flags in supported_layouts() {
             let _guard = norito::core::DecodeFlagsGuard::enter(flags);
@@ -832,9 +839,78 @@ mod tests {
                 receipt
                     .signing_payload_bytes()
                     .expect("bounded signing payload"),
-                historical_signing_payload(&receipt),
+                canonical_owned_signing_payload(&receipt),
                 "borrowed PoTR signing payload changed for flags 0x{flags:02x}"
             );
+        }
+    }
+    #[test]
+    fn signatures_and_receipt_identity_are_independent_of_ambient_layout() {
+        let reference = base_receipt();
+        let payload = canonical_owned_signing_payload(&reference);
+        let canonical_bytes = norito::encode_canonical(&reference).unwrap();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POTR_RECEIPT_DIGEST_DOMAIN_V1);
+        hasher.update(&canonical_bytes);
+        let expected_digest = *hasher.finalize().as_bytes();
+        for flags in supported_layouts() {
+            let signed = {
+                let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+                assert_eq!(reference.validate(), Ok(()));
+                assert_eq!(reference.signing_payload_bytes().unwrap(), payload);
+                assert_eq!(reference.signed_receipt_bytes().unwrap(), canonical_bytes);
+                assert_eq!(reference.signed_receipt_digest().unwrap(), expected_digest);
+                let mut signed = unsigned_receipt();
+                resign(&mut signed);
+                signed
+            };
+            assert_eq!(signed.validate(), Ok(()));
+            assert_eq!(signed.signing_payload_bytes().unwrap(), payload);
+        }
+    }
+    #[test]
+    fn canonical_signing_preflight_preserves_note_bound_under_every_layout() {
+        let mut admitted = unsigned_receipt();
+        admitted.note = Some("x".repeat(POTR_RECEIPT_MAX_NOTE_BYTES_V1));
+        let expected = canonical_owned_signing_payload(&admitted);
+        assert!(expected.len() <= POTR_RECEIPT_SIGNING_PAYLOAD_MAX_BYTES_V1);
+        let mut oversized = admitted.clone();
+        oversized.note.as_mut().unwrap().push('x');
+        for flags in supported_layouts() {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(admitted.signing_payload_bytes().unwrap(), expected);
+            assert_eq!(
+                oversized.signing_payload_bytes(),
+                Err(PotrReceiptValidationError::NoteTooLong)
+            );
+        }
+    }
+    #[test]
+    fn noncanonical_layout_gateway_signature_has_no_fallback() {
+        let mut receipt = base_receipt();
+        let mut unsigned = receipt.clone();
+        unsigned.gateway_signature = None;
+        unsigned.provider_signature = None;
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&unsigned).unwrap()
+        };
+        assert_ne!(alternate, norito::encode_canonical(&unsigned).unwrap());
+        let mut payload = POTR_RECEIPT_SIGNATURE_DOMAIN_V1.to_vec();
+        payload.extend_from_slice(&alternate);
+        receipt.gateway_signature.as_mut().unwrap().signature = SigningKey::from_bytes(&[0x11; 32])
+            .sign(&payload)
+            .to_bytes()
+            .to_vec();
+        for flags in supported_layouts() {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            assert!(matches!(
+                receipt.validate(),
+                Err(PotrReceiptValidationError::InvalidSignature {
+                    context: "gateway",
+                    ..
+                })
+            ));
         }
     }
     #[test]
@@ -1090,11 +1166,12 @@ mod tests {
     fn signed_digest_binds_both_signatures_and_request_scope_is_stable() {
         let receipt = base_receipt();
         let digest = receipt.signed_receipt_digest().expect("signed digest");
-        let historical_frame = norito::to_bytes(&receipt).expect("historical signed receipt frame");
-        let mut historical = blake3::Hasher::new();
-        historical.update(POTR_RECEIPT_DIGEST_DOMAIN_V1);
-        historical.update(&historical_frame);
-        assert_eq!(digest, *historical.finalize().as_bytes());
+        let canonical_frame =
+            norito::encode_canonical(&receipt).expect("canonical signed receipt frame");
+        let mut canonical = blake3::Hasher::new();
+        canonical.update(POTR_RECEIPT_DIGEST_DOMAIN_V1);
+        canonical.update(&canonical_frame);
+        assert_eq!(digest, *canonical.finalize().as_bytes());
         assert_ne!(digest, [0; 32]);
         let scope = receipt.request_scope_digest().expect("request scope");
         assert_eq!(

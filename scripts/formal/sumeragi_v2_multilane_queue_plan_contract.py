@@ -825,7 +825,7 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
+            "IrohaNetwork::start_with_crypto_and_initial_authorities(",
         ),
     ),
 )
@@ -1109,7 +1109,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
+            "IrohaNetwork::start_with_crypto_and_initial_authorities(",
         ),
     ),
 )
@@ -1190,13 +1190,13 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
     ),
     (
         "crates/iroha_core/src/queue.rs",
-        "queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup",
+        "queue_plan_journal_replay_retains_entrypoint_that_fails_stateless_revalidation",
         (
-            "expect_err(\"a current admission failure must abort startup\")",
-            "failed current admission",
-            "assert_eq!(replay_queue.active_len(), 0);",
+            'expect_err("wrong-network journal entrypoint must fail startup")',
+            "failed canonical stateless validation",
+            "assert!(!replay_queue.txs.contains_key(&hash));",
             "live_record_count()",
-            "without publishing or tombstoning a prefix",
+            "stateless failure must not append a tombstone or replacement",
         ),
     ),
     (

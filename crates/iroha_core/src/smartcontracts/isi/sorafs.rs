@@ -1667,11 +1667,12 @@ fn has_permission(
     authority: &AccountId,
     permission: &str,
 ) -> bool {
+    let required = Permission::new(permission.to_owned(), iroha_primitives::json::Json::new(()));
     state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|perms| perms.iter().any(|perm| perm.name() == permission))
+        .is_some_and(|perms| perms.contains(&required))
 }
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -7824,6 +7825,7 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
 #[cfg(test)]
 mod sorafs_tests {
     use super::*;
+    include!("sorafs/permission_token_tests.rs");
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,

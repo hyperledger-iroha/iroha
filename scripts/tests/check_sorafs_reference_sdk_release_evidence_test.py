@@ -626,15 +626,15 @@ def run_gate_omitting_supply_chain_args(
     )
 
 
-def test_complete_release_evidence_passes(tmp_path: Path) -> None:
+def test_complete_metadata_evidence_cannot_qualify_release(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
 
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 0
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.reference_sdk.release_evidence_gate.v1"
-    assert payload["status"] == "ready"
+    assert payload["status"] == "blocked"
     assert payload["valid_archive_index_digests"] == [DIGEST]
     assert payload["valid_ffi_contract_digests"] == [DIGEST]
     assert payload["valid_header_digests"] == [DIGEST]
@@ -642,13 +642,13 @@ def test_complete_release_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_provenance_bundle_digests"] == [
         SOURCE_ARTIFACT_DIGESTS["provenance_bundle"]
     ]
-    assert payload["valid_release_manifest_digests"] == [DIGEST]
-    assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
-    assert payload["valid_release_key_fingerprints"] == [DIGEST]
+    assert payload["valid_release_manifest_digests"] == []
+    assert payload["valid_release_manifest_reference_digests"] == []
+    assert payload["valid_release_key_fingerprints"] == []
     assert payload["valid_sbom_index_digests"] == [
         SOURCE_ARTIFACT_DIGESTS["sbom_index"]
     ]
-    assert payload["signature_algorithms"] == ["ed25519"]
+    assert payload["signature_algorithms"] == []
     signed_manifest_artifact = payload["required"]["signed_manifest"]["artifacts"][0]
     assert signed_manifest_artifact["fingerprint"]["signature_algorithm"] == "ed25519"
     supply_chain_artifact = payload["required"]["supply_chain"]["artifacts"][0]
@@ -679,8 +679,12 @@ def test_complete_release_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_vulnerability_report_digests"] == [
         SOURCE_ARTIFACT_DIGESTS["vulnerability_report"]
     ]
-    assert payload["valid_policy_digests"] == [DIGEST]
-    assert payload["required"]["release_archive"]["valid"] is True
+    assert payload["valid_policy_digests"] == []
+    assert payload["required"]["release_archive"]["valid"] is False
+
+    assert any("independently pinned source context" in error for error in signed_manifest_artifact["errors"])
+    assert signed_manifest_artifact["valid"] is False
+
 
 
 def test_release_lane_rejects_mismatched_topology_context(tmp_path: Path) -> None:
@@ -780,6 +784,7 @@ def test_release_only_subset_does_not_require_provenance_key(
         release_archive(),
     )
     topology = write_topology_qualification(tmp_path)
+    summary = tmp_path / "summary.json"
 
     assert (
         MODULE.main(
@@ -790,11 +795,15 @@ def test_release_only_subset_does_not_require_provenance_key(
                 "release_archive",
                 "--now-unix",
                 str(NOW_UNIX),
+                "--summary-out", str(summary),
                 *topology_cli_args(topology),
             ]
         )
-        == 0
+        == 1
     )
+    result = json.loads(summary.read_text())
+    assert result["required"]["signed_manifest"]["valid"] is False
+    assert not any("provenance" in error for error in result["errors"])
 
 
 def test_release_lane_rejects_mutated_topology_signature_without_leaking_it(
@@ -1004,13 +1013,14 @@ def test_all_manifest_bound_artifacts_reject_signed_manifest_mismatch(
         result = json.loads(summary.read_text(encoding="utf-8"))
         required = result["required"][kind_name]
         artifact = required["artifacts"][0]
-        assert result["valid_release_manifest_digests"] == [DIGEST]
+        assert result["valid_release_manifest_digests"] == []
         assert required["valid"] is False
         assert artifact["valid"] is False
         assert (
-            f"{kind_name} release_manifest_digest_hex must reference a valid "
+            f"{kind_name} release_manifest_digest_hex requires a valid "
             "signed_manifest manifest_digest_hex"
         ) in artifact["errors"]
+
 
 
 def test_all_policy_bound_artifacts_reject_signed_manifest_policy_mismatch(
@@ -1030,13 +1040,14 @@ def test_all_policy_bound_artifacts_reject_signed_manifest_policy_mismatch(
         result = json.loads(summary.read_text(encoding="utf-8"))
         required = result["required"][kind_name]
         artifact = required["artifacts"][0]
-        assert result["valid_policy_digests"] == [DIGEST]
+        assert result["valid_policy_digests"] == []
         assert required["valid"] is False
         assert artifact["valid"] is False
         assert (
-            f"{kind_name} policy_digest_hex must reference a valid "
+            f"{kind_name} policy_digest_hex requires a valid "
             "signed_manifest policy_digest_hex"
         ) in artifact["errors"]
+
 
 
 def test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch(
@@ -1056,16 +1067,17 @@ def test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch(
         result = json.loads(summary.read_text(encoding="utf-8"))
         required = result["required"][kind_name]
         artifact = required["artifacts"][0]
-        assert result["valid_release_key_fingerprints"] == [DIGEST]
+        assert result["valid_release_key_fingerprints"] == []
         assert required["valid"] is False
         assert artifact["valid"] is False
         assert (
-            f"{kind_name} public_key_fingerprint_hex must reference a valid "
+            f"{kind_name} public_key_fingerprint_hex requires a valid "
             "signed_manifest public_key_fingerprint_hex"
         ) in artifact["errors"]
 
 
-def test_multiple_valid_release_manifest_anchors_fail_closed(tmp_path: Path) -> None:
+
+def test_multiple_unauthenticated_release_manifest_anchors_fail_closed(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = signed_manifest()
     payload["manifest_digest_hex"] = DIGEST_2
@@ -1076,13 +1088,14 @@ def test_multiple_valid_release_manifest_anchors_fail_closed(tmp_path: Path) -> 
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["valid_release_manifest_digests"] == []
-    assert (
-        "valid_release_manifest_digests must contain exactly one active digest"
-        in result["errors"]
-    )
+    anchors = result["required"]["signed_manifest"]["artifacts"]
+    assert len(anchors) == 2
+    assert all(not artifact["valid"] for artifact in anchors)
+    assert all(any("independently pinned source context" in error for error in artifact["errors"]) for artifact in anchors)
 
 
-def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+
+def test_multiple_unauthenticated_policy_anchors_fail_closed(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = signed_manifest()
     payload["policy_digest_hex"] = DIGEST_2
@@ -1093,13 +1106,14 @@ def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["valid_policy_digests"] == []
-    assert (
-        "valid_policy_digests must contain exactly one active digest"
-        in result["errors"]
-    )
+    anchors = result["required"]["signed_manifest"]["artifacts"]
+    assert len(anchors) == 2
+    assert all(not artifact["valid"] for artifact in anchors)
+    assert all(any("independently pinned source context" in error for error in artifact["errors"]) for artifact in anchors)
 
 
-def test_multiple_valid_release_key_anchors_fail_closed(tmp_path: Path) -> None:
+
+def test_multiple_unauthenticated_release_key_anchors_fail_closed(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = signed_manifest()
     payload["public_key_fingerprint_hex"] = DIGEST_2
@@ -1110,13 +1124,14 @@ def test_multiple_valid_release_key_anchors_fail_closed(tmp_path: Path) -> None:
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["valid_release_key_fingerprints"] == []
-    assert (
-        "valid_release_key_fingerprints must contain exactly one active digest"
-        in result["errors"]
-    )
+    anchors = result["required"]["signed_manifest"]["artifacts"]
+    assert len(anchors) == 2
+    assert all(not artifact["valid"] for artifact in anchors)
+    assert all(any("independently pinned source context" in error for error in artifact["errors"]) for artifact in anchors)
 
 
-def test_response_file_arguments_pass(tmp_path: Path) -> None:
+
+def test_response_file_arguments_cannot_bypass_manifest_authentication(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     topology = write_topology_qualification(tmp_path)
     args = tmp_path / "reference-sdk.args"
@@ -1151,7 +1166,46 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert MODULE.main([f"@{args}"]) == 0
+    assert MODULE.main([f"@{args}"]) == 1
+
+
+
+@pytest.mark.parametrize("field,anchor_field,fixtures", (
+    ("release_manifest_digest_hex", "manifest_digest_hex", RELEASE_MANIFEST_BOUND_FIXTURES),
+    ("policy_digest_hex", "policy_digest_hex", POLICY_BOUND_FIXTURES),
+    ("public_key_fingerprint_hex", "public_key_fingerprint_hex", RELEASE_KEY_BOUND_FIXTURES),
+))
+def test_binding_helper_preserves_exact_digest_comparison_without_claiming_custody(field, anchor_field, fixtures):
+    """Exercise binding mechanics in isolation; these are not release-authenticated artifacts."""
+    for kind_name, file_name, factory in fixtures:
+        for candidate_digest in (DIGEST, DIGEST_2):
+            payload = factory()
+            payload[field] = candidate_digest
+            artifact = MODULE.build_evidence_artifact(Path(file_name), DIGEST, payload, [], MODULE.FINGERPRINT_FIELDS)
+            assert artifact["valid"] is True, artifact["errors"]
+            errors = []
+            message = f"{kind_name} {field} must reference a valid signed_manifest {anchor_field}"
+            MODULE.validate_bound_evidence_digest_references(
+                required_kinds=MODULE.DEFAULT_REQUIRED_KINDS,
+                missing_anchor_required_kinds=("signed_manifest",),
+                bound_artifacts=[(kind_name, artifact)],
+                valid_anchor_digests={DIGEST}, digest_field=field, errors=errors,
+                binding_error_template="{kind_name} " + f"{field} must reference a valid signed_manifest {anchor_field}",
+                missing_anchor_error_template="{kind_name} " + f"{field} requires a valid signed_manifest {anchor_field}",
+            )
+            assert artifact["valid"] is (candidate_digest == DIGEST)
+            assert artifact["errors"] == ([] if candidate_digest == DIGEST else [message])
+            assert not errors if candidate_digest == DIGEST else any(message in error for error in errors)
+
+
+@pytest.mark.parametrize("label", ("valid_release_manifest_digests", "valid_policy_digests", "valid_release_key_fingerprints"))
+def test_active_digest_selection_rejects_multiple_values_in_isolation(label):
+    """Retain the mixed-anchor rejection without manufacturing hardware qualification."""
+    errors = []
+    assert MODULE.require_single_active_digest({DIGEST}, errors, label=label) == {DIGEST}
+    assert errors == []
+    assert MODULE.require_single_active_digest({DIGEST, DIGEST_2}, errors, label=label) == set()
+    assert errors == [f"{label} must contain exactly one active digest"]
 
 
 def test_missing_release_archive_fails(tmp_path: Path) -> None:
@@ -1159,6 +1213,19 @@ def test_missing_release_archive_fails(tmp_path: Path) -> None:
     (tmp_path / "release-archive.json").unlink()
 
     assert run_gate(tmp_path) == 1
+
+
+@pytest.mark.parametrize("kind", MODULE.DEFAULT_REQUIRED_KINDS)
+def test_selecting_one_kind_cannot_remove_signed_manifest_authentication(tmp_path: Path, kind):
+    write_complete_evidence(tmp_path)
+    (tmp_path / "signed-manifest.json").unlink()
+    summary = tmp_path / "summary.json"
+    assert run_gate(tmp_path, "--require-kind", kind, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text())
+    assert result["status"] == "blocked"
+    assert result["required"]["signed_manifest"]["valid"] is False
+    assert result["required"]["signed_manifest"]["artifact_count"] == 0
+    assert result["valid_release_manifest_digests"] == []
 
 
 def test_stale_release_archive_fails(tmp_path: Path) -> None:
@@ -1263,12 +1330,14 @@ def test_signed_manifest_rejects_legacy_or_unapproved_provider(
         "signed_manifest"
     ]["artifacts"][0]
     assert (
-        "signing_provider must be `authenticated_external_signer`"
-        in artifact["errors"]
+        any("independently pinned source context" in error for error in artifact["errors"])
     )
 
+    assert artifact["valid"] is False
 
-def test_signed_manifest_rejects_non_software_backend(tmp_path: Path) -> None:
+
+
+def test_signed_manifest_rejects_unauthenticated_hardware_backend(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
     write_json(
@@ -1281,7 +1350,9 @@ def test_signed_manifest_rejects_non_software_backend(tmp_path: Path) -> None:
     artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
         "signed_manifest"
     ]["artifacts"][0]
-    assert "signing_backend must be `software`" in artifact["errors"]
+    assert any("independently pinned source context" in error for error in artifact["errors"])
+    assert artifact["valid"] is False
+
 
 
 def test_signed_manifest_rejects_legacy_hsm_verification_field(tmp_path: Path) -> None:
@@ -1300,7 +1371,7 @@ def test_signed_manifest_rejects_legacy_hsm_verification_field(tmp_path: Path) -
         "signed_manifest evidence fields must match the schema-closed contract"
         in artifact["errors"]
     )
-    assert "signer_response_verified must be true" in artifact["errors"]
+    assert "signed_manifest evidence fields must match the schema-closed contract" in artifact["errors"]
 
 
 def test_signed_manifest_requires_verified_signer_response(tmp_path: Path) -> None:
@@ -1316,7 +1387,7 @@ def test_signed_manifest_requires_verified_signer_response(tmp_path: Path) -> No
     artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
         "signed_manifest"
     ]["artifacts"][0]
-    assert "signer_response_verified must be true" in artifact["errors"]
+    assert "signed_manifest evidence fields must match the schema-closed contract" in artifact["errors"]
 
 
 @pytest.mark.parametrize(
@@ -1361,7 +1432,7 @@ def test_signed_manifest_requires_positive_provider_revision(tmp_path: Path) -> 
     artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
         "signed_manifest"
     ]["artifacts"][0]
-    assert "signing_provider_revision must be a positive integer" in artifact["errors"]
+    assert "signed_manifest evidence fields must match the schema-closed contract" in artifact["errors"]
 
 
 def test_supply_chain_requires_all_five_targets(tmp_path: Path) -> None:
@@ -1798,13 +1869,13 @@ def test_release_archive_manifest_digest_must_match_signed_manifest(tmp_path: Pa
     payload = json.loads(summary.read_text(encoding="utf-8"))
     required = payload["required"]["release_archive"]
     artifact = required["artifacts"][0]
-    assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
+    assert payload["valid_release_manifest_reference_digests"] == []
     assert required["valid"] is False
     assert artifact["valid"] is False
-    assert artifact["errors"] == [
-        "release_archive release_manifest_digest_hex must reference a valid "
+    assert all(error in artifact["errors"] for error in [
+        "release_archive release_manifest_digest_hex requires a valid "
         "signed_manifest manifest_digest_hex"
-    ]
+    ])
 
 
 def test_governance_policy_digest_must_match_signed_manifest(tmp_path: Path) -> None:
@@ -1819,13 +1890,13 @@ def test_governance_policy_digest_must_match_signed_manifest(tmp_path: Path) -> 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     required = payload["required"]["governance_approval"]
     artifact = required["artifacts"][0]
-    assert payload["valid_policy_digests"] == [DIGEST]
+    assert payload["valid_policy_digests"] == []
     assert required["valid"] is False
     assert artifact["valid"] is False
-    assert artifact["errors"] == [
-        "governance_approval policy_digest_hex must reference a valid "
+    assert all(error in artifact["errors"] for error in [
+        "governance_approval policy_digest_hex requires a valid "
         "signed_manifest policy_digest_hex"
-    ]
+    ])
 
 
 def test_governance_release_key_fingerprint_is_required(tmp_path: Path) -> None:
@@ -1859,13 +1930,13 @@ def test_governance_release_key_fingerprint_must_match_signed_manifest(
     payload = json.loads(summary.read_text(encoding="utf-8"))
     required = payload["required"]["governance_approval"]
     artifact = required["artifacts"][0]
-    assert payload["valid_release_key_fingerprints"] == [DIGEST]
+    assert payload["valid_release_key_fingerprints"] == []
     assert required["valid"] is False
     assert artifact["valid"] is False
-    assert artifact["errors"] == [
-        "governance_approval public_key_fingerprint_hex must reference a valid "
+    assert all(error in artifact["errors"] for error in [
+        "governance_approval public_key_fingerprint_hex requires a valid "
         "signed_manifest public_key_fingerprint_hex"
-    ]
+    ])
 
 
 def test_cookbook_smoke_duration_above_threshold_fails(tmp_path: Path) -> None:
@@ -1926,7 +1997,12 @@ def test_unknown_directory_artifact_is_ignored_for_subset(tmp_path: Path) -> Non
     write_json(tmp_path / "release-archive.json", release_archive())
     write_json(tmp_path / "unknown.json", {"schema": "sorafs.reference_sdk.unknown.v1"})
 
-    assert run_gate(tmp_path, "--require-kind", "release_archive") == 0
+    summary = tmp_path / "summary.json"
+    assert run_gate(tmp_path, "--require-kind", "release_archive", "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text())
+    assert result["recognized_artifact_count"] == 1
+    assert result["required"]["signed_manifest"]["valid"] is False
+    assert not any("unknown" in error for error in result["errors"])
 
 
 def test_invalid_optional_artifact_fails_subset_gate(tmp_path: Path) -> None:

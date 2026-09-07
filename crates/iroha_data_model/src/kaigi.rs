@@ -1,4 +1,7 @@
 //! Data structures supporting Kaigi instructions.
+/// Canonical identity inputs recomputed by Kaigi authorization verifiers.
+pub mod authorization;
+pub mod participation;
 use crate::{account::AccountId, domain::DomainId, metadata::Metadata, name::Name};
 use derive_more::Display;
 use getset::Getters;

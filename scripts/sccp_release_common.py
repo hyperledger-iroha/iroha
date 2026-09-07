@@ -548,6 +548,59 @@ class SccpReleaseError(ValueError):
     """A bounded, public-safe SCCP release validation failure."""
 
 
+def create_isolated_git_directory(
+    parent: Path, *, object_format: str, commit: str,
+) -> Path:
+    """Create fixed Git metadata without source config, refs, attributes, or templates.
+
+    The caller owns the private scratch parent and its cleanup. It supplies the
+    original object store through GIT_OBJECT_DIRECTORY, and may inspect the
+    original worktree/index with GIT_WORK_TREE, GIT_INDEX_FILE and optional
+    locks disabled. No source metadata is copied or modified here.
+    """
+    oid_length = {"sha1": 40, "sha256": 64}.get(object_format) if type(object_format) is str else None
+    if (
+        oid_length is None
+        or type(commit) is not str
+        or re.fullmatch(r"[0-9a-f]{" + str(oid_length) + r"}", commit) is None
+        or not any(character != "0" for character in commit)
+    ):
+        raise SccpReleaseError("isolated Git source identity is not canonical")
+    try:
+        metadata = parent.lstat()
+        if (
+            not parent.is_absolute()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_mode & 0o077
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise SccpReleaseError("isolated Git scratch parent must be owner-only")
+        directory = Path(tempfile.mkdtemp(prefix="source-git-", dir=parent))
+        (directory / "objects").mkdir(mode=0o700)
+        (directory / "refs").mkdir(mode=0o700)
+        config = (
+            "[core]\n"
+            f"\trepositoryformatversion = {1 if object_format == 'sha256' else 0}\n"
+            "\tbare = true\n"
+            f"\tattributesFile = {os.devnull}\n"
+            f"\thooksPath = {os.devnull}\n"
+            "\tfsmonitor = false\n"
+        )
+        if object_format == "sha256":
+            config += "[extensions]\n\tobjectFormat = sha256\n"
+        for name, payload in (("config", config.encode("ascii")), ("HEAD", (commit + "\n").encode("ascii"))):
+            descriptor = os.open(
+                directory / name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+        return directory
+    except OSError:
+        raise SccpReleaseError("isolated Git source context could not be created") from None
+
+
 class _SecretScanBudget:
     """One aggregate recursive-decoding budget shared across streamed chunks."""
 

@@ -22,10 +22,16 @@ private const val PRIVACY_SUBMIT_PROOF_WIRE_ID_V1 = "iroha.privacy.submit_proof.
  * whenever raw instruction bytes are available.
  */
 class InstructionBox private constructor(
-    val payload: InstructionPayload,
+    payload: InstructionPayload,
     private val privacyAdmission: PrivacyExact12CapabilityTupleAdmissionV1? = null,
     private val privacyProtocolId: PrivacyProtocolIdV1? = null,
 ) {
+    /** Snapshot wire identity and bytes once so admission and encoding see the same payload. */
+    val payload: InstructionPayload = when (payload) {
+        is WireInstructionPayload -> payload
+        is WirePayload -> WireInstructionPayload(payload.wireName, payload.payloadBytes)
+        else -> payload
+    }
 
     /** Instruction display name (matches `InstructionType` tag). */
     val name: String
@@ -75,6 +81,15 @@ class InstructionBox private constructor(
             protocolId,
             wire.payloadBytes,
         )
+    }
+
+    /** Bind retained privacy admission to the enclosing transaction's exact network. */
+    internal fun requirePrivacyExact12Network(networkId: NetworkId) {
+        val wire = payload as? WirePayload ?: return
+        if (wire.wireName != PRIVACY_SUBMIT_PROOF_WIRE_ID_V1) return
+        requireNotNull(privacyAdmission) {
+            "Exact12 submit-proof construction requires authenticated Torii admission"
+        }.requireNetwork(networkId)
     }
 
     companion object {

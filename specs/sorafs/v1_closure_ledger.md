@@ -35,7 +35,8 @@ synthetic fixtures cannot override a blocked aggregate.
 
 ## 2026-09-06 execution checkpoint
 
-G01 is active under the [implementation goals](v1_implementation_goals.md).
+G01, G02, G03 and G13 are active under the
+[implementation goals](v1_implementation_goals.md).
 Source inspection confirms that the dependency expectation already contains
 `blake3==1.0.9`, the four native ledger domains and finalized event queries
 exist, and the SDK reference/DAG validators, quarantine AEAD and integer privacy
@@ -72,11 +73,130 @@ focused source-integrity regressions also pass. These are local script/contract
 results; the native CI job, full workspace/SDK matrix and production deployment
 have not been executed by this slice.
 
+The provider-ingest runtime contract guard now checks scoped restart, counter,
+checkpoint-order and metadata-boundary invariants instead of hashing unrelated
+Rust formatting. All **26 tests** pass, including mutations that disable the
+restart test, substitute comments, reorder phases, change counters or expose
+metadata. This source guard does not replace execution of the native restart test.
+
+G03 exposed a production admission gap: the native Initial executor rejected
+the three repair ISIs before their Core permission/lease/owner checks could run.
+Explicit admission and executor regressions are being validated; the same
+review adds the six orderbook and ten reserve instructions only after checking
+their native owner, governed-account and payload-signature boundaries. The new
+`integration_tests/tests/sorafs_repair_ledger.rs` four-validator scenario covers
+distinct-transaction submission/completion replay, competing claims, permission
+revocation, successor fencing, one terminal journal and same-peer restart.
+Only the exact structured native rejection can satisfy its negative checks.
+The grouped `core_api` integration target now compiles; network execution
+remains pending. This does not establish
+isolated disk replay, provider execution, expiry/slashing or production evidence.
+The successful check follows correction of a test restart-await type error and
+the owning task's concurrent FASTPQ interface repair.
+The orderbook and reserve four-validator scenarios now share that grouped
+harness. Their signed native flows cover distinct-transaction custody races,
+exact authority failures, conservation, committed event/query convergence and
+same-peer restart. Provider ownership is seeded through the documented production
+pre-genesis configuration and queried afterward; no retired owner instruction or
+test-only network state injection is used. The first compilation found four
+orderbook test import/borrow errors, now corrected; recompilation and all network
+execution remain pending.
+Provider-governance proposal intake is also explicitly admitted to Core's current
+bonded-citizen gate, with missing/under-bonded/current-bond and idempotent proposal
+regressions; proposal submission cannot enact ownership.
+
+The authorization audit also found name-only permission checks in moderation,
+PoP registry, proof-outcome policy and several global SoraFS operations. These
+now compare exact canonical tokens, with malformed direct and role grant
+regressions. Orderbook and reserve already compare exact tokens. The deeper
+moderation eligibility fix now spans the PoP proof, Core, node and Torii:
+the required recipient digest is a constrained tenth Halo2 public input and is
+included in authenticated API requests. Core derives the expected binding from
+the immutable appeal intake and authenticated account. The shared per-appeal
+nullifier domain is unchanged. Copied/retargeted proof, duplicate-person and
+actual-schema missing-field rejection regressions are written. A separate bounded
+source review found no additional defect or missing changed call site; native
+test execution and external security qualification remain pending.
+The latest complete manifest library run passed **891 tests**, with no failures
+or ignored tests. The original failures are corrected. New real-signature, canonical archive,
+size-budget and cross-layout regressions pass for PoP, PDP, PoR, PoTR, orderbook,
+provider advertisements, finance and transparency. The transparency correction
+also verifies actual publication Merkle proofs and signatures under every tested
+layout and rejects alternate-layout entry hashes. Strict
+canonical decoding rejects compressed headers before decoding and retains
+composed resource limits.
+The focused Core run passed **11 of 15 tests**. The rightful/copied PoP
+presentation regression now passes. Three registry fixtures used an invalid
+issuer label, and the moderation permission fixture incorrectly assumed the
+stored bootstrap block left an empty state map. Those are corrected, preserving
+exact negative errors and comparing the complete state before and after denial.
+The newest recipient-binding helper streams the canonical AccountId frame rather
+than a network-dependent display string, with explicit encoding-error propagation.
+The model regression and all **three node authorization tests** pass on freshly
+compiled binaries. Torii now passes all three recipient-binding and three native
+OpenAPI contract tests. The four account-filter assertions use the canonical
+explicit account parser; that test and the existing NFT and RWA candidate tests
+pass on the same fresh binary. A fresh Core binary is still required.
+
+The SF-11 signed-manifest gate now requires independently supplied, digest-pinned
+source files. Metadata-only signing claims cannot qualify a canary. Raw Ed25519
+verification authenticates the exact manifest/key/signature snapshots, with
+bounded native executable copies and retained source-directory identities.
+Canonical hardware receipt verification now authenticates a separately signed
+finalized-state observation against independently pinned policy and trust. Eleven
+new tests pass for exact receipts, observer independence, causal observation
+times, replay, revocation, source substitution and bounded canonical documents.
+All **56 native validator CLI tests** and **12 fixture-generator tests** pass.
+The six PoP structural fixtures have been generated and checked; all **30 Python
+fixture-checker tests** pass. Seven actual CLI process checks pass, including a
+complete signed positive and tampered signature/state, wrong deployment,
+revocation, expiry and pinned-policy substitution negatives. These use simulated
+signed observations and do not qualify hardware. Python gate integration remains
+in progress. Both focused Kotlin and Java-source PoP tests pass with a freshly
+rebuilt host JNI bridge; their XML reports contain two executed tests and no
+failures, errors or skips. Each exercises the current, missing-binding and
+zero-binding structural fixture. Swift awaits a current Apple bridge artifact.
+A collection dry-run is not qualification.
+
+G02 adds a bounded canonical custody-record verifier in the shared manifest
+signer module, with the daemon duplicate removed. It requires an independently
+pinned attestation authority, exact signer
+and network bindings, current finalized state, explicit time, revocation checks
+and predecessor/sequence matching. The private verified result cannot be decoded
+or constructed by a caller. All **23 native custody tests** pass, covering
+canonical bounded decoding, independent attestation, non-exportability, exact
+bindings, enrollment replay, use after enrollment, revocation, freshness and
+state changes across provider operations. The public receipt verifier adds exact
+four-signature purpose/order, reviewed-manifest, original-custody and finalized
+completion binding. The opaque operation coordinator also
+passes **26 native tests** after migration to the shared public record owner,
+covering private signature staging, operation reservations,
+state-change fences, enrollment, renewal/rotation/revocation ordering and exact
+durable-response recovery. Independent review found and corrected a gap in binding
+the original custody: a renewed coordinator cannot relabel an earlier completed
+response as belonging to its new custody record. Production authoritative-state
+and provider adapters and the atomic consumer/profile replacement remain
+unfinished. The existing software service is not hardware-qualified by these
+interfaces or their simulated providers.
+The shared bounded supervisor-credential reader now has a neutral daemon owner.
+Consensus threshold custody keeps its existing behavior while dropping its
+dependency on software-signer wrapping APIs. All **three native reader tests**
+pass, covering bounds, metadata changes, links and unsafe permissions.
+
+Ten stale SoraFS source-size baselines have been tightened to the smaller
+current files. The fetch CLI's existing test module is now a separate owned file:
+all 50 tests and 144 assertions are retained, and both files meet their default
+5,000/3,000-line limits with the exception removed. The combined source-budget
+and fetch-contract selection passes **41 tests**. No limit was raised; other
+identified SoraFS growth findings still require source refactoring. Other
+tasks have advanced the repository revision during this work, so these results
+cannot serve as evidence for one immutable release candidate.
+
 The broad release-helper baseline is still being evaluated. Source-budget
-findings, the reviewed-source seal mismatch, provider-ingest contract drift,
-dirty OpenAPI manifests and the software-only custody profile remain explicit
-follow-on work. No production lane, foundational envelope or readiness claim
-is created by these repairs.
+findings, the reviewed-source seal mismatch, dirty OpenAPI manifests and the
+software-only production custody profile remain explicit follow-on work.
+No production lane, foundational envelope or readiness claim is created by
+these repairs.
 
 ## Authority and shared contract
 

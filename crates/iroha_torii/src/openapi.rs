@@ -3914,6 +3914,7 @@ mod tests {
     }
     // Textual inclusion preserves the original OpenAPI test-module paths.
     include!("openapi/tests/sorafs_contracts.rs");
+    include!("openapi/tests/sorafs_pop_contracts.rs");
     #[test]
     fn openapi_route_auth_metadata_matches_enabled_catalog_projection() {
         let document = generate_spec();

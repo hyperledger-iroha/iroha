@@ -75,6 +75,9 @@ pub const MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation
 pub const MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-snapshot.v1";
 /// Domain separator for the shared, per-appeal `PoP` proof challenge.
 pub const MODERATION_POP_CHALLENGE_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-challenge.v1";
+/// Domain separating the authenticated recipient of one moderation PoP presentation.
+pub const MODERATION_POP_PRESENTATION_BINDING_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.pop-presentation-binding.v1";
 /// Domain separator for deterministic panel-selection seed derivation.
 pub const MODERATION_SORTITION_SEED_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-seed.v1";
 /// Domain separator for deterministic candidate scores.
@@ -298,7 +301,9 @@ pub struct ModerationLedgerPolicyRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationPoPRegistrySnapshotV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationPoPRegistrySnapshotV1"
+)]
 pub struct ModerationPoPRegistrySnapshotV1 {
     /// Issuer policy digest used to admit both active publications.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -662,7 +667,9 @@ pub enum ModerationAppealIntakeError {
     norito(tag = "class", content = "value", rename_all = "snake_case")
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityClassV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityClassV1"
+)]
 pub enum ModerationJurorEligibilityClassV1 {
     /// General juror pool.
     General,
@@ -679,7 +686,9 @@ pub enum ModerationJurorEligibilityClassV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1"
+)]
 pub struct ModerationJurorEligibilityRecordV1 {
     /// Appeal case identifier.
     pub case_id: String,
@@ -833,6 +842,25 @@ pub fn sorafs_moderation_pop_verifier_context_v1(intake_digest: [u8; 32]) -> Str
         "sorafs-moderation-sortition-v1:{}",
         hex::encode(intake_digest)
     )
+}
+/// Bind a PoP presentation to the exact authenticated juror without changing
+/// the shared per-appeal nullifier domain.
+///
+/// The canonical account frame is independent of configured display prefixes
+/// and enclosing decoder layout flags.
+///
+/// # Errors
+///
+/// Returns an error if the account cannot be canonically encoded.
+pub fn sorafs_moderation_pop_presentation_binding_v1(
+    intake_digest: [u8; 32],
+    juror: &AccountId,
+) -> Result<[u8; 32], norito::Error> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_POP_PRESENTATION_BINDING_DOMAIN_V1);
+    hasher.update(&intake_digest);
+    norito::core::write_canonical_to_writer(juror, &mut hasher)?;
+    Ok(*hasher.finalize().as_bytes())
 }
 /// Derive the immutable selection seed from appeal and non-applicant anchors.
 #[must_use]
@@ -1318,7 +1346,9 @@ impl ModerationChallengeKindV1 {
     norito(tag = "decision", content = "value", rename_all = "snake_case")
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1"
+)]
 pub enum ModerationChallengeDecisionV1 {
     /// Challenge was rejected and normal ballot processing may resume.
     Rejected,
@@ -1565,7 +1595,9 @@ pub struct ModerationFinalizedCursorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventCursorV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventCursorV1"
+)]
 pub struct ModerationFinalizedEventCursorV1 {
     /// Monotonic moderation-event sequence beginning at one.
     pub sequence: u64,
@@ -1611,7 +1643,9 @@ impl ModerationFinalizedEventV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventPageV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventPageV1"
+)]
 pub struct ModerationFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ModerationFinalizedCursorV1,
@@ -1626,7 +1660,9 @@ pub struct ModerationFinalizedEventPageV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedAppealViewV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedAppealViewV1"
+)]
 pub struct ModerationFinalizedAppealViewV1 {
     /// Authoritative appeal, sortition, and activation record.
     pub appeal: ModerationAppealRecordV1,
@@ -1637,7 +1673,9 @@ pub struct ModerationFinalizedAppealViewV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedCaseViewV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedCaseViewV1"
+)]
 pub struct ModerationFinalizedCaseViewV1 {
     /// Authoritative case header.
     pub case: ModerationCaseRecordV1,
@@ -1656,7 +1694,9 @@ pub struct ModerationFinalizedCaseViewV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedLedgerSnapshotV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedLedgerSnapshotV1"
+)]
 pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Schema version; must equal [`MODERATION_FINALIZED_SNAPSHOT_VERSION_V1`].
     pub version: u16,
@@ -1870,7 +1910,9 @@ pub enum RepairLedgerTerminalKindV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTerminalOutcomeV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTerminalOutcomeV1"
+)]
 pub struct RepairLedgerTerminalOutcomeV1 {
     /// Terminal result.
     pub kind: RepairLedgerTerminalKindV1,
@@ -2322,6 +2364,61 @@ mod tests {
         let case = case_spec();
         case.validate().unwrap();
         assert_canonical_norito_round_trip(&case);
+    }
+
+    #[test]
+    fn moderation_pop_presentation_binding_pins_intake_and_authenticated_account() {
+        let intake = [0x31; 32];
+        let juror = account(21);
+        let binding = sorafs_moderation_pop_presentation_binding_v1(intake, &juror).unwrap();
+        assert_ne!(binding, [0; 32]);
+        assert_eq!(
+            binding,
+            sorafs_moderation_pop_presentation_binding_v1(intake, &juror).unwrap()
+        );
+        assert_ne!(
+            binding,
+            sorafs_moderation_pop_presentation_binding_v1(intake, &account(22)).unwrap()
+        );
+        assert_ne!(
+            binding,
+            sorafs_moderation_pop_presentation_binding_v1([0x32; 32], &juror).unwrap()
+        );
+        // The shared nullifier inputs remain separate from recipient binding.
+        assert_ne!(
+            binding,
+            sorafs_moderation_pop_challenge_v1(intake, [0x33; 32])
+        );
+        let expected_account = norito::encode_canonical(&juror).unwrap();
+        let mut expected = blake3::Hasher::new();
+        expected.update(MODERATION_POP_PRESENTATION_BINDING_DOMAIN_V1);
+        expected.update(&intake);
+        expected.update(&expected_account);
+        assert_eq!(binding, *expected.finalize().as_bytes());
+        let display = juror.to_i105_for_discriminant(73).unwrap();
+        assert_ne!(display, juror.to_i105_for_discriminant(74).unwrap());
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+        let layouts = [
+            0,
+            COMPACT_LEN,
+            PACKED_SEQ,
+            PACKED_SEQ | COMPACT_LEN,
+            PACKED_STRUCT,
+            PACKED_STRUCT | COMPACT_LEN,
+            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        ];
+        for prefix in [73, 74] {
+            let _prefix = crate::account::address::ChainDiscriminantGuard::enter(prefix);
+            for flags in layouts {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                assert_eq!(
+                    sorafs_moderation_pop_presentation_binding_v1(intake, &juror).unwrap(),
+                    binding
+                );
+                assert_eq!(norito::core::get_decode_flags(), flags);
+            }
+        }
     }
 
     #[test]

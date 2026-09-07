@@ -567,6 +567,7 @@ object SumeragiV2Wire {
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
+            require(this.signers.isNotEmpty()) { "timeout group must contain a signer" }
             requireStrictlyIncreasing(this.signers, "timeout group signers")
         }
 
@@ -602,6 +603,7 @@ object SumeragiV2Wire {
             ownWireList(groups, "timeout certificate must contain a group")
 
         init {
+            require(this.groups.isNotEmpty()) { "timeout certificate must contain a group" }
             val seen = HashSet<Long>()
             this.groups.forEach { group ->
                 group.signers.forEach { signer ->
@@ -788,6 +790,10 @@ object SumeragiV2Wire {
     ) : WireValue() {
         @JvmField val chunkHashes: List<Hash32> =
             ownWireList(chunkHashes, "payload manifest must contain a chunk hash")
+
+        init {
+            require(this.chunkHashes.isNotEmpty()) { "payload manifest must contain a chunk hash" }
+        }
 
         override fun encode(): ByteArray = struct(
             round.encode(),
@@ -1975,7 +1981,9 @@ object SumeragiV2Wire {
             return value == 1
         }
 
-        fun remainingBytes(): ByteArray = read(bytes.size - offset, "remaining payload")
+        fun remainingByteCount(): Int = bytes.size - offset
+
+        fun remainingBytes(): ByteArray = read(remainingByteCount(), "remaining payload")
 
         fun finish(label: String) {
             require(offset == bytes.size) { "$label contains trailing Norito bytes" }
@@ -2118,6 +2126,11 @@ object SumeragiV2Wire {
     private fun <T> vectorDecode(reader: Reader, label: String, decode: (Reader) -> T): List<T> {
         val count = reader.u64("$label count")
         require(count in 0..Int.MAX_VALUE.toLong()) { "$label count exceeds JVM range" }
+        // Every element needs at least its one-byte compact length prefix, even when
+        // its payload is empty. Bound allocation by the encoded input before copying.
+        require(count <= reader.remainingByteCount().toLong()) {
+            "$label count exceeds remaining encoded fields"
+        }
         val values = ArrayList<T>(count.toInt())
         repeat(count.toInt()) { index ->
             values.add(reader.field("$label[$index]", decode))

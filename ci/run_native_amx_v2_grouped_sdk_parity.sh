@@ -515,7 +515,7 @@ case "$surface" in
     assert_openapi_replay_marker
     ;;
   python)
-    observed_test_count=63
+    observed_test_count=65
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     if [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]]; then
@@ -532,7 +532,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=61
+    observed_test_count=63
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1
@@ -640,7 +640,7 @@ if not matches or any(int(match.group(1)) != expected for match in matches):
 PY
     ;;
   kotlin)
-    observed_test_count=$((6 + 1))
+    observed_test_count=8
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"

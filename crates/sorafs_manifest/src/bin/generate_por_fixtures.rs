@@ -1,4 +1,4 @@
-//! Generates PoR, PoTR, repair, and governance DAG fixtures.
+//! Generates PoR, PoTR, repair, governance DAG, and PoP structural fixtures.
 //!
 //! Pass exactly one of `--write` or `--check` for the checked-in fixture tree.
 //! An isolated `--output-dir PATH` remains an implicit write for the fixture
@@ -68,8 +68,8 @@ const DEFAULT_FIXTURES_ROOT: &str = "fixtures/sorafs_manifest";
 const INVENTORY_SPECS_SCHEMA: &str = "sorafs.generate_por_fixtures.inventory_specs.v1";
 const INVENTORY_SPECS_DATA: &str = include_str!("generate_por_fixtures/inventory_specs_v1.tsv");
 const INVENTORY_SPECS_SHA256: &str =
-    "e8763000be58be70ca80a30ace7236fa604cb5a312eaea9cca506dc95e08e8ea";
-const INVENTORY_SPEC_COUNTS: (usize, usize, usize, usize, usize) = (17, 8, 9, 82, 32);
+    "b53454f9bea8f82da094e70bf6eef4defb90af659eef84db2918e0d4ce14c1e4";
+const INVENTORY_SPEC_COUNTS: (usize, usize, usize, usize, usize) = (17, 8, 9, 85, 35);
 const BUNDLE_PAYLOAD_SPEC_COUNTS: [usize; 9] = [13, 4, 4, 3, 4, 4, 2, 2, 2];
 
 fn require_secure_fixture_filesystem() -> io::Result<()> {
@@ -436,7 +436,7 @@ const ROOT_INVENTORY: &str = "reference_sdk_validation_inventory_v1.json";
 const PUBLICATION_LOCK: &str = ".generate_por_fixtures.lock";
 // Closed-set tripwire: changing the generator's path inventory must be an
 // explicit source change, never an accidental side effect of regeneration.
-const EXPECTED_MANAGED_FIXTURE_COUNT: usize = 55;
+const EXPECTED_MANAGED_FIXTURE_COUNT: usize = 61;
 const MAX_FIXTURE_BYTES: u64 = 8 << 20;
 const MAX_TOTAL_FIXTURE_BYTES: u64 = 64 << 20;
 const MAX_PATH_BYTES: usize = 4 << 10;
@@ -1392,12 +1392,15 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         "SFS-GOV-006",
     )?;
 
+    write_pop_membership_structural_fixtures(reference_sdk_dir)?;
     write_governance_sdk_fixture_inventory(gov_dir, &inventory_specs)?;
     write_reference_sdk_bundle_outcomes(fixtures_root, reference_sdk_dir, &inventory_specs)?;
     write_reference_sdk_fixture_inventory(fixtures_root, &inventory_specs)?;
 
     Ok(())
 }
+include!("generate_por_fixtures/pop_membership_structural.rs");
+
 fn ensure_no_publication_lock(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
     match fs::symlink_metadata(fixtures_root.join(PUBLICATION_LOCK)) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),

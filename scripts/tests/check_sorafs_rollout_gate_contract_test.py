@@ -20257,9 +20257,12 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch"
         in checker_test
     )
-    assert "test_multiple_valid_release_manifest_anchors_fail_closed" in checker_test
-    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
-    assert "test_multiple_valid_release_key_anchors_fail_closed" in checker_test
+    assert "test_multiple_unauthenticated_release_manifest_anchors_fail_closed" in checker_test
+    assert "test_multiple_unauthenticated_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_unauthenticated_release_key_anchors_fail_closed" in checker_test
+    assert "test_active_digest_selection_rejects_multiple_values_in_isolation" in checker_test
+    assert "test_binding_helper_preserves_exact_digest_comparison_without_claiming_custody" in checker_test
+    assert "test_selecting_one_kind_cannot_remove_signed_manifest_authentication" in checker_test
 
 
 def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
@@ -20286,14 +20289,17 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_RELEASE_TARGETS" in builder
     assert "REQUIRED_DOWNSTREAM_PACKAGES" in builder
     assert "RELEASE_MANIFEST_BOUND_KINDS" in builder
-    assert "ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS" in builder
-    assert "def validate_signature_algorithm(" in builder
+    assert "authenticate_signed_manifest_sources(" in builder
+    assert "--signed-manifest-source-context" in builder
+    assert "--signed-manifest-source-context-sha256" in builder
+    assert "def validate_signature_algorithm(" not in builder
+    assert '"signer_response_verified": True' not in builder
     assert (
         builder.count('"public_key_fingerprint_hex": args.public_key_fingerprint_hex')
-        >= 2
+        == 1
     )
     assert "--public-key-fingerprint-hex" in builder
-    assert "test_generated_canaries_pass_full_reference_sdk_release_gate" in builder_tests
+    assert "test_generated_canaries_cannot_pass_without_authenticated_signed_manifest" in builder_tests
     assert (
         "test_signed_manifest_rejects_unsupported_signature_algorithm_before_write"
         in builder_tests
@@ -20335,7 +20341,7 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
     assert (
         SCRIPTS_DIR
         / "examples"
-        / "sorafs_reference_sdk_signed_manifest_canary.args.example"
+        / "sorafs_reference_sdk_release_signed_manifest_canary.args.example"
     ).is_file()
 
 

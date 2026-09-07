@@ -713,6 +713,9 @@ pub struct PopMembershipProofV1 {
     pub challenge_digest: [u8; 32],
     /// Domain/context string supplied by the verifier.
     pub verifier_context: String,
+    /// Required verifier-selected recipient or action binding, committed by the
+    /// proof independently of the shared challenge/context nullifier domain.
+    pub presentation_binding_digest: [u8; 32],
     /// Membership proof system.
     pub proof_system: PopMembershipProofSystemV1,
     /// Pinned transparent parameters and verifying-key fingerprints.
@@ -749,6 +752,10 @@ impl PopMembershipProofV1 {
         validate_canonical_scalar("nullifier", self.nullifier)?;
         validate_digest("challenge digest", self.challenge_digest)?;
         validate_verifier_context(&self.verifier_context)?;
+        validate_digest(
+            "presentation binding digest",
+            self.presentation_binding_digest,
+        )?;
         self.verifier_material.validate()?;
         if self.proof_bytes.is_empty() || self.proof_bytes.len() > POP_MEMBERSHIP_PROOF_MAX_BYTES_V1
         {
@@ -882,24 +889,6 @@ impl PopMembershipWitnessV1 {
 }
 mod borrowed_norito {
     use norito::core::NoritoSerialize;
-    pub(super) struct Value<'a, T>(pub(super) &'a T);
-    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            T::schema_hash()
-        }
-        fn serialize(
-            &self,
-            writer: &mut norito::core::Encoder<'_>,
-        ) -> Result<(), norito::core::Error> {
-            self.0.serialize(writer)
-        }
-        fn encoded_len_hint(&self) -> Option<usize> {
-            self.0.encoded_len_hint()
-        }
-        fn encoded_len_exact(&self) -> Option<usize> {
-            self.0.encoded_len_exact()
-        }
-    }
     pub(super) struct Vec<'a, T>(Option<&'a std::vec::Vec<T>>);
     impl<'a, T> Vec<'a, T> {
         pub(super) fn borrowed(value: &'a std::vec::Vec<T>) -> Self {
@@ -973,7 +962,8 @@ struct PopCredentialSigningViewWireV1<'a> {
     holder_commitment: [u8; 32],
     eligibility_class: PopEligibilityClassV1,
     attributes: borrowed_norito::Vec<'a, PopCredentialAttributeV1>,
-    issuer_id: borrowed_norito::Value<'a, String>,
+    // Cow preserves String's self-delimiting packed-field layout without copying.
+    issuer_id: std::borrow::Cow<'a, str>,
     issued_at_epoch: u64,
     expires_at_epoch: u64,
     renewal_at_epoch: u64,
@@ -992,7 +982,7 @@ impl<'a> PopCredentialSigningViewV1<'a> {
             holder_commitment: credential.holder_commitment,
             eligibility_class: credential.eligibility_class,
             attributes: borrowed_norito::Vec::borrowed(&credential.attributes),
-            issuer_id: borrowed_norito::Value(&credential.issuer_id),
+            issuer_id: std::borrow::Cow::Borrowed(&credential.issuer_id),
             issued_at_epoch: credential.issued_at_epoch,
             expires_at_epoch: credential.expires_at_epoch,
             renewal_at_epoch: credential.renewal_at_epoch,
@@ -1027,7 +1017,7 @@ struct PopCommitmentRootSigningViewWireV1<'a> {
     tree_size: u64,
     tree_depth: u8,
     tree_version: u64,
-    issuer_id: borrowed_norito::Value<'a, String>,
+    issuer_id: std::borrow::Cow<'a, str>,
     published_at_epoch: u64,
     previous_root_digest: Option<[u8; 32]>,
     governance_event_digest: [u8; 32],
@@ -1042,7 +1032,7 @@ impl<'a> PopCommitmentRootSigningViewV1<'a> {
             tree_size: root.tree_size,
             tree_depth: root.tree_depth,
             tree_version: root.tree_version,
-            issuer_id: borrowed_norito::Value(&root.issuer_id),
+            issuer_id: std::borrow::Cow::Borrowed(&root.issuer_id),
             published_at_epoch: root.published_at_epoch,
             previous_root_digest: root.previous_root_digest,
             governance_event_digest: root.governance_event_digest,
@@ -1073,7 +1063,7 @@ struct PopRevocationListSigningViewWireV1<'a> {
     commitment_root: [u8; 32],
     revocation_root: [u8; 32],
     revocation_tree_depth: u8,
-    issuer_id: borrowed_norito::Value<'a, String>,
+    issuer_id: std::borrow::Cow<'a, str>,
     published_at_epoch: u64,
     entries: borrowed_norito::Vec<'a, PopRevocationEntryV1>,
     publisher_signature: PopSignatureSigningViewV1<'a>,
@@ -1087,7 +1077,7 @@ impl<'a> PopRevocationListSigningViewV1<'a> {
             commitment_root: revocations.commitment_root,
             revocation_root: revocations.revocation_root,
             revocation_tree_depth: revocations.revocation_tree_depth,
-            issuer_id: borrowed_norito::Value(&revocations.issuer_id),
+            issuer_id: std::borrow::Cow::Borrowed(&revocations.issuer_id),
             published_at_epoch: revocations.published_at_epoch,
             entries: borrowed_norito::Vec::borrowed(&revocations.entries),
             publisher_signature: PopSignatureSigningViewV1::from_signature(
@@ -1271,10 +1261,12 @@ pub fn prove_pop_membership_v1(
     witness: &PopMembershipWitnessV1,
     challenge_digest: [u8; 32],
     verifier_context: &str,
+    presentation_binding_digest: [u8; 32],
     now_epoch: u64,
 ) -> Result<PopMembershipProofV1, PopCredentialValidationError> {
     validate_digest("challenge digest", challenge_digest)?;
     validate_verifier_context(verifier_context)?;
+    validate_digest("presentation binding digest", presentation_binding_digest)?;
     witness.validate()?;
     credential.validate_at(now_epoch)?;
     verify_pop_credential_signature_v1(credential)?;
@@ -1298,6 +1290,7 @@ pub fn prove_pop_membership_v1(
         revocations.list_version,
         challenge_digest,
         verifier_context,
+        presentation_binding_digest,
     )?;
     verify_pop_membership_proof_v1(
         &proof,
@@ -1305,6 +1298,7 @@ pub fn prove_pop_membership_v1(
         revocations,
         challenge_digest,
         verifier_context,
+        presentation_binding_digest,
         now_epoch,
         &[],
     )?;
@@ -1317,6 +1311,7 @@ pub fn verify_pop_membership_proof_v1(
     revocations: &PopRevocationListV1,
     expected_challenge_digest: [u8; 32],
     expected_verifier_context: &str,
+    expected_presentation_binding_digest: [u8; 32],
     now_epoch: u64,
     seen_nullifiers: &[[u8; 32]],
 ) -> Result<(), PopCredentialValidationError> {
@@ -1355,6 +1350,9 @@ pub fn verify_pop_membership_proof_v1(
     }
     if proof.verifier_context != expected_verifier_context {
         return Err(PopCredentialValidationError::VerifierContextMismatch);
+    }
+    if proof.presentation_binding_digest != expected_presentation_binding_digest {
+        return Err(PopCredentialValidationError::PresentationBindingMismatch);
     }
     if seen_nullifiers.contains(&proof.nullifier) {
         return Err(PopCredentialValidationError::ReplayedProof);
@@ -1528,6 +1526,9 @@ pub enum PopCredentialValidationError {
     /// Expected verifier domain/context does not match the proof statement.
     #[error("membership proof context does not match verifier context")]
     VerifierContextMismatch,
+    /// Proof was prepared for a different verifier-selected recipient or action.
+    #[error("membership proof presentation binding does not match the verifier request")]
+    PresentationBindingMismatch,
 }
 const POP_SIGNATURE_PREIMAGE_MAX_BYTES_V1: usize = 512 * 1024;
 fn preflight_signature_public_key(
@@ -1605,6 +1606,9 @@ fn pop_signature_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     payload: &T,
 ) -> Result<[u8; 32], PopCredentialValidationError> {
+    // Signature preimages use one V1 layout, including their size admission.
+    // An enclosing decoded envelope must not select different signing bytes.
+    let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let encoded_len = norito::core::encoded_frame_len(payload).map_err(|err| {
         PopCredentialValidationError::SignaturePayloadEncoding {
             reason: err.to_string(),
@@ -1627,7 +1631,7 @@ fn pop_signature_digest<T: norito::core::NoritoSerialize>(
     }
     let mut hasher = Hasher::new();
     hasher.update(domain);
-    norito::core::write_frame_to_writer(payload, &mut Blake3Writer(&mut hasher)).map_err(
+    norito::core::write_canonical_to_writer(payload, &mut Blake3Writer(&mut hasher)).map_err(
         |err| PopCredentialValidationError::SignaturePayloadEncoding {
             reason: err.to_string(),
         },
@@ -1878,11 +1882,12 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
-    fn historical_signature_digest<T: norito::core::NoritoSerialize>(
+    fn canonical_owned_signature_digest<T: norito::core::NoritoSerialize>(
         domain: &[u8],
         value: &T,
     ) -> [u8; 32] {
-        let bytes = norito::to_bytes(value).expect("encode historical PoP signature preimage");
+        let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let bytes = norito::to_bytes(value).expect("encode canonical owned PoP signature preimage");
         let mut hasher = Hasher::new();
         hasher.update(domain);
         hasher.update(&bytes);
@@ -1988,6 +1993,7 @@ mod tests {
             &witness,
             digest(0x43),
             "jury-case-1",
+            digest(0x44),
             500,
         )
         .expect("membership proof");
@@ -2065,7 +2071,7 @@ mod tests {
         norito_roundtrip(&fixture.proof);
     }
     #[test]
-    fn borrowed_signature_preimages_preserve_historical_frames_and_digests() {
+    fn borrowed_signature_preimages_match_owned_frames_and_canonical_digests() {
         let fixture = fixture();
         let mut owned_credential = fixture.credential.clone();
         owned_credential.issuer_signature.signature.clear();
@@ -2097,20 +2103,99 @@ mod tests {
             assert_eq!(
                 pop_credential_signature_digest_v1(&fixture.credential)
                     .expect("stream credential digest"),
-                historical_signature_digest(POP_CREDENTIAL_SIGNATURE_DOMAIN_V1, &owned_credential,),
+                canonical_owned_signature_digest(
+                    POP_CREDENTIAL_SIGNATURE_DOMAIN_V1,
+                    &owned_credential,
+                ),
                 "streamed credential digest changed for flags 0x{flags:02x}"
             );
             assert_eq!(
                 pop_commitment_root_signature_digest_v1(&fixture.root).expect("stream root digest"),
-                historical_signature_digest(POP_ROOT_SIGNATURE_DOMAIN_V1, &owned_root),
+                canonical_owned_signature_digest(POP_ROOT_SIGNATURE_DOMAIN_V1, &owned_root),
                 "streamed root digest changed for flags 0x{flags:02x}"
             );
             assert_eq!(
                 pop_revocation_list_signature_digest_v1(&fixture.revocations)
                     .expect("stream revocation digest"),
-                historical_signature_digest(POP_REVOCATION_SIGNATURE_DOMAIN_V1, &owned_revocations,),
+                canonical_owned_signature_digest(
+                    POP_REVOCATION_SIGNATURE_DOMAIN_V1,
+                    &owned_revocations,
+                ),
                 "streamed revocation digest changed for flags 0x{flags:02x}"
             );
+        }
+    }
+    #[test]
+    fn credential_publication_signatures_and_leaf_ignore_enclosing_norito_layout() {
+        let fixture = fixture();
+        let expected_leaf = pop_credential_leaf_v1(&fixture.credential).expect("canonical leaf");
+        for flags in supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            verify_pop_credential_signature_v1(&fixture.credential)
+                .expect("credential signature must not depend on enclosing layout");
+            verify_pop_commitment_root_signature_v1(&fixture.root)
+                .expect("root signature must not depend on enclosing layout");
+            verify_pop_revocation_list_signature_v1(&fixture.revocations)
+                .expect("revocation signature must not depend on enclosing layout");
+            assert_eq!(
+                pop_credential_leaf_v1(&fixture.credential).expect("canonical credential leaf"),
+                expected_leaf,
+                "credential tree membership must not depend on enclosing layout"
+            );
+            assert_eq!(
+                norito::core::get_decode_flags(),
+                flags,
+                "signature verification must restore the enclosing decoder's flags"
+            );
+        }
+    }
+    #[test]
+    fn credential_publications_reject_valid_signatures_over_noncanonical_layouts() {
+        fn alternate_signature<T: norito::core::NoritoSerialize>(
+            domain: &[u8],
+            unsigned: &T,
+        ) -> Vec<u8> {
+            let alternate = encode_frame_with_flags(unsigned, 0);
+            assert_ne!(
+                alternate,
+                norito::encode_canonical(unsigned).expect("canonical frame")
+            );
+            let mut hasher = Hasher::new();
+            hasher.update(domain);
+            hasher.update(&alternate);
+            signing_key(0x55)
+                .sign(hasher.finalize().as_bytes())
+                .to_bytes()
+                .to_vec()
+        }
+        let fixture = fixture();
+        let mut credential = fixture.credential.clone();
+        credential.issuer_signature.signature.clear();
+        credential.issuer_signature.signature =
+            alternate_signature(POP_CREDENTIAL_SIGNATURE_DOMAIN_V1, &credential);
+        let mut root = fixture.root.clone();
+        root.publisher_signature.signature.clear();
+        root.publisher_signature.signature =
+            alternate_signature(POP_ROOT_SIGNATURE_DOMAIN_V1, &root);
+        let mut revocations = fixture.revocations.clone();
+        revocations.publisher_signature.signature.clear();
+        revocations.publisher_signature.signature =
+            alternate_signature(POP_REVOCATION_SIGNATURE_DOMAIN_V1, &revocations);
+        for flags in supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            for result in [
+                verify_pop_credential_signature_v1(&credential),
+                verify_pop_commitment_root_signature_v1(&root),
+                verify_pop_revocation_list_signature_v1(&revocations),
+            ] {
+                assert!(
+                    matches!(
+                        result,
+                        Err(PopCredentialValidationError::SignatureVerification { .. })
+                    ),
+                    "a valid signature over a noncanonical preimage must not get an alternate verification path"
+                );
+            }
         }
     }
     #[test]
@@ -2228,6 +2313,7 @@ mod tests {
             &bundle.revocation_list,
             digest(0x43),
             "jury-case-1",
+            digest(0x44),
             500,
             &[],
         )
@@ -2277,6 +2363,7 @@ mod tests {
             &fixture.revocations,
             digest(0x43),
             "jury-case-1",
+            digest(0x44),
             500,
             &[],
         )
@@ -2299,6 +2386,153 @@ mod tests {
         );
     }
     #[test]
+    fn membership_proof_presentation_binding_cannot_be_retargeted() {
+        let fixture = fixture();
+        let other_binding = digest(0x45);
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &fixture.proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                other_binding,
+                500,
+                &[],
+            )
+            .expect_err("a copied proof cannot authorize another recipient"),
+            PopCredentialValidationError::PresentationBindingMismatch,
+        );
+        let mut retargeted = fixture.proof.clone();
+        retargeted.presentation_binding_digest = other_binding;
+        assert!(
+            matches!(
+                verify_pop_membership_proof_v1(
+                    &retargeted,
+                    &fixture.root,
+                    &fixture.revocations,
+                    digest(0x43),
+                    "jury-case-1",
+                    other_binding,
+                    500,
+                    &[],
+                ),
+                Err(PopCredentialValidationError::InvalidMembershipProof { .. })
+            ),
+            "the Halo2 statement must bind the recipient even after envelope substitution"
+        );
+        retargeted.presentation_binding_digest = [0; 32];
+        assert!(matches!(
+            retargeted.validate(),
+            Err(PopCredentialValidationError::InvalidDigest {
+                field: "presentation binding digest"
+            })
+        ));
+        let encoded =
+            norito::encode_canonical(&fixture.proof).expect("encode recipient-bound proof");
+        let decoded: PopMembershipProofV1 =
+            norito::decode_canonical(&encoded).expect("decode recipient-bound proof");
+        assert_eq!(decoded, fixture.proof);
+    }
+    #[test]
+    fn membership_proof_wire_requires_presentation_binding() {
+        // Encode the exact former field order only to demonstrate that an
+        // unbound proof cannot decode through the sole current V1 schema.
+        #[derive(NoritoSerialize)]
+        struct UnboundProof {
+            version: u8,
+            eligibility_class: PopEligibilityClassV1,
+            commitment_root: [u8; 32],
+            commitment_tree_version: u64,
+            revocation_root: [u8; 32],
+            revocation_list_version: u64,
+            nullifier: [u8; 32],
+            challenge_digest: [u8; 32],
+            verifier_context: String,
+            proof_system: PopMembershipProofSystemV1,
+            verifier_material: PopMembershipVerifierMaterialV1,
+            proof_bytes: Vec<u8>,
+            expires_at_epoch: u64,
+        }
+        let proof = &fixture().proof;
+        let unbound = UnboundProof {
+            version: proof.version,
+            eligibility_class: proof.eligibility_class,
+            commitment_root: proof.commitment_root,
+            commitment_tree_version: proof.commitment_tree_version,
+            revocation_root: proof.revocation_root,
+            revocation_list_version: proof.revocation_list_version,
+            nullifier: proof.nullifier,
+            challenge_digest: proof.challenge_digest,
+            verifier_context: proof.verifier_context.clone(),
+            proof_system: proof.proof_system,
+            verifier_material: proof.verifier_material.clone(),
+            proof_bytes: proof.proof_bytes.clone(),
+            expires_at_epoch: proof.expires_at_epoch,
+        };
+        // Advertise the real proof schema with its proper alignment/checksum,
+        // so rejection exercises the missing field rather than a test type's
+        // unrelated schema name.
+        let unbound_wire = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (payload, flags) = norito::codec::encode_with_header_flags(&unbound);
+            norito::core::frame_bare_with_header_flags::<PopMembershipProofV1>(&payload, flags)
+                .expect("frame unbound layout as the actual V1 proof schema")
+        };
+        let error = norito::decode_from_bytes::<PopMembershipProofV1>(&unbound_wire)
+            .expect_err("ordinary current-schema decoding must reject an absent proof binding");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
+        assert!(norito::decode_canonical::<PopMembershipProofV1>(&unbound_wire).is_err());
+        let current_wire = norito::encode_canonical(proof).expect("encode recipient-bound proof");
+        assert_eq!(
+            norito::decode_canonical::<PopMembershipProofV1>(&current_wire).unwrap(),
+            *proof
+        );
+    }
+    #[test]
+    fn membership_proof_recipient_changes_preserve_shared_nullifier_scope() {
+        let fixture = fixture();
+        let other_binding = digest(0x45);
+        let proof = prove_pop_membership_v1(
+            &fixture.credential,
+            &fixture.root,
+            &fixture.revocations,
+            &PopMembershipWitnessV1 {
+                holder_secret: fixture.holder_secret,
+                credential_path: fixture.credential_path.clone(),
+                revocation_path: fixture.revocation_path.clone(),
+            },
+            digest(0x43),
+            "jury-case-1",
+            other_binding,
+            500,
+        )
+        .expect("holder can prove the same credential for a different explicit recipient");
+        assert_ne!(
+            proof.presentation_binding_digest,
+            fixture.proof.presentation_binding_digest
+        );
+        assert_eq!(
+            proof.nullifier, fixture.proof.nullifier,
+            "recipient binding must not permit one credential to occupy multiple panel slots"
+        );
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                other_binding,
+                500,
+                &[fixture.proof.nullifier],
+            )
+            .expect_err("second recipient must hit the shared consumed-nullifier set"),
+            PopCredentialValidationError::ReplayedProof,
+        );
+    }
+    #[test]
     fn expired_proofs_are_rejected() {
         let fixture = fixture();
         let err = verify_pop_membership_proof_v1(
@@ -2307,6 +2541,7 @@ mod tests {
             &fixture.revocations,
             digest(0x43),
             "jury-case-1",
+            digest(0x44),
             1_000,
             &[],
         )
@@ -2336,6 +2571,7 @@ mod tests {
             &witness_from(fixture),
             digest(0x43),
             "jury-case-1",
+            digest(0x44),
             500,
         )
         .expect_err("revoked witness");
@@ -2361,6 +2597,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2376,6 +2613,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2391,6 +2629,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             ),
@@ -2405,6 +2644,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2422,6 +2662,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x44),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2435,6 +2676,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-2",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2454,6 +2696,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             ),
@@ -2467,6 +2710,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             ),
@@ -2483,6 +2727,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[fixture.proof.nullifier],
             )
@@ -2498,6 +2743,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             ),
@@ -2522,6 +2768,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2543,6 +2790,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             ),
@@ -2557,6 +2805,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             ),
@@ -2580,6 +2829,7 @@ mod tests {
                     &fixture.revocations,
                     digest(0x43),
                     "jury-case-1",
+                    digest(0x44),
                     500,
                     &[],
                 )
@@ -2608,6 +2858,7 @@ mod tests {
                 &witness,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
             )
             .expect_err("wrong holder secret"),
@@ -2629,6 +2880,7 @@ mod tests {
                 &witness,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
             )
             .expect_err("tampered revocation path"),
@@ -2668,6 +2920,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &seen,
             )
@@ -2693,6 +2946,7 @@ mod tests {
                 &fixture.revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2707,6 +2961,7 @@ mod tests {
                 &revocations,
                 digest(0x43),
                 "jury-case-1",
+                digest(0x44),
                 500,
                 &[],
             )
@@ -2724,6 +2979,7 @@ mod tests {
             &fixture.revocations,
             digest(0x43),
             "jury-case-1",
+            digest(0x44),
             500,
             &[],
         )

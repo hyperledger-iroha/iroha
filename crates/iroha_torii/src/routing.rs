@@ -68508,22 +68508,19 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 fn exact_field_filter_candidates<T>(
     expr: Option<&crate::filter::FilterExpr>,
     field_name: &str,
+    parse_value: &impl Fn(&Value) -> Option<T>,
 ) -> Option<BTreeSet<T>>
 where
-    T: FromStr + Ord,
+    T: Ord,
 {
-    fn parse_value<T>(value: &Value) -> Option<T>
-    where
-        T: FromStr,
-    {
-        value.as_str()?.parse().ok()
-    }
     use crate::filter::FilterExpr as F;
     match expr? {
         F::And(list) => {
             let mut selected: Option<BTreeSet<T>> = None;
             for nested in list {
-                if let Some(candidates) = exact_field_filter_candidates(Some(nested), field_name) {
+                if let Some(candidates) =
+                    exact_field_filter_candidates(Some(nested), field_name, parse_value)
+                {
                     if let Some(selected) = selected.as_mut() {
                         selected.retain(|id| candidates.contains(id));
                     } else {
@@ -68536,7 +68533,8 @@ where
         F::Or(list) => {
             let mut union = BTreeSet::new();
             for nested in list {
-                let candidates = exact_field_filter_candidates(Some(nested), field_name)?;
+                let candidates =
+                    exact_field_filter_candidates(Some(nested), field_name, parse_value)?;
                 union.extend(candidates);
             }
             Some(union)
@@ -68647,7 +68645,7 @@ fn nft_to_query_row(nft: &iroha_data_model::nft::Nft) -> norito::json::Map {
     row
 }
 fn nft_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<NftId>> {
-    exact_field_filter_candidates(expr, "id")
+    exact_field_filter_candidates(expr, "id", &|value| value.as_str()?.parse().ok())
 }
 fn nft_from_key_value(id: &NftId, value: &iroha_data_model::nft::NftValue) -> Nft {
     let details = value.clone().into_inner();
@@ -68920,7 +68918,7 @@ fn rwa_filter_object(expr: &FilterExpr, item: &RwaListItem) -> bool {
     filter_id(expr, &item.id)
 }
 fn rwa_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<RwaId>> {
-    exact_field_filter_candidates(expr, "id")
+    exact_field_filter_candidates(expr, "id", &|value| value.as_str()?.parse().ok())
 }
 fn rwa_list_item_from_id(id: &RwaId) -> RwaListItem {
     RwaListItem { id: id.to_string() }

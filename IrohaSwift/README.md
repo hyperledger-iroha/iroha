@@ -1232,12 +1232,20 @@ contains no governance or readiness state. Call
 `ToriiClient.getPrivacyExact12CapabilityManifestV1(canonicalAuth:)` over HTTPS
 to fetch the exact canonical committed manifest; redirects, JSON, compressed
 representations, missing canonical request authentication, and a missing or
-stale native bridge fail closed. `PrivacyExact12CapabilityAdmissionV1` issues
+stale native bridge fail closed. The signed fetch bypasses local cached responses
+and sends `Cache-Control: no-cache, no-store` for current committed state.
+`PrivacyExact12CapabilityAdmissionV1` issues
 an opaque per-protocol token only when the committed row is active, ready, and
 byte-identical to the ABI23 native-validated compiled catalog. The generic
 transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
-complete envelope profile tuple both at construction and final encoding.
+complete final V1 envelope profile tuple both at construction and final encoding.
+The client must supply `localSigningContext.networkId`: the authenticated origin
+and its token retain that exact network, the deployment's raw32 network and genesis
+fields must match it, and every retained statement's context must bind it.
+Final batch encoding also compares the token and statement against the batch's
+exact `networkId`; an admission from another network cannot be reused. Managed
+fixture projection and standalone native validation do not mint network authority.
 
 ABI23 requires exactly six privacy C exports, including
 `iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
@@ -1777,6 +1785,14 @@ self-tests on the current host). The helper returns `nil` when the Norito bridge
 symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
+
+`getSumeragiDiagnostics()` validates raw JSON number tokens before typed decoding:
+integer fields reject decimal and exponent notation, while the full `UInt64` range
+remains exact. Settlement quantities and TWAP values use canonical decimal
+strings. TWAP retains the signed `Numeric` schema; settlement quantities are
+nonnegative. Swap metadata and its tagged values reject unknown fields.
+The Sumeragi wire decoder bounds vector counts by the available encoded fields
+and checks byte-vector lengths before allocating their payloads.
 
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated

@@ -26,12 +26,14 @@ use {
 static POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
-/// Preflight the configured Poseidon GPU backend used by the prover path.
+/// Preflight the standalone scalar Poseidon GPU permutation backend.
 ///
 /// The preflight performs backend discovery and a tiny deterministic
 /// `poseidon_permute` parity check against the scalar implementation. A failed
-/// self-test disables the accelerated Poseidon path for this process so later
-/// prover work keeps the existing CPU fallback behavior.
+/// self-test disables the standalone accelerated scalar path for this process.
+/// It does not qualify final-V1 native proofs: those require independently
+/// parameterized six-lane hashes and a complete proof dispatch path, checked by
+/// [`crate::preflight_native_v1_gpu_backend`].
 #[cfg(feature = "fastpq-gpu")]
 #[must_use]
 pub fn preflight_gpu_backend() -> bool {

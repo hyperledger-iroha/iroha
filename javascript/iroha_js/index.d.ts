@@ -4664,6 +4664,7 @@ export interface ToriiLaneSwapMetadata {
   epsilon_bps: number;
   twap_window_seconds: number;
   liquidity_profile: ToriiLaneLiquidityProfile;
+  /** Canonical signed Numeric string with a 512-bit mantissa and scale at most 28. */
   twap_local_per_xor: string;
   volatility_class: ToriiLaneVolatilityClass;
 }
@@ -4782,7 +4783,11 @@ export interface ToriiNativeAmxLeg {
   lane_id: number;
   dataspace_id: ToriiU64;
   participant_proposal: Readonly<ToriiNativeAmxParticipantLaneBlockProposal>;
-  participant_settlement: Readonly<ToriiLaneSettlementCommitment>;
+  participant_settlement: Readonly<
+    Omit<ToriiLaneSettlementCommitment, "receipts"> & {
+      receipts: ReadonlyArray<Readonly<ToriiLaneSettlementReceipt>>;
+    }
+  >;
   participant_settlement_hash: string;
   prepare_qc: Readonly<ToriiNativeAmxAttestationQc>;
   commit_qc: Readonly<ToriiNativeAmxAttestationQc>;

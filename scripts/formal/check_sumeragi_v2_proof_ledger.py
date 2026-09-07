@@ -66165,20 +66165,6 @@ self.collect_committed_lane_sessions();
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
         """
-let autonomous_anchor =
-    self.canonical_autonomous_anchor_matches_kura(&session.proposal);
-let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(
-    &session.prepare_qc,
-    autonomous_anchor,
-)?;
-""",
-        "anchored lane persistence must derive autonomous execution authority from the checked PrepareQC role",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
-        """
 if autonomous_certificate {
     persisted = persisted.saturating_add(1);
     continue;
@@ -69096,40 +69082,10 @@ let certificate = match self.reconstruct_durable_lane_certificate(proposal, send
     _require_lane_predecessor_ordering_source_contracts(
         lane_path, lane_ack_items, lane_items, errors
     )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("reconstruct_durable_lane_certificate"),
-        """
-let artifact = self.kura.read_certified_lane_block_artifact(
-    proposal.descriptor.lane_id,
-    proposal.descriptor.lane_block_height,
-);
-let Some(artifact) = artifact else {
-    return Ok(None);
-};
-if artifact.proposal != *proposal {
-    return Ok(None);
-}
-""",
-        "lane recovery reconstruction must begin from the exact certified Kura artifact",
-        errors,
+    _require_lane_public_certificate_source_contracts(
+        lane_path, lane_ack_items, lane_items, errors
     )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("reconstruct_durable_lane_certificate"),
-        """
-let requester_is_current_validator = self
-    .context
-    .roster
-    .iter()
-    .any(|entry| &entry.validator == sender);
-if !requester_is_current_validator && !artifact.commit_qc.validator_set.contains(sender) {
-    return Err(());
-}
-""",
-        "lane recovery reconstruction must authenticate current or historical membership",
-        errors,
-    )
+    errors.extend(_lane_recovery_cache_source_fidelity_errors(repo_root))
     _require_rust_token_sequence(
         lane_path,
         lane_items.get("serve_durable_lane_certificate"),

@@ -1,7 +1,6 @@
 use super::{
-    SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1, SoftwareSignerPurposeBindingV1,
-    SoftwareSignerRoleV1, SoftwareSignerServiceV1, SoftwareSignerSignatureReceiptV1,
-    SoftwareSignerWrappingKeyV1,
+    SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, SoftwareSignerProvisioningV1,
+    SoftwareSignerServiceV1, SoftwareSignerSignatureReceiptV1, SoftwareSignerWrappingKeyV1,
     protocol::{
         AdminCommandV1, AdminRequestV1, AdminStatusV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1,
         SignRequestV1, SignStatusV1, admin_request_digest, payload_digest, sign_request_digest,
@@ -34,53 +33,55 @@ fn wrapping_key() -> SoftwareSignerWrappingKeyV1 {
     SoftwareSignerWrappingKeyV1::try_from_bytes(WRAPPING_KEY).expect("valid wrapping key")
 }
 fn provisioning(
-    role: SoftwareSignerRoleV1,
-    algorithm: SoftwareSignerKeyAlgorithmV1,
+    role: SignerRoleV1,
+    algorithm: SignerKeyAlgorithmV1,
 ) -> SoftwareSignerProvisioningV1 {
     let service_uid = rustix::process::geteuid().as_raw();
     let handle_role = match role {
-        SoftwareSignerRoleV1::ProofOutcome => "proof-outcome",
-        SoftwareSignerRoleV1::Repair => "repair",
-        SoftwareSignerRoleV1::Reserve => "reserve",
-        SoftwareSignerRoleV1::Orderbook => "orderbook",
-        SoftwareSignerRoleV1::Promotion => "promotion",
-        SoftwareSignerRoleV1::GovernanceDag => "governance-dag",
-        SoftwareSignerRoleV1::PotrGateway | SoftwareSignerRoleV1::PotrProvider => "potr",
-        SoftwareSignerRoleV1::BillingStatement => "billing",
-        SoftwareSignerRoleV1::EvidenceViewer => "evidence-viewer",
-        SoftwareSignerRoleV1::StreamToken => "stream-token",
-        SoftwareSignerRoleV1::PopCredentials => "pop-credentials",
+        SignerRoleV1::ProofOutcome => "proof-outcome",
+        SignerRoleV1::Repair => "repair",
+        SignerRoleV1::Reserve => "reserve",
+        SignerRoleV1::Orderbook => "orderbook",
+        SignerRoleV1::Promotion => "promotion",
+        SignerRoleV1::GovernanceDag => "governance-dag",
+        SignerRoleV1::PotrGateway | SignerRoleV1::PotrProvider => "potr",
+        SignerRoleV1::BillingStatement => "billing",
+        SignerRoleV1::EvidenceViewer => "evidence-viewer",
+        SignerRoleV1::StreamToken => "stream-token",
+        SignerRoleV1::PopCredentials => "pop-credentials",
+        SignerRoleV1::ReleaseManifest => "release-manifest",
     };
     let purpose_binding = match role {
-        SoftwareSignerRoleV1::ProofOutcome
-        | SoftwareSignerRoleV1::Repair
-        | SoftwareSignerRoleV1::Reserve
-        | SoftwareSignerRoleV1::Orderbook
-        | SoftwareSignerRoleV1::Promotion => SoftwareSignerPurposeBindingV1::NativeOrPromotion,
-        SoftwareSignerRoleV1::GovernanceDag => SoftwareSignerPurposeBindingV1::GovernanceDag {
+        SignerRoleV1::ProofOutcome
+        | SignerRoleV1::Repair
+        | SignerRoleV1::Reserve
+        | SignerRoleV1::Orderbook
+        | SignerRoleV1::Promotion => SignerPurposeBindingV1::NativeOrPromotion,
+        SignerRoleV1::GovernanceDag => SignerPurposeBindingV1::GovernanceDag {
             publisher_peer_id: b"12D3KooWSoftwareSignerFixture".to_vec(),
         },
-        SoftwareSignerRoleV1::PotrGateway => SoftwareSignerPurposeBindingV1::PotrGateway {
+        SignerRoleV1::PotrGateway => SignerPurposeBindingV1::PotrGateway {
             signer_id: [0x31; 32],
         },
-        SoftwareSignerRoleV1::PotrProvider => SoftwareSignerPurposeBindingV1::PotrProvider {
+        SignerRoleV1::PotrProvider => SignerPurposeBindingV1::PotrProvider {
             signer_id: [0x32; 32],
             provider_id: [0x33; 32],
         },
-        SoftwareSignerRoleV1::BillingStatement => {
-            SoftwareSignerPurposeBindingV1::BillingStatement {
-                signer_id: "billing-signer-primary".to_owned(),
-            }
-        }
-        SoftwareSignerRoleV1::EvidenceViewer => SoftwareSignerPurposeBindingV1::EvidenceViewer,
-        SoftwareSignerRoleV1::StreamToken => SoftwareSignerPurposeBindingV1::StreamToken,
-        SoftwareSignerRoleV1::PopCredentials => SoftwareSignerPurposeBindingV1::PopCredentials {
+        SignerRoleV1::BillingStatement => SignerPurposeBindingV1::BillingStatement {
+            signer_id: "billing-signer-primary".to_owned(),
+        },
+        SignerRoleV1::EvidenceViewer => SignerPurposeBindingV1::EvidenceViewer,
+        SignerRoleV1::StreamToken => SignerPurposeBindingV1::StreamToken,
+        SignerRoleV1::ReleaseManifest => SignerPurposeBindingV1::ReleaseManifest {
+            deployment_id: "production-primary".into(),
+        },
+        SignerRoleV1::PopCredentials => SignerPurposeBindingV1::PopCredentials {
             issuer_id: "pop-issuer-primary".to_owned(),
         },
     };
     let instance = match role {
-        SoftwareSignerRoleV1::PotrGateway => "gateway-primary",
-        SoftwareSignerRoleV1::PotrProvider => "provider-primary",
+        SignerRoleV1::PotrGateway => "gateway-primary",
+        SignerRoleV1::PotrProvider => "provider-primary",
         _ => "primary",
     };
     SoftwareSignerProvisioningV1 {
@@ -107,8 +108,8 @@ fn temporary_parent() -> tempfile::TempDir {
 }
 fn provision(
     parent: &Path,
-    role: SoftwareSignerRoleV1,
-    algorithm: SoftwareSignerKeyAlgorithmV1,
+    role: SignerRoleV1,
+    algorithm: SignerKeyAlgorithmV1,
 ) -> SoftwareSignerServiceV1 {
     SoftwareSignerServiceV1::provision(
         parent.join("state"),
@@ -250,15 +251,12 @@ fn admin_request(service: &SoftwareSignerServiceV1, command: AdminCommandV1) -> 
 }
 #[test]
 fn native_signing_and_recovery_cover_ed25519_and_ml_dsa() {
-    for (index, algorithm) in [
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
-        SoftwareSignerKeyAlgorithmV1::MlDsa,
-    ]
-    .into_iter()
-    .enumerate()
+    for (index, algorithm) in [SignerKeyAlgorithmV1::Ed25519, SignerKeyAlgorithmV1::MlDsa]
+        .into_iter()
+        .enumerate()
     {
         let parent = temporary_parent();
-        let service = provision(parent.path(), SoftwareSignerRoleV1::Repair, algorithm);
+        let service = provision(parent.path(), SignerRoleV1::Repair, algorithm);
         let binding = service.public_binding().expect("binding");
         let (payload, signing_message) = native_payload(&service);
         let request = sign_request(
@@ -341,8 +339,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     let governance_parent = temporary_parent();
     let governance = provision(
         governance_parent.path(),
-        SoftwareSignerRoleV1::GovernanceDag,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::GovernanceDag,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let transition =
         sorafs_node::governance_dag_key_transition_signing_payload_v1(1, 2, [0x41; 32])
@@ -354,7 +352,7 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
         &transition,
     );
     let cross_role = encode_typed_signing_payload(
-        SoftwareSignerRoleV1::EvidenceViewer,
+        SignerRoleV1::EvidenceViewer,
         SoftwareSignerPurposeV1::EvidenceReceipt,
         &[0x42; 32],
     )
@@ -366,8 +364,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     let provider_parent = temporary_parent();
     let provider = provision(
         provider_parent.path(),
-        SoftwareSignerRoleV1::PotrProvider,
-        SoftwareSignerKeyAlgorithmV1::MlDsa,
+        SignerRoleV1::PotrProvider,
+        SignerKeyAlgorithmV1::MlDsa,
     );
     let receipt = unsigned_potr_receipt([0x33; 32]);
     let receipt_message = receipt.signing_payload_bytes().expect("PoTR payload");
@@ -393,8 +391,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     let gateway_parent = temporary_parent();
     let gateway = provision(
         gateway_parent.path(),
-        SoftwareSignerRoleV1::PotrGateway,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::PotrGateway,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     assert_typed_signs(
         &gateway,
@@ -405,8 +403,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     let billing_parent = temporary_parent();
     let billing = provision(
         billing_parent.path(),
-        SoftwareSignerRoleV1::BillingStatement,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::BillingStatement,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     assert_typed_signs(
         &billing,
@@ -428,8 +426,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     let evidence_parent = temporary_parent();
     let evidence = provision(
         evidence_parent.path(),
-        SoftwareSignerRoleV1::EvidenceViewer,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::EvidenceViewer,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let mut receipt_message = b"sorafs.evidence-viewer.receipt-signature.v1".to_vec();
     receipt_message.extend_from_slice(&[0x52; 32]);
@@ -487,8 +485,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     let stream_parent = temporary_parent();
     let stream = provision(
         stream_parent.path(),
-        SoftwareSignerRoleV1::StreamToken,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::StreamToken,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let stream_message = StreamTokenBodyV1 {
         token_id: "11".repeat(16),
@@ -513,8 +511,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     let pop_parent = temporary_parent();
     let pop = provision(
         pop_parent.path(),
-        SoftwareSignerRoleV1::PopCredentials,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::PopCredentials,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     for (operation, purpose) in [
         (0x0D, SoftwareSignerPurposeV1::PopCredential),
@@ -524,14 +522,8 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
         assert_typed_signs(&pop, [operation; 32], purpose, &[operation; 32]);
     }
     for (role, algorithm) in [
-        (
-            SoftwareSignerRoleV1::GovernanceDag,
-            SoftwareSignerKeyAlgorithmV1::MlDsa,
-        ),
-        (
-            SoftwareSignerRoleV1::PotrProvider,
-            SoftwareSignerKeyAlgorithmV1::Ed25519,
-        ),
+        (SignerRoleV1::GovernanceDag, SignerKeyAlgorithmV1::MlDsa),
+        (SignerRoleV1::PotrProvider, SignerKeyAlgorithmV1::Ed25519),
     ] {
         let invalid_parent = temporary_parent();
         assert!(
@@ -549,8 +541,8 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Repair,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Repair,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let authority = AccountId::new(service.public_binding().expect("binding").public_key);
     let wrong_role = TransactionBuilder::new(
@@ -598,8 +590,8 @@ fn promotion_signs_exact_foundational_bytes_and_requires_ed25519() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let mut payload = SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1.to_vec();
     payload.extend_from_slice(
@@ -688,10 +680,7 @@ fn promotion_signs_exact_foundational_bytes_and_requires_ed25519() {
     assert!(
         SoftwareSignerServiceV1::provision(
             invalid_parent.path().join("state"),
-            provisioning(
-                SoftwareSignerRoleV1::Promotion,
-                SoftwareSignerKeyAlgorithmV1::MlDsa,
-            ),
+            provisioning(SignerRoleV1::Promotion, SignerKeyAlgorithmV1::MlDsa,),
             wrapping_key(),
         )
         .is_err()
@@ -702,8 +691,8 @@ fn sign_idempotency_replays_exact_bytes_and_audits_equivocation() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let mut payload = SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1.to_vec();
     payload.extend_from_slice(
@@ -736,8 +725,8 @@ fn rotation_is_predecessor_bound_replay_safe_and_revocation_is_terminal() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let before = service.provenance().expect("initial provenance");
     let rotate = admin_request(
@@ -749,7 +738,7 @@ fn rotation_is_predecessor_bound_replay_safe_and_revocation_is_terminal() {
             new_key_revision: 2,
             new_policy_revision: 2,
             new_policy_digest: [0x52; 32],
-            algorithm: SoftwareSignerKeyAlgorithmV1::Ed25519,
+            algorithm: SignerKeyAlgorithmV1::Ed25519,
         },
     );
     let mut substituted_binding = rotate.clone();
@@ -809,8 +798,8 @@ fn reviewed_successor_binding_rejects_complete_local_state_rollback() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let state = parent.path().join("state");
     let old_envelope = fs::read(state.join("key-envelope-v1.norito")).expect("old envelope");
@@ -825,7 +814,7 @@ fn reviewed_successor_binding_rejects_complete_local_state_rollback() {
                 new_key_revision: 2,
                 new_policy_revision: 2,
                 new_policy_digest: [0x62; 32],
-                algorithm: SoftwareSignerKeyAlgorithmV1::Ed25519,
+                algorithm: SignerKeyAlgorithmV1::Ed25519,
             },
         ))
         .expect("rotate signer");
@@ -854,8 +843,8 @@ fn wrong_key_corrupt_envelope_audit_and_permissions_fail_closed() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let state = parent.path().join("state");
     drop(service);
@@ -884,8 +873,8 @@ fn state_symlinks_and_hardlinked_secret_envelopes_are_rejected() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let state = parent.path().join("state");
     drop(service);
@@ -907,8 +896,8 @@ fn debug_output_redacts_runtime_key_and_envelope_ciphertext() {
     let parent = temporary_parent();
     let service = provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let debug = format!("{service:?}");
     assert!(debug.contains("[REDACTED]"));
@@ -919,8 +908,8 @@ fn startup_rejects_a_substituted_public_binding_before_socket_creation() {
     let parent = temporary_parent();
     let service = std::sync::Arc::new(provision(
         parent.path(),
-        SoftwareSignerRoleV1::Promotion,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
     ));
     let mut substituted = service.public_binding().expect("binding");
     substituted.policy_digest = [0x77; 32];
@@ -936,10 +925,7 @@ fn startup_rejects_a_substituted_public_binding_before_socket_creation() {
     assert!(super::SoftwareSignerServerV1::try_new(service, policy).is_err());
     assert!(!runtime.join("request.sock").exists());
     let wrong_role_parent = temporary_parent();
-    let mut wrong_role = provisioning(
-        SoftwareSignerRoleV1::Repair,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
-    );
+    let mut wrong_role = provisioning(SignerRoleV1::Repair, SignerKeyAlgorithmV1::Ed25519);
     wrong_role.handle = "software://sorafs/orderbook/primary".to_owned();
     let wrong_role_state = wrong_role_parent.path().join("state");
     assert!(
@@ -973,17 +959,17 @@ fn request_and_administrator_peer_identities_are_not_interchangeable() {
 #[test]
 fn cli_value_parsers_accept_only_canonical_role_and_algorithm_labels() {
     assert_eq!(
-        "promotion".parse::<SoftwareSignerRoleV1>(),
-        Ok(SoftwareSignerRoleV1::Promotion)
+        "promotion".parse::<SignerRoleV1>(),
+        Ok(SignerRoleV1::Promotion)
     );
     assert_eq!(
-        "ml-dsa-65".parse::<SoftwareSignerKeyAlgorithmV1>(),
-        Ok(SoftwareSignerKeyAlgorithmV1::MlDsa)
+        "ml-dsa-65".parse::<SignerKeyAlgorithmV1>(),
+        Ok(SignerKeyAlgorithmV1::MlDsa)
     );
     for alias in ["foundational-promotion", "proof-outcome", "reserve-rent"] {
-        assert!(alias.parse::<SoftwareSignerRoleV1>().is_err());
+        assert!(alias.parse::<SignerRoleV1>().is_err());
     }
     for alias in ["ml-dsa", "mldsa", "ML-DSA-65"] {
-        assert!(alias.parse::<SoftwareSignerKeyAlgorithmV1>().is_err());
+        assert!(alias.parse::<SignerKeyAlgorithmV1>().is_err());
     }
 }
