@@ -118,10 +118,17 @@ impl JsonObjectKeyOwned for crate::proof::ProofId {
     }
 }
 
+// Governance hash keys use the same canonical lowercase hexadecimal text as
+// their scalar JSON representation.
 #[cfg(feature = "governance")]
 impl_display_object_key!(
     crate::governance::types::GovernanceAttemptId,
+    crate::governance::types::AssignmentId,
+    crate::governance::types::BodyElectionAttemptId,
+    crate::governance::types::BodyInstanceId,
     crate::governance::types::BallotAttemptId,
+    crate::governance::types::BeaconPulseId,
+    crate::governance::types::TleSessionId,
     crate::governance::types::TleKeySessionId,
 );
 
@@ -142,7 +149,12 @@ macro_rules! impl_fixed_governance_object_key {
 #[cfg(feature = "governance")]
 impl_fixed_governance_object_key!(
     crate::governance::types::GovernanceAttemptId,
+    crate::governance::types::AssignmentId,
+    crate::governance::types::BodyElectionAttemptId,
+    crate::governance::types::BodyInstanceId,
     crate::governance::types::BallotAttemptId,
+    crate::governance::types::BeaconPulseId,
+    crate::governance::types::TleSessionId,
     crate::governance::types::TleKeySessionId,
 );
 
@@ -164,6 +176,134 @@ impl JsonObjectKeyOwned for crate::state_path::StatePath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_hash_object_keys_roundtrip_and_reject_noncanonical_text() {
+        use crate::governance::types::{
+            AssignmentId, BallotAttemptId, BeaconPulseId, BodyElectionAttemptId, BodyInstanceId,
+            GovernanceAttemptId, TleKeySessionId, TleSessionId,
+        };
+        use std::collections::BTreeMap;
+
+        fn check<T>(key: T)
+        where
+            T: JsonObjectKeyOwned + Ord + core::fmt::Debug,
+        {
+            let canonical = "ab".repeat(32);
+            let mut visited = String::new();
+            key.visit_json_key_text::<core::convert::Infallible>(|chunk| {
+                visited.push_str(chunk);
+                Ok(())
+            })
+            .expect("visit governance key");
+            assert_eq!(visited, canonical);
+
+            let map = BTreeMap::from([(key, 7_u8)]);
+            let expected = format!("{{\"{canonical}\":7}}");
+            assert_eq!(
+                json::to_json(&map).expect("encode governance map"),
+                expected
+            );
+            assert_eq!(
+                json::to_json_bounded(&map, expected.len()).expect("encode bounded governance map"),
+                expected
+            );
+            assert!(matches!(
+                json::to_json_bounded(&map, expected.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            ));
+            assert_eq!(
+                json::from_json::<BTreeMap<T, u8>>(&expected).expect("decode governance map"),
+                map
+            );
+
+            for invalid in [
+                canonical.to_uppercase(),
+                format!("0x{canonical}"),
+                "ab".repeat(31),
+                "ab".repeat(33),
+                "ag".repeat(32),
+                format!(" {canonical}"),
+                format!("{canonical} "),
+            ] {
+                let invalid_map = format!("{{\"{invalid}\":7}}");
+                assert!(
+                    json::from_json::<BTreeMap<T, u8>>(&invalid_map).is_err(),
+                    "governance object key must reject {invalid:?}"
+                );
+            }
+        }
+
+        check(GovernanceAttemptId::new([0xab; 32]));
+        check(AssignmentId::new([0xab; 32]));
+        check(BodyElectionAttemptId::new([0xab; 32]));
+        check(BodyInstanceId::new([0xab; 32]));
+        check(BallotAttemptId::new([0xab; 32]));
+        check(BeaconPulseId::new([0xab; 32]));
+        check(TleSessionId::new([0xab; 32]));
+        check(TleKeySessionId::new([0xab; 32]));
+    }
+
+    #[test]
+    fn parliament_body_object_keys_match_scalar_json_and_roundtrip() {
+        use crate::governance::types::{PARLIAMENT_BODIES_V1, ParliamentBody};
+        use std::collections::BTreeMap;
+
+        let labels = [
+            "rules-committee",
+            "agenda-council",
+            "interest-panel",
+            "review-panel",
+            "coordination-council",
+            "mpc-committee",
+            "fma-committee",
+            "oversight-committee",
+            "policy-jury",
+            "confirmation-jury",
+        ];
+        for (body, label) in PARLIAMENT_BODIES_V1.into_iter().zip(labels) {
+            let scalar = format!("\"{label}\"");
+            assert_eq!(json::to_json(&body).expect("encode body"), scalar);
+            assert_eq!(
+                json::to_json_bounded(&body, scalar.len()).expect("encode bounded body"),
+                scalar
+            );
+            assert_eq!(
+                json::from_json::<ParliamentBody>(&scalar).expect("decode body"),
+                body
+            );
+
+            let map = BTreeMap::from([(body, 7_u8)]);
+            let expected = format!("{{\"{label}\":7}}");
+            assert_eq!(json::to_json(&map).expect("encode body map"), expected);
+            assert_eq!(
+                json::to_json_bounded(&map, expected.len()).expect("encode bounded body map"),
+                expected
+            );
+            assert!(matches!(
+                json::to_json_bounded(&map, expected.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            ));
+            assert_eq!(
+                json::from_json::<BTreeMap<ParliamentBody, u8>>(&expected)
+                    .expect("decode body map"),
+                map
+            );
+        }
+
+        for invalid in [
+            "PolicyJury",
+            "POLICY-JURY",
+            "policy_jury",
+            "policy-jury ",
+            "unknown",
+            "",
+        ] {
+            let encoded = format!("{{\"{invalid}\":7}}");
+            assert!(json::from_json::<BTreeMap<ParliamentBody, u8>>(&encoded).is_err());
+        }
+    }
 
     fn allocation_limit(bytes: usize) -> norito::core::DecodeLimits {
         norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)

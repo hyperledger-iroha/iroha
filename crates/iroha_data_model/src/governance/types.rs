@@ -970,6 +970,8 @@ pub struct Vote {
     pub choice: VoteChoice,
 }
 /// Parliament governance body identifiers.
+///
+/// JSON values and object keys share the canonical lowercase, hyphenated body labels.
 #[derive(
     Clone,
     Copy,
@@ -1032,9 +1034,9 @@ pub const PARLIAMENT_BODIES_V1: [ParliamentBody; 10] = [
     ParliamentBody::ConfirmationJury,
 ];
 #[cfg(feature = "json")]
-impl json::JsonSerialize for ParliamentBody {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
+impl ParliamentBody {
+    fn json_label(&self) -> &'static str {
+        match self {
             ParliamentBody::RulesCommittee => "rules-committee",
             ParliamentBody::AgendaCouncil => "agenda-council",
             ParliamentBody::InterestPanel => "interest-panel",
@@ -1045,33 +1047,41 @@ impl json::JsonSerialize for ParliamentBody {
             ParliamentBody::OversightCommittee => "oversight-committee",
             ParliamentBody::PolicyJury => "policy-jury",
             ParliamentBody::ConfirmationJury => "confirmation-jury",
-        };
-        json::write_json_string(label, out);
+        }
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonSerialize for ParliamentBody {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(self.json_label(), out);
     }
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
-        let label = match self {
-            ParliamentBody::RulesCommittee => "rules-committee",
-            ParliamentBody::AgendaCouncil => "agenda-council",
-            ParliamentBody::InterestPanel => "interest-panel",
-            ParliamentBody::ReviewPanel => "review-panel",
-            ParliamentBody::CoordinationCouncil => "coordination-council",
-            ParliamentBody::MpcCommittee => "mpc-committee",
-            ParliamentBody::FmaCommittee => "fma-committee",
-            ParliamentBody::OversightCommittee => "oversight-committee",
-            ParliamentBody::PolicyJury => "policy-jury",
-            ParliamentBody::ConfirmationJury => "confirmation-jury",
-        };
-        json::write_json_string_to(label, out)
+        json::write_json_string_to(self.json_label(), out)
     }
 }
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for ParliamentBody {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
-        match value.as_str() {
+        <Self as json::JsonObjectKeyOwned>::from_json_key_text(&value)
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKey for ParliamentBody {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self.json_label())
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKeyOwned for ParliamentBody {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+        match key {
             "rules-committee" => Ok(ParliamentBody::RulesCommittee),
             "agenda-council" => Ok(ParliamentBody::AgendaCouncil),
             "interest-panel" => Ok(ParliamentBody::InterestPanel),

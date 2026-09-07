@@ -9,7 +9,7 @@
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Manifest descriptor for cross-segment byte-channel binding.
@@ -698,6 +698,7 @@ pub(crate) fn byte_memory_capacity_v1() -> Result<usize, ZkX509IoAirErrorV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
     fn endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
         ZkX509IoEndpointV1 { role, instance }
     }

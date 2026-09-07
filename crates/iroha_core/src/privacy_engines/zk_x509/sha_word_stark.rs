@@ -31,8 +31,7 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -3740,6 +3739,7 @@ pub(crate) fn validate_sha_word_stark_trace_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
     use crate::privacy_engines::zk_x509::sha256_word_air::sha256_word_total_rows_for_message_len_v1;
     use std::sync::OnceLock;
     fn challenges() -> ZkX509WordMemoryChallengesV1 {
