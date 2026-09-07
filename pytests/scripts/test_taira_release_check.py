@@ -62,7 +62,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_selection_has_no_duplicate_test_names(self):
         names = [name for _, tests in gate.STAGES for name in tests]
         self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(len(names), 19 + (gate.sys.platform == "linux"))
+        self.assertEqual(len(names), 23 + (gate.sys.platform == "linux"))
 
     def test_exact_one_test_passes(self):
         result = subprocess.CompletedProcess([], 0,

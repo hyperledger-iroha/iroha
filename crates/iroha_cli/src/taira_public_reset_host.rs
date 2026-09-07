@@ -10603,6 +10603,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     let mut file_range = 0..0;
     let mut stdin_complete = false;
     let mut stdin_aborted = false;
+    let mut stdin_error = None;
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
     let mut stdout_eof = false;
@@ -10710,8 +10711,13 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                     ) => {}
                 Err(error) => {
-                    terminate_owned_child(&mut child)?;
-                    return Err(error).wrap_err("failed to stream bounded child stdin");
+                    // A rejecting child may close stdin before emitting its diagnostic.
+                    // Keep the same bounded drain and deadline so its exit and stderr
+                    // survive, including when the diagnostic exceeds pipe capacity.
+                    stdin_error = Some(error);
+                    stdin_aborted = true;
+                    drop(stdin.take());
+                    made_progress = true;
                 }
             }
             if stdin_complete {
@@ -10800,13 +10806,19 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
             }
         }
     }
-    if !stdin_complete {
+    let status = status.expect("loop exits only after child status");
+    if status.success() && !stdin_complete {
+        if let Some(error) = stdin_error {
+            return Err(error).wrap_err("child exited before consuming its exact framed stdin");
+        }
         return Err(eyre!(
             "child exited before consuming its exact framed stdin"
         ));
     }
+    // Nonzero exits remain failures at the existing require_success boundary,
+    // with the child's bounded stderr instead of a secondary local pipe error.
     Ok(ProcessOutput {
-        status: status.expect("loop exits only after child status"),
+        status,
         stdout: stdout_bytes,
         stderr: stderr_bytes,
     })
@@ -16863,7 +16875,9 @@ fn validate_receipt_name(name: &str) -> Result<()> {
         || name.len() > 128
         || !name.ends_with(".json")
         || !name.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.')
         })
     {
         return Err(eyre!("receipt name escaped the closed local namespace"));
@@ -18576,6 +18590,88 @@ mod tests {
     }
 
     #[test]
+    fn host_receipt_names_cover_every_action_and_artifact_role() {
+        // The same list builds the test inputs and an exhaustive enum match:
+        // adding a HostAction without testing its receipt name cannot compile.
+        macro_rules! all_host_actions {
+            ($($variant:ident),+ $(,)?) => {{
+                let actions = [$(HostAction::$variant),+];
+                for action in &actions {
+                    match action { $(HostAction::$variant => (),)+ }
+                }
+                actions
+            }};
+        }
+        let actions = all_host_actions!(
+            Preflight,
+            Upload,
+            Stage,
+            InrouStageUpload,
+            Stop,
+            Install,
+            Reset,
+            Preseed,
+            Start,
+            Restart,
+            EdgeStage,
+            EdgeCutover,
+            EdgeVerify,
+            Seal,
+            Cleanup,
+            Rollback,
+            MutationReserve,
+        );
+        let roles = super::super::VALIDATOR_ARTIFACT_ROLES
+            .iter()
+            .chain(&super::super::EDGE_ARTIFACT_ROLES)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut names = BTreeSet::new();
+        for action in actions {
+            assert_eq!(HostAction::parse(action.label()).unwrap(), action);
+            if action == HostAction::Upload {
+                for role in &roles {
+                    let name = host_receipt_name(action, role)
+                        .unwrap_or_else(|error| panic!("canonical upload role {role}: {error}"));
+                    assert_eq!(name, format!("upload-{role}.json"));
+                    validate_receipt_name(&name).expect("shared receipt namespace");
+                    assert!(names.insert(name), "canonical receipt names must be unique");
+                }
+            } else {
+                let name = host_receipt_name(action, "")
+                    .unwrap_or_else(|error| panic!("canonical action {action:?}: {error}"));
+                assert_eq!(name, format!("{}.json", action.label()));
+                validate_receipt_name(&name).expect("shared receipt namespace");
+                assert!(names.insert(name), "canonical receipt names must be unique");
+            }
+        }
+        // The upload fixture uses the exact inventory role constants, so a new
+        // canonical artifact role automatically participates in this gate.
+        assert!(names.contains("upload-iroha3d.json"));
+        assert!(names.contains("upload-iroha_cli.json"));
+        assert!(names.contains("inrou_stage_upload.json"));
+    }
+
+    #[test]
+    fn receipt_names_reject_path_control_and_unicode_escape() {
+        for name in [
+            "", ".", "..", "receipt", "../receipt.json", "/receipt.json",
+            "dir/receipt.json", "dir\\receipt.json", "receipt.json/..",
+            "receipt.json\0", "receipt.json\n", "receipt.json\r", "receipt\t.json",
+            "receipt name.json", "Receipt.json", "réceipt.json", "receipt．json",
+        ] {
+            assert!(validate_receipt_name(name).is_err(), "unsafe receipt {name:?}");
+        }
+        let longest = format!("{}.json", "a".repeat(123));
+        validate_receipt_name(&longest).expect("exact 128-byte bound");
+        assert!(validate_receipt_name(&format!("a{longest}")).is_err());
+        for role in ["", "../iroha_cli", "iroha/cli", "iroha\\cli", "iroha.cli", "iroha-cli", "iroha_cli\0", "iroha_cli\n", "iróha_cli"] {
+            assert!(host_receipt_name(HostAction::Upload, role).is_err(), "unsafe role {role:?}");
+        }
+        assert!(host_receipt_name(HostAction::Upload, &"a".repeat(65)).is_err());
+    }
+
+    #[test]
     fn host_progress_requires_explicit_nullable_prepared_action_slot() {
         let admitted = progress_admission();
         let progress = initial_host_progress(&admitted);
@@ -19142,10 +19238,108 @@ time.sleep(30)
             deadline: Instant::now() + Duration::from_secs(2),
         })
         .expect_err("early child exit must reject an incomplete framed stdin");
-        assert!(
-            error.to_string().contains("stdin") || error.to_string().contains("stream"),
-            "unexpected error: {error:?}"
+        assert_eq!(
+            error.to_string(),
+            "child exited before consuming its exact framed stdin"
         );
+    }
+
+    #[test]
+    fn process_runner_preserves_rejection_after_child_closes_stdin() {
+        const DIAGNOSTIC_SIZE: usize = 2 * 1024 * 1024;
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys
+os.close(0)
+sys.stdout.buffer.write(b'fixture-stdout-must-not-enter-errors')
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024))
+sys.stderr.buffer.write(b'\nfixture-remote-rejection\n')
+sys.stderr.buffer.flush()
+os._exit(23)
+"#
+                .into(),
+                "fixture-argument-must-not-enter-errors".into(),
+            ],
+            stdin_prefix: b"fixture-input-must-not-enter-errors".repeat(128 * 1024),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(5),
+        })
+        .expect("rejection must preserve the child's exit status and full bounded diagnostic");
+        assert_eq!(output.status.code(), Some(23));
+        assert_eq!(
+            output.stderr.len(),
+            DIAGNOSTIC_SIZE + b"\nfixture-remote-rejection\n".len()
+        );
+        assert!(
+            output.stderr[..DIAGNOSTIC_SIZE]
+                .iter()
+                .all(|byte| *byte == b'e')
+        );
+        assert!(output.stderr.ends_with(b"\nfixture-remote-rejection\n"));
+        let error = require_success(output, "fixture dispatch")
+            .expect_err("a rejected incomplete frame must never become success");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("fixture dispatch failed with"));
+        assert!(diagnostic.contains("23"));
+        assert!(diagnostic.ends_with("\nfixture-remote-rejection\n"));
+        assert!(!diagnostic.contains("fixture-stdout-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-argument-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-input-must-not-enter-errors"));
+    }
+
+    #[test]
+    fn process_runner_deadline_reaps_child_after_stdin_closure() {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        let (mut observer, held) = UnixStream::pair().expect("owned child witness socket");
+        observer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let held = File::from(OwnedFd::from(held));
+        let descriptor = held.as_raw_fd();
+        let started = Instant::now();
+        let error = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys, time
+os.close(0)
+os.write(int(sys.argv[1]), str(os.getpid()).encode('ascii'))
+time.sleep(30)
+"#
+                .into(),
+                descriptor.to_string().into(),
+            ],
+            stdin_prefix: vec![b'x'; 4 * 1024 * 1024],
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![held],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .expect_err("a child closing stdin then hanging must obey the original deadline");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("exceeded its absolute deadline"));
+        assert!(diagnostic.contains("stdin_complete=false"));
+        assert!(diagnostic.contains("child_exit_observed=false"));
+        let mut witness = String::new();
+        observer
+            .read_to_string(&mut witness)
+            .expect("terminated child must release its inherited socket");
+        let pid = rustix::process::Pid::from_raw(witness.parse().expect("child PID witness"))
+            .expect("positive child PID");
+        assert!(matches!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG),
+            Err(rustix::io::Errno::CHILD)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]
